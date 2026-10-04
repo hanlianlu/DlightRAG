@@ -606,15 +606,17 @@ owner Settings state has no REST counterpart. `GET /web/api/agent-accounts` answ
 `{"available": <bool>, "registration": {"allowed": <bool>, "enabled": <bool>}, "accounts":
 [{"site", "email", "username", "created_at", "last_used_at"}]}`, the accounts in the order of
 their sites. `available` says the deployment composes Agent Accounts, which it does wherever
-an Agent Browser is configured; `registration.allowed` is its allowance for the Agent to
-register (`account_registration`) and `enabled` the owner's switch, and what the Agent may do
-is both. `email`, `username`, and `last_used_at` may be null, and times are UTC ISO 8601 with a
-`Z`. `PUT /web/api/agent-accounts/settings` takes `{"registration_enabled": <bool>}` and is
-accepted even where the deployment does not allow registration.
+an Agent Browser is configured; `registration.allowed` is the deployment's allowance for the
+Agent to register, which holds where an Agent Browser is configured and
+[`account_registration`](configuration.md#agent-browser) is on, and `enabled` the owner's
+switch, and what the Agent may do is both. `email`, `username`, and `last_used_at` may be null,
+and times are UTC ISO 8601 with a `Z`. `PUT /web/api/agent-accounts/settings` takes
+`{"registration_enabled": <bool>}` and is accepted even where the deployment does not allow
+registration.
 `DELETE /web/api/agent-accounts/{site}` removes the owner's account on a site, and answers 404
-where this owner has none there, another owner's account being as unknown as none, and 422
-where `site` is not a lowercase hostname. Each answers 200 with the fresh view, and none takes
-an `Idempotency-Key`, since both writes are idempotent by key. No answer carries a password,
+where this owner has none there, another owner's account being as unknown as none. Each
+answers 200 with the fresh view, and none takes an `Idempotency-Key`, since both writes are
+idempotent by key. No answer carries a password,
 envelope, key id, or account id ([Security](security.md#agent-accounts)).
 
 An answer that cites a stored image is projected with that image addressed on
@@ -922,8 +924,9 @@ reports `{"state": "configured" | "disabled", "endpoints": <n>, "sandbox": <bool
 `sandbox` is the configured `chromium_sandbox`, whether browsers launch inside Chromium's own
 sandbox, and not whether a host can start it; `accounts` and `mailbox` say whether Agent
 Accounts and an Agent Mailbox are composed, which the first is wherever the browser is, and
-not whether the bucket answers; `registration` says whether the deployment lets the Agent
-register new accounts (`account_registration`), which no owner's own switch exceeds. It never
+not whether the bucket answers; `registration` is the deployment's allowance for the Agent to
+register, the same answer as `registration.allowed` of the
+[Agent Accounts view](#web), which no owner's own switch exceeds. It never
 names an endpoint and never reaches the pool or the bucket, so a pool that is down is seen in
 its containers' own health, not here ([Operations](operations.md#agent-browser-pool)), and a
 mailbox that cannot be read is seen as the `inbox` call's reason

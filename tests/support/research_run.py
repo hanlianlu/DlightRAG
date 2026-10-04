@@ -5,7 +5,7 @@
 model records the tools it is offered and ends the Run, so what a test observes is what a provider
 would have been sent. An executor that composed other tools than the Run was accepted with is
 refused before the model is reached, as in production, and so is one whose model fingerprints are
-not the ones the Run was accepted with.
+not the ones the Run was accepted with; ``failure`` says which way a Run ended.
 """
 
 from __future__ import annotations
@@ -44,6 +44,9 @@ class ResearchRig:
     """Keyword arguments for the ``AnswerExecutor`` under test."""
     offered: list[dict[str, Any]] = field(default_factory=list)
     """The tool definitions each model call was offered, by name."""
+    failure: RunExecutionError | None = None
+    """The public failure the last driven Run ended with: the refusal of a Run whose contract
+    changed since it was accepted, or the stop at its first model call."""
 
     async def run(self, executor: AnswerExecutor, prepared_input: Mapping[str, Any]) -> Any:
         """Execute the Run accepted as ``prepared_input``, and return the session it ran under.
@@ -81,8 +84,9 @@ class ResearchRig:
         session.execution.progress_store = progress
         session.execution.fencing_epoch = 11
 
-        with pytest.raises(RunExecutionError):
+        with pytest.raises(RunExecutionError) as ended:
             await executor.execute(cast(RunSession, session))
+        self.failure = ended.value
         return session
 
 

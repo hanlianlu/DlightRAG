@@ -954,8 +954,9 @@ and Research has no `browser` tool.
   [what the actions do](retrieval-answer.md#agent-accounts-and-the-agent-mailbox)). `false`
   withdraws `register` alone: `login` and `inbox` still serve the accounts an owner has, and
   those stay in PostgreSQL and follow a key ring rotation. Each owner's own switch for new
-  sign-ups in Settings can only turn registration off further than this. Without a key ring,
-  register and login fail closed whatever this says.
+  sign-ups in Settings can only turn registration off further than this. A deployment with no
+  Agent Browser allows none, whatever this says. Without a key ring, register and login fail
+  closed whatever this says.
 
 The pool's size is the deployment's limit on Runs using a browser at the same moment
 ([sizing](operations.md#agent-browser-pool)). What `GET /health` says of the Agent

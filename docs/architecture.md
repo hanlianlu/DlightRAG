@@ -230,19 +230,20 @@ read(rendered=true), the Extract chain's browser step, or a browser(...) call
   ([contract](retrieval-answer.md#agent-accounts-and-the-agent-mailbox)) are composed wherever
   there is an Agent Browser: `AgentBrowserBinding.accounts` carries the account store, the key
   ring's cipher, the mailbox, if any, and the deployment's allowance to register. Each Research
-  Run gets one `RunAgentAccounts` from it (`run_agent_accounts`), with the registration its
+  Run gets one `RunAgentAccounts` from it (`run_agent_accounts`), with the `may_register` its
   acceptance pinned, which holds the Run's Child-scoped accounts and each Agent Session's inbox
   window in the worker's memory until the Run settles. The set of passwords each Agent Session
   filled lives in `RunAgentBrowser` beside its pages, outlives them, and is what the Agent Page
   and the mailbox's summaries redact through ([Security](security.md#agent-accounts)). An
   owner's accounts are rows of the `runs` scope (`dlightrag_agent_accounts`, behind the
-  `AgentAccountStore` port and `PGAgentAccountStore`), and a writer's `AgentAccountMaintenance`
-  re-seals their envelopes after a key ring rotation, as Connections re-encrypts Grants. The
-  Application's `AgentAccounts` owns what Settings does with them, the list, the owner's switch
-  for new sign-ups, and removal, over the same store, and is what acceptance asks for the pin.
-  The engine states the `AgentMailbox` port and `summarize_mail`; `adapters/agent_mailbox.py`
-  implements it as `S3AgentMailbox` over the existing `aiobotocore` dependency, with no vendor
-  code. The key ring is shared with Connections
+  engine's `AgentAccountStore` port, `PGAgentAccountStore`), and a writer's
+  `AgentAccountMaintenance` re-seals their envelopes after a key ring rotation, as Connections
+  re-encrypts Grants. The Application's `AgentAccounts` owns what Settings does with them, the
+  list, the owner's switch for new sign-ups, and removal, through its own `AgentAccountDirectory`
+  port, which the same `PGAgentAccountStore` implements, and is what acceptance asks for the
+  pin. The engine states the `AgentMailbox` port and `summarize_mail`;
+  `adapters/agent_mailbox.py` implements it as `S3AgentMailbox` over the existing `aiobotocore`
+  dependency, with no vendor code. The key ring is shared with Connections
   ([Secret handling](personal-mcp-connections.md#secret-handling-and-key-ring)).
 - **Fails closed, and the Run goes on.** A busy or unreachable pool, a page that fails,
   or a lost browser is a model-visible reason on that `read` or `browser` call, not a Run

@@ -26,16 +26,17 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from playwright.async_api import Browser, async_playwright
 
 from dlightrag.adapters.agent_browser.leased_browser import PlaywrightLeasedBrowser
+from dlightrag.application.agent_accounts import AgentAccountDirectory, AgentAccountSummary
 from dlightrag.engine.agent.tools import ToolResult, ToolRuntime
 from dlightrag.engine.agent.tools.files import ResourceReadRequest
 from dlightrag.engine.answer.agent_browser import (
     AgentAccountsBinding,
-    AgentAccountSummary,
+    AgentAccountStore,
     AgentBrowserError,
     AgentBrowserSettings,
     AgentMailbox,
@@ -507,8 +508,13 @@ class FakeProvider:
         self.closed = True
 
 
+class ListedAccountStore(AgentAccountStore, AgentAccountDirectory, Protocol):
+    """An account store that a test can also read the stored accounts of, as Settings does."""
+
+
 class MemoryAccountStore:
-    """An ``AgentAccountStore`` that keeps its rows in memory, one per owner and site.
+    """An ``AgentAccountStore`` and ``AgentAccountDirectory`` that keep their rows in memory, one
+    per owner and site.
 
     ``created`` holds the time each row was first saved, and ``last_used`` the time a login last
     marked it used, which a row has only once one did.
@@ -578,6 +584,12 @@ class StubMailbox:
         return MailListing((), 0, False)
 
 
+async def never_registers(*, owner_id: str) -> bool:
+    """What acceptance asks of a deployment for the Runs it accepts, for a test that accepts Runs
+    and is not about Agent Accounts: no Run of any owner may register."""
+    return False
+
+
 async def _reads_nothing(_request: ResourceReadRequest, _runtime: ToolRuntime) -> ToolResult:
     raise AssertionError("an inert browser host reads nothing")
 
@@ -596,33 +608,33 @@ def idle_accounts_binding(
 
 
 def idle_accounts(
-    *, registration: bool = True, mailbox: AgentMailbox | None = None
+    *, may_register: bool = True, mailbox: AgentMailbox | None = None
 ) -> RunAgentAccounts:
     """The Agent Accounts of a Run that signs in to nothing, for a test that drives or composes
-    the browser and not its accounts. The Run may register unless ``registration`` is off, and
+    the browser and not its accounts. The Run may register unless ``may_register`` is off, and
     ``mailbox`` delivers its mail when it has one."""
     return RunAgentAccounts(
         owner_id="owner",
         binding=idle_accounts_binding(mailbox=mailbox),
-        registration=registration,
+        may_register=may_register,
     )
 
 
 def inert_browser_host(
-    *, registration: bool = True, mailbox: AgentMailbox | None = None
+    *, may_register: bool = True, mailbox: AgentMailbox | None = None
 ) -> BrowserToolHost:
     """The browser tool's host for a test that needs the tool composed and offered, not driven.
 
     Its browser leases nothing until a page is opened, and its reader is never called. Its Run
     has Agent Accounts, which nothing registers or reads, delivered by ``mailbox`` when it has
-    one, and which it may register unless ``registration`` is off.
+    one, and which it may register unless ``may_register`` is off.
     """
     holder = BrowserHolder("owner", "11111111-1111-1111-1111-111111111111", "worker", 1)
     return BrowserToolHost(
         RunAgentBrowser(FakeProvider(), holder, browser_settings()),
         ResourceRegistry(),
         _reads_nothing,
-        idle_accounts(registration=registration, mailbox=mailbox),
+        idle_accounts(may_register=may_register, mailbox=mailbox),
     )
 
 
@@ -633,6 +645,7 @@ __all__ = [
     "FakePage",
     "LaunchRecorder",
     "LaunchedProvider",
+    "ListedAccountStore",
     "MemoryAccountStore",
     "ProxiedRequest",
     "RecordingRenderer",
@@ -646,6 +659,7 @@ __all__ = [
     "inert_browser_host",
     "launch_recorder",
     "launched_chromium",
+    "never_registers",
     "run_server",
     "web_proxy",
 ]

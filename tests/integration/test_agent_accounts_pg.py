@@ -83,7 +83,7 @@ async def register(
     run = RunAgentAccounts(
         owner_id=owner,
         binding=AgentAccountsBinding(store, cipher, registration_allowed=True),
-        registration=True,
+        may_register=True,
     )
     session = run.session("parent", child=False)
     password = generate_password()
@@ -244,12 +244,12 @@ async def test_new_sign_ups_are_on_until_the_owner_turns_them_off_and_the_switch
 ) -> None:
     settings = PGAgentAccountSettingsStore(pool=pool)
 
-    assert await settings.registration_enabled(owner_id="alice") is True
-    assert await settings.set_registration_enabled(owner_id="alice", enabled=False) is False
-    assert await settings.registration_enabled(owner_id="alice") is False
-    assert await settings.registration_enabled(owner_id="bob") is True
-    assert await settings.set_registration_enabled(owner_id="alice", enabled=True) is True
-    assert await settings.registration_enabled(owner_id="alice") is True
+    assert await settings.sign_ups_enabled(owner_id="alice") is True
+    await settings.set_sign_ups(owner_id="alice", enabled=False)
+    assert await settings.sign_ups_enabled(owner_id="alice") is False
+    assert await settings.sign_ups_enabled(owner_id="bob") is True
+    await settings.set_sign_ups(owner_id="alice", enabled=True)
+    assert await settings.sign_ups_enabled(owner_id="alice") is True
     async with pool.acquire() as conn:
         assert await conn.fetchval("SELECT count(*) FROM dlightrag_agent_account_settings") == 1
 
@@ -284,7 +284,7 @@ async def test_reseal_moves_retired_envelopes_and_skips_ones_no_key_opens(pool: 
         run = RunAgentAccounts(
             owner_id=owner,
             binding=AgentAccountsBinding(store, rotated, registration_allowed=True),
-            registration=True,
+            may_register=True,
         )
         session = run.session("parent", child=False)
         account = await session.login_target(site)

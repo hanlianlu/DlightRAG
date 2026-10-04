@@ -514,7 +514,7 @@ def test_a_child_may_register_exactly_where_its_run_may_and_always_logs_in(
 ) -> None:
     """A Child's browser is its Run's, so the switch the Run was accepted with reaches it."""
     orchestrator = _research_owner_with_subagents(
-        tmp_path, browser=inert_browser_host(registration=registration)
+        tmp_path, browser=inert_browser_host(may_register=registration)
     )
 
     parent, child = (

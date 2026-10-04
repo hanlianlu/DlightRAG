@@ -18,7 +18,7 @@ from typing import Any, Literal, cast
 import asyncpg
 
 from dlightrag.adapters.postgres.answer.agent_accounts import (
-    AGENT_ACCOUNT_ACTIVITY_DDL,
+    AGENT_ACCOUNT_ACTIVITY_AND_SIGN_UPS_DDL,
     AGENT_ACCOUNT_SETTINGS_DDL,
     AGENT_ACCOUNT_SETTINGS_SCHEMA_TABLE,
     AGENT_ACCOUNTS_DDL,
@@ -1153,10 +1153,10 @@ RUN_MIGRATIONS = (
         AGENT_ACCOUNTS_DDL,
     ),
     Migration(
-        "agent_account_activity",
+        "agent_account_activity_and_sign_ups",
         "Record when each Agent Account was registered and last used, and each owner's sign-up "
         "switch",
-        AGENT_ACCOUNT_ACTIVITY_DDL,
+        AGENT_ACCOUNT_ACTIVITY_AND_SIGN_UPS_DDL,
     ),
 )
 

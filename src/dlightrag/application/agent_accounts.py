@@ -17,16 +17,11 @@ from __future__ import annotations
 import asyncio
 import datetime
 import logging
-import re
 from dataclasses import dataclass
 from typing import Protocol
 
-from dlightrag.application.errors import ApplicationInputError, ApplicationNotFoundError
-from dlightrag.engine.answer.agent_browser import (
-    AgentAccountStore,
-    AgentAccountSummary,
-    reseal_agent_accounts,
-)
+from dlightrag.application.errors import ApplicationNotFoundError
+from dlightrag.engine.answer.agent_browser import AgentAccountStore, reseal_agent_accounts
 from dlightrag.engine.credential_cipher import CredentialCipher
 
 logger = logging.getLogger(__name__)
@@ -34,18 +29,42 @@ logger = logging.getLogger(__name__)
 #: How often a writer looks for envelopes under a retired key, as often as Connections do.
 _MAINTENANCE_SECONDS = 60.0
 
-#: What names an account: the registrable domain of its site, in lowercase.
-_SITE = re.compile(r"[a-z0-9_-]{1,63}(\.[a-z0-9_-]{1,63})*")
-_SITE_MAX_CHARS = 253
+
+@dataclass(frozen=True, slots=True)
+class AgentAccountSummary:
+    """What Settings shows an owner of one of their accounts: where it is, who it is there, and
+    when it was registered and last signed in. It holds nothing of the password, its envelope,
+    the key that sealed it, or the account's id."""
+
+    site: str
+    email: str | None
+    username: str | None
+    created_at: datetime.datetime
+    """When the owner's account on the site was first registered, which a reset keeps."""
+    last_used_at: datetime.datetime | None
+    """When a login last filled its password, or None before the first one."""
+
+
+class AgentAccountDirectory(Protocol):
+    """An owner's accounts as Settings lists and removes them. The Agent never does either, so
+    the engine's own port for accounts has neither."""
+
+    async def summaries(self, *, owner_id: str) -> tuple[AgentAccountSummary, ...]:
+        """Every account the owner has, in the order of their sites."""
+        ...
+
+    async def delete(self, *, owner_id: str, site: str) -> bool:
+        """Remove the owner's account on ``site``; whether there was one."""
+        ...
 
 
 class AgentAccountSettingsStore(Protocol):
-    """Whether each owner lets the Agent register new accounts; an owner who never chose has them
-    on."""
+    """Whether each owner lets the Agent sign up for new accounts; an owner who never chose has
+    them on."""
 
-    async def registration_enabled(self, *, owner_id: str) -> bool: ...
+    async def sign_ups_enabled(self, *, owner_id: str) -> bool: ...
 
-    async def set_registration_enabled(self, *, owner_id: str, enabled: bool) -> bool: ...
+    async def set_sign_ups(self, *, owner_id: str, enabled: bool) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,38 +76,13 @@ class AgentRegistrationView:
 
 
 @dataclass(frozen=True, slots=True)
-class AgentAccountView:
-    """One account as its owner sees it, with its times in UTC."""
-
-    site: str
-    email: str | None
-    username: str | None
-    created_at: str
-    last_used_at: str | None
-
-
-@dataclass(frozen=True, slots=True)
 class AgentAccountsView:
     """An owner's Agent Accounts, the switch for new sign-ups, and whether the deployment has
     Agent Accounts at all, which it has where an Agent Browser is configured."""
 
     available: bool
     registration: AgentRegistrationView
-    accounts: tuple[AgentAccountView, ...]
-
-
-def _utc(moment: datetime.datetime) -> str:
-    return moment.astimezone(datetime.UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
-
-
-def _view_of(summary: AgentAccountSummary) -> AgentAccountView:
-    return AgentAccountView(
-        site=summary.site,
-        email=summary.email,
-        username=summary.username,
-        created_at=_utc(summary.created_at),
-        last_used_at=None if summary.last_used_at is None else _utc(summary.last_used_at),
-    )
+    accounts: tuple[AgentAccountSummary, ...]
 
 
 class AgentAccounts:
@@ -102,12 +96,12 @@ class AgentAccounts:
     def __init__(
         self,
         *,
-        store: AgentAccountStore,
+        directory: AgentAccountDirectory,
         settings_store: AgentAccountSettingsStore,
         available: bool,
         registration_allowed: bool,
     ) -> None:
-        self._store = store
+        self._directory = directory
         self._settings = settings_store
         self._available = available
         self._registration_allowed = registration_allowed
@@ -117,30 +111,27 @@ class AgentAccounts:
             available=self._available,
             registration=AgentRegistrationView(
                 allowed=self._registration_allowed,
-                enabled=await self._settings.registration_enabled(owner_id=owner_id),
+                enabled=await self._settings.sign_ups_enabled(owner_id=owner_id),
             ),
-            accounts=tuple(
-                _view_of(summary) for summary in await self._store.summaries(owner_id=owner_id)
-            ),
+            accounts=await self._directory.summaries(owner_id=owner_id),
         )
 
-    async def registration(self, *, owner_id: str) -> bool:
+    async def may_register(self, *, owner_id: str) -> bool:
         """Whether a Run accepted for the owner now may register: the deployment allows it and
-        the owner has not turned it off. The Run keeps this answer, whatever is switched next."""
-        return self._registration_allowed and await self._settings.registration_enabled(
+        the owner has not turned sign-ups off. The Run keeps this answer, whatever is switched
+        next."""
+        return self._registration_allowed and await self._settings.sign_ups_enabled(
             owner_id=owner_id
         )
 
-    async def set_registration(self, *, owner_id: str, enabled: bool) -> AgentAccountsView:
-        await self._settings.set_registration_enabled(owner_id=owner_id, enabled=enabled)
+    async def set_sign_ups(self, *, owner_id: str, enabled: bool) -> AgentAccountsView:
+        await self._settings.set_sign_ups(owner_id=owner_id, enabled=enabled)
         return await self.view(owner_id=owner_id)
 
     async def remove(self, *, owner_id: str, site: str) -> AgentAccountsView:
-        """Remove the owner's account on ``site``. Another owner's account there is not theirs
-        to remove, so it is as unknown as one nobody has."""
-        if len(site) > _SITE_MAX_CHARS or _SITE.fullmatch(site) is None:
-            raise ApplicationInputError("site must be a lowercase hostname")
-        if not await self._store.delete(owner_id=owner_id, site=site):
+        """Remove the owner's account on ``site``. A site the owner has no account on is not
+        found, whoever else has one there."""
+        if not await self._directory.delete(owner_id=owner_id, site=site):
             raise ApplicationNotFoundError("This owner has no Agent Account for that site")
         return await self.view(owner_id=owner_id)
 
@@ -182,9 +173,10 @@ class AgentAccountMaintenance:
 
 
 __all__ = [
+    "AgentAccountDirectory",
     "AgentAccountMaintenance",
     "AgentAccountSettingsStore",
-    "AgentAccountView",
+    "AgentAccountSummary",
     "AgentAccounts",
     "AgentAccountsView",
     "AgentRegistrationView",

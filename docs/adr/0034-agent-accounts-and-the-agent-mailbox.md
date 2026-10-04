@@ -150,8 +150,8 @@ identity the Agent registered under, the day it was registered and the day it wa
 signed in, removes an account, and holds the owner's switch. Removing deletes the saved
 sign-in and its sealed password; the account itself stays on the site. The registered day
 is kept by a password reset, which is the same account, and the last sign-in is the day a
-login last filled its stored credentials, which a Child's login with the owner's account
-records too, since recording a use adds no authority. The routes are Web-only, like
+login last filled its password, which a Child's login with the owner's account records too,
+since recording a use adds no authority. The routes are Web-only, like
 Connections: owner Settings state has no REST counterpart.
 
 ## Considered options

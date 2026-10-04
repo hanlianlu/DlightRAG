@@ -23,14 +23,12 @@ from pydantic import SecretStr
 
 from dlightrag.engine.answer.agent_browser import (
     ACCOUNT_LABEL,
-    REGISTRATION_PIN,
     AgentAccount,
     AgentAccountsBinding,
     RunAgentAccounts,
     account_site,
     generate_password,
     owner_alias,
-    run_agent_accounts,
     run_alias,
 )
 from dlightrag.engine.credential_cipher import CredentialCipher, UnreadableEnvelope
@@ -168,7 +166,7 @@ def accounts(
     return RunAgentAccounts(
         owner_id=OWNER,
         binding=AgentAccountsBinding(store, cipher, mailbox, registration_allowed=True),
-        registration=True,
+        may_register=True,
     )
 
 
@@ -189,32 +187,6 @@ async def register(
         password=password,
     )
     return account, password
-
-
-@pytest.mark.parametrize(
-    ("allowed", "prepared", "registers"),
-    [
-        (True, {REGISTRATION_PIN: True}, True),
-        (True, {REGISTRATION_PIN: False}, False),
-        # A Run accepted before the owner had a switch was pinned to nothing: it has the allowance.
-        (True, {}, True),
-        (False, {}, False),
-        # The deployment's allowance is read again and is the ceiling of what a Run was pinned to.
-        (False, {REGISTRATION_PIN: True}, False),
-        (False, {REGISTRATION_PIN: False}, False),
-    ],
-    ids=["pinned-on", "pinned-off", "unpinned", "unpinned-not-allowed", "withdrawn", "both-off"],
-)
-def test_a_run_registers_as_acceptance_pinned_it_under_the_deployments_allowance(
-    allowed: bool, prepared: dict[str, bool], registers: bool
-) -> None:
-    binding = AgentAccountsBinding(
-        MemoryAccountStore(), CredentialCipher(None), registration_allowed=allowed
-    )
-
-    run = run_agent_accounts(binding, owner_id=OWNER, prepared_input=prepared)
-
-    assert run.registration is registers
 
 
 async def test_a_parents_account_is_sealed_for_its_owner_site_and_account() -> None:

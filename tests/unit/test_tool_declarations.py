@@ -83,7 +83,7 @@ async def test_binding_preserves_the_plan_and_adds_real_execution() -> None:
     ],
 )
 @pytest.mark.parametrize(
-    ("agent_browser", "agent_registration", "agent_mailbox"),
+    ("agent_browser", "agent_may_register", "agent_mailbox"),
     [
         (False, False, False),
         (True, False, False),
@@ -101,7 +101,7 @@ def test_research_acceptance_and_execution_use_identical_declarations(
     child: bool,
     narrow: tuple[str, ...] | None,
     agent_browser: bool,
-    agent_registration: bool,
+    agent_may_register: bool,
     agent_mailbox: bool,
 ) -> None:
     factory = SkillsBundleFactory(global_root=tmp_path / "global", owner_root=tmp_path / "owners")
@@ -111,7 +111,7 @@ def test_research_acceptance_and_execution_use_identical_declarations(
         web_search=web,
         resource_read=True,
         agent_browser=agent_browser,
-        agent_registration=agent_registration,
+        agent_may_register=agent_may_register,
         agent_mailbox=agent_mailbox,
         resource_view=True,
         environment=paths,
@@ -135,7 +135,7 @@ def test_research_acceptance_and_execution_use_identical_declarations(
         register_web_source=None,
         resource_reader=AsyncMock(),
         browser=inert_browser_host(
-            registration=agent_registration, mailbox=StubMailbox() if agent_mailbox else None
+            may_register=agent_may_register, mailbox=StubMailbox() if agent_mailbox else None
         )
         if agent_browser
         else None,
@@ -171,7 +171,7 @@ def test_research_acceptance_and_execution_use_identical_declarations(
         assert ("upload" in actions) == paths
         # login is every browser's, since a Run with one has Agent Accounts, register is offered
         # where the Run may register, and inbox where it has an Agent Mailbox.
-        assert ("register" in actions, "login" in actions) == (agent_registration, True)
+        assert ("register" in actions, "login" in actions) == (agent_may_register, True)
         assert ("inbox" in actions) == agent_mailbox
 
 

@@ -429,8 +429,13 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     )
 
     agent_account_store = PGAgentAccountStore()
-    registration_allowed = config.answer.agent.browser.account_registration
     browser_settings = agent_browser_settings(config)
+    # Whether the deployment lets the Agent register is one answer: there is an Agent Browser to
+    # register with, and the operator has not turned account registration off. The binding,
+    # health, Settings and acceptance all take it from here.
+    registration_allowed = (
+        browser_settings is not None and config.answer.agent.browser.account_registration
+    )
     agent_browser = None
     if browser_settings is not None:
         # Playwright loads only where an Agent Browser is configured.
@@ -456,7 +461,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
 
     accounts = None if agent_browser is None else agent_browser.accounts
     agent_accounts = AgentAccounts(
-        store=agent_account_store,
+        directory=agent_account_store,
         settings_store=PGAgentAccountSettingsStore(),
         available=accounts is not None,
         registration_allowed=registration_allowed,
@@ -465,7 +470,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         endpoints=len(config.answer.agent.browser.endpoints),
         sandbox=config.answer.agent.browser.chromium_sandbox,
         accounts=accounts is not None,
-        registration=accounts is not None and registration_allowed,
+        registration_allowed=registration_allowed,
         mailbox=has_mailbox(accounts),
     )
 
@@ -610,7 +615,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         model_invocation_fingerprint_for_role=fingerprint_for_role,
         research_tool_declarations=answer_executor.research_tool_declarations,
         memory_capability=memory.execution_capability,
-        agent_registration=agent_accounts.registration,
+        agent_may_register=agent_accounts.may_register,
         bind_research=connections.bind_research,
         # Stable across workers sharing the operational database. Cursors
         # carry no authorization state and expire on credential rotation.

@@ -33,7 +33,6 @@ from dlightrag.engine.answer.agent_browser import (
     ACCOUNT_LABEL,
     PASSWORD_MASK,
     AgentAccountsBinding,
-    AgentAccountStore,
     AgentMailbox,
     BrowserHolder,
     RunAgentAccounts,
@@ -52,6 +51,7 @@ from dlightrag.engine.answer.tools.browser import BrowserToolHost, browser_tool
 from dlightrag.engine.answer.tools.resources import make_resource_reader
 from dlightrag.engine.credential_cipher import CredentialCipher
 from tests.support.agent_browser import (
+    ListedAccountStore,
     MemoryAccountStore,
     Served,
     StubMailbox,
@@ -184,7 +184,7 @@ class Browsing:
     tools: dict[bool, AgentTool]
     run: RunAgentBrowser
     proxy: WebProxy
-    store: AgentAccountStore
+    store: ListedAccountStore
     cipher: CredentialCipher
     admitted: list[tuple[FetchedResourceBytes, ResourceEffectOwner | None]]
     #: The text of every result and live update a call produced: where a password could show.
@@ -317,16 +317,16 @@ def assert_sent(fields: dict[str, list[str]], password: SecretStr, *names: str) 
 async def browsing(
     directory: Path,
     *,
-    store: AgentAccountStore | None = None,
+    store: ListedAccountStore | None = None,
     keyring: str | None = KEYRING,
     mailbox: AgentMailbox | None = None,
-    registration: bool = True,
+    may_register: bool = True,
     pages: dict[str, Served] | None = None,
     **bounds: Any,
 ) -> AsyncIterator[Browsing]:
     """A Run's browser tool over a Chromium that reaches ``pages`` through a TLS-terminating proxy.
 
-    The Run may register unless ``registration`` is off, which is the owner's switch pinned to it.
+    The Run may register unless ``may_register`` is off, which is the owner's switch pinned to it.
     """
     admitted: list[tuple[FetchedResourceBytes, ResourceEffectOwner | None]] = []
 
@@ -349,7 +349,7 @@ async def browsing(
             binding=AgentAccountsBinding(
                 accounts_store, cipher, mailbox, registration_allowed=True
             ),
-            registration=registration,
+            may_register=may_register,
         )
         host = BrowserToolHost(run, registry, make_resource_reader(registry, 4000), accounts)
         tools = {
@@ -912,7 +912,7 @@ async def test_a_run_that_may_not_register_logs_in_with_what_its_owner_has_and_c
 
     # The owner turned new sign-ups off after this account was registered: the next Run keeps the
     # account and loses the action that makes one.
-    async with browsing(tmp_path, store=store, registration=False) as later:
+    async with browsing(tmp_path, store=store, may_register=False) as later:
         later.watch(password)
         form = await later.form(f"{SHOP}/signin")
         assert (
@@ -950,7 +950,7 @@ async def test_what_a_run_that_may_not_register_is_told_names_only_what_it_has(
     )
 
     async with browsing(
-        tmp_path, store=store, mailbox=StubMailbox(DOMAIN), registration=False
+        tmp_path, store=store, mailbox=StubMailbox(DOMAIN), may_register=False
     ) as web:
         # The inbox opens at a login here, so that is the only thing it says.
         unopened = await web.call(action="inbox")
@@ -972,7 +972,7 @@ async def test_what_a_run_that_may_not_register_is_told_names_only_what_it_has(
 
     # An account whose key the ring lost cannot be recovered by a Run that cannot register.
     async with browsing(
-        tmp_path, store=store, keyring=OTHER_KEYRING, registration=False
+        tmp_path, store=store, keyring=OTHER_KEYRING, may_register=False
     ) as keyless:
         signin = await keyless.form(f"{SHOP}/signin")
         unreadable = await keyless.call(
@@ -1130,9 +1130,7 @@ async def test_an_account_whose_key_is_lost_recovers_through_its_reset_mail(
         generate_password(), label=ACCOUNT_LABEL, binding=(OWNER, SITE, "account")
     )
     store = MemoryAccountStore()
-    store.rows[(OWNER, SITE)] = StoredAgentAccount(
-        OWNER, SITE, "account", alias, None, key_id, envelope
-    )
+    await store.save(StoredAgentAccount(OWNER, SITE, "account", alias, None, key_id, envelope))
     async with s3_stub({}, bucket="mailbox") as bucket:
         mailbox = bucket_mailbox(bucket)
         async with browsing(tmp_path, store=store, keyring=OTHER_KEYRING, mailbox=mailbox) as web:
@@ -1153,6 +1151,8 @@ async def test_an_account_whose_key_is_lost_recovers_through_its_reset_mail(
             forgot = await web.form(f"{SHOP}/forgot")
             filled = await web.call(action="login", email_ref=forgot["email"])
             assert not filled.is_error, filled.text_content
+            # No password was filled, so Settings do not show the account as signed in to.
+            assert [row.last_used_at for row in await store.summaries(owner_id=OWNER)] == [None]
             await web.call(action="click", ref=forgot["button"])
             assert posted(web.proxy, "/sent")["email"] == [alias]
             bucket.objects[f"mail/{alias}/reset.eml"] = delivered(

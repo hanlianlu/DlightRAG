@@ -9,10 +9,11 @@ from typing import Any
 
 from dlightrag.adapters.postgres.core._migrations import TableRequirement
 from dlightrag.adapters.postgres.core._operations import ConnectionPool, PostgresOperationRunner
-from dlightrag.engine.answer.agent_browser import AgentAccountSummary, StoredAgentAccount
+from dlightrag.application.agent_accounts import AgentAccountSummary
+from dlightrag.engine.answer.agent_browser import StoredAgentAccount
 
 # ``updated_at`` is the last time the owner's credentials changed, ``created_at`` the first
-# registration, which a reset keeps, and ``last_used_at`` the last login that filled them.
+# registration, which a reset keeps, and ``last_used_at`` the last login that filled its password.
 _CREATE_AGENT_ACCOUNTS = """
 CREATE TABLE IF NOT EXISTS dlightrag_agent_accounts (
     owner_id           TEXT        NOT NULL,
@@ -36,7 +37,7 @@ CREATE TABLE IF NOT EXISTS dlightrag_agent_accounts (
 _CREATE_AGENT_ACCOUNT_SETTINGS = """
 CREATE TABLE IF NOT EXISTS dlightrag_agent_account_settings (
     owner_id             TEXT        NOT NULL,
-    registration_enabled BOOLEAN     NOT NULL DEFAULT TRUE,
+    sign_ups_enabled     BOOLEAN     NOT NULL DEFAULT TRUE,
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (owner_id)
 )
@@ -45,16 +46,12 @@ CREATE TABLE IF NOT EXISTS dlightrag_agent_account_settings (
 AGENT_ACCOUNTS_DDL = (_CREATE_AGENT_ACCOUNTS,)
 AGENT_ACCOUNT_SETTINGS_DDL = (_CREATE_AGENT_ACCOUNT_SETTINGS,)
 
-# What advances a database whose accounts table was made before it kept these times. A
-# registration time it never recorded is taken to be the last time the account's credentials
-# changed, which is the registration of an account no one has reset. Only a row that the new
-# column gave the time of this migration, later than anything the row was written at, is touched,
-# so a fresh baseline, whose table is empty, and any row written since are left as they are.
-AGENT_ACCOUNT_ACTIVITY_DDL = (
+# What advances a database whose accounts table was made before it kept these times, and which
+# has no switch for the owner's sign-ups.
+AGENT_ACCOUNT_ACTIVITY_AND_SIGN_UPS_DDL = (
     "ALTER TABLE dlightrag_agent_accounts "
     "ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
     "ALTER TABLE dlightrag_agent_accounts ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMPTZ",
-    "UPDATE dlightrag_agent_accounts SET created_at = updated_at WHERE created_at > updated_at",
     *AGENT_ACCOUNT_SETTINGS_DDL,
 )
 
@@ -78,7 +75,7 @@ AGENT_ACCOUNTS_SCHEMA_TABLE = TableRequirement(
 
 AGENT_ACCOUNT_SETTINGS_SCHEMA_TABLE = TableRequirement(
     name="dlightrag_agent_account_settings",
-    columns=("owner_id", "registration_enabled", "updated_at"),
+    columns=("owner_id", "sign_ups_enabled", "updated_at"),
     primary_key=("owner_id",),
 )
 
@@ -125,19 +122,18 @@ SET last_used_at = NOW()
 WHERE owner_id = $1 AND site = $2 AND account_id = $3
 """
 
-_GET_REGISTRATION = """
-SELECT registration_enabled
+_GET_SIGN_UPS = """
+SELECT sign_ups_enabled
 FROM dlightrag_agent_account_settings
 WHERE owner_id = $1
 """
 
-_SET_REGISTRATION = """
-INSERT INTO dlightrag_agent_account_settings (owner_id, registration_enabled)
+_SET_SIGN_UPS = """
+INSERT INTO dlightrag_agent_account_settings (owner_id, sign_ups_enabled)
 VALUES ($1, $2)
 ON CONFLICT (owner_id) DO UPDATE
-SET registration_enabled = EXCLUDED.registration_enabled,
+SET sign_ups_enabled = EXCLUDED.sign_ups_enabled,
     updated_at = NOW()
-RETURNING registration_enabled
 """
 
 _SELECT_SEALED_UNDER = """
@@ -171,7 +167,8 @@ def _stored(row: Any) -> StoredAgentAccount:
 
 
 class PGAgentAccountStore(PostgresOperationRunner):
-    """Each owner's Agent Accounts, one row per site."""
+    """Each owner's Agent Accounts, one row per site: what the Agent reads and keeps of them
+    (``AgentAccountStore``), and what Settings lists and removes (``AgentAccountDirectory``)."""
 
     def __init__(self, *, pool: ConnectionPool | None = None) -> None:
         super().__init__(pool=pool)
@@ -253,29 +250,29 @@ class PGAgentAccountStore(PostgresOperationRunner):
 
 
 class PGAgentAccountSettingsStore(PostgresOperationRunner):
-    """Whether each owner lets the Agent register new accounts."""
+    """Whether each owner lets the Agent sign up for new accounts."""
 
     def __init__(self, *, pool: ConnectionPool | None = None) -> None:
         super().__init__(pool=pool)
 
-    async def registration_enabled(self, *, owner_id: str) -> bool:
+    async def sign_ups_enabled(self, *, owner_id: str) -> bool:
         async def operation(conn: Any) -> bool:
-            enabled = await conn.fetchval(_GET_REGISTRATION, owner_id)
+            enabled = await conn.fetchval(_GET_SIGN_UPS, owner_id)
             return True if enabled is None else bool(enabled)
 
         return await self._run(operation)
 
-    async def set_registration_enabled(self, *, owner_id: str, enabled: bool) -> bool:
-        async def operation(conn: Any) -> bool:
-            return bool(await conn.fetchval(_SET_REGISTRATION, owner_id, enabled))
+    async def set_sign_ups(self, *, owner_id: str, enabled: bool) -> None:
+        async def operation(conn: Any) -> None:
+            await conn.execute(_SET_SIGN_UPS, owner_id, enabled)
 
-        return await self._run(operation)
+        await self._run(operation)
 
 
 __all__ = [
     "AGENT_ACCOUNTS_DDL",
     "AGENT_ACCOUNTS_SCHEMA_TABLE",
-    "AGENT_ACCOUNT_ACTIVITY_DDL",
+    "AGENT_ACCOUNT_ACTIVITY_AND_SIGN_UPS_DDL",
     "AGENT_ACCOUNT_SETTINGS_DDL",
     "AGENT_ACCOUNT_SETTINGS_SCHEMA_TABLE",
     "PGAgentAccountSettingsStore",

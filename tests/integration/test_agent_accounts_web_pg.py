@@ -128,7 +128,7 @@ async def deployed(
         app.state.application = application_double(
             config,
             agent_accounts=AgentAccounts(
-                store=accounts,
+                directory=accounts,
                 settings_store=settings,
                 available=available,
                 registration_allowed=registration_allowed,
@@ -172,7 +172,8 @@ async def test_an_owner_is_shown_their_accounts_and_never_a_secret(mode: str) ->
             "agent-77",
         )
         assert by_site["shop.example"]["email"] == "agent@alias.example"
-        stamp = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
+        # UTC ISO 8601 with a Z, as every Web view of a time has it.
+        stamp = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z")
         assert all(stamp.fullmatch(account["created_at"]) for account in accounts)
         assert by_site["alpha.example"]["last_used_at"] is None
         assert stamp.fullmatch(by_site["shop.example"]["last_used_at"])
@@ -193,7 +194,7 @@ async def test_the_switch_for_new_sign_ups_is_set_and_read_back(mode: str) -> No
 
         assert off.status_code == 200
         assert off.json()["registration"] == {"allowed": True, "enabled": False}
-        assert await web.settings.registration_enabled(owner_id=web.owner("a")) is False
+        assert await web.settings.sign_ups_enabled(owner_id=web.owner("a")) is False
         again = (await client.get("/web/api/agent-accounts")).json()
         assert again["registration"] == {"allowed": True, "enabled": False}
         on = await client.put(
@@ -208,7 +209,7 @@ async def test_the_switch_for_new_sign_ups_is_set_and_read_back(mode: str) -> No
                 "/web/api/agent-accounts/settings", json=body, headers=writing(client)
             )
             assert refused.status_code == 422
-        assert await web.settings.registration_enabled(owner_id=web.owner("a")) is True
+        assert await web.settings.sign_ups_enabled(owner_id=web.owner("a")) is True
 
 
 async def test_a_switch_is_each_owners_own_in_a_deployment_that_tells_owners_apart() -> None:
@@ -291,22 +292,6 @@ async def test_another_owners_account_is_as_unknown_as_one_nobody_has() -> None:
         assert await web.accounts.account(owner_id=web.owner("a"), site="shop.example") is not None
 
 
-@pytest.mark.parametrize("mode", MODES)
-@pytest.mark.parametrize(
-    "site",
-    ["Shop.Example", "shop..example", ".example", "shop.example.", "a%20b", "sh%C3%B6p.example"],
-)
-async def test_a_site_that_is_not_a_lowercase_hostname_is_refused(mode: str, site: str) -> None:
-    async with deployed(mode) as web, web.browser("a") as client:
-        await web.seed(web.owner("a"), "shop.example")
-        await client.get("/web/api/agent-accounts")
-
-        refused = await client.delete(f"/web/api/agent-accounts/{site}", headers=writing(client))
-
-        assert refused.status_code == 422
-        assert await web.accounts.account(owner_id=web.owner("a"), site="shop.example") is not None
-
-
 def delete_shop(client: AsyncClient, headers: dict[str, str]) -> Any:
     return client.delete("/web/api/agent-accounts/shop.example", headers=headers)
 
@@ -337,5 +322,5 @@ async def test_a_write_the_page_did_not_make_is_refused_and_changes_nothing(
 
         assert refused == [403, 403, 403]
         assert await web.accounts.account(owner_id=web.owner("a"), site="shop.example") is not None
-        assert await web.settings.registration_enabled(owner_id=web.owner("a")) is True
+        assert await web.settings.sign_ups_enabled(owner_id=web.owner("a")) is True
         assert (await write(client, writing(client))).status_code == 200

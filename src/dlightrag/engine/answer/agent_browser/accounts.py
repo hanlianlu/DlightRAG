@@ -137,21 +137,6 @@ class ChildAccount:
 type AgentAccount = StoredAgentAccount | ChildAccount
 
 
-@dataclass(frozen=True, slots=True)
-class AgentAccountSummary:
-    """What Settings shows an owner of one of their accounts: where it is, who it is there, and
-    when it was registered and last signed in. It holds nothing of the password, its envelope,
-    the key that sealed it, or the account's id."""
-
-    site: str
-    email: str | None
-    username: str | None
-    created_at: datetime
-    """When the owner's account on the site was first registered, which a reset keeps."""
-    last_used_at: datetime | None
-    """When a login last filled its stored credentials, or None before the first one."""
-
-
 class AgentAccountStore(Protocol):
     """The owner-scoped durable record of Agent Accounts."""
 
@@ -161,17 +146,9 @@ class AgentAccountStore(Protocol):
         """Insert the account, or replace the owner's account on that site."""
         ...
 
-    async def summaries(self, *, owner_id: str) -> tuple[AgentAccountSummary, ...]:
-        """Every account the owner has, in the order of their sites."""
-        ...
-
-    async def delete(self, *, owner_id: str, site: str) -> bool:
-        """Remove the owner's account on ``site``; whether there was one."""
-        ...
-
     async def mark_used(self, account: StoredAgentAccount) -> None:
-        """Note that a login filled ``account`` just now, unless it was replaced or removed
-        since it was read."""
+        """Note that a login filled ``account``'s password just now, unless it was replaced or
+        removed since it was read."""
         ...
 
     async def sealed_under(
@@ -210,13 +187,8 @@ def has_mailbox(accounts: _Mailboxed | None) -> bool:
     return accounts is not None and accounts.mailbox is not None
 
 
-def may_register(accounts: RunAgentAccounts | None) -> bool:
-    """Whether a Run composed Agent Accounts that may register."""
-    return accounts is not None and accounts.registration
-
-
 #: Where acceptance pins whether the owner's Run may register, in the Run's prepared input.
-REGISTRATION_PIN = "agent_account_registration"
+MAY_REGISTER_PIN = "agent_may_register"
 
 
 def run_agent_accounts(
@@ -228,13 +200,11 @@ def run_agent_accounts(
     no Run already accepted. The deployment's allowance is read again, and is the ceiling: a Run
     pinned to register under an allowance since withdrawn is composed without ``register``, which
     its accepted plan does not match, so it is refused like any Run whose tools have changed.
-    A Run accepted before the switch existed was pinned to nothing, and has the allowance.
+    A Run with no pin was not accepted able to register, and cannot.
     """
-    pinned = prepared_input.get(REGISTRATION_PIN, True)
+    pinned = prepared_input.get(MAY_REGISTER_PIN) is True
     return RunAgentAccounts(
-        owner_id=owner_id,
-        binding=binding,
-        registration=binding.registration_allowed and bool(pinned),
+        owner_id=owner_id, binding=binding, may_register=binding.registration_allowed and pinned
     )
 
 
@@ -314,9 +284,9 @@ class SessionAccounts:
         return account.email if account.email == minted else None
 
     async def mark_used(self, account: AgentAccount) -> None:
-        """A login filled ``account`` now: the owner's Settings show the day it last did. That is
-        no authority, so a Child's login with the owner's account marks it too; a Child's own
-        account lives in this process and has no day to keep."""
+        """A login filled ``account``'s password now: the owner's Settings show the day it last
+        did. That is no authority, so a Child's login with the owner's account marks it too; a
+        Child's own account lives in this process and has no day to keep."""
         if isinstance(account, StoredAgentAccount):
             await self._store.mark_used(account)
 
@@ -375,15 +345,15 @@ class ChildSessionAccounts(SessionAccounts):
 class RunAgentAccounts:
     """One Research Run's Agent Accounts, as each of its Agent Sessions sees them.
 
-    ``registration`` is whether the Run may register: it logs in with the accounts its owner
+    ``may_register`` is whether the Run may register: it logs in with the accounts its owner
     has either way, and no other fact of the Run depends on it.
     """
 
-    def __init__(self, *, owner_id: str, binding: AgentAccountsBinding, registration: bool) -> None:
+    def __init__(self, *, owner_id: str, binding: AgentAccountsBinding, may_register: bool) -> None:
         self._owner_id = owner_id
         self._binding = binding
         self.mailbox = binding.mailbox
-        self.registration = registration
+        self.may_register = may_register
         self._sessions: dict[str, SessionAccounts] = {}
 
     def available(self) -> bool:
@@ -433,12 +403,11 @@ async def reseal_agent_accounts(
 
 __all__ = [
     "ACCOUNT_LABEL",
+    "MAY_REGISTER_PIN",
     "MIN_PASSWORD_LENGTH",
     "PASSWORD_LENGTH",
-    "REGISTRATION_PIN",
     "AgentAccount",
     "AgentAccountStore",
-    "AgentAccountSummary",
     "AgentAccountsBinding",
     "ChildAccount",
     "RunAgentAccounts",
@@ -447,7 +416,6 @@ __all__ = [
     "account_site",
     "generate_password",
     "has_mailbox",
-    "may_register",
     "owner_alias",
     "reseal_agent_accounts",
     "run_agent_accounts",
