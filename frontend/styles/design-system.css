@@ -120,6 +120,23 @@
     padding: var(--space-component);
   }
 
+  .ds-nav {
+    display: grid;
+    gap: var(--space-inline);
+    width: 14rem;
+  }
+
+  .ds-choice-card {
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-card);
+    overflow: hidden;
+    width: 14rem;
+  }
+
+  .ds-choice-card > * + * {
+    border-top: 1px solid var(--color-border-subtle);
+  }
+
   .ds-toast-demo {
     inset: auto;
     opacity: 1;

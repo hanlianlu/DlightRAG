@@ -1,0 +1,90 @@
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
+
+/* stylelint-disable selector-pseudo-class-no-unknown -- CSS Modules :global */
+
+/* What every Settings page is built from: a column of cards on hairlines, and the rows and notes
+ * those cards hold. What only one page draws stays with that page. */
+
+@layer features {
+  .stack {
+    display: grid;
+    gap: var(--space-related);
+    min-width: 0;
+  }
+
+  .card {
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-card);
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  /* A card of rows puts a hairline between them. */
+  .divided > * + * {
+    border-block-start: 1px solid var(--color-border-subtle);
+  }
+
+  .row {
+    align-items: center;
+    display: flex;
+    gap: var(--space-component);
+    padding: var(--space-tight) var(--space-component);
+  }
+
+  .rowText {
+    display: grid;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .rowLabel {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-detail);
+    line-height: var(--line-height-control);
+    overflow-wrap: anywhere;
+  }
+
+  /* A control the deployment has switched off reads quieter than one the owner can use. */
+  .rowLabelMuted {
+    color: var(--color-text-muted);
+  }
+
+  .rowCaption,
+  .hint {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    overflow-wrap: anywhere;
+  }
+
+  /* A row whose control is one destructive button: it stacks under its text on a phone. */
+  .dangerRow {
+    gap: var(--space-related);
+  }
+
+  .note {
+    background: var(--color-danger-surface);
+    border-radius: var(--radius-control);
+    color: var(--color-danger);
+    font-size: var(--font-size-detail);
+    line-height: var(--line-height-control);
+    padding: var(--space-tight) var(--space-component);
+  }
+
+  /* ── Phone ── */
+
+  @media (width <= 720px), (height <= 480px) {
+    .row {
+      padding-block: var(--space-component);
+    }
+
+    .dangerRow {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .dangerRow > :global(.dl-btn) {
+      width: 100%;
+    }
+  }
+}

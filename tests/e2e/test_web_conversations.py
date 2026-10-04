@@ -21,6 +21,48 @@ class ConversationRouteState:
     delete_status: int = 204
 
 
+@dataclass
+class AgentAccountsRouteState:
+    """What the mocked Agent Accounts routes answer, and what the page asked of them."""
+
+    accounts: list[dict[str, Any]] = field(default_factory=list)
+    registration: dict[str, bool] = field(
+        default_factory=lambda: {"allowed": True, "enabled": True}
+    )
+    available: bool = True
+    read_status: int = 200
+    # (method, path, JSON body) of every request that reached the routes, in order.
+    requests: list[tuple[str, str, Any]] = field(default_factory=list)
+
+    def view(self) -> dict[str, Any]:
+        return {
+            "available": self.available,
+            "registration": self.registration,
+            "accounts": self.accounts,
+        }
+
+
+def _iso(days_ago: float) -> str:
+    return (datetime.now(UTC) - timedelta(days=days_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _agent_account(
+    site: str,
+    *,
+    email: str | None = None,
+    username: str | None = None,
+    registered_days_ago: float = 10,
+    last_used_days_ago: float | None = None,
+) -> dict[str, Any]:
+    return {
+        "site": site,
+        "email": email,
+        "username": username,
+        "created_at": _iso(registered_days_ago),
+        "last_used_at": None if last_used_days_ago is None else _iso(last_used_days_ago),
+    }
+
+
 def _wait_for_shell_settled(page: Page) -> None:
     """Wait until the shell grid geometry stops changing.
 
@@ -169,7 +211,59 @@ def _install_conversation_routes(page: Page) -> ConversationRouteState:
         route.abort()
 
     page.route("**/web/api/conversations**", handle)
+    _install_agent_accounts_routes(page, AgentAccountsRouteState())
+    _install_quiet_settings_routes(page)
     return state
+
+
+def _install_agent_accounts_routes(
+    page: Page, state: AgentAccountsRouteState
+) -> AgentAccountsRouteState:
+    """Answer the Agent Accounts routes from ``state``; a later install replaces an earlier one."""
+
+    def handle(route: Route) -> None:
+        request = route.request
+        path = urlparse(request.url).path
+        method = request.method
+        state.requests.append((method, path, request.post_data_json if request.post_data else None))
+        if method == "GET" and path == "/web/api/agent-accounts":
+            if state.read_status != 200:
+                route.fulfill(status=state.read_status, json={"detail": "unavailable"})
+                return
+            route.fulfill(json=state.view())
+        elif method == "PUT" and path == "/web/api/agent-accounts/settings":
+            state.registration["enabled"] = bool(
+                (request.post_data_json or {})["registration_enabled"]
+            )
+            route.fulfill(json=state.view())
+        elif method == "DELETE" and path.startswith("/web/api/agent-accounts/"):
+            site = path.rsplit("/", 1)[1]
+            if not any(account["site"] == site for account in state.accounts):
+                route.fulfill(
+                    status=404,
+                    json={"detail": "No account", "error_type": "not_found", "error_kind": None},
+                )
+                return
+            state.accounts = [account for account in state.accounts if account["site"] != site]
+            route.fulfill(json=state.view())
+        else:
+            route.abort()
+
+    page.route("**/web/api/agent-accounts**", handle)
+    return state
+
+
+def _install_quiet_settings_routes(page: Page) -> None:
+    """Connections empty and Profile Memory off, so the other Settings pages have nothing to say."""
+
+    def connections(route: Route) -> None:
+        route.fulfill(json={"revision": "0", "connections": [], "presets": []})
+
+    def memory(route: Route) -> None:
+        route.fulfill(json={"enabled": False, "active_count": None})
+
+    page.route("**/web/api/connections/mcp", connections)
+    page.route("**/web/api/memory/settings", memory)
 
 
 def _active_id(page: Page) -> str:
@@ -208,6 +302,13 @@ def _open_settings(page: Page) -> Locator:
     page.keyboard.press("Enter")
     dialog = page.get_by_role("dialog", name="Settings")
     dialog.wait_for()
+    return dialog
+
+
+def _open_settings_page(page: Page, name: str) -> Locator:
+    """Open Settings and choose one of its pages by the name of its navigation row."""
+    dialog = _open_settings(page)
+    dialog.get_by_role("button", name=name, exact=True).click()
     return dialog
 
 
@@ -586,7 +687,7 @@ def test_delete_all_conversations_is_quiet_accessible_and_returns_to_new_chat(
     _new_conversation(page)
     assert len(state.conversations) == 3
 
-    settings = _open_settings(page)
+    settings = _open_settings_page(page, "Conversation Sessions")
     trigger = settings.get_by_role("button", name="Delete all conversations")
     assert settings.get_by_text("Conversations retain 365 days", exact=True).is_visible()
     assert settings.get_by_text("3 conversations", exact=True).is_visible()
@@ -611,7 +712,7 @@ def test_delete_all_conversations_is_quiet_accessible_and_returns_to_new_chat(
     settings.get_by_role("button", name="Close settings").click()
 
     _add_draft_with_image(page, "discard this draft")
-    settings = _open_settings(page)
+    settings = _open_settings_page(page, "Conversation Sessions")
     settings.get_by_role("button", name="Delete all conversations").click()
     dialog.get_by_text("Draft and attachments will also be deleted.").wait_for()
     dialog.get_by_role("button", name="Delete all").click()
@@ -632,7 +733,7 @@ def test_delete_all_failure_preserves_conversations_draft_and_theme_tokens(page:
     _new_conversation(page)
     _add_draft_with_image(page, "keep this draft")
 
-    settings = _open_settings(page)
+    settings = _open_settings_page(page, "Conversation Sessions")
     settings.get_by_role("button", name="Delete all conversations").click()
     dialog = page.get_by_role("dialog", name="Delete all conversations?")
     danger = dialog.get_by_role("button", name="Delete all")
@@ -677,7 +778,7 @@ def test_delete_all_is_keyboard_accessible_and_centered_on_mobile(page: Page) ->
     _install_conversation_routes(page)
     page.set_viewport_size({"width": 390, "height": 844})
     page.goto("/web/")
-    settings = _open_settings(page)
+    settings = _open_settings_page(page, "Conversation Sessions")
 
     trigger = settings.get_by_role("button", name="Delete all conversations")
     trigger.focus()
@@ -1066,7 +1167,7 @@ def test_mobile_shell_keeps_primary_actions_reachable(
     assert settings_box is not None
     assert settings_box["width"] == pytest.approx(390, abs=1)
     _assert_touch_target(settings.get_by_role("button", name="Close settings"))
-    for control in settings.locator(".dl-dialog-checkbox").all():
+    for control in settings.locator(".dl-nav-item:visible").all():
         _assert_touch_target(control)
     page.keyboard.press("Escape")
     page.get_by_role("button", name="Close conversations").click()

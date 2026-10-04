@@ -9,8 +9,9 @@ Generation, Run Connection Binding, and Connection Activation Epoch.
 
 ## Product contract
 
-- Settings owns the path **Settings → Connections → MCP**. Each owner creates,
-  authorizes, enables, disables, and deletes only their own Connections.
+- Settings owns the **Connections** page, reached as **Settings → Connections**,
+  whose MCP list holds the Connections. Each owner creates, authorizes, enables,
+  disables, and deletes only their own Connections.
 - Every authentication mode has them. A JWT owner is one issuer and subject;
   `none` and `simple` admit every caller as the one deployment owner, so whoever
   holds the `simple` token uses that owner's Connections.

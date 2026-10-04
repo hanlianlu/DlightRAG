@@ -73,6 +73,26 @@ if (host) {
             <button class="dl-switch" type="button" role="switch" aria-checked="false" disabled
                     aria-label="Switch disabled specimen"></button>
             <textarea class="dl-dialog-input" rows="2" placeholder="Text input"></textarea>
+            <nav class="ds-nav" aria-label="Navigation item specimen">
+              <button class="dl-nav-item" type="button" aria-current="page">
+                <span class="dl-nav-item-icon">${icon('connections', {size: 'sm'})}</span>
+                <span class="dl-nav-item-text"><span class="dl-nav-item-label">Selected</span></span>
+                <span class="dl-nav-item-status">1/2</span>
+              </button>
+              <button class="dl-nav-item" type="button">
+                <span class="dl-nav-item-icon">${icon('agent-accounts', {size: 'sm'})}</span>
+                <span class="dl-nav-item-text"><span class="dl-nav-item-label">Idle</span></span>
+                <span class="dl-nav-item-status">3</span>
+              </button>
+            </nav>
+            <div class="ds-choice-card" role="radiogroup" aria-label="Choice row specimen">
+              <label class="dl-dialog-checkbox dl-dialog-checkbox--row">
+                <input type="radio" name="ds-choice" checked> Automatic
+              </label>
+              <label class="dl-dialog-checkbox dl-dialog-checkbox--row">
+                <input type="radio" name="ds-choice"> English
+              </label>
+            </div>
           </div>
         </section>
         <section class="ds-viewport ds-viewport--1440" aria-label="1440 pixel specimen">

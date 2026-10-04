@@ -43,3 +43,33 @@ export class StoreController implements ReactiveController {
         this.#release = [];
     }
 }
+
+/** Re-renders its host when a media query starts or stops matching. */
+export class MediaController implements ReactiveController {
+    readonly #host: ReactiveControllerHost;
+    readonly #query: string;
+    #list: MediaQueryList | null = null;
+
+    constructor(host: ReactiveControllerHost, query: string) {
+        this.#host = host;
+        this.#query = query;
+        host.addController(this);
+    }
+
+    /** Whether the query matches now, before the host connects as well as after. */
+    get matches(): boolean {
+        return (this.#list ?? window.matchMedia(this.#query)).matches;
+    }
+
+    hostConnected(): void {
+        this.#list = window.matchMedia(this.#query);
+        this.#list.addEventListener('change', this.#changed);
+    }
+
+    hostDisconnected(): void {
+        this.#list?.removeEventListener('change', this.#changed);
+        this.#list = null;
+    }
+
+    readonly #changed = (): void => { this.#host.requestUpdate(); };
+}

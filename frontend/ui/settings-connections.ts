@@ -1,15 +1,15 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-/** Settings → Connections: one MCP group of Connection cards.
+/** Settings → Connections: the MCP Connection cards.
 
- * The group is collapsed by default and its summary reads `N of M enabled`, so nothing here
- * reports on tools: the Capability Catalogue belongs to the Agent, and the UI never receives it.
- * A switch owns discovery, because enabling a Connection with no confirmed catalogue requires a
- * probe first and the user should not have to know that. Enabling is gated once per owner session
- * by the whole-Connection warning; the backend records `consent_version=1` on every enable.
+ * The page says `N of M enabled` and nothing about tools: the Capability Catalogue belongs to the
+ * Agent, and the UI never receives it. A switch owns discovery, because enabling a Connection with
+ * no confirmed catalogue requires a probe first and the user should not have to know that.
+ * Enabling is gated once per owner session by the whole-Connection warning; the backend records
+ * `consent_version=1` on every enable.
  */
 
 import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
-import {html, nothing, type TemplateResult} from 'lit';
+import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import {
   beginConnectionAuthorization,
@@ -21,8 +21,10 @@ import {
 } from '../api/connections.ts';
 import {icon} from '../design-system/index.ts';
 import {LightElement} from '../lib/lit-host.ts';
-import {modalResult} from './modal.ts';
+import shared from '../styles/settings-page.module.css';
 import styles from '../styles/settings-connections.module.css';
+import {modalResult} from './modal.ts';
+import {reportSettingsSummary} from './settings-summary.ts';
 
 const POLL_MILLISECONDS = 5000;
 type Authentication = Connection['authentication'];
@@ -37,7 +39,6 @@ const MODE_LABEL: Record<Authentication, () => string> = {
 export class DlSettingsConnections extends LightElement {
   static properties = {
     view: {state: true},
-    expanded: {state: true},
     openCard: {state: true},
     editingEndpoint: {state: true},
     draftAuth: {state: true},
@@ -50,7 +51,6 @@ export class DlSettingsConnections extends LightElement {
   };
 
   declare view: ConnectionsView | null;
-  declare expanded: boolean;
   declare openCard: string | null;
   declare editingEndpoint: string | null;
   declare draftAuth: Record<string, Authentication>;
@@ -75,7 +75,6 @@ export class DlSettingsConnections extends LightElement {
     super();
     updateWhenLocaleChanges(this);
     this.view = null;
-    this.expanded = false;
     this.openCard = null;
     this.editingEndpoint = null;
     this.draftAuth = {};
@@ -107,9 +106,14 @@ export class DlSettingsConnections extends LightElement {
     super.disconnectedCallback();
   }
 
-  /** Settings asks for the expanded group on the OAuth return path only. */
-  expand(): void {
-    this.expanded = true;
+  protected override updated(changed: PropertyValues<this>): void {
+    if (changed.has('view') && this.view) {
+      reportSettingsSummary(this, {
+        section: 'connections',
+        enabled: this.view.connections.filter((connection) => connection.enabled).length,
+        total: this.view.connections.length,
+      });
+    }
   }
 
   async #load(): Promise<void> {
@@ -218,23 +222,23 @@ export class DlSettingsConnections extends LightElement {
 
   #note(connection: Connection): TemplateResult | typeof nothing {
     if (connection.authorizationStatus === 'changed') {
-      return html`<p class=${styles.note} role="alert">${msg(
+      return html`<p class=${shared.note} role="alert">${msg(
         'This connection changed while you were authorizing, so nothing was saved. Authorize again.',
         {id: 'connections.oauthChanged'},
       )}</p>`;
     }
     if (connection.authorizationStatus === 'failed') {
-      return html`<p class=${styles.note} role="alert">${msg(
+      return html`<p class=${shared.note} role="alert">${msg(
         'Authorization failed or expired. Authorize again to use this server.',
         {id: 'connections.oauthFailed'},
       )}</p>`;
     }
     if (connection.authorizationStatus === 'pending') {
-      return html`<p class=${styles.note} role="status">${msg('Authorization pending.', {id: 'connections.oauthPending'})}</p>`;
+      return html`<p class=${shared.note} role="status">${msg('Authorization pending.', {id: 'connections.oauthPending'})}</p>`;
     }
     const {note} = this.#statusOf(connection);
     if (!note) return nothing;
-    return html`<p class=${styles.note} role="alert">${note}</p>`;
+    return html`<p class=${shared.note} role="alert">${note}</p>`;
   }
 
   #labelOf(connectionId: string): string {
@@ -260,9 +264,10 @@ export class DlSettingsConnections extends LightElement {
     this.busy = false;
     this.pending = null;
     await this.updateComplete;
+    // A control that went away (a deleted card, a closed form) hands focus to the page's first card.
     const target = returnFocus?.isConnected
       ? returnFocus
-      : this.querySelector<HTMLElement>('[data-connections-root]');
+      : this.querySelector<HTMLElement>('[data-card], [data-add]');
     target?.focus();
     this.#timer = setTimeout(() => {
       void this.#load();
@@ -326,19 +331,17 @@ export class DlSettingsConnections extends LightElement {
     </label>`;
   }
 
-  #endpointRow(connection: Connection): TemplateResult {
-    if (connection.authentication !== 'none') {
-      return html`<div class=${styles.endpointRow}>
-        <span class=${styles.endpoint}>${connection.endpoint}</span>
-      </div>`;
-    }
-    if (this.editingEndpoint !== connection.connectionId) {
-      return html`<div class=${styles.endpointRow}>
-        <span class=${styles.endpoint}>${connection.endpoint}</span>
-        <button class="dl-btn ${styles.blockAction}" type="button"
-          @click=${() => {
-            this.editingEndpoint = connection.connectionId;
-          }}>${msg('Change endpoint', {id: 'connections.changeEndpoint'})}</button>
+  #endpointField(connection: Connection): TemplateResult {
+    if (connection.authentication !== 'none' || this.editingEndpoint !== connection.connectionId) {
+      return html`<div class=${styles.field}>
+        <span class=${styles.fieldLabel}>${msg('Endpoint', {id: 'connections.endpoint'})}</span>
+        <span class=${styles.endpointRow}>
+          <span class=${styles.endpoint}>${connection.endpoint}</span>
+          ${connection.authentication === 'none' ? html`<button class="dl-btn" type="button"
+            @click=${() => {
+              this.editingEndpoint = connection.connectionId;
+            }}>${msg('Change endpoint', {id: 'connections.changeEndpoint'})}</button>` : nothing}
+        </span>
       </div>`;
     }
     return html`<div class=${styles.stackTight}>
@@ -367,44 +370,47 @@ export class DlSettingsConnections extends LightElement {
 
   #authBlock(connection: Connection, auth: Authentication): TemplateResult {
     if (auth === 'bearer') {
-      return html`<div class=${styles.stackTight}>
-        <label class=${styles.field}>
-          <span class=${styles.fieldLabel}>${msg('Personal bearer (write-only)', {id: 'connections.bearer'})}</span>
-          <input class=${styles.input} type="password" autocomplete="off" maxlength="8192"
-            data-bearer=${connection.connectionId}>
-        </label>
-        <button class="dl-btn ${styles.blockAction}" type="button"
-          @click=${(event: Event) => {
-            const input = this.querySelector<HTMLInputElement>(`[data-bearer="${connection.connectionId}"]`);
-            if (!input?.value) return;
-            const bearer = input.value;
-            input.value = '';
-            void this.#command({
-              kind: 'bearer',
-              connectionId: connection.connectionId,
-              bearer,
-              endpoint: connection.endpoint,
-            }, event.currentTarget as HTMLElement);
-          }}>${msg('Save bearer', {id: 'connections.saveBearer'})}</button>
+      const input = `bearer-${connection.connectionId}`;
+      return html`<div class=${styles.field}>
+        <label class=${styles.fieldLabel} for=${input}>${msg('Personal bearer (write-only)', {id: 'connections.bearer'})}</label>
+        <span class=${styles.inline}>
+          <input id=${input} class="${styles.input} ${styles.inlineInput}" type="password" autocomplete="off"
+            maxlength="8192" data-bearer=${connection.connectionId}>
+          <button class="dl-btn" type="button"
+            @click=${(event: Event) => {
+              const field = this.querySelector<HTMLInputElement>(`[data-bearer="${connection.connectionId}"]`);
+              if (!field?.value) return;
+              const bearer = field.value;
+              field.value = '';
+              void this.#command({
+                kind: 'bearer',
+                connectionId: connection.connectionId,
+                bearer,
+                endpoint: connection.endpoint,
+              }, event.currentTarget as HTMLElement);
+            }}>${msg('Save bearer', {id: 'connections.saveBearer'})}</button>
+        </span>
       </div>`;
     }
     if (auth === 'oauth') {
       return html`<div class=${styles.stackTight}>
-        <button class="dl-btn ${styles.blockAction}" type="button" data-oauth=${connection.connectionId}
-          @click=${(event: Event) => {
-            void this.#beginAuthorization(connection, event.currentTarget as HTMLElement);
-          }}>${msg('Authorize with OAuth', {id: 'connections.oauthBegin'})}</button>
+        <span class=${styles.inline}>
+          <button class="dl-btn" type="button" data-oauth=${connection.connectionId}
+            @click=${(event: Event) => {
+              void this.#beginAuthorization(connection, event.currentTarget as HTMLElement);
+            }}>${msg('Authorize with OAuth', {id: 'connections.oauthBegin'})}</button>
+          <span class="${shared.hint} ${styles.inlineHint}">${msg(
+            'Authorization must finish in this session. Tokens refresh automatically inside the consented scopes.',
+            {id: 'connections.oauthRestart'},
+          )}</span>
+        </span>
         ${this.authorizationUrl
           ? html`<p><a data-oauth-continue href=${this.authorizationUrl} rel="noreferrer noopener"
             >${msg('Continue to provider authorization', {id: 'connections.oauthContinue'})}</a></p>`
           : nothing}
-        <p class=${styles.hint}>${msg(
-          'Authorization must finish in this session. Tokens refresh automatically inside the consented scopes.',
-          {id: 'connections.oauthRestart'},
-        )}</p>
       </div>`;
     }
-    return html`<p class=${styles.hint}>${msg(
+    return html`<p class=${shared.hint}>${msg(
       'No credential. Anyone who can reach this URL can use it.',
       {id: 'connections.noCredential'},
     )}</p>`;
@@ -445,7 +451,7 @@ export class DlSettingsConnections extends LightElement {
   #card(connection: Connection): TemplateResult {
     const auth = this.#authOf(connection);
     const expanded = this.openCard === connection.connectionId;
-    return html`<article class=${styles.card}>
+    return html`<article class=${shared.card}>
       <div class=${styles.cardHeader}>
         <button class=${styles.cardToggle} type="button" aria-expanded=${String(expanded)}
           data-card=${connection.connectionId}
@@ -464,10 +470,12 @@ export class DlSettingsConnections extends LightElement {
       </div>
       ${expanded ? html`<div class=${styles.cardBody}>
         ${this.#note(connection)}
-        ${this.#labelField(connection)}
-        ${this.#endpointRow(connection)}
+        <div class=${styles.fields}>
+          ${this.#labelField(connection)}
+          ${this.#endpointField(connection)}
+        </div>
         <div class=${styles.stackTight}>
-          <span class=${styles.sectionLabel}>${msg('Authentication', {id: 'connections.authentication'})}</span>
+          <span class=${styles.fieldLabel}>${msg('Authentication', {id: 'connections.authentication'})}</span>
           <div class=${styles.segmented}>
             ${(['none', 'bearer', 'oauth'] as const).map((mode) => html`
               <button class="${styles.segment} ${mode === auth ? styles.segmentActive : ''}" type="button"
@@ -479,10 +487,14 @@ export class DlSettingsConnections extends LightElement {
           ${this.#authBlock(connection, auth)}
         </div>
         <div class=${styles.dangerRow}>
+          <span class=${shared.hint}>${msg(
+            'Deleting removes the endpoint, the label and the stored credential; to pause it, switch it off instead.',
+            {id: 'connections.deleteHint'},
+          )}</span>
           <button class="dl-btn dl-btn-danger-text" type="button" data-delete=${connection.connectionId}
             @click=${() => {
               void this.#requestDelete(connection);
-            }}>${msg('Delete', {id: 'connections.delete'})}</button>
+            }}>${msg('Delete…', {id: 'connections.delete'})}</button>
         </div>
       </div>` : nothing}
     </article>`;
@@ -515,7 +527,6 @@ export class DlSettingsConnections extends LightElement {
     const created = view?.connections.find((connection) => !known.has(connection.connectionId));
     if (!created || !presetAuth) return;
     this.draftAuth = {...this.draftAuth, [created.connectionId]: presetAuth};
-    this.expanded = true;
     this.openCard = created.connectionId;
   }
 
@@ -532,74 +543,75 @@ export class DlSettingsConnections extends LightElement {
                 this.#applyPreset(preset);
               }}>${preset.label}</button>`)}
         </div>`}
-      <label class=${styles.field}>
-        <span class=${styles.fieldLabel}>${msg('Label', {id: 'connections.label'})}</span>
-        <input class=${styles.input} data-new-label required maxlength="100">
-      </label>
-      <label class=${styles.field}>
-        <span class=${styles.fieldLabel}>${msg('Endpoint', {id: 'connections.endpoint'})}</span>
-        <input class=${styles.input} data-new-endpoint type="url" required maxlength="2048"
-          placeholder="https://example.com/mcp">
-      </label>
-      <p class=${styles.hint}>${msg('Starts inactive.', {id: 'connections.startsInactive'})}</p>
-      <button class="primary-btn ${styles.blockAction}" type="button" ?disabled=${this.busy}
-        @click=${(event: Event) => {
-          const label = this.querySelector<HTMLInputElement>('[data-new-label]');
-          const endpoint = this.querySelector<HTMLInputElement>('[data-new-endpoint]');
-          if (!label?.reportValidity() || !endpoint?.reportValidity()) return;
-          this.adding = false;
-          void this.#create(label.value, endpoint.value, event.currentTarget as HTMLElement);
-        }}>${msg('Add connection', {id: 'connections.add'})}</button>
+      <div class=${styles.fields}>
+        <label class=${styles.field}>
+          <span class=${styles.fieldLabel}>${msg('Label', {id: 'connections.label'})}</span>
+          <input class=${styles.input} data-new-label required maxlength="100">
+        </label>
+        <label class=${styles.field}>
+          <span class=${styles.fieldLabel}>${msg('Endpoint', {id: 'connections.endpoint'})}</span>
+          <input class=${styles.input} data-new-endpoint type="url" required maxlength="2048"
+            placeholder="https://example.com/mcp">
+        </label>
+      </div>
+      <div class=${styles.footer}>
+        <span class=${shared.hint}>${msg('Starts inactive.', {id: 'connections.startsInactive'})}</span>
+        <button class="primary-btn" type="button" ?disabled=${this.busy}
+          @click=${(event: Event) => {
+            const label = this.querySelector<HTMLInputElement>('[data-new-label]');
+            const endpoint = this.querySelector<HTMLInputElement>('[data-new-endpoint]');
+            if (!label?.reportValidity() || !endpoint?.reportValidity()) return;
+            this.adding = false;
+            void this.#create(label.value, endpoint.value, event.currentTarget as HTMLElement);
+          }}>${msg('Add connection', {id: 'connections.add'})}</button>
+      </div>
     </div>`;
   }
 
-  #group(): TemplateResult {
+  /** The small MCP label and how many of the Connections are on. */
+  #summary(): TemplateResult {
     const total = this.view?.connections.length ?? 0;
     const enabled = this.view?.connections.filter((connection) => connection.enabled).length ?? 0;
     const attention = this.view?.connections.filter((connection) => (
       connection.enabled && (connection.status === 'degraded' || connection.status === 'needs-auth')
     )).length ?? 0;
-    return html`<button class=${styles.groupRow} type="button" aria-expanded=${String(this.expanded)}
-      data-connections-root @click=${() => {
-        this.expanded = !this.expanded;
-      }}>
-      <span class=${styles.groupName}>MCP</span>
-      <span class=${styles.groupMeta}>${total === 0
-        ? msg('add a connection', {id: 'connections.groupEmpty'})
-        : msg(str`${enabled} of ${total} enabled`, {id: 'connections.groupSummary'})}</span>
+    return html`<p class=${styles.summary}>
+      <span class=${styles.summaryName}>MCP</span>
+      <span class=${styles.summaryMeta}>${total === 0
+        ? msg('add a connection', {id: 'connections.summaryEmpty'})
+        : msg(str`${enabled} of ${total} enabled`, {id: 'connections.summary'})}</span>
       ${attention > 0
         ? html`<span class="dl-sr-only">${attention === 1
           ? msg('1 connection needs attention', {id: 'connections.attentionOne'})
           : msg(str`${attention} connections need attention`, {id: 'connections.attentionMany'})}</span>`
         : nothing}
-      <span class=${styles.groupChevron}>${icon('disclosure', {size: 'sm'})}</span>
-    </button>`;
+    </p>`;
   }
 
   protected override render(): TemplateResult {
     const connections = this.view?.connections ?? [];
-    return html`<section class=${styles.root} aria-label=${msg('MCP Connections', {id: 'connections.title'})}>
-      ${this.#group()}
-      ${this.expanded ? html`
-        ${this.error ? html`<p class=${styles.note} role="alert">${msg(
-          'Connection request failed or the revision changed. Reload and retry.',
-          {id: 'connections.error'},
-        )}</p>
-        <button class="dl-btn" type="button" ?disabled=${this.busy} @click=${() => {
-          void this.#load();
-        }}>${msg('Reload', {id: 'connections.reload'})}</button>` : nothing}
-        ${!this.view ? html`<p class=${styles.hint} role="status">${msg(
-          'Loading Connections…', {id: 'connections.loading'})}</p>` : nothing}
-        ${connections.length === 0 && this.view
-          ? html`<p class=${styles.hint}>${msg('No MCP connections yet.', {id: 'connections.empty'})}</p>`
-          : nothing}
+    return html`<div class=${styles.root}>
+      ${this.error ? html`<p class=${shared.note} role="alert">${msg(
+        'Connection request failed or the revision changed. Reload and retry.',
+        {id: 'connections.error'},
+      )}</p>
+      <button class="dl-btn" type="button" ?disabled=${this.busy} @click=${() => {
+        void this.#load();
+      }}>${msg('Reload', {id: 'connections.reload'})}</button>` : nothing}
+      ${!this.view ? html`<p class=${shared.hint} role="status">${msg(
+        'Loading Connections…', {id: 'connections.loading'})}</p>` : this.#summary()}
+      ${connections.length === 0 && this.view
+        ? html`<p class=${shared.hint}>${msg('No MCP connections yet.', {id: 'connections.empty'})}</p>`
+        : nothing}
+      <div class=${styles.cards}>
         ${repeat(connections, (connection) => connection.connectionId, (connection) => this.#card(connection))}
-        <article class=${styles.card}>
-          <button class=${styles.addRow} type="button" @click=${() => {
+        <article class=${shared.card}>
+          <button class=${styles.addRow} type="button" data-add @click=${() => {
             this.adding = !this.adding;
           }}>${icon('add', {size: 'sm'})}${msg('Add MCP connection', {id: 'connections.new'})}</button>
           ${this.adding ? html`<div class=${styles.cardBody}>${this.#createForm()}</div>` : nothing}
-        </article>` : nothing}
+        </article>
+      </div>
 
       <dialog class="confirm-dialog" id="connections-consent" aria-labelledby="connections-consent-title">
         <form method="dialog" novalidate>
@@ -635,7 +647,7 @@ export class DlSettingsConnections extends LightElement {
           </div>
         </form>
       </dialog>
-    </section>`;
+    </div>`;
   }
 }
 customElements.define('dl-settings-connections', DlSettingsConnections);
