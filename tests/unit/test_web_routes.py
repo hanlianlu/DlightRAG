@@ -370,6 +370,31 @@ async def test_vendored_assets_allow_revalidation_caching(client):
     assert "no-store" not in resp.headers.get("cache-control", "")
 
 
+async def test_an_uncaught_browser_error_is_logged_as_one_line(
+    client: AsyncClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level("WARNING"):
+        response = await client.post(
+            "/web/api/client-errors", json={"detail": "boom\n2026-10-05 ERROR forged line"}
+        )
+
+    assert response.status_code == 204
+    [record] = [r for r in caplog.records if r.name.endswith("client_errors")]
+    assert record.levelname == "WARNING"
+    assert record.getMessage() == "Uncaught browser error: 'boom\\n2026-10-05 ERROR forged line'"
+
+
+async def test_a_browser_error_report_over_the_limit_is_refused_without_echoing_it(
+    client: AsyncClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level("WARNING"):
+        response = await client.post("/web/api/client-errors", json={"detail": "x" * 2001})
+
+    assert response.status_code == 422
+    assert "x" * 100 not in response.text
+    assert not [r for r in caplog.records if r.name.endswith("client_errors")]
+
+
 def _web_client_for(application: Any) -> AsyncClient:
     app = create_app()
     app.state.application = application
@@ -423,6 +448,7 @@ class TestWebAuth:
         [
             ("GET", "/web/api/bootstrap"),
             ("POST", "/web/api/conversations"),
+            ("POST", "/web/api/client-errors"),
             # Without fetch metadata the path decides, so even a download link is refused.
             ("GET", "/web/api/files/raw/doc-report?workspace=finance"),
         ],

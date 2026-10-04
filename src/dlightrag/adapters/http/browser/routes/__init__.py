@@ -9,6 +9,7 @@ from .agent_accounts import router as agent_accounts_router
 from .bootstrap import router as bootstrap_router
 from .chat import page_router as chat_page_router
 from .chat import router as chat_api_router
+from .client_errors import router as client_errors_router
 from .connections import callback_router as connections_callback_router
 from .connections import router as connections_router
 from .conversations import router as conversations_router
@@ -40,6 +41,7 @@ api_router.include_router(workspaces_router)
 api_router.include_router(model_catalogue_router)
 api_router.include_router(skills_router)
 api_router.include_router(video_playback_router)
+api_router.include_router(client_errors_router)
 router.include_router(api_router)
 
 __all__ = ["router"]

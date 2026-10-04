@@ -598,8 +598,8 @@ Route families cover:
   child observation/control/guidance reply, fork/cancel,
   Artifacts/presentation, and events; and
 - Files/upload and same-origin `/corpus-runs/{run_id}`
-  status/events/cancel/resume, workspaces, images, Memory, the owner's Agent Accounts, and
-  model catalogue.
+  status/events/cancel/resume, workspaces, images, Memory, the owner's Agent Accounts,
+  model catalogue, and `/client-errors`, which logs one uncaught browser error.
 
 `/agent-accounts` is an owner's Agent Accounts in Settings. It is Web-only, like Connections:
 owner Settings state has no REST counterpart. `GET /web/api/agent-accounts` answers
