@@ -619,10 +619,12 @@ could read.
   kept, chained, or logged, and a failed or changed fill empties the fields it filled. The set
   of filled passwords belongs to the Agent Session and the Run, outlives its page, and also
   redacts the mail it reads.
-- **No screenshot of a shown password.** A browser draws a password field as dots, but a page
-  can turn one into a text field. With any password filled, a screenshot first reads each
-  frame's text fields and visible text and refuses when one holds a filled password or cannot
-  be read, comparing in DlightRAG's process so no password is ever sent into a page.
+- **No screenshot of a filled password.** A browser draws a password field as dots, but that
+  is its own decision and the page's to change, and a script can turn the field into a text
+  field. With any password filled, a screenshot first reads every input and textarea of each
+  frame, password fields included, and the frame's visible text, and refuses when one holds a
+  filled password or cannot be read, comparing in DlightRAG's process so no password is ever
+  sent into a page. A filled form is screenshotted after it is submitted, not before.
 - **Children register for the Run.** A Child keeps `register`, but its account is held in the
   worker's memory under its Agent Session until the Run settles, with a random alias, so
   nothing durable is written for the owner that the parent did not make
@@ -644,8 +646,9 @@ Residual risks, recorded rather than solved:
   `register` on a site whose account exists.
 - A downloaded file has the password masked by its exact bytes, so one a site compresses or
   encodes into the file, in an archive, a PDF stream, or base64, is admitted with it. A
-  password a page prints as text can be confirmed by `wait(text=…)`, and one shown inside
-  shadow DOM, which the locators do not pierce, escapes the screenshot check.
+  password a page prints as text can be confirmed by `wait(text=…)`, and one a page draws on
+  a canvas, generates with CSS (`content: attr(...)`), or shows inside shadow DOM, which the
+  locators do not pierce, escapes the screenshot check.
 - Registrations of one owner on one site that run at once leave the last envelope. A Child's
   account stays on the site after its Run, under an alias nothing reads again.
 - Mail retention is the deployment's, and an alias that is flooded lists only its first 10,000

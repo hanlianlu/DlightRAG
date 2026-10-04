@@ -324,8 +324,8 @@ class PlaywrightAgentPage:
 
     async def screenshot(self, *, full_page: bool) -> PageScreenshot:
         page, events = self._observing()
-        if self._passwords and await self._shows_a_password(page):
-            raise page_failure("password_shown")
+        if self._passwords and await self._holds_a_password(page):
+            raise page_failure("password_held")
         try:
             png = await page.screenshot(
                 type="png",
@@ -645,19 +645,22 @@ class PlaywrightAgentPage:
             with suppress(PlaywrightError):
                 await field.fill("", timeout=self._action_ms)
 
-    async def _shows_a_password(self, page: Page) -> bool:
-        """Whether a frame of the page shows a filled password as text, or cannot be read to say.
+    async def _holds_a_password(self, page: Page) -> bool:
+        """Whether a frame of the page holds a filled password in a field or in its visible text,
+        or cannot be read to say.
 
-        A page can turn a password input into a text input, and a screenshot would print what the
-        browser draws as dots. Every frame's text fields and visible text are read and compared
-        here, so no password is ever sent into a page.
+        A browser draws a password field as dots, but that is the browser's decision and the
+        page's to change: a script can turn the field into a text field. So every input and
+        textarea is read, password fields included, along with the frame's visible text, and
+        compared here, so no password is ever sent into a page. A filled form is screenshotted
+        after it is submitted, not before.
         """
         try:
             async with asyncio.timeout(self._limits.action_timeout):
                 for frame in page.frames:
-                    values = await frame.locator(
-                        "input:not([type=password]), textarea"
-                    ).evaluate_all("els => els.map(e => e.value)")
+                    values = await frame.locator("input, textarea").evaluate_all(
+                        "els => els.map(e => e.value)"
+                    )
                     text = await frame.locator("body").inner_text()
                     if any(self._passwords.found_in(value) for value in values):
                         return True

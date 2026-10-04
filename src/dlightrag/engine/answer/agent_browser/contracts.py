@@ -257,7 +257,7 @@ type AgentBrowserFailure = Literal[
     "not_password_field",
     "not_text_field",
     "field_rejected",
-    "password_shown",
+    "password_held",
 ]
 
 #: What the model reads when a render fails, one stable sentence per reason. Page URLs
@@ -330,7 +330,10 @@ _PAGE_MESSAGES: dict[AgentBrowserFailure, str] = {
         "The page changed the value filled into {ref}, so nothing was recorded and the fields "
         "were cleared."
     ),
-    "password_shown": "The page shows a filled password as text, so no screenshot was taken.",
+    "password_held": (
+        "The page holds a filled password, so no screenshot was taken. Take it after the form "
+        "is submitted."
+    ),
 }
 
 

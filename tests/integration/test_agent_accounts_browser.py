@@ -129,13 +129,6 @@ MIRROR = page(
     document.getElementById('dl').href = '/files/' + encodeURIComponent(input.value) + '.csv';
   } }</script>""",
 )
-# A password field a page can turn into a text field, as a "show password" button does.
-TOGGLE = page(
-    "Toggle",
-    """<input aria-label="Handle" name="handle">
-<input aria-label="Password" id="pw" type="password">
-<button onclick="document.getElementById('pw').type = 'text'">Show</button>""",
-)
 EMBED = page(
     "Embed",
     """<input aria-label="Handle" name="handle">
@@ -151,7 +144,11 @@ PAGES = {
     f"{SHOP}/sent": page("Sent", "<p>Check your mail</p>"),
     f"{SHOP}/reset?token=abc123": signup(),
     f"{SHOP}/mirror": MIRROR,
-    f"{SHOP}/toggle": TOGGLE,
+    # A password field restyled to show its characters, which Chromium ignores: the guard reads
+    # what a field holds and never how it is drawn.
+    f"{SHOP}/revealed": signup(
+        password='type="password" style="-webkit-text-security: none"', confirm=False
+    ),
     f"{SHOP}/embed": EMBED,
     f"{SHOP}/short": signup(password='type="password" maxlength="14"', confirm=False),
     f"{SHOP}/tiny": signup(password='type="password" maxlength="10"', confirm=False),
@@ -871,30 +868,28 @@ async def test_a_childs_registration_is_run_scoped(tmp_path: Path) -> None:
 # -- screenshots ------------------------------------------------------------------------------
 
 
-async def test_screenshots_stop_when_a_password_shows(tmp_path: Path) -> None:
+@pytest.mark.parametrize("page_path", ["signup", "revealed"])
+async def test_a_screenshot_waits_until_the_form_holding_a_password_is_gone(
+    tmp_path: Path, page_path: str
+) -> None:
     async with browsing(tmp_path) as web:
-        opened = await web.call(action="navigate", url=f"{SHOP}/toggle")
-        handle, password, show = (
-            ref_of(opened.text_content, label)
-            for label in ('textbox "Handle"', 'textbox "Password"', 'button "Show"')
-        )
-        await web.call(action="type", ref=handle, text=HANDLE)
-        await web.call(action="register", password_refs=[password], username_ref=handle)
+        form = await web.form(f"{SHOP}/{page_path}")
+        await web.register(form)
         web.stored_password()
 
-        # The browser draws a password field's value as dots, so there is nothing to refuse yet.
-        before = await web.call(action="screenshot")
-        assert not before.is_error and len(tool_content_attachments(before.parts)) == 1
-
-        await web.call(action="click", ref=show)
-        after = await web.call(action="screenshot")
-
-        assert after.is_error and after.text_content == (
-            "The page shows a filled password as text, so no screenshot was taken."
+        # A field drawn as dots holds the password as much as one drawn as text, so neither is
+        # photographed.
+        held = await web.call(action="screenshot")
+        assert held.is_error and held.text_content == (
+            "The page holds a filled password, so no screenshot was taken. Take it after the "
+            "form is submitted."
         )
-        assert (
-            tool_content_attachments(after.parts) == () and after.effects.attached_resources == ()
-        )
+        assert tool_content_attachments(held.parts) == () and held.effects.attached_resources == ()
+
+        await web.call(action="click", ref=form["button"])
+        taken = await web.call(action="screenshot")
+
+        assert not taken.is_error and len(tool_content_attachments(taken.parts)) == 1
 
 
 # -- the inbox --------------------------------------------------------------------------------
