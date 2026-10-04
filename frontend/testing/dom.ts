@@ -24,6 +24,13 @@ export function buttonNamed<T extends HTMLElement = HTMLElement>(
     ?? null;
 }
 
+/** The first radio whose name, the text its `aria-labelledby` points at, is `name`. */
+export function radioNamed(root: ParentNode, name: string): HTMLInputElement | null {
+  return Array.from(root.querySelectorAll<HTMLInputElement>('input[type="radio"]')).find((radio) => (
+    document.getElementById(radio.getAttribute('aria-labelledby') ?? '')?.textContent?.trim() === name
+  )) ?? null;
+}
+
 /** Link stylesheets into the page and resolve once every one has loaded; returns how to remove them.
  *  The suite loads no product CSS by itself, so a test about layout asks for the files it needs. */
 export async function linkStyles(urls: readonly string[]): Promise<() => void> {

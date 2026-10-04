@@ -202,7 +202,7 @@ export class DlSettingsAgentAccounts extends LightElement {
     const {primary, secondary} = identityOf(account);
     const recent = account.lastUsedAt ? recentDay(account.lastUsedAt, now, locale) : null;
     return html`
-      <tr data-site=${account.site}>
+      <tr>
         <th scope="row" class=${styles.cell}>${this.#site(account)}</th>
         <td class=${styles.cell}>
           <span class=${styles.identity}>
@@ -253,7 +253,7 @@ export class DlSettingsAgentAccounts extends LightElement {
             ? recentDay(account.lastUsedAt, now, locale) ?? shortDate(account.lastUsedAt, now, locale)
             : null;
           return html`
-            <li class=${styles.item} data-site=${account.site}>
+            <li class=${styles.item}>
               <span class=${styles.tile} aria-hidden="true">${account.site.charAt(0).toLocaleUpperCase()}</span>
               <span class=${styles.itemText}>
                 <span class=${styles.siteName} title=${account.site}>${account.site}</span>

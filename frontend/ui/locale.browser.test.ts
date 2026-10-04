@@ -10,7 +10,7 @@ import {
   setLanguagePreference,
 } from '../i18n/locale.ts';
 import {LANGUAGE_STORAGE_KEY} from '../lib/language.ts';
-import {waitFor} from '../testing/dom.ts';
+import {radioNamed, waitFor} from '../testing/dom.ts';
 
 class LocaleProbe extends LitElement {
   constructor() {
@@ -75,7 +75,7 @@ it('settings language radios apply and persist the preference', async () => {
     const {settings} = mountSettings();
     await openSettings(settings, 'language');
 
-    const radio = settings.querySelector<HTMLInputElement>('#language-options input[value="zh"]')!;
+    const radio = radioNamed(settings, '中文')!;
     radio.checked = true;
     radio.dispatchEvent(new Event('change'));
     await waitFor(() => getLocale() === 'zh');

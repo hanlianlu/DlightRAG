@@ -71,7 +71,7 @@ export class DlSettingsLanguage extends LightElement {
   protected override render(): TemplateResult {
     return html`
       <div class=${shared.stack}>
-        <div id="language-options" class="${shared.card} ${shared.divided}" role="radiogroup"
+        <div class="${shared.card} ${shared.divided}" role="radiogroup"
              aria-label=${msg('Language', {id: 'settings.language'})}>
           ${PREFERENCES.map((value) => this.#choice(value))}
         </div>
