@@ -11,6 +11,8 @@ export interface ActionToastOptions {
   actionLabel: string;
   onAction: () => Promise<string | undefined>;
   duration?: number;
+  /** Move focus to the action once it shows: for a command whose own control has just gone away. */
+  focus?: boolean;
 }
 
 export type ToastRequestDetail =
@@ -90,6 +92,7 @@ export class DlToastRegion extends LightElement {
       duration: options.duration ?? MAX_TOAST_DURATION,
       action: options,
     });
+    if (options.focus) void this.#focusAction();
   }
 
   protected override updated(changed: PropertyValues<this>): void {
@@ -111,6 +114,13 @@ export class DlToastRegion extends LightElement {
                 @click=${this.#runAction}>${request.action.actionLabel}</button>
       ` : nothing}
     `;
+  }
+
+  /** The action takes focus once it is on screen, unless another receipt has already replaced it. */
+  async #focusAction(): Promise<void> {
+    const request = this.request;
+    await this.updateComplete;
+    if (this.request === request) this.querySelector<HTMLElement>('.toast-action')?.focus();
   }
 
   #show(request: ToastRequest): void {

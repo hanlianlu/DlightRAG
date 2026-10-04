@@ -1,6 +1,7 @@
 /* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
 
-/* Settings → Agent Accounts: a table of websites on a desktop, three-line rows on a phone. */
+/* Settings → Agent Accounts: a table of websites where the page has room for one, three-line rows
+ * where it has not (the page measures itself, so the choice is script's: ui/settings-agent-accounts.ts). */
 
 @layer features {
   .empty {
@@ -28,6 +29,12 @@
     font-size: var(--font-size-detail);
     font-weight: 600;
     line-height: var(--line-height-control);
+    margin: 0;
+  }
+
+  /* A heading takes focus when the last account goes and nothing else can; it is no control. */
+  .emptyTitle:focus {
+    outline: none;
   }
 
   .emptyBody {
@@ -72,26 +79,15 @@
 
   .table thead .cell {
     border-block-end: 1px solid var(--color-border-subtle);
-    color: var(--color-text-subtle);
+    color: var(--color-text-muted);
     font-size: var(--font-size-caption);
+    font-weight: 600;
     line-height: var(--line-height-control);
     padding-block: var(--space-tight);
   }
 
   .table tbody tr + tr .cell {
     border-block-start: 1px solid var(--color-border-subtle);
-  }
-
-  /* Beside a narrow pane the table gives up when an account registered first: the website and how
-   * it signs in matter more than when, and they would otherwise be cut to a few letters. */
-  .tableCard {
-    container-type: inline-size;
-  }
-
-  @container (width < 36rem) {
-    .registered {
-      display: none;
-    }
   }
 
   .site {
@@ -149,25 +145,7 @@
     font-size: var(--font-size-caption);
   }
 
-  .remove {
-    color: var(--color-text-muted);
-  }
-
-  .remove:hover {
-    color: var(--color-text-primary);
-  }
-
-  /* ── Phone ── */
-
-  .list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-  }
-
-  .list > * + * {
-    border-block-start: 1px solid var(--color-border-subtle);
-  }
+  /* ── Three-line rows ── */
 
   .item {
     align-items: center;
@@ -188,7 +166,7 @@
   }
 
   .meta {
-    color: var(--color-text-subtle);
+    color: var(--color-text-muted);
     font-size: var(--font-size-caption);
     line-height: var(--line-height-control);
   }

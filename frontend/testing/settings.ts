@@ -45,6 +45,13 @@ export async function openSettings(
   return dialog;
 }
 
+/** Settings has closed and said so: the dialog is shut and the page behind it is its own again.
+ *  A dialog reports a close in a task of its own, so a test that ends on `!dialog.open` hands the
+ *  next test a report that is still on its way. */
+export function settingsClosed(): boolean {
+  return !document.querySelector('#settings-dialog[open]') && !document.body.classList.contains('settings-open');
+}
+
 export interface Wired {
   method: string;
   path: string;

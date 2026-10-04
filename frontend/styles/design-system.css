@@ -126,14 +126,15 @@
     width: 14rem;
   }
 
-  .ds-choice-card {
+  /* A bordered card that clips its rows: the choice rows and the navigation list form sit in one. */
+  .ds-list-card {
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-card);
     overflow: hidden;
     width: 14rem;
   }
 
-  .ds-choice-card > * + * {
+  .ds-list-card > * + * {
     border-top: 1px solid var(--color-border-subtle);
   }
 

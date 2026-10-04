@@ -54,16 +54,6 @@
     text-align: center;
   }
 
-  .list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-  }
-
-  .list > * + * {
-    border-block-start: 1px solid var(--color-border-subtle);
-  }
-
   /* A row is the kind, the memory, and Forget. The forget button keeps the control ladder's size,
    * so a short memory still gives it room, and the text pads itself to match. */
   .memory {
@@ -88,28 +78,20 @@
     white-space: nowrap;
   }
 
-  /* Two lines of the memory; the whole text is its tooltip. */
+  /* The whole memory, as the agent wrote it: its own line breaks stay, and a long word wraps. */
   .body {
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
     color: var(--color-text-secondary);
-    display: -webkit-box;
     font-size: var(--font-size-detail);
     grid-area: body;
     line-height: var(--line-height-control);
     margin: 0;
-    overflow: hidden;
     overflow-wrap: anywhere;
     padding-block: var(--space-inline);
+    white-space: pre-wrap;
   }
 
   .forget {
-    color: var(--color-text-muted);
     grid-area: action;
-  }
-
-  .forget:hover {
-    color: var(--color-text-primary);
   }
 
   /* A note that is only there to speak: with nothing to say it takes no room, and it stays in

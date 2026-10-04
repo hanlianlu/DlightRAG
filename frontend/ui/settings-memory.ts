@@ -30,10 +30,9 @@ import shared from '../styles/settings-page.module.css';
 import styles from '../styles/settings-memory.module.css';
 import {loadOlderControl} from './load-older.ts';
 import {modalResult} from './modal.ts';
-import {switchCard} from './settings-parts.ts';
+import {dangerCard, switchCard} from './settings-parts.ts';
 import {reportSettingsSummary} from './settings-summary.ts';
 import {requestToast} from './toast-request.ts';
-import type {ToastRequestDetail} from './toast.ts';
 
 const MAX_SEEN_MEMORY_OPERATIONS = 500;
 type MemoryReadResult = 'loaded' | 'stale' | 'failed';
@@ -149,6 +148,11 @@ export class DlSettingsMemory extends LightElement {
 
   /** Consume one live Profile Memory domain fact from Chat composition. */
   handleOperation(event: MemoryOperationEvent): void {
+    this.#receive(event, false);
+  }
+
+  /** Turn one live fact into its receipt; `takeFocus` is for a change whose own control is gone. */
+  #receive(event: MemoryOperationEvent, takeFocus: boolean): void {
     if (!event.live) return;
     const identity = event.changeId || `${event.intentId || ''}:${event.operation}:${event.outcome}`;
     if (!identity || this.#seenOperations.has(identity)) return;
@@ -159,16 +163,17 @@ export class DlSettingsMemory extends LightElement {
     this.#seenOperations.add(identity);
     const message = memorySummary(event);
     if (event.outcome !== 'changed' || !event.changeId) {
-      this.#notify({message, duration: 3000});
+      requestToast(this, {message, duration: 3000});
       return;
     }
     const changeId = event.changeId;
     const signal = this.#events?.signal;
-    this.#notify({
+    requestToast(this, {
       message,
       action: {
         actionLabel: msg('Undo', {id: 'settings.memory.undo'}),
         duration: 3000,
+        focus: takeFocus,
         onAction: async () => {
           if (this.pending) throw new Error('Memory operation in progress');
           this.pending = true;
@@ -177,7 +182,7 @@ export class DlSettingsMemory extends LightElement {
             const receipt = await undoMemoryChange(changeId, signal);
             if (receipt.outcome !== 'changed') throw new Error('Memory undo conflicted');
           } catch (error) {
-            if (!signal?.aborted) this.#notify({
+            if (!signal?.aborted) requestToast(this, {
               message: msg('Could not undo the change.', {id: 'toast.undoFailed'}),
             });
             throw error;
@@ -185,7 +190,7 @@ export class DlSettingsMemory extends LightElement {
             this.pending = false;
             void this.#refresh();
           }
-          if (!signal?.aborted) this.#notify({
+          if (!signal?.aborted) requestToast(this, {
             message: msg('Profile Memory change undone.', {id: 'settings.memory.changeUndone'}),
           });
           return msg('Profile Memory change undone.', {id: 'settings.memory.changeUndone'});
@@ -260,14 +265,14 @@ export class DlSettingsMemory extends LightElement {
             msg('Stored memories', {id: 'settings.memory.stored'})}</h4>
           ${count === null ? nothing : html`<span class=${styles.badge}>${count}</span>`}
         </div>
-        ${this.records?.length ? html`<ul class=${styles.list}>
+        ${this.records?.length ? html`<ul class="${shared.list} ${shared.divided}">
           ${repeat(this.records, (record) => record.memoryId, (record) => html`
             <li class=${styles.memory}>
               <span class=${styles.kind}>${record.kind === 'fact'
                 ? msg('Fact', {id: 'settings.memory.kindFact'})
                 : msg('Preference', {id: 'settings.memory.kindPreference'})}</span>
-              <p class=${styles.body} title=${record.body}>${record.body}</p>
-              <dl-icon-button class=${styles.forget} name="close" size="sm"
+              <p class=${styles.body}>${record.body}</p>
+              <dl-icon-button class="${styles.forget} ${shared.iconAction}" name="close" size="sm"
                 aria-label=${msg('Forget this memory', {id: 'settings.memory.forget'})}
                 ?disabled=${this.pending || this.loading}
                 @click=${() => { void this.#forget(record); }}></dl-icon-button>
@@ -302,23 +307,14 @@ export class DlSettingsMemory extends LightElement {
   }
 
   #clearCard(): TemplateResult {
-    return html`
-      <div class="${shared.card} ${shared.row} ${shared.dangerRow}">
-        <span class=${shared.rowText}>
-          <span class=${shared.rowLabel}>${msg('Clear all memories', {id: 'settings.clearAll'})}</span>
-          <span class=${shared.rowCaption}>${this.#clearBody()}</span>
-        </span>
-        <button type="button" id="memory-clear-btn" class="dl-btn dl-btn-danger-text"
-                aria-label=${msg('Clear all memories', {id: 'settings.clearAll'})}
-                ?disabled=${this.pending} @click=${this.#clear}>${this.#phone.matches
-          ? msg('Clear all memories', {id: 'settings.clearAll'})
-          : msg('Clear…', {id: 'settings.clearButton'})}</button>
-      </div>`;
-  }
-
-  /** The dialog owns the toast region; a notice goes to it while Settings is open and to the shell otherwise. */
-  #notify(detail: ToastRequestDetail): void {
-    requestToast(this, detail);
+    return dangerCard({
+      action: msg('Clear all memories', {id: 'settings.clearAll'}),
+      short: msg('Clear…', {id: 'settings.clearButton'}),
+      caption: this.#clearBody(),
+      phone: this.#phone.matches,
+      disabled: this.pending,
+      onClick: this.#clear,
+    });
   }
 
   #toggle = async (event: Event): Promise<void> => {
@@ -334,7 +330,7 @@ export class DlSettingsMemory extends LightElement {
       if (!signal.aborted) this.memory = memory;
     } catch {
       if (!signal.aborted) {
-        this.#notify({
+        requestToast(this, {
           message: msg('Could not save memory settings.', {id: 'settings.memorySaveFailed'}),
           duration: 3000,
         });
@@ -361,14 +357,14 @@ export class DlSettingsMemory extends LightElement {
     try {
       await clearMemory(signal);
       if (!signal.aborted) {
-        this.#notify({
+        requestToast(this, {
           message: msg('Memory cleared.', {id: 'settings.memoryCleared'}),
           duration: 3000,
         });
       }
     } catch {
       if (!signal.aborted) {
-        this.#notify({
+        requestToast(this, {
           message: msg('Could not clear memory.', {id: 'settings.memoryClearFailedToast'}),
           duration: 3000,
         });
@@ -411,15 +407,19 @@ export class DlSettingsMemory extends LightElement {
     if (!signal || signal.aborted || this.pending || this.loading) return;
     this.pending = true;
     this.#invalidateReads();
+    // The row the reader is on is about to go: the Undo that replaces it takes focus, or the list's
+    // title does when nothing can be undone.
+    let undoable = false;
     try {
       const receipt = await forgetMemory(record.memoryId, signal);
       if (signal.aborted) return;
-      this.handleOperation({
+      undoable = receipt.outcome === 'changed' && receipt.changeId !== '';
+      this.#receive({
         live: true, operation: receipt.action, outcome: receipt.outcome,
         changeId: receipt.changeId, intentId: null, body: receipt.body || record.body,
-      });
+      }, undoable);
     } catch {
-      if (!signal.aborted) this.#notify({
+      if (!signal.aborted) requestToast(this, {
         message: msg('Could not forget this memory.', {id: 'settings.memory.forgetFailed'}), duration: 3000,
       });
     } finally {
@@ -427,11 +427,7 @@ export class DlSettingsMemory extends LightElement {
         this.pending = false;
         void this.#refresh();
         await this.updateComplete;
-        // The row the reader was on is gone: land on the Undo that just appeared, else on the list.
-        const dialog = this.closest('dialog');
-        const toast = dialog?.open ? dialog.querySelector('dl-toast-region') : null;
-        await toast?.updateComplete;
-        if (dialog?.open) (toast?.querySelector('button') ?? this.#listTitle())?.focus();
+        if (!undoable) this.#listTitle()?.focus();
       }
     }
   }

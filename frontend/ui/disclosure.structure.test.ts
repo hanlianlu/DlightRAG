@@ -5,7 +5,7 @@
  * with the panel (605px inside a 720px row), the glyph was drawn at the box's
  * left edge, and rotation pivoted on that box centre, so the icon drifted by half
  * the track whenever the panel resized. It now pins one fixed glyph column to the
- * row end. The Connections page has no collapsible group above its cards.
+ * row end.
  *
  * The References list shows five rows, and three on a narrow answer column. The
  * control is the list's next sibling and renders only while the collapsed list
@@ -68,15 +68,12 @@ test('the MCP card disclosure pins one fixed glyph column to the row end', () =>
   assert.match(rule(css, '.cardToggle'), /display: flex/);
   assert.doesNotMatch(rule(css, '.cardToggle'), /grid-template-columns/);
   assert.match(css, /\.cardToggle\[aria-expanded='true'\] \.chevron \{/);
-  // The page is the open state: no group row collapses the cards.
-  assert.doesNotMatch(css, /groupRow|groupChevron/);
 });
 
 test('the MCP card uses the shared disclosure icon without inline rotation', () => {
   const source = read('ui/settings-connections.ts');
   assert.equal((source.match(/icon\('disclosure'/g) ?? []).length, 1);
   assert.doesNotMatch(source, /rotate\(/);
-  assert.doesNotMatch(source, /expanded: \{state: true\}|data-connections-root/);
 });
 
 test('the MCP card row rings inside its own box on keyboard focus', () => {

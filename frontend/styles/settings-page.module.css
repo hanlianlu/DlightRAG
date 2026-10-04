@@ -24,6 +24,13 @@
     border-block-start: 1px solid var(--color-border-subtle);
   }
 
+  /* A list of rows inside a card: no bullets, no indent. */
+  .list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
   .row {
     align-items: center;
     display: flex;
@@ -57,15 +64,34 @@
     overflow-wrap: anywhere;
   }
 
-  /* A row whose control is one destructive button: it stacks under its text on a phone. */
+  /* A destructive action beside the sentence that says what it will do; on a phone the button
+   * stacks under the sentence at full width. A card's danger row also wears `.row` for its padding. */
   .dangerRow {
+    align-items: center;
+    display: flex;
     gap: var(--space-related);
   }
 
+  .dangerRow > :first-child {
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* An icon button that acts on its row or its page (Forget, Remove, Close): a muted glyph that
+   * darkens on hover, as a panel's Close does; the element's own tint answers the pointer too. */
+  .iconAction {
+    color: var(--color-text-muted);
+  }
+
+  .iconAction:hover {
+    color: var(--color-text-tertiary);
+  }
+
+  /* The danger colour leans toward the text colour until it reads at 4.5 to 1 on its own tint. */
   .note {
     background: var(--color-danger-surface);
     border-radius: var(--radius-control);
-    color: var(--color-danger);
+    color: color-mix(in srgb, var(--color-danger) 70%, var(--color-text-primary));
     font-size: var(--font-size-detail);
     line-height: var(--line-height-control);
     padding: var(--space-tight) var(--space-component);

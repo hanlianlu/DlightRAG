@@ -2,8 +2,10 @@
 /** The Settings Agent Accounts wire: a redacted view, the owner's sign-up switch, and removal.
 
  * Credentials are write-only everywhere. DlightRAG mints and seals each password, so no reply
- * carries a password, an envelope, a key id, or an account id; the schemas are strict, so a reply
- * that names any other field is refused instead of ignored and the browser never holds it.
+ * carries a password, an envelope, a key id, or an account id. A schema that is not strict already
+ * drops a field it does not know from what it returns; these are strict, so a reply that names one
+ * is refused instead. A backend that began to send a secret here fails where it can be seen, and
+ * not quietly in a field nobody reads.
  */
 
 import * as v from 'valibot';

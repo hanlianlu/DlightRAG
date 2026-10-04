@@ -103,8 +103,8 @@ a.dl-btn {
 /* === Switch === */
 
 /* Applied to a native <button role="switch" aria-checked="true|false">. The product owns the
- * state and the accessible name; the primitive owns the track, the thumb, the motion, and the
- * focus ring. Geometry stays symmetric through the two foundation invariants:
+ * state and the accessible name; the primitive owns the track, the thumb, the motion, the hit
+ * area, and the focus ring. Geometry stays symmetric through the two foundation invariants:
  * height = thumb + 2 * inset, and width = thumb + 2 * inset + travel. */
 
 .dl-switch {
@@ -119,9 +119,19 @@ a.dl-btn {
     block-size: var(--size-switch-height);
     inline-size: var(--size-switch-width);
     padding: 0;
+    position: relative;
     transition:
         background var(--duration-control) var(--easing-standard),
         border-color var(--duration-control) var(--easing-standard);
+}
+
+/* The control is as easy to hit as the control ladder says (--control-hit-target) however small the
+ * track is drawn: an invisible extension of the button itself, so a tap beside the track still
+ * turns it. Each side reaches out by half of what the track lacks, and a larger track keeps its own. */
+.dl-switch::before {
+    content: '';
+    inset: min(0px, calc((100% - var(--control-hit-target)) / 2));
+    position: absolute;
 }
 
 /* The 1px border sits outside the padding box, so the thumb inset loses exactly one pixel. */
@@ -161,22 +171,18 @@ a.dl-btn {
     border-color: var(--color-control-border-hover);
 }
 
-/* Compact variant for dense rows: apply it beside the base class (`dl-switch dl-switch--sm`).
- * Same geometry invariants one icon step down, so it only rescales the track and thumb and keeps
- * every state rule identical. */
-.dl-switch--sm {
-    block-size: var(--size-switch-sm-height);
-    inline-size: var(--size-switch-sm-width);
-}
-
-.dl-switch--sm::after {
-    block-size: var(--size-switch-sm-thumb);
-    inline-size: var(--size-switch-sm-thumb);
-    margin-inline-start: calc(var(--size-switch-sm-inset) - 1px);
-}
-
-.dl-switch--sm[aria-checked='true']::after {
-    transform: translateX(var(--size-switch-sm-travel));
+/* Dense variant for rows beside a pointer: `dl-switch dl-switch--dense` is the compact switch, one
+ * icon step down with the same two invariants, and it is the regular switch where a finger is the
+ * pointer (the phone layout). It only rebinds the geometry the base rules already read, so no
+ * state rule is written twice. */
+@media (width > 720px) and (height > 480px) {
+    .dl-switch--dense {
+        --size-switch-height: var(--size-switch-sm-height);
+        --size-switch-inset: var(--size-switch-sm-inset);
+        --size-switch-thumb: var(--size-switch-sm-thumb);
+        --size-switch-travel: var(--size-switch-sm-travel);
+        --size-switch-width: var(--size-switch-sm-width);
+    }
 }
 
 @media (forced-colors: active) {
@@ -201,9 +207,11 @@ a.dl-btn {
 
 /* === Navigation item === */
 
-/* A native <button> inside a <nav>: an icon, a label, and an optional trailing status. The item
- * whose page is showing carries aria-current="page" and the selected-row tint. A feature that
- * lays the same items out as a list adds its own parts; the primitive owns the row. */
+/* A native <button> inside a <nav>: an icon, a label, and a short trailing status. The item whose
+ * page is showing carries aria-current="page" and the selected-row tint. The same row has a list
+ * form (`dl-nav-item dl-nav-item--list`) for a screen that shows the navigation as a page of its
+ * own: the full status line under the label and a disclosure, instead of the short status. The
+ * detail line stays in the tree in both forms, so the row's description never depends on its form. */
 
 .dl-nav-item {
     align-items: center;
@@ -269,14 +277,47 @@ a.dl-btn {
 
 .dl-nav-item-detail {
     color: var(--color-text-muted);
+    display: none;
     font-size: var(--font-size-caption);
     line-height: var(--line-height-control);
 }
 
 .dl-nav-item-status {
-    color: var(--color-text-subtle);
+    color: var(--color-text-muted);
     flex: none;
     font-size: var(--font-size-caption);
+}
+
+.dl-nav-item-disclosure {
+    color: var(--color-text-dim);
+    display: none;
+    flex: none;
+}
+
+/* The row as an entry of a bordered list: the list owns the outer border and clips its corners, so
+ * the row is square, takes the list's text colour, and sits on a hairline under the row before it. */
+.dl-nav-item--list {
+    border-radius: 0;
+    color: inherit;
+    gap: var(--space-component);
+    padding-block: var(--space-tight);
+    padding-inline: var(--space-component);
+}
+
+.dl-nav-item--list + .dl-nav-item--list {
+    border-block-start: 1px solid var(--color-border-subtle);
+}
+
+.dl-nav-item--list .dl-nav-item-detail {
+    display: block;
+}
+
+.dl-nav-item--list .dl-nav-item-disclosure {
+    display: flex;
+}
+
+.dl-nav-item--list .dl-nav-item-status {
+    display: none;
 }
 
 /* === Confirm Dialog === */

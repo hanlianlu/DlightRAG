@@ -1,10 +1,9 @@
 /* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
 
-/* stylelint-disable selector-pseudo-class-no-unknown -- CSS Modules :global */
-
 /* Inside the Settings dialog (the box itself is settings.css): a navigation column and one page
- * beside it, and on a phone a section list that opens a page. Cards sit on hairlines; nothing in
- * here casts a shadow, because the dialog is the one overlapping surface. */
+ * beside it, and on a phone a section list that opens a page. Docked surfaces (the navigation,
+ * the pages, their cards) sit on hairlines and cast no shadow, because the dialog is the one
+ * overlapping surface; a notice is a toast and floats over it like one. */
 
 @layer features {
   .frame {
@@ -23,15 +22,10 @@
 
   /* One Close for both levels, pinned to the corner of the frame so scrolling never takes it. */
   .close {
-    color: var(--color-text-muted);
     inset-block-start: var(--space-component);
     inset-inline-end: var(--space-component);
     position: absolute;
     z-index: 1;
-  }
-
-  .close:hover {
-    color: var(--color-text-primary);
   }
 
   /* ── Navigation ── */
@@ -62,8 +56,9 @@
   }
 
   .groupLabel {
-    color: var(--color-text-subtle);
+    color: var(--color-text-muted);
     font-size: var(--font-size-caption);
+    font-weight: 600;
     padding-block-end: var(--space-inline);
     padding-inline: var(--space-tight);
   }
@@ -72,17 +67,6 @@
     display: flex;
     flex-direction: column;
     gap: calc(var(--space-inline) / 2);
-  }
-
-  /* The two statuses and the chevron belong to different layouts; each shows in its own. */
-  .statusDetail,
-  .chevron {
-    display: none;
-  }
-
-  .chevron {
-    color: var(--color-text-dim);
-    flex: none;
   }
 
   /* ── Page ── */
@@ -143,67 +127,13 @@
   }
 
   /* Pages are elements of their own; the one that is not showing is hidden, never unmounted. */
-  .pane :is(
-    dl-settings-connections,
-    dl-settings-agent-accounts,
-    dl-settings-memory,
-    dl-settings-conversations,
-    dl-settings-language
-  ) {
+  .page {
     display: block;
     min-width: 0;
   }
 
-  .pane :is(
-    dl-settings-connections,
-    dl-settings-agent-accounts,
-    dl-settings-memory,
-    dl-settings-conversations,
-    dl-settings-language
-  )[hidden] {
+  .page[hidden] {
     display: none;
-  }
-
-  /* ── Notices ── */
-
-  /* Floats over the foot of the pane, wherever the reader is: a Memory change can arrive on any
-   * page. It is empty and out of the way until the region shows a message. */
-  .notice {
-    align-items: center;
-    background: var(--color-bg-elevated);
-    border-radius: var(--radius-popover);
-    bottom: var(--space-related);
-    box-shadow: var(--shadow-toast);
-    box-sizing: border-box;
-    color: var(--color-text-tertiary);
-    display: none;
-    font-size: var(--font-size-detail);
-    gap: var(--space-component);
-    inset-inline: var(--space-section);
-    padding: var(--space-inline) var(--space-inline) var(--space-inline) var(--space-component);
-    position: absolute;
-  }
-
-  .notice:global(.visible) {
-    display: flex;
-  }
-
-  .notice :global(.toast-message) {
-    flex: 1;
-    overflow-wrap: anywhere;
-    white-space: normal;
-  }
-
-  .notice :global(.toast-action) {
-    background: transparent;
-    border-color: transparent;
-    color: var(--color-accent-action);
-  }
-
-  .notice :global(.toast-action:hover:not(:disabled)) {
-    background: var(--color-accent-surface);
-    border-color: transparent;
-    color: var(--color-accent-action);
   }
 
   /* ── Phone: full screen, a section list, then a page ── */
@@ -241,36 +171,12 @@
       padding-inline: var(--space-inline);
     }
 
-    /* A group is one card of rows: the same items, laid out as a list with a status line. */
+    /* A group is one card of rows: the items turn into the list form, and the card clips them. */
     .groupItems {
       border: 1px solid var(--color-border-subtle);
       border-radius: var(--radius-card);
       gap: 0;
       overflow: hidden;
-    }
-
-    .groupItems > :global(.dl-nav-item) {
-      border-radius: 0;
-      color: inherit;
-      gap: var(--space-component);
-      padding-block: var(--space-tight);
-      padding-inline: var(--space-component);
-    }
-
-    .groupItems > :global(.dl-nav-item) + :global(.dl-nav-item) {
-      border-block-start: 1px solid var(--color-border-subtle);
-    }
-
-    .statusShort {
-      display: none;
-    }
-
-    .statusDetail {
-      display: block;
-    }
-
-    .chevron {
-      display: flex;
     }
 
     .paneHeader {
@@ -298,11 +204,6 @@
 
     .description {
       padding-inline-end: 0;
-    }
-
-    .notice {
-      bottom: var(--space-section);
-      inset-inline: var(--space-related);
     }
   }
 }

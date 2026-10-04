@@ -1,7 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {expect} from '@esm-bundle/chai';
-import {setViewport} from '@web/test-runner-commands';
 import {setLanguagePreference} from '../i18n/locale.ts';
 import {waitFor} from '../testing/dom.ts';
 import {
@@ -19,7 +18,10 @@ import './settings-agent-accounts.ts';
 import type {SettingsSummary} from './settings-summary.ts';
 
 const originalFetch = window.fetch;
-const originalViewport = {width: window.innerWidth, height: window.innerHeight};
+
+/** A page wide enough for the table, and one too narrow for it (the line is 36rem, 576px). */
+const WIDE = 700;
+const NARROW = 400;
 
 type Feature = HTMLElementTagNameMap['dl-settings-agent-accounts'];
 
@@ -52,23 +54,24 @@ afterEach(async () => {
   document.body.replaceChildren();
   document.body.className = '';
   csrfCookie(null);
-  if (window.innerWidth !== originalViewport.width || window.innerHeight !== originalViewport.height) {
-    await setViewport(originalViewport);
-  }
 });
 
-function mount(): Feature {
+/** The page as the dialog gives it: a block as wide as the pane it is in. */
+function mount(width: number): Feature {
+  const pane = document.createElement('div');
+  pane.style.width = `${width}px`;
   const feature = document.createElement('dl-settings-agent-accounts');
-  document.body.append(feature);
+  feature.style.display = 'block';
+  pane.append(feature);
+  document.body.append(pane);
   return feature;
 }
 
-/** Mount the page, wait for it to read, and settle on the desktop layout unless told otherwise. */
-async function shown(routes: Record<string, Handler> = {}, phone = false): Promise<{feature: Feature; api: Wire}> {
-  await setViewport(phone ? {width: 390, height: 844} : {width: 1280, height: 800});
+/** Mount the page in a pane of one width and wait for it to read. */
+async function shown(routes: Record<string, Handler> = {}, width = WIDE): Promise<{feature: Feature; api: Wire}> {
   const api = wire(routes);
   window.fetch = api.fetch;
-  const feature = mount();
+  const feature = mount(width);
   await waitFor(() => feature.view !== null || feature.error);
   await feature.updateComplete;
   return {feature, api};
@@ -127,8 +130,8 @@ it('lists each website with how the agent signs in there, when it registered, an
     .to.deep.equal(ACCOUNTS.map((account) => `Remove the account for ${account.site}`));
 });
 
-it('writes each phone row as three lines: the website, how it signs in, and when it last did', async () => {
-  const {feature} = await shown(listing(), true);
+it('writes each account as three lines where the page is too narrow for a table: the website, how it signs in, and when it last did', async () => {
+  const {feature} = await shown(listing(), NARROW);
 
   expect(feature.querySelector('table')).to.equal(null);
   const rows = [...feature.querySelectorAll('li')].map((row) => [...row.querySelectorAll('[class*=itemText] > span')]
@@ -141,6 +144,28 @@ it('writes each phone row as three lines: the website, how it signs in, and when
     ['example.net', rows[3]![1]!],
   ]);
   expect(rows[3]![1]).to.match(/^Signed in \w{3} \d{1,2}, \d{4}$/);
+});
+
+it('turns from a table to three-line rows as its pane narrows past 36rem, and back, without losing an account', async () => {
+  const {feature} = await shown(listing(), WIDE);
+  const pane = feature.parentElement!;
+  const layout = (): string => (feature.querySelector('table') ? 'table' : feature.querySelector('ul') ? 'rows' : 'none');
+  expect(layout()).to.equal('table');
+
+  // Just under and just over the line, the way a pane meets it: by being resized while open.
+  pane.style.width = '560px';
+  await waitFor(() => layout() === 'rows');
+  expect(feature.querySelectorAll('li')).to.have.length(ACCOUNTS.length);
+  pane.style.width = '600px';
+  await waitFor(() => layout() === 'table');
+  expect(feature.querySelectorAll('tbody tr')).to.have.length(ACCOUNTS.length);
+});
+
+it('shows when an account registered even where it never signed in and there is no room for a table', async () => {
+  const {feature} = await shown(listing(), NARROW);
+
+  const never = [...feature.querySelectorAll('li')].find((row) => row.textContent!.includes('ycombinator.com'))!;
+  expect(never.textContent).to.contain('Registered Mar 6, 2025, not signed in since');
 });
 
 it('invites the first account when there is none, and keeps the switch', async () => {
@@ -329,6 +354,24 @@ describe('removing an account', () => {
     await waitFor(() => feature.textContent!.includes('No accounts yet'));
 
     await waitFor(() => document.activeElement === registration(feature));
+  });
+
+  it('hands focus to the note that nothing is left when the switch is out of reach for the deployment', async () => {
+    const closed = {allowed: false, enabled: true};
+    const {feature} = await shown({
+      'GET /web/api/agent-accounts': () => Response.json(agentAccountsView([ACCOUNTS[0]!], closed)),
+      'DELETE /web/api/agent-accounts/discourse.org': () => Response.json(agentAccountsView([], closed)),
+    });
+    const dialog = feature.querySelector<HTMLDialogElement>('#agent-accounts-remove')!;
+    expect(registration(feature).disabled).to.equal(true);
+
+    removeButton(feature, 'discourse.org').click();
+    await waitFor(() => dialog.open);
+    dialog.querySelector<HTMLButtonElement>('button[value=remove]')!.click();
+    await waitFor(() => feature.textContent!.includes('No accounts yet'));
+
+    const note = [...feature.querySelectorAll('h4')].find((heading) => heading.textContent!.trim() === 'No accounts yet')!;
+    await waitFor(() => document.activeElement === note);
   });
 
   it('treats a 404 as "already gone": it reads the list again and says nothing', async () => {

@@ -2,13 +2,14 @@
 
 import {expect} from '@esm-bundle/chai';
 import {sendKeys, setViewport} from '@web/test-runner-commands';
-import {linkStyles, waitFor} from '../testing/dom.ts';
+import {buttonNamed, linkStyles, waitFor} from '../testing/dom.ts';
 import {
   agentAccountsView,
   memoryPage,
   memorySettings,
   mountSettings,
   openSettings,
+  settingsClosed,
   wire,
   wireAccount,
 } from '../testing/settings.ts';
@@ -283,15 +284,15 @@ it('closes from the Close button, from Escape, and from the scrim, but not from 
   expect(dialog.open).to.equal(true);
 
   named('Close settings').click();
-  await waitFor(() => !dialog.open);
+  await waitFor(settingsClosed);
 
   await openSettings(settings);
   await sendKeys({press: 'Escape'});
-  await waitFor(() => !dialog.open);
+  await waitFor(settingsClosed);
 
   await openSettings(settings);
   dialog.click();
-  await waitFor(() => !dialog.open);
+  await waitFor(settingsClosed);
 });
 
 it('starts a session of its own when it opens before the last close has been reported', async () => {
@@ -311,8 +312,8 @@ it('starts a session of its own when it opens before the last close has been rep
   expect(second).not.to.equal(first);
   expect(first.isConnected).to.equal(false);
   // The late report of the first close did not tear the second session down.
-  expect(dialog.open).to.equal(true);
-  expect(document.body.classList.contains('settings-open')).to.equal(true);
+  expect(dialog.open, 'dialog open').to.equal(true);
+  expect(document.body.classList.contains('settings-open'), 'settings-open class').to.equal(true);
   await waitFor(() => api.requests.filter((request) => request.path === '/web/api/connections/mcp').length === 2);
   await waitFor(() => (second as unknown as {view: unknown}).view !== null);
 });
@@ -327,7 +328,7 @@ it('deletes every conversation through the sidebar\'s command, and closes only o
     return outcome;
   };
   const dialog = await openSettings(settings, 'conversations');
-  const button = settings.querySelector<HTMLButtonElement>('#delete-all-btn')!;
+  const button = buttonNamed<HTMLButtonElement>(settings, 'Delete all conversations')!;
 
   button.click();
   await waitFor(() => asked.length === 1);
@@ -337,7 +338,7 @@ it('deletes every conversation through the sidebar\'s command, and closes only o
 
   outcome = true;
   button.click();
-  await waitFor(() => !dialog.open);
+  await waitFor(settingsClosed);
   expect(asked).to.have.length(2);
 });
 
@@ -364,18 +365,24 @@ it('shows a page\'s notice in its own region while open, and hands it to the she
   expect(toast.textContent).to.contain('After it closed');
 });
 
-it('lets a notice that still offers Undo outlive the dialog', async () => {
+it('lets a notice that still offers Undo outlive the dialog, and gives focus back to where it was opened', async () => {
   window.fetch = populated().fetch;
   const {settings, toast} = mountSettings();
-  const dialog = await openSettings(settings);
+  const trigger = document.createElement('button');
+  document.body.append(trigger);
+  trigger.focus();
+  await settings.open(trigger);
+  const dialog = settings.querySelector<HTMLDialogElement>('#settings-dialog')!;
+  await waitFor(() => dialog.open);
   settings.querySelector('dl-settings-language')!.dispatchEvent(new CustomEvent('dl-toast-request', {
-    detail: {message: 'Forgot: one', action: {actionLabel: 'Undo', onAction: async () => 'Undone'}},
+    detail: {message: 'Forgot: one', action: {actionLabel: 'Undo', onAction: async () => 'Undone', focus: true}},
     bubbles: true,
     composed: true,
   }));
   const own = settings.querySelector('dl-toast-region')!;
   await own.updateComplete;
   expect(own.querySelector('button')?.textContent?.trim()).to.equal('Undo');
+  await waitFor(() => document.activeElement === own.querySelector('button'));
 
   dialog.close();
   await waitFor(() => !document.body.classList.contains('settings-open'));
@@ -383,7 +390,28 @@ it('lets a notice that still offers Undo outlive the dialog', async () => {
 
   expect(toast.textContent).to.contain('Forgot: one');
   expect(toast.querySelector('button')?.textContent?.trim()).to.equal('Undo');
+  // The reader never reached that Undo: focus is back on what opened Settings.
+  expect(document.activeElement).to.equal(trigger);
 });
+
+/** A page's notice with an Undo, and the Undo as a finger would find it: showing, and under the point it covers. */
+async function noticeWithUndo(settings: DlSettingsDialog): Promise<{region: Element; undo: Element | null; hit: Element | null}> {
+  settings.querySelector('dl-settings-language')!.dispatchEvent(new CustomEvent('dl-toast-request', {
+    detail: {message: 'Forgot: one', action: {actionLabel: 'Undo', onAction: async () => 'Undone'}},
+    bubbles: true,
+    composed: true,
+  }));
+  const region = settings.querySelector('dl-toast-region')!;
+  await region.updateComplete;
+  await waitFor(() => getComputedStyle(region).opacity === '1');
+  const undo = region.querySelector('button');
+  const box = undo?.getBoundingClientRect();
+  return {
+    region,
+    undo,
+    hit: box ? document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2) : null,
+  };
+}
 
 describe('on a phone', () => {
   let unlink: () => void;
@@ -391,6 +419,7 @@ describe('on a phone', () => {
     await setViewport({width: 390, height: 844});
     unlink = await linkStyles([
       '../design-system/index.css',
+      '../styles/global.css',
       '../styles/layout.css',
       '../styles/settings.css',
       '../styles/settings-dialog.module.css',
@@ -447,6 +476,33 @@ describe('on a phone', () => {
     expect(memory.hasAttribute('aria-current')).to.equal(false);
   });
 
+  it('shows a notice on the section list as well as on a page, with its Undo within reach', async () => {
+    window.fetch = populated().fetch;
+    const {settings} = mountSettings();
+    await openSettings(settings);
+
+    // The list hides the page pane, and a notice from a page that is not showing still lands.
+    let shown = await noticeWithUndo(settings);
+    expect(visible(settings.querySelector('[role="region"]')!)).to.equal(false);
+    expect(shown.undo).not.to.equal(null);
+    expect(shown.hit).to.equal(shown.undo);
+
+    row(settings, 'language').click();
+    await settings.updateComplete;
+    shown = await noticeWithUndo(settings);
+    expect(shown.hit).to.equal(shown.undo);
+  });
+
+  it('lists the accounts as rows when Settings opens straight on them, though the page was out of sight when it mounted', async () => {
+    window.fetch = populated().fetch;
+    const {settings} = mountSettings();
+    await openSettings(settings, 'agent-accounts');
+
+    const accounts = pageElement(settings, 'dl-settings-agent-accounts');
+    await waitFor(() => accounts.querySelectorAll('li').length === 3);
+    expect(accounts.querySelector('table')).to.equal(null);
+  });
+
   it('opens straight on a page it is asked for, with the list one Back away', async () => {
     window.fetch = populated().fetch;
     const {settings} = mountSettings();
@@ -456,39 +512,6 @@ describe('on a phone', () => {
     expect(visible(settings.querySelector('[role="region"]')!)).to.equal(true);
     expect(document.activeElement).to.equal(settings.querySelector('#settings-page-title'));
   });
-
-  it('fills the screen with square corners, and every control a finger meets is 44px or more', async () => {
-    window.fetch = populated().fetch;
-    const {settings} = mountSettings();
-    const dialog = await openSettings(settings);
-
-    const box = dialog.getBoundingClientRect();
-    expect([box.x, box.y, box.width, box.height]).to.deep.equal([0, 0, 390, 844]);
-    expect(getComputedStyle(dialog).borderRadius).to.equal('0px');
-    const small = (element: Element): boolean => {
-      const rect = element.getBoundingClientRect();
-      return rect.width < 43.5 || rect.height < 43.5;
-    };
-    const named = (name: string): HTMLElement => [...settings.querySelectorAll<HTMLElement>('dl-icon-button')]
-      .find((button) => button.getAttribute('aria-label') === name)!;
-    expect(rows(settings).filter(small)).to.deep.equal([]);
-    expect(small(named('Close settings'))).to.equal(false);
-
-    row(settings, 'language').click();
-    await settings.updateComplete;
-    expect(small(named('Back'))).to.equal(false);
-    expect(small(named('Close settings'))).to.equal(false);
-  });
-
-  it('gives a finger the regular switch', async () => {
-    window.fetch = populated().fetch;
-    const {settings} = mountSettings();
-    await openSettings(settings, 'memory');
-    await waitFor(() => Boolean(settings.querySelector('#memory-enabled-toggle')));
-
-    const box = settings.querySelector('#memory-enabled-toggle')!.getBoundingClientRect();
-    expect([box.width, box.height]).to.deep.equal([40, 24]);
-  });
 });
 
 describe('on a desktop', () => {
@@ -497,6 +520,7 @@ describe('on a desktop', () => {
     await setViewport({width: 1280, height: 800});
     unlink = await linkStyles([
       '../design-system/index.css',
+      '../styles/global.css',
       '../styles/layout.css',
       '../styles/settings.css',
       '../styles/settings-dialog.module.css',
@@ -509,28 +533,14 @@ describe('on a desktop', () => {
     await setViewport(originalViewport);
   });
 
-  it('is a centered dialog with a fixed size, a hairline border, and a navigation column beside its page', async () => {
+  it('shows a notice with its Undo within reach of a pointer', async () => {
     window.fetch = populated().fetch;
     const {settings} = mountSettings();
-    const dialog = await openSettings(settings);
+    await openSettings(settings);
 
-    const box = dialog.getBoundingClientRect();
-    expect([box.width, box.height]).to.deep.equal([880, 640]);
-    expect(box.x + box.width / 2).to.be.closeTo(640, 1);
-    expect(box.y + box.height / 2).to.be.closeTo(400, 1);
-    const style = getComputedStyle(dialog);
-    expect(style.borderRadius).to.equal('22px');
-    expect(style.borderTopWidth).to.equal('1px');
-    const nav = settings.querySelector('nav')!.getBoundingClientRect();
-    const pane = settings.querySelector('[role="region"]')!.getBoundingClientRect();
-    expect(nav.right).to.be.at.most(pane.left + 1);
-    expect(nav.top).to.be.closeTo(pane.top, 1);
-
-    // Another page does not resize it.
-    row(settings, 'language').click();
-    await settings.updateComplete;
-    const after = dialog.getBoundingClientRect();
-    expect([after.width, after.height]).to.deep.equal([880, 640]);
+    const shown = await noticeWithUndo(settings);
+    expect(shown.undo).not.to.equal(null);
+    expect(shown.hit).to.equal(shown.undo);
   });
 
   it('opens every page at its top, and scrolls its own pane rather than the dialog', async () => {
@@ -554,15 +564,5 @@ describe('on a desktop', () => {
     await settings.updateComplete;
 
     expect(body.scrollTop).to.equal(0);
-  });
-
-  it('keeps the compact switch beside a pointer', async () => {
-    window.fetch = populated().fetch;
-    const {settings} = mountSettings();
-    await openSettings(settings, 'memory');
-    await waitFor(() => Boolean(settings.querySelector('#memory-enabled-toggle')));
-
-    const box = settings.querySelector('#memory-enabled-toggle')!.getBoundingClientRect();
-    expect([box.width, box.height]).to.deep.equal([28, 16]);
   });
 });

@@ -20,15 +20,17 @@ import {
 import {ApiError} from '../api/wire.ts';
 import {icon} from '../design-system/index.ts';
 import {getLocale} from '../i18n/locale.ts';
-import {PHONE_DIALOG_MEDIA} from '../lib/breakpoints.ts';
 import {capitalized, recentDay, shortDate} from '../lib/date-format.ts';
-import {LightElement, MediaController} from '../lib/lit-host.ts';
+import {LightElement, NarrowController} from '../lib/lit-host.ts';
 import shared from '../styles/settings-page.module.css';
 import styles from '../styles/settings-agent-accounts.module.css';
 import {modalResult} from './modal.ts';
 import {switchCard} from './settings-parts.ts';
 import {reportSettingsSummary} from './settings-summary.ts';
 import {requestToast} from './toast-request.ts';
+
+/** The narrowest page, in rem, that has room for the table's five columns. */
+const TABLE_REM = 36;
 
 /** The one sentence under the sign-up switch: the deployment's answer first, then the owner's. */
 function registrationCaption(view: AgentAccountsView): string {
@@ -70,7 +72,8 @@ export class DlSettingsAgentAccounts extends LightElement {
   declare removing: string | null;
 
   #events: AbortController | null = null;
-  readonly #phone = new MediaController(this, PHONE_DIALOG_MEDIA);
+  /** A table needs room for its columns: below this width each account is three lines instead. */
+  readonly #narrow = new NarrowController(this, TABLE_REM);
 
   constructor() {
     super();
@@ -109,8 +112,11 @@ export class DlSettingsAgentAccounts extends LightElement {
       this.error = false;
     } catch {
       if (signal.aborted) return;
-      if (this.view) this.#say(msg('Could not load agent accounts.', {id: 'agentAccounts.loadFailed'}));
-      else this.error = true;
+      if (this.view) {
+        requestToast(this, {message: msg('Could not load agent accounts.', {id: 'agentAccounts.loadFailed'}), duration: 3000});
+      } else {
+        this.error = true;
+      }
     }
   }
 
@@ -118,10 +124,6 @@ export class DlSettingsAgentAccounts extends LightElement {
     this.error = false;
     void this.#load();
   };
-
-  #say(message: string): void {
-    requestToast(this, {message, duration: 3000});
-  }
 
   #toggleRegistration = async (event: Event): Promise<void> => {
     const signal = this.#events?.signal;
@@ -134,7 +136,9 @@ export class DlSettingsAgentAccounts extends LightElement {
       const fresh = await setAgentAccountRegistration(!view.registration.enabled, signal);
       if (!signal.aborted) this.view = fresh;
     } catch {
-      if (!signal.aborted) this.#say(msg('Could not save the sign-up setting.', {id: 'agentAccounts.saveFailed'}));
+      if (!signal.aborted) {
+        requestToast(this, {message: msg('Could not save the sign-up setting.', {id: 'agentAccounts.saveFailed'}), duration: 3000});
+      }
     } finally {
       if (!signal.aborted) {
         this.pending = false;
@@ -162,22 +166,24 @@ export class DlSettingsAgentAccounts extends LightElement {
       if (signal.aborted) return;
       // The account is already gone, here or in another tab: the fresh view says so.
       if (error instanceof ApiError && error.status === 404) await this.#load();
-      else this.#say(msg('Could not remove the account.', {id: 'agentAccounts.removeFailed'}));
+      else requestToast(this, {message: msg('Could not remove the account.', {id: 'agentAccounts.removeFailed'}), duration: 3000});
     } finally {
       if (!signal.aborted) {
         this.pending = false;
         await this.updateComplete;
-        // The row the reader was on is gone: land on the one that took its place, else the switch.
+        // The row the reader was on is gone: land on the one that took its place, else on the switch,
+        // else (it is off for the deployment) on the note that there is nothing left.
         const removals = this.querySelectorAll<HTMLElement>('[data-remove]');
         (removals[Math.min(index, removals.length - 1)]
-          ?? this.querySelector<HTMLElement>('#agent-accounts-registration'))?.focus();
+          ?? this.querySelector<HTMLElement>('#agent-accounts-registration:not(:disabled)')
+          ?? this.querySelector<HTMLElement>('#agent-accounts-empty-title'))?.focus();
       }
     }
   }
 
   /** Removing one account, named for the website it belongs to. */
   #removeButton(account: AgentAccount): TemplateResult {
-    return html`<dl-icon-button name="remove" size="sm" class=${styles.remove}
+    return html`<dl-icon-button name="remove" size="sm" class=${shared.iconAction}
       data-remove=${account.site} ?disabled=${this.pending}
       aria-label=${msg(str`Remove the account for ${account.site}`, {id: 'agentAccounts.removeLabel'})}
       @click=${(event: Event) => { void this.#remove(account, event.currentTarget as HTMLElement); }}
@@ -196,7 +202,7 @@ export class DlSettingsAgentAccounts extends LightElement {
     const {primary, secondary} = identityOf(account);
     const recent = account.lastUsedAt ? recentDay(account.lastUsedAt, now, locale) : null;
     return html`
-      <tr data-site=${account.site}>
+      <tr>
         <th scope="row" class=${styles.cell}>${this.#site(account)}</th>
         <td class=${styles.cell}>
           <span class=${styles.identity}>
@@ -207,7 +213,7 @@ export class DlSettingsAgentAccounts extends LightElement {
             ${secondary === null ? nothing : html`<span class=${styles.secondary} title=${secondary}>${secondary}</span>`}
           </span>
         </td>
-        <td class="${styles.cell} ${styles.date} ${styles.registered}">${shortDate(account.createdAt, now, locale)}</td>
+        <td class="${styles.cell} ${styles.date}">${shortDate(account.createdAt, now, locale)}</td>
         <td class="${styles.cell} ${styles.date}">${account.lastUsedAt === null
           ? html`<span aria-hidden="true">—</span><span class="dl-sr-only">${
             msg('Never', {id: 'agentAccounts.never'})}</span>`
@@ -225,7 +231,7 @@ export class DlSettingsAgentAccounts extends LightElement {
           <tr>
             <th scope="col" class="${styles.cell} ${styles.websiteColumn}">${msg('Website', {id: 'agentAccounts.website'})}</th>
             <th scope="col" class=${styles.cell}>${msg('Sign-in', {id: 'agentAccounts.signIn'})}</th>
-            <th scope="col" class="${styles.cell} ${styles.date} ${styles.registered}">${msg('Registered', {id: 'agentAccounts.registered'})}</th>
+            <th scope="col" class="${styles.cell} ${styles.date}">${msg('Registered', {id: 'agentAccounts.registered'})}</th>
             <th scope="col" class="${styles.cell} ${styles.date}">${msg('Last sign-in', {id: 'agentAccounts.lastSignIn'})}</th>
             <th scope="col" class="${styles.cell} ${styles.action}"><span class="dl-sr-only">${
               msg('Remove', {id: 'agentAccounts.remove'})}</span></th>
@@ -237,17 +243,17 @@ export class DlSettingsAgentAccounts extends LightElement {
       </table>`;
   }
 
-  /** On a phone each account is three lines: the website, how it signs in, and when it last did. */
+  /** Where a table has no room, each account is three lines: the website, how it signs in, and when it last did. */
   #list(accounts: readonly AgentAccount[], now: Date, locale: string): TemplateResult {
     return html`
-      <ul class=${styles.list}>
+      <ul class="${shared.list} ${shared.divided}">
         ${repeat(accounts, (account) => account.site, (account) => {
           const {primary} = identityOf(account);
           const when = account.lastUsedAt
             ? recentDay(account.lastUsedAt, now, locale) ?? shortDate(account.lastUsedAt, now, locale)
             : null;
           return html`
-            <li class=${styles.item} data-site=${account.site}>
+            <li class=${styles.item}>
               <span class=${styles.tile} aria-hidden="true">${account.site.charAt(0).toLocaleUpperCase()}</span>
               <span class=${styles.itemText}>
                 <span class=${styles.siteName} title=${account.site}>${account.site}</span>
@@ -268,7 +274,8 @@ export class DlSettingsAgentAccounts extends LightElement {
     return html`
       <div class="${shared.card} ${styles.empty}">
         <span class=${styles.emptyIcon}>${icon('agent-accounts', {size: 'md'})}</span>
-        <span class=${styles.emptyTitle}>${msg('No accounts yet', {id: 'agentAccounts.emptyTitle'})}</span>
+        <h4 id="agent-accounts-empty-title" class=${styles.emptyTitle} tabindex="-1">${
+          msg('No accounts yet', {id: 'agentAccounts.emptyTitle'})}</h4>
         <span class=${styles.emptyBody}>${msg(
           'When Research meets a website that needs a free account, the agent signs up under its own identity and the account appears here.',
           {id: 'agentAccounts.emptyBody'},
@@ -292,8 +299,8 @@ export class DlSettingsAgentAccounts extends LightElement {
           onToggle: this.#toggleRegistration,
         })}
         ${view.accounts.length === 0 ? this.#empty() : html`
-          <div class="${shared.card} ${styles.tableCard}">
-            ${this.#phone.matches
+          <div class=${shared.card}>
+            ${this.#narrow.narrow
               ? this.#list(view.accounts, now, locale)
               : this.#table(view.accounts, now, locale)}
           </div>`}
