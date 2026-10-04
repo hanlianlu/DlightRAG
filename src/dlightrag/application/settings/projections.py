@@ -154,6 +154,10 @@ def agent_browser_settings(config: DlightragConfig) -> AgentBrowserSettings | No
         lease_wait_seconds=browser.lease_wait_seconds,
         navigation_timeout_seconds=browser.navigation_timeout_seconds,
         settle_timeout_seconds=browser.settle_timeout_seconds,
+        action_timeout_seconds=browser.action_timeout_seconds,
+        snapshot_depth=browser.snapshot_depth,
+        # A download is admitted under the bound of any fetched Resource.
+        max_download_bytes=config.answer.generation.max_attachment_bytes,
         idle_release_seconds=browser.idle_release_seconds,
     )
 

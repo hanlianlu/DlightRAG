@@ -224,6 +224,50 @@ def test_chromiums_sandbox_is_on_unless_the_operator_turns_it_off_and_reaches_th
     assert settings is not None and settings.chromium_sandbox is sandboxed
 
 
+@pytest.mark.parametrize(
+    ("bound", "action_timeout", "depth"),
+    [(None, 10.0, 12), ({"ACTION_TIMEOUT_SECONDS": "30", "SNAPSHOT_DEPTH": "20"}, 30.0, 20)],
+    ids=["by-default", "bound"],
+)
+def test_the_browser_tools_bounds_reach_the_settings_with_downloads_under_the_attachment_limit(
+    monkeypatch: pytest.MonkeyPatch,
+    bound: dict[str, str] | None,
+    action_timeout: float,
+    depth: int,
+) -> None:
+    monkeypatch.setenv(
+        "DLIGHTRAG_ANSWER__AGENT__BROWSER__ENDPOINTS", '["ws://agent-browser-1:3000/"]'
+    )
+    monkeypatch.setenv(
+        "DLIGHTRAG_ANSWER__AGENT__BROWSER__EGRESS_PROXY", "http://agent-browser-egress:3128"
+    )
+    monkeypatch.setenv("DLIGHTRAG_ANSWER__GENERATION__MAX_ATTACHMENT_BYTES", "4096")
+    for name, value in (bound or {}).items():
+        monkeypatch.setenv(f"DLIGHTRAG_ANSWER__AGENT__BROWSER__{name}", value)
+
+    settings = agent_browser_settings(DlightragConfig())  # pyright: ignore[reportCallIssue]
+
+    assert settings is not None
+    assert (settings.action_timeout_seconds, settings.snapshot_depth) == (action_timeout, depth)
+    assert settings.max_download_bytes == 4096
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("action_timeout_seconds", 0),
+        ("action_timeout_seconds", 121),
+        ("snapshot_depth", 0),
+        ("snapshot_depth", 65),
+    ],
+)
+def test_a_browser_bound_outside_its_range_is_refused_naming_the_setting(
+    field: str, value: float
+) -> None:
+    with pytest.raises(ValidationError, match=field):
+        AgentBrowserConfig.model_validate({field: value})
+
+
 def test_endpoints_without_an_egress_proxy_are_refused() -> None:
     with pytest.raises(
         ValidationError, match="answer.agent.browser.endpoints require egress_proxy"

@@ -334,7 +334,7 @@ class SessionNotesConfig(BaseModel):
 
 
 class AgentBrowserConfig(BaseModel):
-    """The Agent Browser pool (ADR 0032): Research renders pages in a browser it leases.
+    """The Agent Browser pool (ADR 0032): Research renders and drives pages in a browser it leases.
 
     No endpoint means no Agent Browser. The endpoints and the proxy are Compose Service
     names, so ``docker-compose.yml`` binds them (ADR 0006) and ``config.yaml`` leaves
@@ -392,13 +392,31 @@ class AgentBrowserConfig(BaseModel):
         le=60,
         description="How long a loaded page may take to go quiet; a page that never does is read.",
     )
+    action_timeout_seconds: float = Field(
+        default=10.0,
+        gt=0,
+        le=120,
+        description=(
+            "How long one element action, one snapshot, or one find may take on a page the "
+            "browser tool drives."
+        ),
+    )
+    snapshot_depth: int = Field(
+        default=12,
+        ge=1,
+        le=64,
+        description=(
+            "How many levels of the page the browser tool's accessibility snapshot shows; "
+            "deeper elements keep their refs, and find locates them."
+        ),
+    )
     idle_release_seconds: float = Field(
         default=30.0,
         ge=0,
         le=600,
         description=(
-            "A Run gives its browser back once it has gone this long without rendering; its "
-            "next render leases one again. 0 releases after every render."
+            "A Run gives its browser back once it has gone this long with no page open and no "
+            "render in flight; its next page or render leases one again. 0 releases at once."
         ),
     )
 

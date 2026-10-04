@@ -21,13 +21,17 @@ import sys
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 from dlightrag.engine.answer.agent_browser import (
     AgentBrowserError,
     AgentBrowserSettings,
     BrowserHolder,
+    InteractiveLimits,
     LeasedBrowser,
+    PageEvents,
+    PageObservation,
+    PageState,
     RenderedPage,
 )
 
@@ -222,9 +226,16 @@ def _response(status: int, body: bytes, headers: Mapping[str, str]) -> bytes:
 
 
 def browser_settings(
-    *, wait: float = 1.0, navigation: float = 5.0, settle: float = 0.0, idle: float = 600.0
+    *,
+    wait: float = 1.0,
+    navigation: float = 5.0,
+    settle: float = 0.0,
+    action: float = 5.0,
+    depth: int = 12,
+    download_bytes: int = 1024 * 1024,
+    idle: float = 600.0,
 ) -> AgentBrowserSettings:
-    """The Agent Browser settings of a test: a one-member pool, and the waits a test varies."""
+    """The Agent Browser settings of a test: a one-member pool, and the bounds a test varies."""
     return AgentBrowserSettings(
         endpoints=("ws://pool-1/",),
         egress_proxy="http://egress:3128",
@@ -233,6 +244,9 @@ def browser_settings(
         lease_wait_seconds=wait,
         navigation_timeout_seconds=navigation,
         settle_timeout_seconds=settle,
+        action_timeout_seconds=action,
+        snapshot_depth=depth,
+        max_download_bytes=download_bytes,
         idle_release_seconds=idle,
     )
 
@@ -266,11 +280,36 @@ class RecordingRenderer:
         return RenderedPage(requested_url=url, final_url=url, html=html, status=200)
 
 
+class FakeSession:
+    """An Agent Session's page as its Run sees it: it can be called, asked where it is, and closed.
+
+    A ``failure`` is what every call raises, as a browser that disconnected would.
+    """
+
+    def __init__(self, *, failure: AgentBrowserError | None = None) -> None:
+        self.failure = failure
+        self.visited: list[str] = []
+        self.closed = 0
+
+    def current_url(self) -> str | None:
+        return self.visited[-1] if self.visited else None
+
+    async def navigate(self, url: str) -> PageObservation:
+        if self.failure is not None:
+            raise self.failure
+        self.visited.append(url)
+        return PageObservation(PageState(url, ""), PageEvents(), "")
+
+    async def aclose(self) -> None:
+        self.closed += 1
+
+
 class FakeLease:
-    """A leased browser that renders from a table and records how it was used.
+    """A leased browser that renders from a table, hosts fake sessions, and records its use.
 
     ``gate`` holds every render until it is set, so a test can have renders in flight, and
-    ``peak`` is the most that were.
+    ``peak`` is the most that were. ``session_failure`` is what every session it opens
+    raises from its calls, and ``opening_failure`` what opening one raises.
     """
 
     def __init__(
@@ -278,10 +317,16 @@ class FakeLease:
         *,
         failure: AgentBrowserError | None = None,
         gate: asyncio.Event | None = None,
+        session_failure: AgentBrowserError | None = None,
+        opening_failure: AgentBrowserError | None = None,
     ) -> None:
         self.failure = failure
         self.gate = gate
+        self.session_failure = session_failure
+        self.opening_failure = opening_failure
         self.rendered: list[str] = []
+        self.sessions: list[FakeSession] = []
+        self.limits: list[InteractiveLimits] = []
         self.closed = 0
         self.active = 0
         self.peak = 0
@@ -301,6 +346,14 @@ class FakeLease:
         finally:
             self.active -= 1
 
+    async def open_session(self, limits: InteractiveLimits) -> Any:
+        if self.opening_failure is not None:
+            raise self.opening_failure
+        self.limits.append(limits)
+        session = FakeSession(failure=self.session_failure)
+        self.sessions.append(session)
+        return session
+
     async def aclose(self) -> None:
         self.closed += 1
 
@@ -309,11 +362,13 @@ class FakeLeases:
     """The lease store as the pool provider sees it, with operations that can be made to fail.
 
     A store whose database is down raises from every operation it is told to fail. A claim
-    that works takes the first endpoint not excluded, and every release is recorded.
+    that works takes the first endpoint not excluded, and every claim and release is
+    recorded.
     """
 
     def __init__(self, *failing: Literal["register_endpoints", "claim", "release"]) -> None:
         self._failing = set(failing)
+        self.claimed: list[str] = []
         self.released: list[str] = []
 
     def _operation(self, name: str) -> None:
@@ -327,7 +382,10 @@ class FakeLeases:
         self, holder: BrowserHolder, endpoints: Sequence[str], exclude: Sequence[str] = ()
     ) -> str | None:
         self._operation("claim")
-        return next((endpoint for endpoint in endpoints if endpoint not in exclude), None)
+        endpoint = next((endpoint for endpoint in endpoints if endpoint not in exclude), None)
+        if endpoint is not None:
+            self.claimed.append(endpoint)
+        return endpoint
 
     async def release(self, holder: BrowserHolder, endpoint: str) -> None:
         self.released.append(endpoint)
@@ -363,6 +421,7 @@ __all__ = [
     "FakeLease",
     "FakeLeases",
     "FakeProvider",
+    "FakeSession",
     "LaunchRecorder",
     "ProxiedRequest",
     "RecordingRenderer",

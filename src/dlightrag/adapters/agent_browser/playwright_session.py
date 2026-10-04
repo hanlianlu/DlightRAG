@@ -1,30 +1,48 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""One leased Playwright browser, and the page renders it gives."""
+"""One leased Playwright browser: the page renders it gives and the sessions it hosts."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from collections.abc import Awaitable, Callable
 
-from playwright.async_api import Browser, Page, Response
+from playwright.async_api import Browser, BrowserContext, Page, Response
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from dlightrag.engine.answer.agent_browser import AgentBrowserError, RenderedPage, browser_failure
+from dlightrag.adapters.agent_browser.driver import (
+    CLOSE_SECONDS,
+    NETWORK_ERROR,
+    milliseconds,
+    page_content,
+)
+from dlightrag.adapters.agent_browser.interactive import PlaywrightBrowserSession
+from dlightrag.engine.answer.agent_browser import (
+    AgentBrowserError,
+    BrowserSession,
+    InteractiveLimits,
+    RenderedPage,
+    browser_failure,
+    interactive_failure,
+)
 
 logger = logging.getLogger(__name__)
 
-#: The only part of a navigation failure the model reads: Chromium's network error token.
-_NETWORK_ERROR = re.compile(r"net::ERR_[A-Z0-9_]+")
-#: Closing a context, or disconnecting a browser, that does not answer must not hold a
-#: render or a Run's settlement open.
-_CLOSE_SECONDS = 10.0
+
+async def new_agent_context(browser: Browser, *, accept_downloads: bool) -> BrowserContext:
+    """Make an anonymous context, the one way an Agent Browser context is made.
+
+    It passes no proxy of its own, so the context inherits the launch proxy that is the
+    pool's only way out, and the connection never exposes the application's network to
+    the browser (ADR 0032). It starts empty and lets no page register a worker; it keeps
+    downloads only where a session reads them.
+    """
+    return await browser.new_context(accept_downloads=accept_downloads, service_workers="block")
 
 
 class PlaywrightLeasedBrowser:
-    """A Run's browser: each render is a temporary anonymous context of its own."""
+    """A Run's browser: each render is a temporary context, each Agent Session one of its own."""
 
     def __init__(self, browser: Browser, release: Callable[[], Awaitable[None]]) -> None:
         self._browser = browser
@@ -37,25 +55,23 @@ class PlaywrightLeasedBrowser:
         # An anonymous context starts empty and ends with the render: no cookie or storage
         # survives it, and it neither keeps downloads nor lets a page register a worker.
         try:
-            context = await self._browser.new_context(
-                accept_downloads=False, service_workers="block"
-            )
+            context = await new_agent_context(self._browser, accept_downloads=False)
         except PlaywrightError as exc:
             raise self._failure(exc, navigation_timeout) from exc
         try:
             page = await context.new_page()
             statuses: list[int] = []
             page.on("response", lambda response: _note_navigation(page, response, statuses))
-            await page.goto(url, wait_until="load", timeout=_milliseconds(navigation_timeout))
+            await page.goto(url, wait_until="load", timeout=milliseconds(navigation_timeout))
             if settle_timeout > 0:
                 try:
                     await page.wait_for_load_state(
-                        "networkidle", timeout=_milliseconds(settle_timeout)
+                        "networkidle", timeout=milliseconds(settle_timeout)
                     )
                 except PlaywrightTimeoutError:
                     # A page that never goes quiet is still read as it stands.
                     pass
-            html = await _content(page, navigation_timeout)
+            html = await page_content(page, navigation_timeout)
             status = statuses[-1] if statuses else None
             if status is not None and status >= 400:
                 raise browser_failure("http_status", status=status)
@@ -71,7 +87,7 @@ class PlaywrightLeasedBrowser:
             raise self._failure(exc, navigation_timeout) from exc
         finally:
             try:
-                async with asyncio.timeout(_CLOSE_SECONDS):
+                async with asyncio.timeout(CLOSE_SECONDS):
                     await context.close()
             except PlaywrightError:
                 # The context went with its browser, or the browser is gone.
@@ -82,13 +98,28 @@ class PlaywrightLeasedBrowser:
                 logger.warning("Failed to close an Agent Browser context in time")
                 raise browser_failure("disconnected") from None
 
+    async def open_session(self, limits: InteractiveLimits) -> BrowserSession:
+        """Open an Agent Session's context, which lives until the session closes."""
+        if not self._browser.is_connected():
+            raise interactive_failure("disconnected")
+        try:
+            context = await new_agent_context(self._browser, accept_downloads=True)
+            return await PlaywrightBrowserSession.open(self._browser, context, limits)
+        except PlaywrightError as exc:
+            if not self._browser.is_connected():
+                raise interactive_failure("disconnected") from exc
+            logger.warning("Agent Browser failed to open a page (%s)", type(exc).__name__)
+            raise interactive_failure(
+                "action_failed", action="open", target="a page", detail=type(exc).__name__
+            ) from exc
+
     async def aclose(self) -> None:
         """Disconnect the browser, then release its lease; failures are logged, not raised."""
         if self._closed:
             return
         self._closed = True
         try:
-            async with asyncio.timeout(_CLOSE_SECONDS):
+            async with asyncio.timeout(CLOSE_SECONDS):
                 await self._browser.close()
         except Exception:
             logger.warning("Failed to disconnect an Agent Browser", exc_info=True)
@@ -107,13 +138,8 @@ class PlaywrightLeasedBrowser:
         text = str(exc)
         if "Download is starting" in text:
             return browser_failure("download")
-        token = _NETWORK_ERROR.search(text)
+        token = NETWORK_ERROR.search(text)
         return browser_failure("navigation_failed", detail=token.group() if token else None)
-
-
-def _milliseconds(seconds: float) -> float:
-    """Playwright's timeouts are milliseconds, and 0 would mean no limit at all."""
-    return max(1.0, seconds * 1000)
 
 
 def _note_navigation(page: Page, response: Response, statuses: list[int]) -> None:
@@ -122,13 +148,4 @@ def _note_navigation(page: Page, response: Response, statuses: list[int]) -> Non
         statuses.append(response.status)
 
 
-async def _content(page: Page, navigation_timeout: float) -> str:
-    """The serialized DOM; a navigation in progress is waited out once."""
-    try:
-        return await page.content()
-    except PlaywrightError:
-        await page.wait_for_load_state("load", timeout=_milliseconds(navigation_timeout))
-        return await page.content()
-
-
-__all__ = ["PlaywrightLeasedBrowser"]
+__all__ = ["PlaywrightLeasedBrowser", "new_agent_context"]

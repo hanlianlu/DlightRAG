@@ -35,6 +35,116 @@ class RenderedPage:
     """The last main-frame navigation response, when the browser saw one."""
 
 
+@dataclass(frozen=True, slots=True)
+class InteractiveLimits:
+    """The bounds one Agent Session's page works within, from the settings of its Run."""
+
+    navigation_timeout: float
+    """Seconds a navigation, a wait for text, a screenshot, or one download's save may take."""
+    action_timeout: float
+    """Seconds one element action, one snapshot, or one find may take."""
+    settle_timeout: float
+    """Seconds, in all, an acting call waits for the page to load and go quiet."""
+    snapshot_depth: int
+    max_download_bytes: int
+    """The most one download may hold; the transfer stops once it is over."""
+
+
+@dataclass(frozen=True, slots=True)
+class PageState:
+    """Where an Agent Session's active page is."""
+
+    url: str
+    title: str
+    """One line of at most 200 characters."""
+
+
+@dataclass(frozen=True, slots=True)
+class DownloadedFile:
+    """One file a page downloaded, as the browser delivered it."""
+
+    url: str
+    """As the browser reports it: an HTTP(S), ``blob:``, or ``data:`` URL."""
+    suggested_filename: str
+    content: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class DownloadRefusal:
+    """One download the session did not deliver, and why."""
+
+    suggested_filename: str
+    reason: Literal["too_large", "timeout", "failed", "limit"]
+
+
+@dataclass(frozen=True, slots=True)
+class PageEvents:
+    """What the session's pages did around one call, besides the call itself."""
+
+    downloads: tuple[DownloadedFile, ...] = ()
+    refused_downloads: tuple[DownloadRefusal, ...] = ()
+    dialogs: tuple[str, ...] = ()
+    """One rendered line for each dialog the page showed, at most five."""
+    new_page: bool = False
+    """A popup or a new tab became the active page."""
+    returned: bool = False
+    """The active page closed, and an earlier page is active again."""
+    closed: bool = False
+    """The last page closed: the session has no page."""
+    http_status: int | None = None
+    """The active page's last main-frame navigation response during the call."""
+
+
+@dataclass(frozen=True, slots=True)
+class PageObservation:
+    """What an acting call left: the page, what happened around it, and its snapshot."""
+
+    page: PageState | None
+    """None when the call closed the last page."""
+    events: PageEvents
+    snapshot: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class FoundElements:
+    """The elements of the active page that match a query."""
+
+    page: PageState
+    events: PageEvents
+    lines: tuple[str, ...]
+    """The snapshot lines that match, at most ``limit``, each cut to 300 characters."""
+    total: int
+    """How many lines matched, shown or not."""
+
+
+@dataclass(frozen=True, slots=True)
+class PageScreenshot:
+    """The active page's pixels."""
+
+    page: PageState
+    events: PageEvents
+    png: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class PageCapture:
+    """The active page as the browser serializes it now."""
+
+    page: PageState
+    events: PageEvents
+    html: bytes
+    """UTF-8 of the serialized DOM, as the page stands."""
+
+
+@dataclass(frozen=True, slots=True)
+class UploadFile:
+    """One workspace file offered to a page's file input."""
+
+    name: str
+    mime_type: str
+    content: bytes
+
+
 type AgentBrowserFailure = Literal[
     "not_configured",
     "busy",
@@ -47,6 +157,16 @@ type AgentBrowserFailure = Literal[
     "too_large",
     "no_text",
     "final_url_refused",
+    "no_page",
+    "page_closed",
+    "page_lost",
+    "stale_ref",
+    "not_actionable",
+    "invalid_key",
+    "no_history",
+    "not_file_input",
+    "wait_timeout",
+    "action_failed",
 ]
 
 #: What the model reads when a render fails, one stable sentence per reason. Page URLs
@@ -74,9 +194,46 @@ _PUBLIC_MESSAGES: dict[AgentBrowserFailure, str] = {
     ),
 }
 
+#: What the model reads when a ``browser`` call fails. A reason missing here keeps its
+#: sentence above, which a call and a render say in the same words. Driver error text
+#: enters only through ``action_failed``, and only its first line.
+_INTERACTIVE_MESSAGES: dict[AgentBrowserFailure, str] = {
+    "no_page": (
+        'No page is open in this Agent Session. Start with browser(action="navigate", '
+        "url=...); a Run that resumed after an interruption starts with no open page."
+    ),
+    "page_closed": 'The page closed. Start again with browser(action="navigate", url=...).',
+    "page_lost": (
+        "This Agent Session's page was lost when the Agent Browser disconnected. Navigate "
+        "again; earlier refs no longer apply."
+    ),
+    "disconnected": (
+        "The Agent Browser disconnected, and every open page of this Run was lost. Navigate "
+        "again to start a fresh page."
+    ),
+    "stale_ref": (
+        "No element on the current page has ref {ref}. Refs come from the latest snapshot or "
+        "find of this page; call snapshot or find again."
+    ),
+    "not_actionable": (
+        "The element {ref} could not be {verb} within {seconds:g} seconds; it may be hidden, "
+        "disabled, or covered. Call snapshot to see the page again."
+    ),
+    "invalid_key": (
+        "{key} is not a key the browser knows. Use names such as Enter, Tab, Escape, "
+        "ArrowDown, or Control+A."
+    ),
+    "no_history": "There is no earlier page in this page's history.",
+    "not_file_input": "Element {ref} is not a file input and did not open a file chooser.",
+    "wait_timeout": '"{text}" did not {change} within {seconds:g} seconds.',
+    "action_failed": "The browser could not {action} {target}: {detail}.",
+    "busy": "Every Agent Browser is in use by other Runs, so no page was opened. Try again later.",
+    "unreachable": "The Agent Browser is unreachable, so no page was opened.",
+}
+
 
 class AgentBrowserError(Exception):
-    """A render the Agent Browser could not give, with the sentence the model reads."""
+    """A render or a ``browser`` call the Agent Browser could not give, with the sentence the model reads."""
 
     def __init__(self, reason: AgentBrowserFailure, public_message: str) -> None:
         super().__init__(public_message)
@@ -93,12 +250,72 @@ def browser_failure(reason: AgentBrowserFailure, **fields: object) -> AgentBrows
     return AgentBrowserError(reason, _PUBLIC_MESSAGES[reason].format(**fields))
 
 
+def interactive_failure(reason: AgentBrowserFailure, **fields: object) -> AgentBrowserError:
+    """The error for ``reason`` as a ``browser`` call reports it.
+
+    ``fields`` are the ones its sentence names: ``ref``, ``verb``, ``key``, ``text`` and
+    ``change``, ``action``, ``target`` and ``detail``, ``seconds``. A reason a render
+    reports in the same words is the render's error.
+    """
+    template = _INTERACTIVE_MESSAGES.get(reason)
+    if template is None:
+        return browser_failure(reason, **fields)
+    return AgentBrowserError(reason, template.format(**fields))
+
+
+class BrowserSession(Protocol):
+    """One Agent Session's context in the Run's browser, with one active page.
+
+    A call acts on the active page and answers with what it left. A popup or a new tab
+    becomes the active page only after the call that opened it, so a ref always acts on
+    the page it came from.
+    """
+
+    def current_url(self) -> str | None: ...
+
+    async def navigate(self, url: str) -> PageObservation: ...
+
+    async def back(self) -> PageObservation: ...
+
+    async def snapshot(self) -> PageObservation: ...
+
+    async def find(self, query: str, *, limit: int) -> FoundElements: ...
+
+    async def wait(
+        self, *, text: str | None, text_gone: str | None, seconds: float | None
+    ) -> PageObservation: ...
+
+    async def click(self, ref: str) -> PageObservation: ...
+
+    async def type_text(self, ref: str, text: str, *, submit: bool) -> PageObservation: ...
+
+    async def select(self, ref: str, values: tuple[str, ...]) -> PageObservation: ...
+
+    async def press(self, key: str, *, ref: str | None) -> PageObservation: ...
+
+    async def scroll(
+        self, *, direction: Literal["up", "down"], ref: str | None
+    ) -> PageObservation: ...
+
+    async def upload(self, ref: str, files: tuple[UploadFile, ...]) -> PageObservation: ...
+
+    async def screenshot(self, *, full_page: bool) -> PageScreenshot: ...
+
+    async def capture(self) -> PageCapture: ...
+
+    async def aclose(self) -> None:
+        """Close the context. Failing, it logs; it never raises."""
+        ...
+
+
 class LeasedBrowser(Protocol):
     """One browser a Run holds until it is closed."""
 
     async def render(
         self, url: str, *, navigation_timeout: float, settle_timeout: float
     ) -> RenderedPage: ...
+
+    async def open_session(self, limits: InteractiveLimits) -> BrowserSession: ...
 
     async def aclose(self) -> None:
         """Disconnect the browser, then release its lease."""
@@ -130,9 +347,9 @@ class AgentBrowserSettings:
     """The Agent Browser a deployment configures.
 
     The pool's endpoints, the egress proxy, whether Chromium is launched inside its own
-    sandbox, and the connect timeout are what its provider is built from. The other timings
-    are the waits a Run keeps: for a free browser, for a page to load and settle, and before
-    it gives an idle browser back.
+    sandbox, and the connect timeout are what its provider is built from. The other values
+    are the waits and bounds a Run keeps: for a free browser, for a page to load, settle
+    and answer an action, for a download, and before it gives an idle browser back.
     """
 
     endpoints: tuple[str, ...]
@@ -142,6 +359,9 @@ class AgentBrowserSettings:
     lease_wait_seconds: float
     navigation_timeout_seconds: float
     settle_timeout_seconds: float
+    action_timeout_seconds: float
+    snapshot_depth: int
+    max_download_bytes: int
     idle_release_seconds: float
 
 
@@ -161,7 +381,19 @@ __all__ = [
     "BrowserHolder",
     "BrowserLeases",
     "BrowserProvider",
+    "BrowserSession",
+    "DownloadRefusal",
+    "DownloadedFile",
+    "FoundElements",
+    "InteractiveLimits",
     "LeasedBrowser",
+    "PageCapture",
+    "PageEvents",
+    "PageObservation",
+    "PageScreenshot",
+    "PageState",
     "RenderedPage",
+    "UploadFile",
     "browser_failure",
+    "interactive_failure",
 ]
