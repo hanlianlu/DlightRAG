@@ -435,16 +435,16 @@ DlightRAG makes every password and fills it by ref.
 A Run may register when the deployment allows it
 ([`account_registration`](configuration.md#agent-browser), on by default) and its owner's
 switch for new sign-ups, which is on until the owner turns it off in Settings, was on when the
-Run was accepted. Acceptance reads the switch once, as it reads the Profile Memory
-capability, pins the answer in the Run's prepared input, and plans the browser tool with it,
-so the accepted plan and the tools the Run executes agree, and what the owner switches
-afterwards changes no Run already accepted. A Run accepted before the switch existed has the
-deployment's allowance. The allowance stays the ceiling and is read again at execution: a Run
-pinned to register under one since withdrawn is composed without `register` and refused as
-incompatible, like any Run whose tools changed. A Child's tools follow its parent's, and a
-Child's registration still lasts for the Run alone. A Run that cannot register is told of no `register`:
-the tool's description, its action lines and argument descriptions, and the sentence of a
-refusal name only the actions the Run has, and an `inbox` window opens at a `login`.
+Run was accepted. Acceptance reads the switch once, as it reads the Profile Memory capability,
+pins the answer in the Run's prepared input, and plans the browser tool with it, so the
+accepted plan and the tools the Run executes agree, and what the owner switches afterwards
+changes no Run already accepted. The allowance stays the ceiling and is read again at
+execution: a Run pinned to register under one since withdrawn is composed without `register`
+and refused as incompatible, like any Run whose tools changed. A Child's tools follow its
+parent's, and a Child's registration still lasts for the Run alone. A Run that cannot register
+is told of no `register`: the tool's description, its action lines and argument descriptions,
+and the sentence of a refusal name only the actions the Run has, and an `inbox` window opens
+at a `login`.
 
 - **`register`** acts on the page `navigate` opened and leases nothing. It takes
   `password_refs` (one or two, such as a password and its confirmation), and optionally

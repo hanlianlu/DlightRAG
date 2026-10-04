@@ -45,16 +45,12 @@ CREATE TABLE IF NOT EXISTS dlightrag_agent_account_settings (
 AGENT_ACCOUNTS_DDL = (_CREATE_AGENT_ACCOUNTS,)
 AGENT_ACCOUNT_SETTINGS_DDL = (_CREATE_AGENT_ACCOUNT_SETTINGS,)
 
-# What advances a database whose accounts table was made before it kept these times. A
-# registration time it never recorded is taken to be the last time the account's credentials
-# changed, which is the registration of an account no one has reset. Only a row that the new
-# column gave the time of this migration, later than anything the row was written at, is touched,
-# so a fresh baseline, whose table is empty, and any row written since are left as they are.
+# What advances a database whose accounts table was made before it kept these times, and which
+# has no switch for the owner's sign-ups.
 AGENT_ACCOUNT_ACTIVITY_AND_SIGN_UPS_DDL = (
     "ALTER TABLE dlightrag_agent_accounts "
     "ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
     "ALTER TABLE dlightrag_agent_accounts ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMPTZ",
-    "UPDATE dlightrag_agent_accounts SET created_at = updated_at WHERE created_at > updated_at",
     *AGENT_ACCOUNT_SETTINGS_DDL,
 )
 

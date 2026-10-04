@@ -616,9 +616,8 @@ class TestSchema:
     ) -> None:
         """A database holding the table as it first shipped is advanced, never reset.
 
-        It gains the two times, an account that had no registration time takes the time its
-        credentials last changed, and the owner's switch appears; a reader then verifies it as
-        it verifies a fresh database.
+        It gains the two times and the owner's switch, keeps the account it held, and a reader
+        then verifies it as it verifies a fresh database.
         """
         async with pool.acquire() as conn:
             await conn.execute("DROP TABLE dlightrag_agent_account_settings")
@@ -626,11 +625,9 @@ class TestSchema:
             await conn.execute(_EARLIER_AGENT_ACCOUNTS_DDL)
             await conn.execute(
                 "INSERT INTO dlightrag_agent_accounts"
-                " (owner_id, site, account_id, email, key_id, encrypted_envelope, updated_at)"
-                " VALUES ('alice', 'shop.example', 'id', 'a@alias.example', 'k', '{}',"
-                " TIMESTAMPTZ '2026-10-01 12:00:00+00')"
+                " (owner_id, site, account_id, email, key_id, encrypted_envelope)"
+                " VALUES ('alice', 'shop.example', 'id', 'a@alias.example', 'k', '{}')"
             )
-            changed = await conn.fetchval("SELECT updated_at FROM dlightrag_agent_accounts")
             await conn.execute(
                 "DELETE FROM dlightrag_schema_migrations"
                 " WHERE scope = 'runs' AND version = 'agent_account_activity_and_sign_ups'"
@@ -640,14 +637,10 @@ class TestSchema:
 
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT created_at, updated_at, last_used_at FROM dlightrag_agent_accounts"
+                "SELECT site, last_used_at FROM dlightrag_agent_accounts WHERE owner_id = 'alice'"
             )
             assert row is not None
-            assert (row["created_at"], row["updated_at"], row["last_used_at"]) == (
-                changed,
-                changed,
-                None,
-            )
+            assert (row["site"], row["last_used_at"]) == ("shop.example", None)
             for declared in (AGENT_ACCOUNTS_SCHEMA_TABLE, AGENT_ACCOUNT_SETTINGS_SCHEMA_TABLE):
                 assert await catalog_table(conn, declared.name) == declared_shape(declared)
         await PGRunStore(pool=pool).initialize(validate_only=True)

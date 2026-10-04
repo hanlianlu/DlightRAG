@@ -223,13 +223,11 @@ def run_agent_accounts(
     no Run already accepted. The deployment's allowance is read again, and is the ceiling: a Run
     pinned to register under an allowance since withdrawn is composed without ``register``, which
     its accepted plan does not match, so it is refused like any Run whose tools have changed.
-    A Run accepted before the switch existed was pinned to nothing, and has the allowance.
+    A Run with no pin was not accepted able to register, and cannot.
     """
-    pinned = prepared_input.get(MAY_REGISTER_PIN, True)
+    pinned = prepared_input.get(MAY_REGISTER_PIN) is True
     return RunAgentAccounts(
-        owner_id=owner_id,
-        binding=binding,
-        may_register=binding.registration_allowed and bool(pinned),
+        owner_id=owner_id, binding=binding, may_register=binding.registration_allowed and pinned
     )
 
 

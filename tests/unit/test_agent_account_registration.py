@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from dlightrag.engine.answer.agent_browser import AgentBrowserBinding
+from dlightrag.engine.answer.agent_browser import MAY_REGISTER_PIN, AgentBrowserBinding
 from dlightrag.engine.answer.execution import AnswerExecutor
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from tests.support.agent_browser import FakeProvider, browser_settings, idle_accounts_binding
@@ -70,6 +70,21 @@ async def test_a_research_run_is_offered_register_exactly_as_it_was_accepted_abl
     actions = set(rig.offered[0]["browser"].parameters["properties"]["action"]["enum"])
     # Login is every Run's, and register only the Run that was accepted able to.
     assert ("register" in actions, "login" in actions) == (registers, True)
+
+
+async def test_a_run_stored_with_no_pin_cannot_register_so_one_planned_to_is_refused(
+    tmp_path: Path,
+) -> None:
+    async with ResourceRegistry() as registry:
+        rig = research_rig(tmp_path=tmp_path, planning=_Retrieval(), registry=registry)
+        deployment = _deployment(rig, allowed=True)
+        accepted = await _accepted(deployment, registers=True)
+        del accepted[MAY_REGISTER_PIN]
+
+        await rig.run(deployment, accepted)
+
+    assert rig.offered == []
+    assert rig.failure is not None and rig.failure.kind == "incompatible_answer_run"
 
 
 async def test_a_run_accepted_to_register_is_refused_once_its_deployment_withdraws_the_allowance(
