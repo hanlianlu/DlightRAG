@@ -451,7 +451,9 @@ async def test_every_page_text_is_redacted(tmp_path: Path) -> None:
         found = await web.call(action="find", query="Secret")
         assert shows_mask(found.text_content, "Secret", secret)
         probe = await web.call(action="find", query=value[:6])
-        assert probe.text_content.splitlines()[-1] == f'No element matches "{value[:6]}".'
+        # The answer echoes the query, so the test compares in code and never prints it.
+        matched_nothing = probe.text_content.splitlines()[-1].startswith("No element matches")
+        assert matched_nothing
         # The serialized page and its address, a dialog it opens and a file it links to.
         await web.call(action="capture")
         (capture, _) = web.admitted[-1]
@@ -577,12 +579,12 @@ def generated(monkeypatch: pytest.MonkeyPatch) -> list[SecretStr]:
     return made
 
 
-async def value_of(web: Browsing, label: str) -> str | None:
-    """What the page's snapshot shows in its textbox ``label``: the value, or None when it is empty."""
+async def is_empty(web: Browsing, label: str) -> bool:
+    """Whether the page's snapshot shows its textbox ``label`` without a value. What a field
+    holds is never read out, since a page can leave a variant of the password in it."""
     shown = await web.call(action="snapshot")
     (line,) = [ln for ln in shown.text_content.splitlines() if f'textbox "{label}"' in ln]
-    _, separator, value = line.partition("]: ")
-    return value if separator else None
+    return "]: " not in line
 
 
 @pytest.mark.parametrize(
@@ -621,7 +623,7 @@ async def test_a_failed_fill_leaks_nothing_and_records_nothing(
         assert failed.is_error and failed.text_content == sentence.format(ref=form["password"])
         assert web.rows == []
         # No field is left holding what was filled, nor what the page made of it.
-        assert await value_of(web, "Password") is None
+        assert await is_empty(web, "Password")
 
 
 async def test_a_password_that_cannot_be_stored_is_cleared_from_the_form(
@@ -646,9 +648,9 @@ async def test_a_password_that_cannot_be_stored_is_cleared_from_the_form(
         )
         assert "An Agent Account could not be recorded (ConnectionError)" in caplog.text
         assert web.rows == []
-        assert [await value_of(web, label) for label in ("Password", "Confirmation")] == [
-            None,
-            None,
+        assert [await is_empty(web, label) for label in ("Password", "Confirmation")] == [
+            True,
+            True,
         ]
         assert_hidden(password, caplog.text)
 
@@ -824,9 +826,12 @@ async def test_a_childs_registration_is_run_scoped(tmp_path: Path) -> None:
         (join,) = posts(web.proxy, "/join")
         own, fallback = posts(web.proxy, "/session")
         assert own["email"] == [alias]
-        assert own["password"] == join["password"] and own["password"] != [
-            owners.get_secret_value()
-        ]
+        # Its own password is the one it registered with, and not the owner's.
+        reused = (
+            own["password"] == join["password"],
+            own["password"] == [owners.get_secret_value()],
+        )
+        assert reused == (True, False)
         assert fallback["email"] == [owners_alias]
         assert_sent(fallback, owners, "password")
         assert web.rows == [owners_row]

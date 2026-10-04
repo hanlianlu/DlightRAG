@@ -177,10 +177,8 @@ async def test_a_parents_account_is_sealed_for_its_owner_site_and_account() -> N
     (row,) = store.rows.values()
     assert (row.owner_id, row.site, row.email, row.username) == (OWNER, SITE, "a@x.example", None)
     assert account.persistent and account.identity == "a@x.example"
-    assert cipher.open(
-        row.envelope, label=ACCOUNT_LABEL, binding=(OWNER, SITE, row.account_id)
-    ) == (password)
-    assert run.password(account) == password
+    opened = cipher.open(row.envelope, label=ACCOUNT_LABEL, binding=(OWNER, SITE, row.account_id))
+    assert opened == password and run.password(account) == password
     for other in ((OWNER, "other.example", row.account_id), ("someone", SITE, row.account_id)):
         with pytest.raises(UnreadableEnvelope):
             cipher.open(row.envelope, label=ACCOUNT_LABEL, binding=other)

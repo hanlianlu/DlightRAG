@@ -142,7 +142,7 @@ def test_a_filled_password_a_message_echoes_is_masked_before_anything_is_taken_f
     assert summary.links == (f"https://shop.example/login?password={PASSWORD_MASK}",)
     # Nothing it holds carries the password, and no part of it comes back as a code.
     texts = (summary.sender, summary.subject, *summary.links, *summary.codes)
-    assert (sum(value in text for text in texts), summary.codes) == (0, ())
+    assert (sum(value in text for text in texts), len(summary.codes)) == (0, 0)
 
 
 def test_a_password_an_html_message_spells_with_character_references_is_masked_too() -> None:
