@@ -18,6 +18,7 @@ from typing import Any, Literal, cast
 import asyncpg
 
 from dlightrag.adapters.postgres.answer.agent_accounts import (
+    AGENT_ACCOUNT_SETTINGS_SCHEMA_TABLE,
     AGENT_ACCOUNTS_DDL,
     AGENT_ACCOUNTS_SCHEMA_TABLE,
 )
@@ -1661,6 +1662,7 @@ _RUN_TABLES = (
     MEMORY_SETTINGS_SCHEMA_TABLE,
     AGENT_BROWSER_LEASES_SCHEMA_TABLE,
     AGENT_ACCOUNTS_SCHEMA_TABLE,
+    AGENT_ACCOUNT_SETTINGS_SCHEMA_TABLE,
     TableRequirement(
         name="dlightrag_answer_committed_spills",
         columns=(

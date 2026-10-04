@@ -1,5 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Agent Accounts in PostgreSQL: owner-scoped rows, and their re-sealing after a key rotation.
+"""Agent Accounts in PostgreSQL: owner-scoped rows, the times they keep, the owner's switch for new
+sign-ups, and the re-sealing of their envelopes after a key rotation.
 
 Every test owns a scratch database. A generated password is compared in code and never put into
 an assertion, so a failure reports a count or a flag and never the value.
@@ -17,7 +18,10 @@ import asyncpg
 import pytest
 from pydantic import SecretStr
 
-from dlightrag.adapters.postgres.answer.agent_accounts import PGAgentAccountStore
+from dlightrag.adapters.postgres.answer.agent_accounts import (
+    PGAgentAccountSettingsStore,
+    PGAgentAccountStore,
+)
 from dlightrag.engine.answer.agent_browser import (
     ACCOUNT_LABEL,
     AgentAccountsBinding,
@@ -229,6 +233,21 @@ async def test_an_owner_lists_and_removes_only_their_own_accounts_in_the_order_o
         "a.example",
         "c.example",
     ]
+
+
+async def test_new_sign_ups_are_on_until_the_owner_turns_them_off_and_the_switch_is_theirs(
+    pool: Any,
+) -> None:
+    settings = PGAgentAccountSettingsStore(pool=pool)
+
+    assert await settings.registration_enabled(owner_id="alice") is True
+    assert await settings.set_registration_enabled(owner_id="alice", enabled=False) is False
+    assert await settings.registration_enabled(owner_id="alice") is False
+    assert await settings.registration_enabled(owner_id="bob") is True
+    assert await settings.set_registration_enabled(owner_id="alice", enabled=True) is True
+    assert await settings.registration_enabled(owner_id="alice") is True
+    async with pool.acquire() as conn:
+        assert await conn.fetchval("SELECT count(*) FROM dlightrag_agent_account_settings") == 1
 
 
 async def test_reseal_moves_retired_envelopes_and_skips_ones_no_key_opens(pool: Any) -> None:

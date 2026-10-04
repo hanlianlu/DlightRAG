@@ -619,6 +619,7 @@ class TestSchema:
             "dlightrag_answer_memory_settings",
             "dlightrag_agent_browser_leases",
             "dlightrag_agent_accounts",
+            "dlightrag_agent_account_settings",
             "dlightrag_corpus_mutation_windows",
         }
 

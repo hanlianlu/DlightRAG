@@ -1,5 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Each owner's Agent Accounts in PostgreSQL, their passwords sealed under the key ring (ADR 0034)."""
+"""Each owner's Agent Accounts in PostgreSQL, their passwords sealed under the key ring, and the
+owner's switch for new sign-ups (ADR 0034)."""
 
 from __future__ import annotations
 
@@ -30,7 +31,18 @@ CREATE TABLE IF NOT EXISTS dlightrag_agent_accounts (
 )
 """
 
-AGENT_ACCOUNTS_DDL = (_CREATE_AGENT_ACCOUNTS,)
+# Each owner's switch for new sign-ups. A row exists only once the owner has chosen, and an owner
+# with none has them on, so the deployment's allowance is the only thing that has to be said.
+_CREATE_AGENT_ACCOUNT_SETTINGS = """
+CREATE TABLE IF NOT EXISTS dlightrag_agent_account_settings (
+    owner_id             TEXT        NOT NULL,
+    registration_enabled BOOLEAN     NOT NULL DEFAULT TRUE,
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (owner_id)
+)
+"""
+
+AGENT_ACCOUNTS_DDL = (_CREATE_AGENT_ACCOUNTS, _CREATE_AGENT_ACCOUNT_SETTINGS)
 
 AGENT_ACCOUNTS_SCHEMA_TABLE = TableRequirement(
     name="dlightrag_agent_accounts",
@@ -48,6 +60,12 @@ AGENT_ACCOUNTS_SCHEMA_TABLE = TableRequirement(
     ),
     primary_key=("owner_id", "site"),
     checks=("dlightrag_agent_accounts_identity_check",),
+)
+
+AGENT_ACCOUNT_SETTINGS_SCHEMA_TABLE = TableRequirement(
+    name="dlightrag_agent_account_settings",
+    columns=("owner_id", "registration_enabled", "updated_at"),
+    primary_key=("owner_id",),
 )
 
 _SELECT_ACCOUNT = """
@@ -91,6 +109,21 @@ _MARK_USED = """
 UPDATE dlightrag_agent_accounts
 SET last_used_at = NOW()
 WHERE owner_id = $1 AND site = $2 AND account_id = $3
+"""
+
+_GET_REGISTRATION = """
+SELECT registration_enabled
+FROM dlightrag_agent_account_settings
+WHERE owner_id = $1
+"""
+
+_SET_REGISTRATION = """
+INSERT INTO dlightrag_agent_account_settings (owner_id, registration_enabled)
+VALUES ($1, $2)
+ON CONFLICT (owner_id) DO UPDATE
+SET registration_enabled = EXCLUDED.registration_enabled,
+    updated_at = NOW()
+RETURNING registration_enabled
 """
 
 _SELECT_SEALED_UNDER = """
@@ -205,8 +238,30 @@ class PGAgentAccountStore(PostgresOperationRunner):
         return await self._run(operation)
 
 
+class PGAgentAccountSettingsStore(PostgresOperationRunner):
+    """Whether each owner lets the Agent register new accounts."""
+
+    def __init__(self, *, pool: ConnectionPool | None = None) -> None:
+        super().__init__(pool=pool)
+
+    async def registration_enabled(self, *, owner_id: str) -> bool:
+        async def operation(conn: Any) -> bool:
+            enabled = await conn.fetchval(_GET_REGISTRATION, owner_id)
+            return True if enabled is None else bool(enabled)
+
+        return await self._run(operation)
+
+    async def set_registration_enabled(self, *, owner_id: str, enabled: bool) -> bool:
+        async def operation(conn: Any) -> bool:
+            return bool(await conn.fetchval(_SET_REGISTRATION, owner_id, enabled))
+
+        return await self._run(operation)
+
+
 __all__ = [
     "AGENT_ACCOUNTS_DDL",
     "AGENT_ACCOUNTS_SCHEMA_TABLE",
+    "AGENT_ACCOUNT_SETTINGS_SCHEMA_TABLE",
+    "PGAgentAccountSettingsStore",
     "PGAgentAccountStore",
 ]
