@@ -256,7 +256,8 @@ again when it ends its turn; unread results are. The built-in `council` Skill is
 investigations and at most one curated cross-examination; it adds no tools, asks
 for no narrowing of its children, which hold the default set, and is not a
 permission gate. A user's explicit `/skill:` request is made to the Run's own
-agent, so a child gets the Skill catalog but not that request.
+agent, so a child gets the Skill catalog, while it holds `load_skill`, but not that
+request.
 
 Child `model_role` selects a configured model, not a task category or permission.
 The objective remains arbitrary free text; omitting the selector chooses `query`.
