@@ -135,15 +135,39 @@ page is what an anonymous GET returns. That is the trust class of hosted
 extraction, and the acquisition on every row says which tier produced it.
 
 **One browser per Run, one context per Agent Session.** Each pool container runs
-`playwright run-server --port 3000 --host 0.0.0.0 --max-clients 1 --unsafe`, because the
-server honors a client's request for Chromium's own sandbox only with `--unsafe`. DlightRAG
-connects with the Python `playwright` package through `chromium.connect("ws://…")`.
-The server launches a browser for that connection and closes it when the connection
-ends, so the browser lives exactly as long as the Run's connection. The parent Agent
-Session and each Child Session get their own browser context in it; Children run in
-the parent's process and share the Run's connection. A Rendered Read uses a
-temporary context that closes when the read ends. A context has one active page: a
-popup or a new tab becomes the active page, and the tool says so.
+`playwright run-server --port 3000 --host 0.0.0.0 --unsafe`, because the server honors a
+client's request for Chromium's own sandbox only with `--unsafe`. DlightRAG connects with
+the Python `playwright` package through `chromium.connect("ws://…")`. The server launches
+a browser for that connection and closes it when the connection ends, so the browser
+lives exactly as long as the Run's connection. The parent Agent Session and each Child
+Session get their own browser context in it; Children run in the parent's process and
+share the Run's connection. A Rendered Read uses a temporary context that closes when the
+read ends. A context has one active page: a popup or a new tab becomes the active page,
+and the tool says so.
+
+The server limits no clients, and the lease below alone gives a Run its container.
+`--max-clients 1` would queue a second client, but on Playwright 1.63.0 a client queued
+behind it that times out on its own side leaves the server serving the abandoned
+connection indefinitely: the endpoint stayed busy for more than 60 one-second attempts,
+which wedges a pool member for good. Without the flag a second client connects in 0.07 s
+and nothing wedges.
+
+**Chromium's own sandbox is configured, not guessed.** `answer.agent.browser.chromium_sandbox`
+(default `true`) states whether every launch asks for Chromium's process sandbox, and the
+launch options carry `chromiumSandbox` exactly from it. The server honors the request
+because it runs with `--unsafe`; without the request Chromium runs with `--no-sandbox`.
+Whether a pool host can start the sandbox is a static property of that host, its kernel's
+user namespaces and its container runtime's seccomp profile, so the operator states it and
+DlightRAG does not discover it. There is no automatic degrade. A connect that fails is an
+ordinary connect failure, whatever the cause: the endpoint is given back and skipped, the
+failure is logged at ERROR with its error type, and a pool with no member left reports
+`unreachable`. A host that cannot start the sandbox therefore fails closed until the
+operator relaxes the host or sets `false`. The Agent Browser is an optional capability
+whose failure leaves Research working from the direct read, so failing closed costs a
+rendered read and never a Run. A fallback would have to be guessed from a failed connect,
+which cannot tell a host that lacks the sandbox from a member that is down or a launch that
+failed for another reason, and the guess would run an untrusted page's renderer without
+the sandbox. With `false` the container and its network are the only isolation.
 
 **The protocol is Playwright's, pinned in lockstep.** The Python package and the
 containers' Playwright are one version, pinned in both places. `playwright` 1.63.0
@@ -278,12 +302,13 @@ Kubernetes-specific abstraction: `PooledBrowserProvider` leases from the endpoin
 is given and is tied to Compose in nothing else. Configuration follows ADR 0006.
 `docker-compose.yml` owns the pool containers, the internal network, and the Squid
 container. `answer.agent.browser` holds the non-secret settings — endpoints, the
-egress proxy, timeouts, snapshot depth, and `account_registration: true` — with
-final names fixed by the spec; `config.yaml` owns the behaviour, and because the
-endpoints and the proxy address are Compose service names, `docker-compose.yml`
-binds those values, as it binds the PostgreSQL host. Secrets belong in `.env`; the
-Agent Browser has none, and ADR 0034's mailbox credentials are the first. `/health`
-reports whether the Agent Browser is configured and performs no I/O, as it does for
+egress proxy, `chromium_sandbox`, timeouts, snapshot depth, and
+`account_registration: true` — with final names fixed by the spec; `config.yaml`
+owns the behaviour, and because the endpoints and the proxy address are Compose service
+names, `docker-compose.yml` binds those values, as it binds the PostgreSQL host.
+Secrets belong in `.env`; the Agent Browser has none, and ADR 0034's mailbox
+credentials are the first. `/health` reports whether the Agent Browser is configured,
+with its endpoint count and its `chromium_sandbox`, and performs no I/O, as it does for
 every component.
 
 **Fast is unchanged.** Fast has no tools and gains no hidden rendering (ADR 0005,
@@ -416,19 +441,16 @@ Residual risks, recorded rather than solved:
   context created without its proxy reaches that network's peers — Squid and the
   application processes that lease the member — though nothing beyond. DlightRAG sets
   the proxy on every context; a page cannot.
-- Chromium's own sandbox is requested, not guaranteed: Playwright launches it with
-  `--no-sandbox` unless the client asks for the sandbox, the server drops that request
-  without `--unsafe`, and a container whose user namespaces or seccomp profile forbid
-  the sandbox runs without it. DlightRAG always asks, falls back for such an endpoint
-  once and loudly, and records the outcome on the Run's trace
-  (`agent_browser_sandbox`). The container and its network are the isolation boundary
-  either way. A pool container serves one Run at a time, not one Run in its lifetime,
-  so a renderer compromise that outlives its browser can meet the next Run that leases
-  the container.
-- `--max-clients 1` queues a second client instead of refusing it, and
-  `chromium.connect` waits without limit by default, so a lease claimed while an
-  expired holder's connection lingers waits on that connection. DlightRAG therefore
-  passes a connect timeout.
+- Chromium's own sandbox is requested, not verified. With `chromium_sandbox: true` every
+  launch asks for it and a host that cannot start it fails closed, but DlightRAG never
+  inspects the renderer: a pool member started without `--unsafe` drops the request and
+  launches Chromium with `--no-sandbox`, and `false` runs it so on purpose. The container
+  and its network are the isolation boundary either way.
+- A pool container serves one Run at a time by lease, not one Run in its lifetime, so a
+  renderer compromise that outlives its browser can meet the next Run that leases the
+  container. Because the server limits no clients, a connection of a holder whose lease
+  expired, a worker that stalled rather than died, may still be open when the next Run
+  leases the container, and the two browsers then share it until that connection ends.
 - The `aria-ref=` locator is undocumented in 1.63; the pin and a product test hold
   it until `get_by_ref`.
 - Rendered and captured content is the browser's assertion. A site can serve a

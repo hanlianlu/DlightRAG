@@ -893,6 +893,7 @@ answer:
     browser:
       endpoints: []                   # DLIGHTRAG_ANSWER__AGENT__BROWSER__ENDPOINTS
       egress_proxy: null              # DLIGHTRAG_ANSWER__AGENT__BROWSER__EGRESS_PROXY
+      chromium_sandbox: true
       lease_wait_seconds: 10          # 0–120
       connect_timeout_seconds: 15     # above 0, at most 120
       navigation_timeout_seconds: 30  # above 0, at most 300
@@ -918,10 +919,15 @@ step.
   ([ADR 0006](adr/0006-configuration-ownership-and-deployment-bindings.md)) and
   `config.yaml` leaves them unset. The bundled stack binds two members and the Squid
   proxy for `dlightrag-api`, `dlightrag-mcp`, and `dlightrag-reader`.
+- `chromium_sandbox` is whether every browser launches inside Chromium's own process
+  sandbox. Whether a pool host can start it is for the operator to state, so DlightRAG
+  neither probes for it nor falls back: on a host that cannot, every launch fails and
+  renders report the pool unreachable until the host is relaxed
+  ([troubleshooting](operations.md#agent-browser-pool)) or this is `false`. `false` launches
+  Chromium with `--no-sandbox`, leaving the container and its network as the only
+  isolation ([Security](security.md#agent-browser-boundary)).
 - `lease_wait_seconds` is how long a render waits for a free browser before it
-  reports the pool busy. `connect_timeout_seconds` bounds connecting to one browser,
-  which also bounds how long a connection that an expired holder left behind can
-  block its endpoint.
+  reports the pool busy. `connect_timeout_seconds` bounds connecting to one browser.
 - `navigation_timeout_seconds` is how long a page may take to load.
   `settle_timeout_seconds` is how long a loaded page may take to go quiet before it
   is read as it stands.
@@ -932,9 +938,7 @@ step.
 
 The pool's size is the deployment's limit on Runs rendering at the same moment
 ([sizing](operations.md#agent-browser-pool)). What `GET /health` says of the Agent
-Browser is in [Interfaces](interfaces.md#health-and-errors). A Research Run that leased
-a browser records on its trace whether Chromium ran inside its own sandbox
-([Interfaces](interfaces.md#run-lifecycle-and-answer-endpoints)).
+Browser is in [Interfaces](interfaces.md#health-and-errors).
 
 ## Public Web Sources
 

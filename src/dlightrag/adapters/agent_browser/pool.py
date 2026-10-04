@@ -1,12 +1,13 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """The Agent Browser pool: Playwright run-servers, one leased to each Run.
 
-Each pool container runs ``playwright run-server --max-clients 1``, which launches a
-fresh browser for a connection and closes it with that connection. This provider
-claims one endpoint for a Run in the shared lease record, connects to it with the
-egress proxy and the configured Chromium sandbox in the launch options, and gives the
-Run a ``PlaywrightLeasedBrowser`` (ADR 0032). It never passes ``expose_network``, which
-would route browser traffic back out through the application's own network.
+Each pool container runs ``playwright run-server --unsafe``, which launches a fresh
+browser for a connection and closes it with that connection. The server does not limit
+its clients: the shared lease record alone gives a Run its endpoint. This provider
+claims one endpoint for a Run in that record, connects to it with the egress proxy and
+the configured Chromium sandbox in the launch options, and gives the Run a
+``PlaywrightLeasedBrowser`` (ADR 0032). It never passes ``expose_network``, which would
+route browser traffic back out through the application's own network.
 """
 
 from __future__ import annotations

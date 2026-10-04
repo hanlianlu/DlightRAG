@@ -18,5 +18,6 @@ USER pwuser
 WORKDIR /home/pwuser
 EXPOSE 3000
 # --unsafe lets a client pass Chromium's own sandbox request to the launch. It also lets a
-# client choose the launch arguments, so the pool's networks admit only DlightRAG.
-CMD ["/opt/agent-browser/node_modules/.bin/playwright","run-server","--port","3000","--host","0.0.0.0","--max-clients","1","--unsafe"]
+# client choose the launch arguments, so the pool's networks admit only DlightRAG. The
+# server limits no clients: the PostgreSQL lease alone gives a Run its member (ADR 0032).
+CMD ["/opt/agent-browser/node_modules/.bin/playwright","run-server","--port","3000","--host","0.0.0.0","--unsafe"]

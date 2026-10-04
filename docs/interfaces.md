@@ -484,12 +484,7 @@ Canonical successful Answer result:
 
 `trace.agent_shell_confinement` states what the answering Agent's processes could be
 confined to on the host that produced the Run, in the same closed shape `/health`
-reports. `trace.agent_browser_sandbox` appears on a Research Run that leased an Agent
-Browser, with the value of the first lease it took: `chromium` when the browser ran
-inside Chromium's own sandbox, `unavailable` when its pool container could not start the
-sandbox and ran without it ([Security](security.md#agent-browser-boundary)). A Run that
-rendered nothing, and every Fast Run, has no such key. A Research Run's
-`trace.agent_turns` counts its own model calls, and
+reports. A Research Run's `trace.agent_turns` counts its own model calls, and
 `trace.prompt_cache` aggregates their billed prompt and cache hits (`turns`,
 `prompt_tokens`, `cache_hit_tokens`, `cold_turns`); both count the attempt that finished
 the Run, so a Run recovered after a crash reports only the calls made after its recovery.
@@ -905,10 +900,12 @@ warnings use fixed sanitized text. The four LightRAG storage class names and
 `answer_image_capability` are also reported, as is `agent_shell_confinement`: what an
 Agent's processes can be confined to on this host, one of `disabled` (no Agent
 environment), `unavailable` (no kernel seam), or `landlock:abiN`. `agent_browser`
-reports `{"state": "configured" | "disabled", "endpoints": <n>}` from configuration alone:
-it never names an endpoint and never reaches the pool, so a pool that is down is seen in
-its containers' own health, not here ([Operations](operations.md#agent-browser-pool)).
-Degraded state remains HTTP 200.
+reports `{"state": "configured" | "disabled", "endpoints": <n>, "sandbox": <bool>}` from
+configuration alone: `sandbox` is the configured `chromium_sandbox`, whether browsers
+launch inside Chromium's own sandbox, and not whether a host can start it. It never names
+an endpoint and never reaches the pool, so a pool that is down is seen in its containers'
+own health, not here ([Operations](operations.md#agent-browser-pool)). Degraded state
+remains HTTP 200.
 
 `GET /ready` checks only the authority required to durably admit and coordinate
 Runs: Application Operational State plus the injected writable Operational

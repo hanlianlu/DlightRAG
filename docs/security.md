@@ -494,21 +494,19 @@ accepts back.
   `TCP_DENIED` in the proxy's log.
 - **Sessions.** Every render uses a temporary anonymous context with no cookies,
   storage, or service workers, and downloads off; the browser is launched for one
-  connection and closed with it, and a pool container serves one Run at a time. The
-  browser holds no credential of the owner.
+  connection and closed with it, and the lease gives a pool container to one Run at a
+  time. The browser holds no credential of the owner.
 - **Chromium's sandbox.** The container runs as the unprivileged `pwuser` under
   Playwright's recommended seccomp profile, with an init process and memory and process
-  limits. Each launch asks for Chromium's own sandbox, which the server honors only
-  because it runs with `--unsafe`; without that flag Chromium always runs with
-  `--no-sandbox`. Where a container cannot start the sandbox, because user namespaces
-  or the seccomp profile forbid it, the endpoint falls back to running without it
-  rather than failing the Run: one WARNING per endpoint and process, no silent
-  downgrade, and `trace.agent_browser_sandbox` on the Run says `unavailable`
-  ([ADR 0024](adr/0024-the-agent-sees-only-its-workspace.md) degrades Landlock the same
-  way). A sandboxed connect that fails with Playwright's `TimeoutError`, because
-  nobody answered the WebSocket upgrade in time, says nothing about the sandbox and is
-  not retried without it: it fails like any connect that gets no answer. In either case
-  the container and its network are the isolation boundary.
+  limits. `answer.agent.browser.chromium_sandbox` (default `true`) is whether each launch
+  asks for Chromium's own sandbox, which the server honors only because it runs with
+  `--unsafe`; without that flag, or with the setting `false`, Chromium runs with
+  `--no-sandbox`. Whether a host can start the sandbox depends on its user namespaces and
+  the seccomp profile; the operator states it, and DlightRAG does not probe for it. A host
+  that cannot start it fails every launch and the pool is unreachable until the host is
+  relaxed or the setting is `false` ([Operations](operations.md#agent-browser-pool));
+  nothing runs unsandboxed on a guess. With `false` the container and its network are the
+  isolation boundary. `GET /health` reports the setting.
 - **Evidence.** Rendered text is the browser's assertion. DlightRAG attests the binding
   between the returned page, the Resource Handle, and the URL; it does not attest that
   an anonymous GET serves the same page, and a site may serve a browser what it does
@@ -527,10 +525,11 @@ Residual risks, recorded rather than solved:
 - Squid resolves and checks a destination itself, unlike the direct read, which pins
   the validated address for its connection. The window between Squid's check and its
   connection is small but not zero.
-- A pool container serves one Run at a time, not one Run in its lifetime: a renderer
-  compromise that outlives its browser can meet the next Run that leases the container.
-- A stale connection from an expired holder blocks its endpoint until it closes; the
-  connect timeout bounds the wait.
+- A pool container serves one Run at a time by lease, not one Run in its lifetime: a
+  renderer compromise that outlives its browser can meet the next Run that leases the
+  container. The server limits no clients, so a connection of a holder whose lease has
+  expired, a worker that stalled rather than died, may still be open when the next Run
+  leases the container, and the two browsers then share it until that connection ends.
 
 ## Answer Artifact Browser Boundary
 

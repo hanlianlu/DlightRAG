@@ -35,7 +35,7 @@ _HEAD_LIMIT = 64 * 1024
 
 
 class RunServer:
-    """One ``playwright run-server --max-clients 1 --unsafe`` on loopback."""
+    """One ``playwright run-server --unsafe`` on loopback."""
 
     def __init__(self, process: asyncio.subprocess.Process, endpoint: str) -> None:
         self._process = process
@@ -60,8 +60,6 @@ async def run_server() -> AsyncIterator[RunServer]:
         "0",
         "--host",
         "127.0.0.1",
-        "--max-clients",
-        "1",
         "--unsafe",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,

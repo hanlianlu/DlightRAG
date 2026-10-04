@@ -215,19 +215,25 @@ docker compose logs agent-browser-egress
     minute).
   - A page that never loads: look for `TCP_DENIED` in the proxy's log. A private
     destination or a port other than 80 and 443 is refused by design.
-  - `Chromium sandboxing failed`, or the WARNING that an endpoint cannot start
-    Chromium's sandbox: the host restricts unprivileged user namespaces (Ubuntu 24.04
-    sets `kernel.apparmor_restrict_unprivileged_userns=1`) or its container runtime
-    ignores the seccomp profile. The endpoint then runs unsandboxed, once per process,
-    and `trace.agent_browser_sandbox` says `unavailable`; lift the restriction for the
-    sandboxed path.
+  - `unreachable` for every member while the members are healthy, with
+    `Agent Browser connect failed` logged for each, typically as `TargetClosedError`:
+    Chromium exited as it launched. The usual cause is its sandbox, which Playwright words
+    as `Chromium sandboxing failed` in the error it returns; the application logs only the
+    error's type. The host restricts unprivileged user namespaces (Ubuntu 24.04 sets
+    `kernel.apparmor_restrict_unprivileged_userns=1`) or its container runtime ignores the
+    seccomp profile, and `chromium_sandbox` (default `true`) makes every launch ask for the
+    sandbox. Nothing falls back to running without it. Either relax the host (CI lifts the
+    restriction with `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`) or set
+    `answer.agent.browser.chromium_sandbox: false` and restart the processes that run Query
+    workers. With `false` the container and its network are the only isolation
+    ([why](security.md#agent-browser-boundary)).
   - A member refuses to start: the seccomp path did not resolve because Compose ran
     outside the repository root.
 - **Development.** `tests/integration/test_agent_browser_pg.py` runs a real
-  `playwright run-server` with Chromium. Install the browser once with
-  `uv run playwright install chromium` (on Linux, `--with-deps`); on a host that
-  restricts unprivileged user namespaces, also lift the restriction CI lifts for the
-  sandboxed path (`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`).
+  `playwright run-server` with Chromium, launched inside its sandbox. Install the browser
+  once with `uv run playwright install chromium` (on Linux, `--with-deps`); on a host that
+  restricts unprivileged user namespaces, also lift the restriction CI lifts
+  (`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`).
 
 ## Product Document Finalization And Failed Ingestion Cleanup
 
