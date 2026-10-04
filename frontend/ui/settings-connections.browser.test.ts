@@ -358,7 +358,5 @@ describe('laid out as a page', () => {
     const label = feature.querySelector('[data-label="fixture"]')!.getBoundingClientRect();
     const endpoint = feature.querySelector('[class*=endpointRow]')!.getBoundingClientRect();
     expect(endpoint.top).to.be.at.least(label.bottom);
-    const button = feature.querySelector('[data-delete="fixture"]')!.getBoundingClientRect();
-    expect(button.height).to.be.at.least(43.5);
   });
 });

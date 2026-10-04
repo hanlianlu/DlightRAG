@@ -456,29 +456,6 @@ describe('on a phone', () => {
     expect(visible(settings.querySelector('[role="region"]')!)).to.equal(true);
     expect(document.activeElement).to.equal(settings.querySelector('#settings-page-title'));
   });
-
-  it('fills the screen with square corners, and every control a finger meets is 44px or more', async () => {
-    window.fetch = populated().fetch;
-    const {settings} = mountSettings();
-    const dialog = await openSettings(settings);
-
-    const box = dialog.getBoundingClientRect();
-    expect([box.x, box.y, box.width, box.height]).to.deep.equal([0, 0, 390, 844]);
-    expect(getComputedStyle(dialog).borderRadius).to.equal('0px');
-    const small = (element: Element): boolean => {
-      const rect = element.getBoundingClientRect();
-      return rect.width < 43.5 || rect.height < 43.5;
-    };
-    const named = (name: string): HTMLElement => [...settings.querySelectorAll<HTMLElement>('dl-icon-button')]
-      .find((button) => button.getAttribute('aria-label') === name)!;
-    expect(rows(settings).filter(small)).to.deep.equal([]);
-    expect(small(named('Close settings'))).to.equal(false);
-
-    row(settings, 'language').click();
-    await settings.updateComplete;
-    expect(small(named('Back'))).to.equal(false);
-    expect(small(named('Close settings'))).to.equal(false);
-  });
 });
 
 describe('on a desktop', () => {

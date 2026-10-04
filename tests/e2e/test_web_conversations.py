@@ -1158,18 +1158,6 @@ def test_mobile_shell_keeps_primary_actions_reachable(
         _assert_touch_target(control)
     page.keyboard.press("Escape")
 
-    settings = _open_settings(page)
-    page.wait_for_function(
-        "document.querySelector('.settings-dialog')?.getBoundingClientRect().left >= -0.5"
-    )
-    _assert_surface_owns_viewport_layer(page, ".settings-dialog")
-    settings_box = settings.bounding_box()
-    assert settings_box is not None
-    assert settings_box["width"] == pytest.approx(390, abs=1)
-    _assert_touch_target(settings.get_by_role("button", name="Close settings"))
-    for control in settings.locator(".dl-nav-item:visible").all():
-        _assert_touch_target(control)
-    page.keyboard.press("Escape")
     page.get_by_role("button", name="Close conversations").click()
     page.wait_for_function(
         "document.querySelector('#chat-sidebar')?.getBoundingClientRect().right <= 0.5"

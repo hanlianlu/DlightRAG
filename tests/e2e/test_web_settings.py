@@ -1,14 +1,16 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Browser coverage for the Settings dialog: its navigation, its phone layout, and Agent Accounts."""
 
+from typing import Any
+from urllib.parse import urlparse
+
 import pytest
-from playwright.sync_api import Locator, Page, expect
+from playwright.sync_api import Locator, Page, Route, expect
 
 from tests.e2e.test_web_conversations import (
     AgentAccountsRouteState,
     _agent_account,
     _assert_surface_owns_viewport_layer,
-    _assert_touch_target,
     _install_agent_accounts_routes,
     _install_conversation_routes,
     _open_settings,
@@ -59,6 +61,119 @@ def _names(rows: Locator) -> list[str]:
     return rows.evaluate_all(
         "rows => rows.map(row => "
         "document.getElementById(row.getAttribute('aria-labelledby')).textContent.trim())"
+    )
+
+
+def _install_busy_settings_routes(page: Page) -> None:
+    """Connections with presets, and Profile Memory on with a next page, so every page has controls."""
+
+    def connections(route: Route) -> None:
+        def connection(connection_id: str, label: str, authentication: str, enabled: bool) -> Any:
+            return {
+                "connection_id": connection_id,
+                "label": label,
+                "endpoint": f"https://{connection_id}.example/mcp",
+                "enabled": enabled,
+                "activation_epoch": 1,
+                "generation": 1,
+                "authentication": authentication,
+                "authorization_status": None,
+                "status": "ready" if enabled else "disabled",
+            }
+
+        route.fulfill(
+            json={
+                "revision": "1",
+                "presets": [
+                    {
+                        "preset_id": "notion",
+                        "label": "Notion",
+                        "endpoint": "https://mcp.notion.com/mcp",
+                        "default_authentication": "oauth",
+                    },
+                    {
+                        "preset_id": "hugging-face",
+                        "label": "Hugging Face",
+                        "endpoint": "https://huggingface.co/mcp",
+                        "default_authentication": "none",
+                    },
+                ],
+                "connections": [
+                    connection("notion", "Notion", "oauth", True),
+                    connection("wiki", "Team wiki", "none", False),
+                ],
+            }
+        )
+
+    def memory(route: Route) -> None:
+        if urlparse(route.request.url).path == "/web/api/memory/settings":
+            route.fulfill(json={"enabled": True, "active_count": 2})
+            return
+        route.fulfill(
+            json={
+                "memories": [
+                    {"memory_id": "one", "kind": "preference", "body": "Use concise answers"},
+                    {"memory_id": "two", "kind": "fact", "body": "Works on the ingestion service"},
+                ],
+                "next_cursor": "more",
+            }
+        )
+
+    page.route("**/web/api/connections/mcp", connections)
+    page.route(
+        "**/web/api/connections/mcp/*/oauth",
+        lambda route: route.fulfill(json={"authorization_url": "https://auth.example/authorize"}),
+    )
+    page.route("**/web/api/memory**", memory)
+
+
+# What a finger meets inside the dialog, and how large the area is that answers to it. The browser is
+# asked what lies under each point around a control, so a target that reaches past its drawn box
+# counts, and one that is covered or clipped does not. A radio or checkbox is turned by tapping its
+# row, so the row is its target. Disabled controls take no tap and are left out.
+_SMALL_TARGETS = """root => {
+    const controls = root.querySelectorAll(
+        "button, a[href], input:not([type='hidden']), select, textarea, dl-icon-button");
+    const nameOf = control => control.getAttribute('aria-label')
+        || document.getElementById(control.getAttribute('aria-labelledby'))?.textContent.trim()
+        || control.textContent.trim() || control.getAttribute('placeholder') || control.tagName;
+    const small = [];
+    for (const control of controls) {
+        if (control.disabled || control.hasAttribute('disabled')) continue;
+        if (control.closest('[inert], [hidden]') || !control.getClientRects().length) continue;
+        const target = control.matches("input[type='radio'], input[type='checkbox']")
+            ? control.closest('label') ?? control : control;
+        target.scrollIntoView({block: 'center'});
+        const box = target.getBoundingClientRect();
+        const x = box.left + box.width / 2;
+        const y = box.top + box.height / 2;
+        const owns = (px, py) => {
+            const hit = document.elementFromPoint(px, py);
+            return hit !== null && (hit === target || target.contains(hit));
+        };
+        const name = nameOf(control);
+        if (!owns(x, y)) {
+            small.push({name, problem: 'covered at its centre'});
+            continue;
+        }
+        const reach = (dx, dy) => {
+            let steps = 0;
+            while (steps < 80 && owns(x + dx * (steps + 1), y + dy * (steps + 1))) steps += 1;
+            return steps;
+        };
+        const width = reach(-1, 0) + reach(1, 0) + 1;
+        const height = reach(0, -1) + reach(0, 1) + 1;
+        if (width < 44 || height < 44) small.push({name, width, height});
+    }
+    return small;
+}"""
+
+
+def _assert_fingers_are_served(settings: Locator, where: str) -> None:
+    """Every control in view answers to a 44px square, or says which do not."""
+    small = settings.evaluate(_SMALL_TARGETS)
+    assert not small, f"{where}: " + "; ".join(
+        f"{target['name']!r} is {target.get('width')} by {target.get('height')}" for target in small
     )
 
 
@@ -155,9 +270,10 @@ def test_settings_navigation_moves_with_the_keyboard_and_gives_focus_back(page: 
 
 
 @pytest.mark.e2e
-def test_settings_is_two_levels_on_a_phone_with_touch_sized_controls(page: Page) -> None:
+def test_settings_fills_a_phone_and_every_control_a_finger_meets_is_44px(page: Page) -> None:
     _install_conversation_routes(page)
     _install_agent_accounts_routes(page, _three_accounts())
+    _install_busy_settings_routes(page)
     page.set_viewport_size({"width": 390, "height": 844})
     page.goto("/web/")
     page.locator("[aria-current='page']").wait_for()
@@ -169,45 +285,55 @@ def test_settings_is_two_levels_on_a_phone_with_touch_sized_controls(page: Page)
     assert settings.evaluate("element => getComputedStyle(element).borderRadius") == "0px"
     _assert_surface_owns_viewport_layer(page, ".settings-dialog")
 
-    # The first level is the section list: every row names its page and says what it holds.
     navigation = settings.get_by_role("navigation", name="Settings")
-    rows = navigation.get_by_role("button")
-    assert _names(rows) == PAGES
-    expect(settings.get_by_role("region")).to_have_count(0)
-    expect(rows.nth(0)).to_be_focused()
-    expect(navigation.locator("[aria-current='page']")).to_have_count(0)
-    expect(rows.nth(1)).to_contain_text("3 websites")
-    expect(rows.nth(2)).to_contain_text("Off")
-    for control in [*rows.all(), settings.get_by_role("button", name="Close settings")]:
-        _assert_touch_target(control)
+    _assert_fingers_are_served(settings, "the section list")
 
-    rows.nth(1).click()
-    region = settings.get_by_role("region", name="Agent Accounts")
-    expect(region).to_be_visible()
-    expect(navigation).to_be_hidden()
-    back = settings.get_by_role("button", name="Back")
-    expect(back).to_be_visible()
-    for control in [
-        back,
-        settings.get_by_role("button", name="Close settings"),
-        *region.get_by_role("button", name="Remove the account for").all(),
-    ]:
-        _assert_touch_target(control)
-    # The page is a list of three-line rows, not a table.
-    expect(region.get_by_role("table")).to_have_count(0)
-    expect(region.get_by_role("listitem").nth(0)).to_contain_text("Signed in today")
-    expect(region.get_by_role("listitem").nth(2)).to_contain_text("not signed in since")
-    # The switch itself is small; the card it lives in is the target a finger finds.
-    _assert_touch_target(region.locator("label").filter(has=page.get_by_role("switch")))
+    def visit(name: str) -> Locator:
+        navigation.get_by_role("button", name=name, exact=True).click()
+        return settings.get_by_role("region", name=name)
 
-    back.click()
-    expect(navigation).to_be_visible()
-    expect(settings.get_by_role("region")).to_have_count(0)
-    expect(rows.nth(1)).to_be_focused()
+    def leave() -> None:
+        settings.get_by_role("button", name="Back").click()
+        expect(navigation).to_be_visible()
 
-    page.keyboard.press("Escape")
-    settings.wait_for(state="hidden")
-    expect(page.locator("#settings-btn")).to_be_visible()
+    # Connections, in every state that shows a control: the cards, an open card on each
+    # authentication, the endpoint being changed, and the form that adds one.
+    connections = visit("Connections")
+    expect(connections.get_by_role("switch")).to_have_count(2)
+    _assert_fingers_are_served(settings, "Connections")
+    connections.get_by_role("button", name="Team wiki").click()
+    connections.get_by_role("button", name="Change endpoint").click()
+    _assert_fingers_are_served(settings, "an open Connection whose endpoint is being changed")
+    connections.get_by_role("button", name="Bearer", exact=True).click()
+    expect(connections.get_by_label("Personal bearer (write-only)")).to_be_visible()
+    _assert_fingers_are_served(settings, "a Connection on bearer authentication")
+    connections.get_by_role("button", name="OAuth", exact=True).click()
+    connections.get_by_role("button", name="Authorize with OAuth").click()
+    expect(
+        connections.get_by_role("link", name="Continue to provider authorization")
+    ).to_be_visible()
+    _assert_fingers_are_served(settings, "a Connection on OAuth with its provider's link")
+    connections.get_by_role("button", name="Add MCP connection").click()
+    expect(connections.get_by_role("button", name="Use the Notion preset")).to_be_visible()
+    _assert_fingers_are_served(settings, "the form that adds a Connection")
+    leave()
+
+    accounts = visit("Agent Accounts")
+    expect(accounts.get_by_role("listitem")).to_have_count(3)
+    _assert_fingers_are_served(settings, "Agent Accounts")
+    leave()
+
+    memory = visit("Profile Memory")
+    expect(memory.get_by_role("button", name="Load more")).to_be_visible()
+    _assert_fingers_are_served(settings, "Profile Memory")
+    leave()
+
+    visit("Conversation Sessions")
+    _assert_fingers_are_served(settings, "Conversation Sessions")
+    leave()
+
+    visit("Language")
+    _assert_fingers_are_served(settings, "Language")
 
 
 @pytest.mark.e2e
