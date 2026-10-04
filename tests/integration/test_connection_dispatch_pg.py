@@ -9,10 +9,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from dlightrag.application.connections.credentials import CredentialCipher
 from dlightrag.engine.agent.session.ids import IntentId
 from dlightrag.engine.agent.tools import ToolResult, ToolRuntime
 from dlightrag.engine.answer.execution.connection_binding import ResearchToolClaim
+from dlightrag.engine.credential_cipher import CredentialCipher
 from tests.integration.run_runtime_pg_harness import isolated_run_runtime, run_envelope
 from tests.integration.test_connection_binding_pg import enabled_connection
 from tests.support.pg import notification_hub
@@ -26,7 +26,7 @@ async def dispatch_fixture(
         from pydantic import SecretStr
 
         from dlightrag.application.connections import ConnectionCommand, Connections
-        from dlightrag.application.connections.credentials import CredentialCipher
+        from dlightrag.engine.credential_cipher import CredentialCipher
         from tests.unit.test_connections_config import KEYRING
 
         service = Connections(store=store, mcp=mcp, cipher=CredentialCipher(SecretStr(KEYRING)))
@@ -569,7 +569,7 @@ async def test_owner_gate_reaches_real_sdk_fake_http_static_call(monkeypatch):
 
     from dlightrag.adapters.mcp.personal_http import PersonalMcpClient
     from dlightrag.application.connections import Connections
-    from dlightrag.application.connections.credentials import CredentialCipher
+    from dlightrag.engine.credential_cipher import CredentialCipher
     from tests.support.dns import public_dns
     from tests.unit.test_connections_config import KEYRING
 
@@ -746,7 +746,8 @@ async def test_oauth_dispatch_uses_only_live_access_token_without_refresh_or_red
 
     from pydantic import SecretStr
 
-    from dlightrag.application.connections.credentials import CredentialCipher
+    from dlightrag.application.connections.credentials import GrantCipher
+    from dlightrag.engine.credential_cipher import CredentialCipher
     from tests.unit.test_connections_config import KEYRING
 
     async with isolated_run_runtime("oauth_dispatch") as (runs, pool):
@@ -756,7 +757,7 @@ async def test_oauth_dispatch_uses_only_live_access_token_without_refresh_or_red
         _, stored = await store.read("a")
         grant = stored[0].grant_id
         assert grant is not None
-        key_id, envelope = CredentialCipher(SecretStr(KEYRING)).encrypt(
+        key_id, envelope = GrantCipher(CredentialCipher(SecretStr(KEYRING))).encrypt(
             SecretStr(
                 json.dumps(
                     {

@@ -12,7 +12,7 @@ from typing import Any, cast
 import pytest
 
 from dlightrag.application.connections import ConnectionPolicy, Connections
-from dlightrag.application.connections.credentials import CredentialCipher
+from dlightrag.engine.credential_cipher import CredentialCipher
 
 
 class _Store:

@@ -30,13 +30,14 @@ from dlightrag.engine.answer.execution.connection_binding import (
     ResearchToolClaim,
     RunConnectionBinding,
 )
+from dlightrag.engine.credential_cipher import CredentialCipher
 from dlightrag.engine.network_admission import (
     validate_credential_free_query,
     validate_public_http_url,
 )
 
 from .client_metadata import client_metadata_document, client_metadata_url
-from .credentials import CredentialCipher, access_bearer
+from .credentials import GrantCipher, access_bearer
 from .models import (
     AuthorizationStart,
     BoundResearchConnections,
@@ -92,7 +93,7 @@ class Connections:
         self._oauth = oauth
         self._authorizations: dict[str, asyncio.Task[None]] = {}
         self._authorization_slots = asyncio.Semaphore(4)
-        self._cipher = cipher
+        self._cipher = GrantCipher(cipher)
         self._store = store
         self._mcp = mcp
         self._policy = policy or ConnectionPolicy()

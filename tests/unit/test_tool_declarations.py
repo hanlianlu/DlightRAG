@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import BaseModel
 
-from dlightrag.application.connections.credentials import CredentialCipher
 from dlightrag.application.connections.models import CatalogueTool
 from dlightrag.application.connections.service import Connections
 from dlightrag.engine.agent.environment import SearchToolchain
@@ -32,6 +31,7 @@ from dlightrag.engine.answer.tools.subagents import (
     child_guidance_declarations,
     subagent_declarations,
 )
+from dlightrag.engine.credential_cipher import CredentialCipher
 from tests.support.agent_browser import inert_browser_host
 
 

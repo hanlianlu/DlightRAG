@@ -12,7 +12,7 @@ from pydantic import SecretStr
 
 from dlightrag.adapters.postgres.connections import PGConnectionsStore
 from dlightrag.application.connections import ConnectionCommand, Connections, ConnectionsError
-from dlightrag.application.connections.credentials import CredentialCipher
+from dlightrag.engine.credential_cipher import CredentialCipher
 from tests.integration.run_runtime_pg_harness import isolated_run_runtime
 from tests.integration.test_connections_pg import FakeMcp, stored_catalogue
 from tests.support.pg import notification_hub

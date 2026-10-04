@@ -13,7 +13,8 @@ import pytest
 from dlightrag.adapters.mcp.oauth import PersonalOAuthClient
 from dlightrag.adapters.postgres.connections import PGConnectionsStore
 from dlightrag.application.connections import ConnectionCommand, ConnectionPolicy, Connections
-from dlightrag.application.connections.credentials import CredentialCipher
+from dlightrag.application.connections.credentials import GrantCipher
+from dlightrag.engine.credential_cipher import CredentialCipher
 from tests.integration.run_runtime_pg_harness import isolated_run_runtime
 from tests.integration.test_connection_authorization_pg import cipher
 from tests.integration.test_connection_binding_pg import enabled_connection
@@ -26,7 +27,7 @@ from tests.unit.test_connection_oauth import refresh_credentials
 async def oauth_connection(pool, remote):
     _, store, mcp, view = await enabled_connection(pool)
     identity = view.connections[0].connection_id
-    key, envelope = cipher().encrypt(
+    key, envelope = GrantCipher(cipher()).encrypt(
         refresh_credentials(), owner_id="a", connection_id=identity, grant_id="grant"
     )
     await store.publish_authorization(
@@ -58,7 +59,7 @@ async def test_cosmetic_reencryption_preserves_live_rotating_refresh(race, monke
 
     from pydantic import SecretStr
 
-    from dlightrag.application.connections.credentials import CredentialCipher
+    from dlightrag.engine.credential_cipher import CredentialCipher
 
     monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
     async with isolated_run_runtime("rotation_refresh") as (_, pool):
@@ -118,7 +119,7 @@ async def test_cosmetic_reencryption_preserves_live_rotating_refresh(race, monke
                 )
                 assert (await maintenance.maintain())["reencrypted"] == 0
             else:
-                key, envelope = rotated.encrypt(
+                key, envelope = GrantCipher(rotated).encrypt(
                     refresh_credentials(), owner_id="a", connection_id=identity, grant_id="grant"
                 )
                 assert not await store.reencrypt_grant(
@@ -131,15 +132,15 @@ async def test_cosmetic_reencryption_preserves_live_rotating_refresh(race, monke
             _, (item,) = await store.read("a")
             assert item.envelope is not None and item.secret_version == 3
             credentials = json.loads(
-                rotated.decrypt(
-                    item.envelope, owner_id="a", connection_id=identity, grant_id="grant"
-                ).get_secret_value()
+                GrantCipher(rotated)
+                .decrypt(item.envelope, owner_id="a", connection_id=identity, grant_id="grant")
+                .get_secret_value()
             )
             assert credentials["tokens"]["refresh_token"] == "rotated-refresh-1"
             # Deterministically advance credential expiry, not a sleep or an
             # invented production TTL. The next SDK refresh must use the new token.
             credentials["expires_at"] = 1
-            key, envelope = rotated.encrypt(
+            key, envelope = GrantCipher(rotated).encrypt(
                 SecretStr(json.dumps(credentials)),
                 owner_id="a",
                 connection_id=identity,
@@ -339,7 +340,7 @@ async def test_keyring_maintenance_is_cas_safe_and_old_key_can_be_removed():
 
     from pydantic import SecretStr
 
-    from dlightrag.application.connections.credentials import CredentialCipher
+    from dlightrag.engine.credential_cipher import CredentialCipher
 
     async with isolated_run_runtime("connection_keys") as (_, pool):
         service, store, mcp, identity = await oauth_connection(pool, lambda _: None)
@@ -361,7 +362,7 @@ async def test_keyring_maintenance_is_cas_safe_and_old_key_can_be_removed():
             SecretStr(json.dumps({"active": "next", "keys": {"next": keys["next"]}}))
         )
         assert (
-            only_new.decrypt(
+            GrantCipher(only_new).decrypt(
                 item.envelope, owner_id="a", connection_id=identity, grant_id=item.grant_id
             )
             == refresh_credentials()
@@ -435,7 +436,7 @@ async def test_sdk_effect_refresh_is_fenced_before_and_after_remote_io(outcome, 
 
     from pydantic import SecretStr
 
-    from dlightrag.application.connections.credentials import CredentialCipher
+    from dlightrag.engine.credential_cipher import CredentialCipher
     from tests.integration.test_connection_dispatch_pg import dispatch_fixture
     from tests.unit.test_connections_config import KEYRING
 
@@ -451,7 +452,7 @@ async def test_sdk_effect_refresh_is_fenced_before_and_after_remote_io(outcome, 
             .get_secret_value()
             .replace("https://mcp.example/mcp", item.endpoint)
         )
-        key_id, envelope = ring.encrypt(
+        key_id, envelope = GrantCipher(ring).encrypt(
             SecretStr(raw), owner_id="a", connection_id=item.connection_id, grant_id=item.grant_id
         )
         async with pool.acquire() as conn:
@@ -601,7 +602,7 @@ async def test_in_flight_http_call_tracks_authorization_not_secret_version(
     from pydantic import SecretStr
 
     from dlightrag.adapters.mcp.personal_http import PersonalMcpClient
-    from dlightrag.application.connections.credentials import CredentialCipher
+    from dlightrag.engine.credential_cipher import CredentialCipher
     from tests.integration.test_connection_dispatch_pg import dispatch_fixture
     from tests.unit.test_connections_config import KEYRING
 
@@ -646,7 +647,7 @@ async def test_in_flight_http_call_tracks_authorization_not_secret_version(
 
         async def set_credentials():
             assert item.grant_id is not None
-            key, envelope = ring.encrypt(
+            key, envelope = GrantCipher(ring).encrypt(
                 SecretStr(json.dumps(credentials)),
                 owner_id="a",
                 connection_id=item.connection_id,
@@ -765,12 +766,14 @@ async def test_in_flight_http_call_tracks_authorization_not_secret_version(
                 )
                 assert (
                     json.loads(
-                        ring.decrypt(
+                        GrantCipher(ring)
+                        .decrypt(
                             updated.envelope,
                             owner_id="a",
                             connection_id=item.connection_id,
                             grant_id=item.grant_id,
-                        ).get_secret_value()
+                        )
+                        .get_secret_value()
                     )["tokens"]["refresh_token"]
                     == "rotated-refresh"
                 )

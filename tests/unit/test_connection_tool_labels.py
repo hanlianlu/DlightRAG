@@ -11,8 +11,8 @@ from typing import Any, cast
 import pytest
 
 from dlightrag.application.connections import Connections
-from dlightrag.application.connections.credentials import CredentialCipher
 from dlightrag.application.connections.models import PinnedToolFact
+from dlightrag.engine.credential_cipher import CredentialCipher
 
 
 class _Store:

@@ -107,7 +107,6 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.application.access import access_control_from_settings
     from dlightrag.application.answer_runs import AnswerService
     from dlightrag.application.connections import Connections
-    from dlightrag.application.connections.credentials import KEYRING_FILE, deployment_cipher
     from dlightrag.application.corpus_admin import (
         CorpusAdmin,
         CorpusMutationExecutor,
@@ -168,6 +167,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.engine.answer.execution import AnswerExecutor, AnswerResourceResolver
     from dlightrag.engine.answer.model_runtime import AnswerModelRuntime
     from dlightrag.engine.answer.workspace import agent_workspace_reclaimer
+    from dlightrag.engine.credential_cipher import KEYRING_FILE, deployment_cipher
     from dlightrag.engine.dependencies import DependencyComponent
     from dlightrag.engine.rag.corpus.downloads import SourceDownloadService
     from dlightrag.engine.rag.retrieval.federation import FederatedReranker

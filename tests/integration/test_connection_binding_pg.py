@@ -7,7 +7,7 @@ import pytest
 
 from dlightrag.adapters.postgres.connections import PGConnectionsStore
 from dlightrag.application.connections import ConnectionCommand, Connections
-from dlightrag.application.connections.credentials import CredentialCipher
+from dlightrag.engine.credential_cipher import CredentialCipher
 from tests.integration.run_runtime_pg_harness import isolated_run_runtime
 from tests.integration.test_connections_pg import stored_catalogue
 
@@ -739,7 +739,7 @@ async def test_a_connection_keeps_its_part_while_its_head_has_no_catalogue():
 
     from pydantic import SecretStr
 
-    from dlightrag.application.connections.credentials import CredentialCipher
+    from dlightrag.engine.credential_cipher import CredentialCipher
     from tests.unit.test_connections_config import KEYRING
 
     class SwitchableMcp(CatalogueMcp):
