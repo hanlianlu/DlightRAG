@@ -583,13 +583,13 @@ async def _reads_nothing(_request: ResourceReadRequest, _runtime: ToolRuntime) -
 
 
 def inert_browser_host(
-    *, accounts: bool = False, mailbox: AgentMailbox | None = None
+    *, accounts: bool = False, registration: bool = True, mailbox: AgentMailbox | None = None
 ) -> BrowserToolHost:
     """The browser tool's host for a test that needs the tool composed and offered, not driven.
 
     Its browser leases nothing until a page is opened, and its reader is never called. With
     ``accounts`` the Run has Agent Accounts, which nothing registers or reads, delivered by
-    ``mailbox`` when it has one.
+    ``mailbox`` when it has one, and which it may register unless ``registration`` is off.
     """
     holder = BrowserHolder("owner", "11111111-1111-1111-1111-111111111111", "worker", 1)
     return BrowserToolHost(
@@ -598,7 +598,10 @@ def inert_browser_host(
         _reads_nothing,
         RunAgentAccounts(
             owner_id="owner",
-            binding=AgentAccountsBinding(MemoryAccountStore(), CredentialCipher(None), mailbox),
+            binding=AgentAccountsBinding(
+                MemoryAccountStore(), CredentialCipher(None), mailbox, registration_allowed=True
+            ),
+            registration=registration,
         )
         if accounts
         else None,

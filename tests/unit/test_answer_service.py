@@ -612,6 +612,8 @@ def _service(
     capability_view: Any = None,
     resources: Any = None,
     memory_capability: Any = None,
+    agent_registration: Any = None,
+    research_tool_declarations: Any = None,
     bind_research: Any = None,
     models: Any = None,
 ) -> AnswerService:
@@ -631,6 +633,8 @@ def _service(
         resources=resources or _Resources(),
         model_invocation_fingerprint_for_role=_fingerprint,
         memory_capability=memory_capability,
+        agent_registration=agent_registration,
+        research_tool_declarations=research_tool_declarations,
         bind_research=bind_research,
         child_roster_cursor_secret=b"answer-service-child-roster-test",
     )
@@ -657,6 +661,50 @@ async def test_acceptance_pins_disabled_profile_memory_without_reserving_its_cap
     prepared = store.created[0]["prepared_input"]
     assert prepared["profile_memory_enabled"] is False
     assert prepared["profile_memory_epoch"] == 7
+
+
+@pytest.mark.parametrize("registers", [True, False])
+async def test_acceptance_pins_whether_the_run_may_register_and_plans_its_browser_to_match(
+    registers: bool,
+) -> None:
+    from dlightrag.engine.answer.agent_browser import (
+        REGISTRATION_PIN,
+        AgentAccountsBinding,
+        AgentBrowserBinding,
+    )
+    from dlightrag.engine.credential_cipher import CredentialCipher
+    from tests.support.agent_browser import FakeProvider, MemoryAccountStore, browser_settings
+    from tests.unit.test_answer_executor import _executor
+
+    asked: list[dict[str, Any]] = []
+
+    async def registration(**kwargs: Any) -> bool:
+        asked.append(kwargs)
+        return registers
+
+    store = _Store()
+    accounts = AgentAccountsBinding(
+        MemoryAccountStore(), CredentialCipher(None), registration_allowed=True
+    )
+    executor = _executor(browser=AgentBrowserBinding(FakeProvider(), browser_settings(), accounts))
+    service = _service(
+        store=store,
+        agent_registration=registration,
+        research_tool_declarations=executor.research_tool_declarations,
+    )
+
+    await service.create(request=_request(mode="research"), owner_id=_OWNER)
+
+    # Read once, for the owner, and kept as the Run was accepted.
+    assert asked == [{"owner_id": _OWNER}]
+    prepared = store.created[0]["prepared_input"]
+    assert prepared[REGISTRATION_PIN] is registers
+    plan = AnswerRunInput.from_prepared_input(prepared).agent_run_plan
+    assert plan is not None
+    browser = next(tool for tool in plan.tools if tool.name == "browser")
+    actions = browser.definition["parameters"]["properties"]["action"]["enum"]
+    # Login is the Run's with its accounts, and register only if the Run may register.
+    assert ("register" in actions, "login" in actions) == (registers, True)
 
 
 async def test_an_accepted_effort_is_recorded_and_distinguishes_replays() -> None:

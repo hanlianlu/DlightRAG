@@ -124,6 +124,13 @@ class AgentAccounts:
             ),
         )
 
+    async def registration(self, *, owner_id: str) -> bool:
+        """Whether a Run accepted for the owner now may register: the deployment allows it and
+        the owner has not turned it off. The Run keeps this answer, whatever is switched next."""
+        return self._registration_allowed and await self._settings.registration_enabled(
+            owner_id=owner_id
+        )
+
     async def set_registration(self, *, owner_id: str, enabled: bool) -> AgentAccountsView:
         await self._settings.set_registration_enabled(owner_id=owner_id, enabled=enabled)
         return await self.view(owner_id=owner_id)

@@ -14,10 +14,10 @@ import ipaddress
 import secrets
 import string
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import ClassVar, Protocol
+from typing import Any, ClassVar, Protocol
 from urllib.parse import urlsplit
 
 import tldextract
@@ -189,12 +189,14 @@ class AgentAccountStore(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class AgentAccountsBinding:
-    """What a deployment composed for Agent Accounts: where they are kept, the key ring, and the
-    Agent Mailbox that delivers their mail, when it has one."""
+    """What a deployment composed for Agent Accounts: where they are kept, the key ring, the
+    Agent Mailbox that delivers their mail when it has one, and whether it lets the Agent
+    register new accounts, which no owner's own switch can exceed."""
 
     store: AgentAccountStore
     cipher: CredentialCipher
     mailbox: AgentMailbox | None = None
+    registration_allowed: bool = field(kw_only=True)
 
 
 class _Mailboxed(Protocol):
@@ -206,6 +208,34 @@ def has_mailbox(accounts: _Mailboxed | None) -> bool:
     """Whether a deployment or a Run composed Agent Accounts with an Agent Mailbox that delivers
     their mail. A mailbox belongs to the accounts: there is none without them."""
     return accounts is not None and accounts.mailbox is not None
+
+
+def may_register(accounts: RunAgentAccounts | None) -> bool:
+    """Whether a Run composed Agent Accounts that may register."""
+    return accounts is not None and accounts.registration
+
+
+#: Where acceptance pins whether the owner's Run may register, in the Run's prepared input.
+REGISTRATION_PIN = "agent_account_registration"
+
+
+def run_agent_accounts(
+    binding: AgentAccountsBinding, *, owner_id: str, prepared_input: Mapping[str, Any]
+) -> RunAgentAccounts:
+    """The Agent Accounts an accepted Run executes with.
+
+    Whether it may register is what acceptance pinned, so what the owner switches later changes
+    no Run already accepted. The deployment's allowance is read again, and is the ceiling: a Run
+    pinned to register under an allowance since withdrawn is composed without ``register``, which
+    its accepted plan does not match, so it is refused like any Run whose tools have changed.
+    A Run accepted before the switch existed was pinned to nothing, and has the allowance.
+    """
+    pinned = prepared_input.get(REGISTRATION_PIN, True)
+    return RunAgentAccounts(
+        owner_id=owner_id,
+        binding=binding,
+        registration=binding.registration_allowed and bool(pinned),
+    )
 
 
 class SessionAccounts:
@@ -343,12 +373,17 @@ class ChildSessionAccounts(SessionAccounts):
 
 
 class RunAgentAccounts:
-    """One Research Run's Agent Accounts, as each of its Agent Sessions sees them."""
+    """One Research Run's Agent Accounts, as each of its Agent Sessions sees them.
 
-    def __init__(self, *, owner_id: str, binding: AgentAccountsBinding) -> None:
+    ``registration`` is whether the Run may register: it logs in with the accounts its owner
+    has either way, and no other fact of the Run depends on it.
+    """
+
+    def __init__(self, *, owner_id: str, binding: AgentAccountsBinding, registration: bool) -> None:
         self._owner_id = owner_id
         self._binding = binding
         self.mailbox = binding.mailbox
+        self.registration = registration
         self._sessions: dict[str, SessionAccounts] = {}
 
     def available(self) -> bool:
@@ -400,6 +435,7 @@ __all__ = [
     "ACCOUNT_LABEL",
     "MIN_PASSWORD_LENGTH",
     "PASSWORD_LENGTH",
+    "REGISTRATION_PIN",
     "AgentAccount",
     "AgentAccountStore",
     "AgentAccountSummary",
@@ -411,7 +447,9 @@ __all__ = [
     "account_site",
     "generate_password",
     "has_mailbox",
+    "may_register",
     "owner_alias",
     "reseal_agent_accounts",
+    "run_agent_accounts",
     "run_alias",
 ]

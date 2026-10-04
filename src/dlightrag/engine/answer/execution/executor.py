@@ -102,6 +102,7 @@ from dlightrag.engine.answer.agent_browser import (
     RunAgentAccounts,
     RunAgentBrowser,
     has_mailbox,
+    run_agent_accounts,
 )
 from dlightrag.engine.answer.attachment_replay import AttachmentReplaySelection
 from dlightrag.engine.answer.capabilities import AnswerCapabilityCoordinator
@@ -501,10 +502,15 @@ class AnswerExecutor:
         *,
         web_search: bool,
         memory: bool,
+        agent_registration: bool,
         model_guidance: str,
         injected: Sequence[ToolDeclaration],
     ) -> tuple[ToolDeclaration, ...]:
-        """Project configured capabilities without constructing execution dependencies."""
+        """Project configured capabilities without constructing execution dependencies.
+
+        ``agent_registration`` is whether the Run being accepted may register, which is the
+        owner's switch under the deployment's allowance and is pinned with the Run.
+        """
         from dlightrag.engine.answer.tools.composition import research_tool_declarations
         from dlightrag.engine.answer.tools.subagents import subagent_declarations
 
@@ -514,6 +520,7 @@ class AnswerExecutor:
             resource_read=True,
             agent_browser=self._browser is not None,
             agent_accounts=accounts is not None,
+            agent_registration=agent_registration,
             agent_mailbox=has_mailbox(accounts),
             resource_view=True,
             environment=self._execution_adapter is not None,
@@ -2134,12 +2141,16 @@ class AnswerExecutor:
     def _run_agent_accounts(
         self, session: RunSession, agent_browser: RunAgentBrowser | None
     ) -> RunAgentAccounts | None:
-        """The Agent Accounts this Research Run registers and logs in with, if it has a browser
-        and the deployment allows them. Their Child-scoped accounts live in this object, so
-        they go with the Run and there is nothing to close."""
+        """The Agent Accounts this Research Run logs in with, and registers with when it may, if
+        it has a browser and the deployment composed them. Their Child-scoped accounts live in
+        this object, so they go with the Run and there is nothing to close."""
         if agent_browser is None or self._browser is None or self._browser.accounts is None:
             return None
-        return RunAgentAccounts(owner_id=session.owner_id, binding=self._browser.accounts)
+        return run_agent_accounts(
+            self._browser.accounts,
+            owner_id=session.owner_id,
+            prepared_input=session.prepared_input or {},
+        )
 
     async def prepare_orchestrated_run(
         self,

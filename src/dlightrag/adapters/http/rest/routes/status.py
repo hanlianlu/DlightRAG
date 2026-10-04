@@ -62,13 +62,15 @@ class AgentBrowserHealthResponse(_StatusModel):
 
     ``sandbox`` is the configured ``chromium_sandbox``, not a probe of what a host can start.
     ``accounts`` and ``mailbox`` say whether Agent Accounts and an Agent Mailbox are composed,
-    not whether the bucket answers.
+    not whether the bucket answers, and ``registration`` whether the deployment lets the Agent
+    register new accounts, which no owner's own switch can exceed.
     """
 
     state: Literal["configured", "disabled"]
     endpoints: int = Field(ge=0)
     sandbox: bool
     accounts: bool
+    registration: bool
     mailbox: bool
 
 

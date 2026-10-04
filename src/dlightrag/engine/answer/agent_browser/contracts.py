@@ -276,8 +276,8 @@ _PAGE_MESSAGES: dict[AgentBrowserFailure, str] = {
     "busy": "Every Agent Browser is in use by other Runs, so no page was opened. Try again later.",
     "unreachable": "The Agent Browser is unreachable, so no page was opened.",
     "wrong_site": (
-        "Field {ref} is not on an https page of {site}, so nothing was filled: register and "
-        "login fill only the fields of the page's own site."
+        "Field {ref} is not on an https page of {site}, so nothing was filled: an Agent "
+        "Account is filled only into the fields of the page's own site."
     ),
     "not_password_field": "Element {ref} is not a password field, so nothing was filled.",
     "not_text_field": "Element {ref} is not a text or email field, so nothing was filled.",
@@ -456,7 +456,7 @@ class AgentBrowserSettings:
 @dataclass(frozen=True, slots=True)
 class AgentBrowserBinding:
     """The Agent Browser a deployment composed: its provider, the settings it runs under, and
-    the Agent Accounts its Runs may register and log in with (ADR 0034), when it allows them."""
+    the Agent Accounts its Runs log in with and may register (ADR 0034)."""
 
     provider: BrowserProvider
     settings: AgentBrowserSettings

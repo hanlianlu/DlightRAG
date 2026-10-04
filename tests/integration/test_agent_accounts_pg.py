@@ -80,7 +80,11 @@ async def register(
     store: PGAgentAccountStore, cipher: CredentialCipher, owner: str, site: str
 ) -> SecretStr:
     """The owner's parent registers on the site, and the password sealed for it comes back."""
-    run = RunAgentAccounts(owner_id=owner, binding=AgentAccountsBinding(store, cipher))
+    run = RunAgentAccounts(
+        owner_id=owner,
+        binding=AgentAccountsBinding(store, cipher, registration_allowed=True),
+        registration=True,
+    )
     session = run.session("parent", child=False)
     password = generate_password()
     await session.record(
@@ -277,7 +281,11 @@ async def test_reseal_moves_retired_envelopes_and_skips_ones_no_key_opens(pool: 
         # The account is the same one, only sealed anew: nothing the owner did to it moved.
         moved = ("account_id", "created_at", "updated_at", "last_used_at")
         assert [row[name] for name in moved] == [was[name] for name in moved]
-        run = RunAgentAccounts(owner_id=owner, binding=AgentAccountsBinding(store, rotated))
+        run = RunAgentAccounts(
+            owner_id=owner,
+            binding=AgentAccountsBinding(store, rotated, registration_allowed=True),
+            registration=True,
+        )
         session = run.session("parent", child=False)
         account = await session.login_target(site)
         assert account is not None and session.password(account) == password
