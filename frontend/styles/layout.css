@@ -609,7 +609,7 @@ body.files-panel-open #files-btn {
     color: var(--color-on-action);
     cursor: pointer;
     flex-shrink: 0;
-    transition: background 0.15s, color 0.15s, transform 0.1s;
+    transition: background 0.15s, color 0.15s, transform var(--duration-instant);
 }
 
 .composer-send:hover {

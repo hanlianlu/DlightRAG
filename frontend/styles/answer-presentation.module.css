@@ -181,6 +181,12 @@
     margin-top: var(--space-tight);
 }
 
+@media (prefers-reduced-motion: reduce) {
+    .answer-image-strip {
+        scroll-behavior: auto;
+    }
+}
+
 .answer-image-item {
     background: transparent;
     flex-shrink: 0;

@@ -47,7 +47,7 @@
 .ingest-target-caret {
     color: var(--color-accent-muted);
     flex-shrink: 0;
-    transition: transform 0.15s;
+    transition: transform var(--duration-control);
 }
 
 .ingest-target.open .ingest-target-caret {

@@ -151,6 +151,17 @@
     to { transform: rotate(360deg); }
 }
 
+@keyframes spinner-pulse {
+    0%, 100% { opacity: 0.2; }
+    50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .spinner {
+        animation: spinner-pulse 1.2s ease-in-out infinite;
+    }
+}
+
 /* === Upload Zone (Files Panel) === */
 
 .upload-zone {

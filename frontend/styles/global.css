@@ -74,13 +74,6 @@ body.conversation-drawer-open {
     color: var(--color-on-action);
 }
 
-/* === Streaming Indicator === */
-
-@keyframes pulse {
-    0%, 100% { opacity: 0.2; }
-    50% { opacity: 1; }
-}
-
 mjx-container {
     color: inherit;
 }
@@ -103,7 +96,7 @@ mjx-container {
     padding: var(--space-component) var(--space-section);
     position: fixed;
     transform: translateX(-50%) translateY(8px);
-    transition: opacity 0.2s ease-out, transform 0.2s ease-out;
+    transition: opacity 0.2s ease-out, transform var(--duration-overlay) ease-out;
     z-index: 200;
 }
 
