@@ -125,12 +125,12 @@ test('colours outside the ramps are only ever white', () => {
             .map((i) => parseInt(hex.slice(i, i + 2), 16)).join(', ')),
     );
     const strays = [
-        ...[...semantics.matchAll(/#[0-9a-fA-F]{6}\b/g)].map((m) => m[0].toLowerCase()),
+        ...[...semantics.matchAll(/#[0-9a-fA-F]{3,8}\b/g)].map((m) => m[0].toLowerCase()),
         ...[...semantics.matchAll(/rgba?\((\d+)[ ,]+(\d+)[ ,]+(\d+)/g)]
             .map((m) => m.slice(1, 4).join(', '))
             .filter((triple) => !triples.has(triple))
             .map((triple) => `rgb(${triple})`),
-    ].filter((colour) => !['#ffffff', 'rgb(255, 255, 255)', 'rgb(0, 0, 0)'].includes(colour));
+    ].filter((colour) => !['#fff', '#ffffff', 'rgb(255, 255, 255)', 'rgb(0, 0, 0)'].includes(colour));
 
     assert.deepEqual([...new Set(strays)], []);
 });
