@@ -2,6 +2,7 @@
 """materialize: a Resource's admitted bytes become a workspace file, and nothing else happens."""
 
 import hashlib
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -240,35 +241,62 @@ async def test_a_page_with_a_snapshot_and_a_rendering_copies_the_snapshot(
     assert (len(web), renderer.calls) == (1, [URL])
 
 
+def sound(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The workspace is as a Run finds it."""
+
+
+def latch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A symbolic link left in the workspace latches it."""
+    (tmp_path / "link").symlink_to("elsewhere")
+
+
+def fill(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A workspace whose quota is eight bytes."""
+    monkeypatch.setattr(local, "WORKSPACE_MAX_BYTES", 8)
+
+
+def entries(root: Path) -> list[str]:
+    """Everything a workspace holds, as a refused call must leave it."""
+    return sorted(path.relative_to(root).as_posix() for path in root.rglob("*"))
+
+
 @pytest.mark.parametrize(
-    ("case", "complaint", "loads"),
+    ("prepare", "path", "limits", "complaint", "loads"),
     [
-        ("latched", "workspace integrity latched", 0),
-        ("full", "workspace quota exceeded", 1),
-        ("escaping", "path must not escape the workspace", 0),
-        ("allowance", "total attachment bytes exceeded", 1),
+        pytest.param(latch, DESTINATION, {}, "workspace integrity latched", 0, id="latched"),
+        pytest.param(fill, DESTINATION, {}, "workspace quota exceeded", 1, id="full"),
+        pytest.param(sound, "../x", {}, "path must not escape the workspace", 0, id="escaping"),
+        pytest.param(
+            sound,
+            DESTINATION,
+            {"max_total_attachment_bytes": 8},
+            "total attachment bytes exceeded",
+            1,
+            id="allowance",
+        ),
     ],
 )
 async def test_a_refused_copy_writes_nothing_and_loads_only_what_it_must(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str, complaint: str, loads: int
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    prepare: Callable[[Path, pytest.MonkeyPatch], None],
+    path: str,
+    limits: dict[str, int],
+    complaint: str,
+    loads: int,
 ) -> None:
-    if case == "latched":
-        (tmp_path / "link").symlink_to("elsewhere")
-    if case == "full":
-        monkeypatch.setattr(local, "WORKSPACE_MAX_BYTES", 8)
+    prepare(tmp_path, monkeypatch)
     env = LocalExecutionEnvironment(tmp_path)
-    async with Run(**({"max_total_attachment_bytes": 8} if case == "allowance" else {})) as run:
+    before = entries(tmp_path)
+    async with Run(**limits) as run:
         resource_id = await run.upload()
 
-        result = await copy(
-            copying(env, run.registry), resource_id, "../x" if case == "escaping" else DESTINATION
-        )
+        result = await copy(copying(env, run.registry), resource_id, path)
 
         assert result.is_error is True
         assert complaint in result.text_content
         assert result.effects == ToolEffects()
         assert run.loads == loads
-    assert not (tmp_path / DESTINATION).exists()
+    assert entries(tmp_path) == before
     assert not (tmp_path.parent / "x").exists()
-    if case == "full":
-        assert env.quota_violation is None, "a refused write latches nothing"
+    assert env.quota_violation is None, "a refused copy latches nothing"
