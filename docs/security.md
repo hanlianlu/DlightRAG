@@ -6,8 +6,9 @@ defaults live in [Configuration](configuration.md); public payloads in
 [Interfaces](interfaces.md).
 
 DlightRAG verifies credentials and maps claims to workspace/actions. It does
-not issue OAuth tokens, manage users/passwords, or provide an identity-provider
-login system.
+not issue OAuth tokens, manage users or passwords of its own, or provide an
+identity-provider login system. The passwords it does hold are the Agent's, on
+third-party sites ([Agent Accounts](#agent-accounts), ADR 0034).
 
 Examples below are YAML. Each setting is also `DLIGHTRAG_ACCESS__<FIELD>`, which
 is where a deployment of the checked-in `config.yaml` keeps it (see
@@ -400,9 +401,10 @@ every redirect, pins the validated address for each connection, and never permit
 HTTPS to downgrade to HTTP. Agent reads can vary only `User-Agent`, `Accept`, and
 `Accept-Language`; cookies, authorization, arbitrary headers, and browser sessions
 are unavailable to `read`. The Agent's only sessions are the Run-scoped Agent
-Browser's, whose pages are anonymous contexts
-([Agent Browser Boundary](#agent-browser-boundary)). A successful acquisition becomes
-one immutable run snapshot.
+Browser's, whose pages are anonymous contexts that may sign in with the Agent's own
+accounts, never the owner's ([Agent Browser Boundary](#agent-browser-boundary),
+[Agent Accounts](#agent-accounts)). A successful acquisition becomes one immutable run
+snapshot.
 
 MarkItDown runs without plugins/network. OOXML files pass central-directory
 zip-bomb checks before conversion. Full bytes never enter model context—only
@@ -546,9 +548,10 @@ hands over and accepts back.
   [Resource reading](resource-reading.md#browser-captures-and-downloads).
 - **Verification walls.** A CAPTCHA or any other human-verification check surfaces as an
   HTTP error or as page text. The `browser` tool's description tells the model to stop that
-  path and report it. DlightRAG never solves, bypasses, or outsources one and holds no
-  solver integration; this is a rule the model follows, not a mechanism, because nothing
-  detects a CAPTCHA, and a vision model could read one from a screenshot.
+  path and report it, and a sign-up behind one is no exception. DlightRAG never solves,
+  bypasses, or outsources one and holds no solver integration; this is a rule the model
+  follows, not a mechanism, because nothing detects a CAPTCHA, and a vision model could read
+  one from a screenshot.
 
 Residual risks, recorded rather than solved:
 
@@ -570,6 +573,84 @@ Residual risks, recorded rather than solved:
   container. The server limits no clients, so a connection of a holder whose lease has
   expired, a worker that stalled rather than died, may still be open when the next Run
   leases the container, and the two browsers then share it until that connection ends.
+
+### Agent Accounts
+
+The Agent may register on a third-party site and sign in again later
+([ADR 0034](adr/0034-agent-accounts-and-the-agent-mailbox.md); the actions are in
+[Retrieval and Answer](retrieval-answer.md#agent-accounts-and-the-agent-mailbox)). What
+makes that safe is that no password is ever anywhere the model, or anything it can steer,
+could read.
+
+- **An identity of its own.** No credential, name, address, or other personal information
+  of the owner enters a form, and the tool's description says so. An Agent Mailbox alias
+  is 16 characters of an unkeyed hash of the owner and the site and carries nothing of the
+  owner. The browser holds no credential of the owner either.
+- **DlightRAG makes the password and never shows it.** It generates 20 characters with
+  `secrets`, shorter only to fit a field's `maxlength` and never below 12, from letters,
+  digits, and `*-._`, which HTML, JSON, and URL encoding leave unchanged, so a password has
+  exactly one spelling to look for. The model names fields by ref and never types or sees a
+  password. No tool argument, result, Session Entry, event, trace, log, or error carries one.
+- **Sealed under the key ring.** A parent's account is stored per owner, sealed under the
+  [deployment key ring](#personal-connection-authorization) with a label of its own and bound
+  to the owner, the site, and the account, so an account envelope never opens as a Connection
+  Grant, nor a Grant as an account, and one owner's never opens for another's. Without a ring,
+  register and login fail closed, and an envelope no key opens is unusable until the site's
+  password reset replaces it. No route, view, export, or result returns a password.
+- **Filled only into the account's own site.** A password goes only into a password field in
+  an `https` frame whose registrable domain, by the pinned Public Suffix List's eTLD+1 with
+  its private section, is the account's site, judged by the frame's own address and not the
+  page's, so an iframe of another site is refused and a stored password cannot be sent to a
+  site it does not belong to. The list ships in the wheel and is never fetched. A page that
+  is not `https`, or has an IP address or a bare public suffix for a host, has no site and
+  fills nothing. Every ref is checked before any field is filled.
+- **Redacted from every text a page returns.** The driver prints a filled value wherever it
+  describes the page: the accessibility snapshot prints a password input's value in clear,
+  the serialized HTML carries it once the page mirrors it into the input's `value` attribute,
+  a form that submits with GET puts it into the page's URL, and the error of a failed fill
+  quotes it in its call log. So every filled password is replaced by `********` in the
+  page's URL and title, the snapshot (before `find` filters its lines, so no query can probe
+  a value), dialog messages, the names and URLs of downloads, the text a field reads back,
+  the first line of a driver error, and the serialized HTML of a capture, always before a
+  text is cut. A failed fill's error is decided outside the handler that caught it and never
+  kept, chained, or logged, and a failed or changed fill empties the fields it filled. The set
+  of filled passwords belongs to the Agent Session and the Run, outlives its page, and also
+  redacts the mail it reads.
+- **No screenshot of a shown password.** A browser draws a password field as dots, but a page
+  can turn one into a text field. With any password filled, a screenshot first reads each
+  frame's text fields and visible text and refuses when one holds a filled password or cannot
+  be read, comparing in DlightRAG's process so no password is ever sent into a page.
+- **Children register for the Run.** A Child keeps `register`, but its account is held in the
+  worker's memory under its Agent Session until the Run settles, with a random alias, so
+  nothing durable is written for the owner that the parent did not make
+  ([ADR 0025](adr/0025-a-child-inherits-capability-not-authority.md)). A Child may sign in
+  with the owner's accounts, which is capability.
+- **Mail is untrusted.** Anyone who learns an alias can write to it, so mail is context and
+  never Evidence, the result says so, and a link in it is opened with `navigate` under its
+  first-URL check. DlightRAG reads the bucket and never writes or deletes. The bucket's keys
+  are `.env` secrets that live only in DlightRAG's processes: an Agent's own processes get no
+  `DLIGHTRAG_*` variable.
+
+Residual risks, recorded rather than solved:
+
+- A site and its scripts necessarily see the password, and it crosses the pool's internal
+  network unencrypted inside the Playwright protocol. One password for each account confines
+  a leak to that account.
+- An account is recorded when its fields are filled, before the site accepts the form, so a
+  refused sign-up leaves a record that `login` will fail with. The way out is the reset path,
+  `register` on a site whose account exists.
+- A file a site generates with the password in it is admitted as it is: downloads are not
+  redacted. A password a page prints as text can be confirmed by `wait(text=…)`, and one shown
+  inside shadow DOM, which the locators do not pierce, escapes the screenshot check.
+- Registrations of one owner on one site that run at once leave the last envelope. A Child's
+  account stays on the site after its Run, under an alias nothing reads again.
+- Mail retention is the deployment's, and an alias that is flooded lists only its first 10,000
+  objects ([Operations](operations.md#agent-mailbox)). The S3 client's own debug log names the
+  endpoint and the access key id, so a deployment keeps production at `log_level: info`.
+- Backups hold envelopes a retained copy of their key can still open, as for Connections, a
+  pinned Public Suffix List ages and may split or share an account wrongly, and whether a
+  site's terms allow an automated sign-up is the site's to say: DlightRAG does not read them,
+  as `read` does not read `robots.txt`.
 
 ## Answer Artifact Browser Boundary
 
@@ -639,7 +720,9 @@ even with bearer auth.
 
 Personal MCP Connections authorize with OAuth PKCE and state, deposit each callback
 once into an encrypted inbox, and keep credentials sealed under the deployment key
-ring; the [contract](personal-mcp-connections.md) has the details. A callback URL
+ring; the [contract](personal-mcp-connections.md) has the details. The ring has a second
+consumer, [Agent Accounts](#agent-accounts), and each seals under a label of its own, so
+an envelope of one never opens as the other's. A callback URL
 carries the code and state in its query: the Web strips them before its own
 logging, and operators must redact them in upstream proxies and external tracing,
 which are outside this application. Removing live ciphertext does not erase

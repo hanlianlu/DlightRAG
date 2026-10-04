@@ -372,8 +372,10 @@ it has no browser.
   [Architecture](architecture.md#agent-browser).
 - **Actions.** `navigate`, `snapshot`, `find`, `back`, and `wait` (for text, for text to
   go, or for seconds); `click`, `type` (optionally pressing Enter), `select`, `press`,
-  and `scroll`; `screenshot` and `capture`; and `upload`, which is offered only where the
-  Run has a workspace (`trust`). Only a configured capability's actions are offered, and
+  and `scroll`; `screenshot` and `capture`; `upload`, which is offered only where the
+  Run has a workspace (`trust`); and `register`, `login`, and `inbox`, which belong to
+  [Agent Accounts and the Agent Mailbox](#agent-accounts-and-the-agent-mailbox). Only a
+  configured capability's actions are offered, and
   no configured value appears in the description or the schema, so changing a timeout
   never changes a pinned plan. The tool is not read-only and never replays: each call runs
   alone, and a call pending at a crash settles its outcome as unknown.
@@ -416,6 +418,69 @@ it has no browser.
   `navigate`, so the next call that is not a `navigate` says that a Run that resumed after
   an interruption starts with no open page. Captures and downloads that settled are
   restored without a browser.
+
+### Agent Accounts And The Agent Mailbox
+
+A Run whose deployment allows Agent Accounts (`answer.agent.browser.account_registration`,
+on by default) offers `register` and `login`, and one that also configures an Agent Mailbox
+offers `inbox` ([ADR 0034](adr/0034-agent-accounts-and-the-agent-mailbox.md); what keeps a
+password from the model is in [Security](security.md#agent-accounts)). An Agent Session acts
+as an identity of its own: the tool's description says never to type the owner's details into
+a form, and that DlightRAG makes every password and fills it by ref. Turning accounts off
+withdraws both actions together, and a Run accepted with them is pinned to them.
+
+- **`register`** acts on the page `navigate` opened and leases nothing. It takes
+  `password_refs` (one or two, such as a password and its confirmation), and optionally
+  `email_ref` and `username_ref`; the model types a username into its field first. It checks
+  every ref (the element exists, is of the right kind, and is in a frame of the page's own
+  site) before it fills anything, sizes the password to the smallest `maxlength` the
+  password fields state, and refuses below 12 characters. The address is the one the account
+  already has, which is filled again; else, with a mailbox, the owner's alias for the site (a
+  Child gets a random alias of its own), which is filled; else the address the Agent typed,
+  which must hold one `@` and no whitespace. The username is the one typed, 1 to 128
+  characters with no control character. A new account needs at least one of them. It then
+  generates the password, fills it, and records the account before the site has accepted the
+  form, because DlightRAG cannot see the site's verdict. A refused sign-up leaves the record
+  that `login` will fail with, and so does a password the site rejected.
+- **A password reset is a registration.** `register` on a form of a site whose account
+  exists gives the account a new password, keeps its account id and address, and replaces its
+  envelope. That is also how an account recovers when no key opens its envelope.
+- **`login`** takes any of `email_ref`, `username_ref`, and `password_refs`, and fills the
+  account this site has for the Session: a Child's own Run-scoped account first, else the
+  owner's. It opens the password's envelope only when a password field is named, and
+  refuses an account that lacks the field named, or whose envelope no key opens, with the
+  site's reset path.
+- **What a result says.** Both end like any action that changes the page: the frame, its
+  notes, then a sentence (the account recorded or reset, with `for this owner's later Runs`
+  or `for this Run only (a Child Session's account)`, and for an alias a pointer to `inbox`;
+  or the fields filled), then the bounded snapshot, in which a password is only
+  `********`. They carry no Evidence. A refusal fills nothing and stores nothing. The
+  reasons: no key ring; a page with no `https` registrable domain; a ref that is stale,
+  in a frame of another site, or not a password, or not a text or email, field; a
+  `maxlength` below 12; an address or username that cannot be recorded; a new account with
+  neither; a fill that failed or that the page changed, which clears what it filled; an
+  account that could not be stored, which does the same and tells the model not to submit;
+  no account for the site, or one without the field named; and an envelope no key opens.
+- **`inbox`** needs no page and no lease. It shows mail that the aliases of this Agent
+  Session's accounts received since its latest `register` or `login` in the Run, from two
+  minutes before it, because the time is the bucket's own clock; the Session's other
+  aliases in the Run stay in the window. Before either action it says so, and so it does
+  for accounts with no alias. It shows the newest five messages of its aliases, each with
+  its time, alias, sender, subject, up to four links, and up to five codes, says how many
+  more there were, and says when an alias holds more than 10,000 stored messages. A link over
+  2,048 characters or beyond the first four is only counted. A code is a token of four to
+  nine characters that looks like one. A message over 1 MiB is listed and not read, and one
+  that cannot be parsed is listed as such. An empty window is not an error: the result says
+  mail can take a minute and to call `inbox` again after a `wait`. A bucket that cannot be
+  read is reported by its error code alone ([Operations](operations.md#agent-mailbox)).
+- **Mail is context.** The result states that anyone who learns an alias can write to it, and
+  that mail is never evidence. Every filled password is masked in its headers and body before
+  anything is extracted, so none comes back as a code. A link in it is followed with
+  `navigate`.
+- **Subjects and recovery.** `register` and `login` name the page they act on, as the other
+  actions do, and `inbox` names its aliases. A recovered Run has no Run-scoped account, no
+  window, and no page, as it has no browser; the owner's accounts are intact, and `inbox`
+  needs a new `register` or `login` first.
 
 ## Context And Model Budgets
 

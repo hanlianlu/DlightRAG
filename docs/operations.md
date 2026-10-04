@@ -406,9 +406,9 @@ Before destructive production rebuilds, back up PostgreSQL and use the service's
 own `.env`, `config.yaml`, workspace, and model. Inspect any nonzero exit before
 restart.
 
-## Connection Key Ring Rotation
+## Key Ring Rotation
 
-Personal Connection credentials are sealed under
+Personal Connection credentials and Agent Account passwords are sealed under
 `<deployment.working_dir>/connection-keyring.json`, which the first writer
 creates ([format](personal-mcp-connections.md#secret-handling-and-key-ring)).
 
@@ -420,10 +420,12 @@ creates ([format](personal-mcp-connections.md#secret-handling-and-key-ring)).
 
 2. Point `active` at the new ID and restart **all** workers, so none still
    encrypts with the old key. Writer maintenance then re-encrypts live Grants
-   ([Operational lifecycle](personal-mcp-connections.md#operational-lifecycle)).
-3. Wait until the old key's Grant and OAuth inbox counts reach zero. Inbox flows
-   expire within `oauth_timeout` (at most 600 seconds) and are then collected.
-   On the deployment database, count envelopes; never select or export them:
+   ([Operational lifecycle](personal-mcp-connections.md#operational-lifecycle)) and
+   re-seals Agent Account envelopes, in a loop of its own that passes at startup and
+   then once a minute, up to 100 accounts a pass.
+3. Wait until the old key's Grant, OAuth inbox, and Agent Account counts reach
+   zero. Inbox flows expire within `oauth_timeout` (at most 600 seconds) and are then
+   collected. On the deployment database, count envelopes; never select or export them:
 
    ```sql
    SELECT key_id, count(*) FROM dlightrag_connection_grants
@@ -432,10 +434,97 @@ creates ([format](personal-mcp-connections.md#secret-handling-and-key-ring)).
    FROM dlightrag_connection_oauth_flows f
    CROSS JOIN LATERAL (VALUES (f.encrypted_result), (f.encrypted_credentials)) v(envelope)
    WHERE envelope IS NOT NULL GROUP BY 1;
+   SELECT key_id, count(*) FROM dlightrag_agent_accounts GROUP BY key_id;
    ```
 
 4. Remove the old key from the ring. A Grant it still sealed would need
-   authorization again, and backups stay readable to any retained copy of it.
+   authorization again, an Agent Account it still sealed is unusable until the
+   site's password reset replaces it, and backups stay readable to any retained copy
+   of it.
+
+## Agent Mailbox
+
+The Agent Mailbox ([ADR 0034](adr/0034-agent-accounts-and-the-agent-mailbox.md)) is
+optional. DlightRAG only reads: whole RFC 822 messages from an S3-compatible bucket,
+which it never writes to or deletes from, and the repository holds no vendor code.
+[Configuration](configuration.md#agent-mailbox) has the fields and the bucket's layout.
+How mail reaches the bucket, and how long it stays, are the deployment's. The steps
+below are one deployment's, a catch-all on its own domain through Cloudflare Email
+Routing and an Email Worker to R2; the Worker is an example for that deployment, not
+product code, and another one could use SES receipt rules that write to S3.
+
+- **A catch-all needs the apex.** Cloudflare allows catch-all rules only on a zone's
+  apex domain, and a subdomain gets literal rules only. The Agent mints a different
+  address for every owner and site, so literal rules cannot work, and the catch-all and
+  `alias_domain` are the apex. It then takes every address of that domain that has no
+  literal rule, and writes it all to the bucket for the Agent to read. To keep the
+  domain's own mail, give those addresses literal rules, which take precedence, or use a
+  domain of its own for the Agent.
+- **Check the domain's mail first.** `dig +short MX <domain>` and
+  `dig +short TXT <domain>`, and look at its DNS in the dashboard. Enabling Email
+  Routing replaces its MX records with Cloudflare's, so a domain that already receives mail
+  stops receiving it: use another domain.
+- **The bucket.** Create an R2 bucket (for example `dlightrag-agent-mail`; lower-case
+  letters, digits, `-`, and `.`) in the default location. A jurisdiction changes the
+  endpoint to `https://<account-id>.<jurisdiction>.r2.cloudflarestorage.com`.
+- **The Worker.** Cloudflare accepts mail up to 25 MiB, of which DlightRAG reads only
+  messages up to 1 MiB: a larger one is listed and not read. It gives the Worker the envelope
+  recipient as `message.to`. Bind the bucket as `MAIL` and set `PREFIX` to the same value as
+  `answer.agent.mailbox.prefix`, `mail` by default:
+
+  ```js
+  // One deployment's example: write every incoming message to R2 as it arrived.
+  // key = <PREFIX>/<envelope recipient, lower case>/<ISO time>-<uuid>.eml
+  export default {
+    async email(message, env, ctx) {
+      const recipient = message.to.toLowerCase();   // the envelope RCPT TO, not the To: header
+      const prefix = env.PREFIX ? `${env.PREFIX}/` : "";
+      const key = `${prefix}${recipient}/${new Date().toISOString()}-${crypto.randomUUID()}.eml`;
+      const raw = await new Response(message.raw).arrayBuffer();   // the whole message
+      await env.MAIL.put(key, raw, { httpMetadata: { contentType: "message/rfc822" } });
+    },
+  };
+  ```
+
+  The recipient is the envelope's because a `To:` header need not name the address a
+  message was delivered to, and lower case because DlightRAG mints lower-case aliases and a
+  site may capitalize one. The object's name is only for people: DlightRAG reads when mail
+  arrived from the object's `LastModified`, never from a header.
+- **Routing.** Enable Email Routing for the zone, which adds Cloudflare's MX and SPF
+  records. The wizard may ask for a destination address to verify; it is not used, and the
+  Agent never uses any address of the owner's. Set the catch-all to **Send to a Worker**,
+  choose the Worker, and check it is **Active**. Leave subaddressing off.
+- **Retention is the deployment's, and DlightRAG never deletes.** Add an R2 lifecycle rule
+  that deletes objects under the prefix after 30 days. An alias that has more than 10,000
+  stored messages is listed from its first 10,000 only, and `inbox` says so.
+- **The key.** Create an R2 account API token with **Object Read only**, scoped to the
+  bucket. DlightRAG only lists and gets. Note its Access Key ID and Secret Access Key when
+  it is created; the Secret is shown once. The endpoint is
+  `https://<account-id>.r2.cloudflarestorage.com`. Revoke and recreate the token, and update
+  `.env`, if either key may have leaked.
+- **Turning it on.** Put the five settings in `.env`
+  ([names and rules](configuration.md#agent-mailbox)), run an image that has this code, and
+  restart `dlightrag-api`, `dlightrag-mcp`, and `dlightrag-reader`. `GET /health` then shows
+  `"accounts": true` and `"mailbox": true` under `agent_browser`
+  ([what it reports](interfaces.md#health-and-errors)), from configuration alone: the bucket
+  is first reached by a Run's `inbox`, and a wrong key or bucket answers there as
+  `The Agent Mailbox could not be read (AccessDenied)`, naming only the error code.
+- **Test a message.** Send mail from any address to `probe-<anything>@<domain>`. An object
+  named `<prefix>/probe-<anything>@<domain>/<time>-<id>.eml` appears in the bucket. If it does
+  not, look at the Worker's logs and Email Routing's activity log.
+- **Never log what the browser or the client sees.** Do not set `DEBUG=pw:*` for the pool
+  or the application: Playwright's debug log prints each call's arguments, a filled password
+  among them. Keep production at `log_level: info`, since the S3 client's debug log names the
+  endpoint and the access key id. Neither the key nor an endpoint reaches an error or a log
+  line DlightRAG writes.
+- **Mail is untrusted.** Anyone who learns an alias can write to it, which is why DlightRAG
+  gives mail to the model only as context and never as Evidence
+  ([Security](security.md#agent-accounts)).
+- **Development.** `tests/integration/test_agent_accounts_browser.py` drives `register`,
+  `login`, and `inbox` in a real Chromium over a proxy that terminates TLS, against a
+  loopback S3 double, with no database, and `tests/integration/test_agent_accounts_pg.py`
+  runs the account store, its re-sealing, and a later Run's login against PostgreSQL. Both
+  need the browser installed as for the [pool's tests](#agent-browser-pool).
 
 ## Local Langfuse Observability
 

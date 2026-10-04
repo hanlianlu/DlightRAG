@@ -902,6 +902,7 @@ answer:
       action_timeout_seconds: 10      # above 0, at most 120
       snapshot_depth: 12              # 1–64
       idle_release_seconds: 30        # 0–600
+      account_registration: true      # DLIGHTRAG_ANSWER__AGENT__BROWSER__ACCOUNT_REGISTRATION
 ```
 
 The Agent Browser lets Research read a page as a browser renders it and drive one with
@@ -948,10 +949,58 @@ and Research has no `browser` tool.
   ([when](architecture.md#agent-browser)). The next render or page leases again, and `0`
   gives it back as soon as nothing is open. Settlement releases whatever is held either
   way.
+- `account_registration` is whether the Agent may register on third-party sites and sign
+  in with Agent Accounts of its own ([ADR 0034](adr/0034-agent-accounts-and-the-agent-mailbox.md);
+  [what the actions do](retrieval-answer.md#agent-accounts-and-the-agent-mailbox)). `false`
+  offers neither `register` nor `login`, and so no `inbox`. Accounts the Agent made earlier
+  stay in PostgreSQL and still follow a key ring rotation. Without a key ring, register and
+  login fail closed whatever this says.
 
 The pool's size is the deployment's limit on Runs using a browser at the same moment
 ([sizing](operations.md#agent-browser-pool)). What `GET /health` says of the Agent
 Browser is in [Interfaces](interfaces.md#health-and-errors).
+
+## Agent Mailbox
+
+```yaml
+answer:
+  agent:
+    mailbox:
+      endpoint: null        # DLIGHTRAG_ANSWER__AGENT__MAILBOX__ENDPOINT; null is AWS S3's own
+      region: auto          # DLIGHTRAG_ANSWER__AGENT__MAILBOX__REGION; Cloudflare R2's is auto
+      bucket: null          # DLIGHTRAG_ANSWER__AGENT__MAILBOX__BUCKET
+      prefix: mail          # DLIGHTRAG_ANSWER__AGENT__MAILBOX__PREFIX
+      alias_domain: null    # DLIGHTRAG_ANSWER__AGENT__MAILBOX__ALIAS_DOMAIN
+```
+
+The Agent Mailbox is optional ([ADR 0034](adr/0034-agent-accounts-and-the-agent-mailbox.md)). It
+gives the Agent addresses of its own to register with and lets it read the mail that arrives
+at them with `inbox`; without it the Agent may use a temporary-mail site through the
+browser itself, and `register` records the address it typed. No bucket means no Agent
+Mailbox, and an Agent Mailbox needs [Agent Accounts](#agent-browser) to be on.
+
+- The two keys are secrets, so they belong in `.env` and nowhere in YAML
+  ([ADR 0006](adr/0006-configuration-ownership-and-deployment-bindings.md)):
+  `DLIGHTRAG_ANSWER__AGENT__MAILBOX__ACCESS_KEY_ID` and
+  `DLIGHTRAG_ANSWER__AGENT__MAILBOX__SECRET_ACCESS_KEY`. They never render, and an Agent's
+  own processes get no `DLIGHTRAG_*` variable. A deployment that runs the checked-in
+  `config.yaml` keeps its endpoint, bucket, and alias domain in `.env` as well, as it keeps its
+  access policy.
+- Naming a `bucket` requires `alias_domain` and both keys, and without a bucket none of
+  `endpoint`, `alias_domain`, or the keys may be set; startup refuses either mistake and names
+  the setting. A blank variable in `.env` is an unset setting. `bucket` is a valid S3 bucket
+  name, `prefix` is slash-separated segments of `A-Za-z0-9._-` or empty, and `alias_domain`
+  is a lower-case domain with at least two labels.
+- `alias_domain` is the domain the Agent's addresses are minted on, which the deployment's
+  mail routing must deliver. An address is the same for one owner and site in every Run.
+- **The bucket's contract is its layout.** Each message is written whole, as one object, under
+  `<prefix>/<envelope recipient, lower case>/`: the envelope recipient, because a `To:` header
+  does not reliably name the address a message was delivered to. DlightRAG lists one alias's
+  prefix and never scans the bucket, reads `LastModified` as when mail arrived, and needs
+  only list and get access. How mail reaches the bucket, with an example, and how long it
+  stays, are the deployment's ([Operations](operations.md#agent-mailbox)).
+
+What `GET /health` says of it is in [Interfaces](interfaces.md#health-and-errors).
 
 ## Public Web Sources
 

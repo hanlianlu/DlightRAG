@@ -900,12 +900,15 @@ warnings use fixed sanitized text. The four LightRAG storage class names and
 `answer_image_capability` are also reported, as is `agent_shell_confinement`: what an
 Agent's processes can be confined to on this host, one of `disabled` (no Agent
 environment), `unavailable` (no kernel seam), or `landlock:abiN`. `agent_browser`
-reports `{"state": "configured" | "disabled", "endpoints": <n>, "sandbox": <bool>}` from
-configuration alone: `sandbox` is the configured `chromium_sandbox`, whether browsers
-launch inside Chromium's own sandbox, and not whether a host can start it. It never names
-an endpoint and never reaches the pool, so a pool that is down is seen in its containers'
-own health, not here ([Operations](operations.md#agent-browser-pool)). Degraded state
-remains HTTP 200.
+reports `{"state": "configured" | "disabled", "endpoints": <n>, "sandbox": <bool>,
+"accounts": <bool>, "mailbox": <bool>}` from configuration alone: `sandbox` is the
+configured `chromium_sandbox`, whether browsers launch inside Chromium's own sandbox, and
+not whether a host can start it; `accounts` and `mailbox` say whether Agent Accounts and an
+Agent Mailbox are composed, and not whether the bucket answers. It never names an endpoint
+and never reaches the pool or the bucket, so a pool that is down is seen in its containers'
+own health, not here ([Operations](operations.md#agent-browser-pool)), and a mailbox that
+cannot be read is seen as the `inbox` call's reason
+([Agent Mailbox](operations.md#agent-mailbox)). Degraded state remains HTTP 200.
 
 `GET /ready` checks only the authority required to durably admit and coordinate
 Runs: Application Operational State plus the injected writable Operational

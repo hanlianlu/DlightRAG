@@ -423,6 +423,14 @@ _Avoid_: browser session, browsing session, context (in prose)
 The port that leases a Run's browser endpoint. It is an ordinary adapter boundary with one implementation, a pool of Playwright run-servers; see [Architecture](architecture.md#agent-browser) for when a lease is live.
 _Avoid_: Connection provider, browser service, MCP server
 
+**Agent Account**:
+An account the Agent registered on a third-party site under its own identity. DlightRAG generates its password, fills it by ref, and seals it under the deployment key ring; a parent's account persists for its owner, a Child's lasts for its Run.
+_Avoid_: owner account, saved login, browser profile
+
+**Agent Mailbox**:
+An optional deployment capability that delivers mail sent to Agent aliases, read from an S3-compatible bucket the deployment fills. Mail is untrusted context, never Evidence.
+_Avoid_: inbox provider, temporary mail
+
 **Agent Skill**:
 A progressively disclosed `SKILL.md` package discovered from packaged built-ins, the operator-global root, or one owner's published skills. Precedence is built-in, then global, then owner. Metadata is projected first; the framework reads contained references only through `load_skill` and never executes Skill code. What an Agent's own processes may read is the roots the capability declares to the Execution Environment (ADR 0024): the operator-global root and the Run owner's own shard, never the shared parent and never a sibling owner's. Users write their own skills only through the validated `publish_skill` tool.
 _Avoid_: owner Profile Memory, marketplace plugin, arbitrary extension
