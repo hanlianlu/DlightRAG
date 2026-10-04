@@ -227,7 +227,9 @@ run-local registry may include:
 
 - knowledge-base, resource, and optional provider-neutral public Web tools;
 - the `browser` tool, when the deployment configures an [Agent Browser](#agent-browser);
-- rooted file/Bash tools when execution is enabled;
+- rooted file/Bash tools when execution is enabled, among them
+  [`materialize`](resource-reading.md#materialize), which copies a Resource into the
+  Workspace;
 - Profile Memory tools for the parent (children recall only);
 - progressive `load_skill`, plus `publish_skill`/`delete_skill` for the parent;
 - the tools of every enabled
@@ -638,7 +640,7 @@ emits them. Timeout or failure leaves original sources unchanged.
 ## Answer Attachments And Resources
 
 Attachments, caller links, Web Search results, and URLs the Agent chooses become
-Resources of one Answer Run, which Research reads as bounded text and views as
-pixels; they never become corpus data.
+Resources of one Answer Run, which Research reads as bounded text, views as pixels,
+and, with execution enabled, copies into its Workspace; they never become corpus data.
 [Answer Resource Reading and Viewing](resource-reading.md) owns that contract,
 and their blobs follow [Run retention](run-runtime.md#retention).

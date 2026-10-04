@@ -1,15 +1,16 @@
 # Answer Resource Reading and Viewing
 
-This document owns how an Answer Run reads and views its Resources: the `read`
-and `view` tools, extraction status and visual discovery, conversion routes,
-conversion snapshots, and adoption of an earlier Run's Resources. Public URL
-admission follows [ADR 0005](adr/0005-public-web-resource-acquisition.md), a page
-read as a browser renders it follows
-[ADR 0032](adr/0032-the-agent-browser.md), stored bytes share one read surface under
-[ADR 0016](adr/0016-one-run-resource-read-surface.md), and adoption follows
+This document owns how an Answer Run reads, views, and copies its Resources: the
+`read`, `view`, and `materialize` tools, extraction status and visual discovery,
+conversion routes, conversion snapshots, and adoption of an earlier Run's Resources.
+Public URL admission follows [ADR 0005](adr/0005-public-web-resource-acquisition.md),
+a page read as a browser renders it follows
+[ADR 0032](adr/0032-the-agent-browser.md), a copy into the Agent Workspace follows
+[ADR 0033](adr/0033-resource-materialization.md), stored bytes share one read surface
+under [ADR 0016](adr/0016-one-run-resource-read-surface.md), and adoption follows
 [ADR 0013](adr/0013-lineage-adoption-of-earlier-run-resources.md).
 [Domain Language](domain-language.md) defines Resource Handle, Web Resource,
-Rendered Read, Browser Capture, and Blob.
+Rendered Read, Browser Capture, Resource Materialization, and Blob.
 
 ## Scope
 
@@ -85,6 +86,50 @@ Rendered Read, Browser Capture, and Blob.
   page can reach the model downscaled. An overview stops early when the budget
   runs out, and a view that can attach nothing fails without pixels. A model
   without image support cannot view.
+
+### `materialize`
+
+- Takes a `resource_id` and a workspace `path`, and writes the bytes the Resource
+  admitted to that path, byte for byte, so a process the Agent runs can open the file
+  itself: `read` returns a text view, which for a CSV collapses a line break inside a
+  cell, and `bash` cannot reach a Resource at all. It is declared only with execution
+  `trust`, beside `write`, and every Child holds it by default
+  ([ADR 0033](adr/0033-resource-materialization.md)). Nothing copies a Resource unless
+  the Agent asks.
+- What copies: an upload, a lazily held one loading as its first read would and
+  spending what that read spends; a Web Resource's snapshot, which is the hosted Extract
+  text when the fetch failed and that text became the snapshot; a browser download; a
+  capture's HTML ([Browser captures and downloads](#browser-captures-and-downloads));
+  and an adopted Resource. Conversion state does not matter: bytes whose conversion
+  failed or was refused for safety copy as any others do, because a copy converts
+  nothing.
+- It never fetches, renders, or converts. A Web Resource that holds no snapshot, such as
+  a search link or a URL nothing has read, is refused, and the refusal names the `read`
+  that acquires it. One that holds only a rendering is refused too, and the refusal
+  names the `browser` call that captures the page: a rendering is a representation
+  appended to the Resource ([Rendered reads](#rendered-reads)), not bytes the Resource
+  admitted, and a capture is how a rendered page becomes a Resource with bytes of its
+  own. A Resource that holds a snapshot and a rendering copies the snapshot.
+- A handle resolves as it does for `read` and `view`, aliases included, and an earlier
+  turn's handle is adopted first as `view` adopts one ([Earlier Runs](#earlier-runs)): a
+  copy needs only the bytes, so no stored conversion view is required, and the adoption
+  spends this Run's attachment allowance. An unknown handle gets the one refusal `read`
+  and `view` give.
+- It is accounted as `write` is. The path is rooted in the workspace and never reaches
+  through a symbolic link, the workspace integrity latch refuses it, it holds its path
+  through the same access scheduler, the workspace quota refuses what does not fit, and
+  it replaces a file already there. The settlement carries the Workspace Inventory fact
+  for the path, with its size, mode, and the SHA-256 of what is on disk, and a copy under
+  `notes/` is a Session Note within that plane's budget. A refusal of the latch or of the
+  path loads and adopts nothing.
+- The copy is work, not a source. The bytes pass through the application process and
+  never enter model context, and the copy admits no Evidence and has no provenance of
+  its own: a citation names the Resource, never the file, and a file the Agent builds
+  from the copy and attaches is a new product with its own provenance.
+- The result is `materialized <resource_id> to <path> (<media type>, <n> bytes)`, naming
+  the Resource's canonical handle. The tool is not read-only, so each call runs alone,
+  and its replay policy is `never`: a call pending at a crash settles its outcome as
+  unknown, and copying again replaces the file.
 
 ## Registration and acquisition
 
@@ -174,7 +219,8 @@ itself.
   survives.
 - **Downloads.** A download is typed by its filename, then by a PDF signature, and is
   otherwise opaque. It becomes Evidence when `read` or `view` reads it, as any Resource
-  does, not when it is admitted.
+  does, not when it is admitted. A process that needs the file itself, a CSV to compute
+  over, takes it with [`materialize`](#materialize).
 - **Handles and settlement.** A handle is minted from the Agent Session, the call, and the
   file's place in the call, so a recovered Run mints the handles it already printed. The
   bytes settle with the call that produced them, in the same transaction as its result:
@@ -421,14 +467,14 @@ completeness for arbitrary documents.
   its model must accept images, and each inherited image is charged once to the
   Run's image budget.
 - Earlier uploads re-registered for a follow-up or fork load their bytes only
-  when read or viewed. A follow-up or fork through the Run API re-registers its
+  when read, viewed, or copied. A follow-up or fork through the Run API re-registers its
   parent Run's uploads and links. A Web follow-up re-registers the uploads of
   the conversation's succeeded turns, newest turn first, up to the attachment
   allowance its own uploads leave.
 - Lineage adoption is on by default (`answer.generation.lineage_adoption`). When
-  `read` or `view` names an unknown handle, the loader looks in the same owner
-  and Agent Session for a retained row with that handle and an adoptable kind: a
-  fetched Web body, a tool attachment, a Published Artifact, or a Resource an
+  `read`, `view`, or `materialize` names an unknown handle, the loader looks in the
+  same owner and Agent Session for a retained row with that handle and an adoptable
+  kind: a fetched Web body, a tool attachment, a Published Artifact, or a Resource an
   earlier turn adopted. Its Blob digest must match. A rendering is not an adoptable
   kind ([Rendered reads](#rendered-reads)).
 - A stored conversion view is checked before anything is registered: it must
@@ -478,9 +524,9 @@ completeness for arbitrary documents.
   view refuses without adopting it, and names the remedy: re-read it from its
   URL or a fresh attachment, or, for a PDF only (by file name or declared type),
   view its pages as pixels. `view` can still adopt such a document for pixels
-  that need no conversion, such as PDF pages, but a later `read` through the
-  earlier handle or this Run's handle refuses the same way, and recovery keeps
-  it so.
+  that need no conversion, such as PDF pages, and `materialize` for its bytes, but a
+  later `read` through the earlier handle or this Run's handle refuses the same way,
+  and recovery keeps it so.
 - Publication stores that view for a convertible Published Artifact. The
   publishing Run converts the product with the converters and limits a read
   uses, mints its image handles as a read would, and records the snapshot and

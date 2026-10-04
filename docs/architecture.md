@@ -144,7 +144,8 @@ the Access boundary before Engine RAG runs.
 ### Answer Resources
 
 Attachments and fetched links become Resources scoped to one Answer Run, read as
-bounded text or viewed as images on demand ([Resource reading](resource-reading.md)).
+bounded text, viewed as images, or, with `trust`, copied into the Agent Workspace, on
+demand ([Resource reading](resource-reading.md)).
 Accepted uploads and settled Web fetches are owner-scoped content-addressed
 blobs, so recovery neither re-fetches nor crosses owners. A Web Resource can also
 hold a page as the [Agent Browser](#agent-browser) rendered it, a second
@@ -156,8 +157,10 @@ Resources never become corpus documents, chunks, vectors, BM25 rows, or KG data.
 
 ### Agent Execution
 
-Agent execution is `disabled` or `trust`. `trust` exposes rooted file tools and
-confines every Agent process to its Agent Workspace: the corpus, the
+Agent execution is `disabled` or `trust`. `trust` exposes rooted file tools, among them
+`materialize`, which copies a Resource's admitted bytes into the Agent Workspace when the
+Agent asks ([ADR 0033](adr/0033-resource-materialization.md)), and confines every Agent
+process to its Agent Workspace: the corpus, the
 deployment's configuration, the project tree, and other Runs' workspaces stay
 outside the process view, while Bash keeps network authority for the deployment
 to enforce ([ADR 0024](adr/0024-the-agent-sees-only-its-workspace.md)). Skills

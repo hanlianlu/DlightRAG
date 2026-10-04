@@ -432,7 +432,7 @@ An owner-bound remote tool invoked through a bounded foreground Streamable-HTTP 
 _Avoid_: Personal Connection, MCP registry, marketplace, OAuth platform
 
 **Agent Workspace**:
-The model-visible filesystem rooted at the active Workspace Epoch's workspace directory. It lives exactly as long as its Run's row: retention removes the tree with the row, and a sweep removes roots whose row is already gone, both guarded by the row rather than by directory age.
+The model-visible filesystem rooted at the active Workspace Epoch's workspace directory. It lives exactly as long as its Run's row: retention removes the tree with the row, and a sweep removes roots whose row is already gone, both guarded by the row rather than by directory age. A Resource is never a file in it until Resource Materialization copies one.
 _Avoid_: Corpus Workspace, working_dir, workspace when it could mean a corpus scope
 
 **Workspace Epoch**:
@@ -442,6 +442,10 @@ _Avoid_: Durable Progress, Fencing Epoch, checkpoint
 **Workspace Inventory**:
 The current Workspace Epoch's path, type, size, and digest observation of an Agent Workspace.
 _Avoid_: Journal Entry, checkpoint, historical epoch listing
+
+**Resource Materialization**:
+Copying a Resource's admitted original bytes into the Agent Workspace with the `materialize` tool, when the Agent asks and only with execution `trust`. The Resource stays the immutable, citable original; the copy is mutable work with no provenance of its own, so a citation names the Resource, never the file. A Web Resource with no snapshot of its own has nothing to copy, because the copy never fetches, renders, or converts. `ResourceRegistry.materialize`, which loads a Resource's bytes into the registry, and lineage adoption are not this term.
+_Avoid_: adoption, re-download, citing a Workspace file
 
 **Session Note**:
 A file the answering agent writes under its Agent Workspace's reserved notes path, outside `artifacts/`, so that work product survives one Run's compaction and the next turn of the same Session reads it. Memory belongs to the Agent Session, not to the Run: one authoritative note set per Session holds each note's bytes, size, digest, revision, and writing Run, and every Run of that Session materializes a working copy of it when it binds and promotes its changes back at Tool settlement under its own lease. A session note therefore outlives the Run that wrote it, and per-Run reclamation cannot take it. The Context Projection names each note by the `read(path=…)` call that reads it again. Memory never fails a Run: a plane that cannot be read, a note the plane refuses for budget, or a promotion that fails is recorded on the Run's trace and the Run proceeds with the working copy it has. A Session Note is never citable, never a second statement of what happened, and never a Memory Record.
