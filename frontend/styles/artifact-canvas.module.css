@@ -1,5 +1,6 @@
 /* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
 
+@layer features {
 /* Canvas-owned media presentation. The player fits the Canvas, and the 70vh
    ceiling is shared with the answer column's other media Artifacts; fullscreen
    belongs to the browser's own controls. */
@@ -11,4 +12,6 @@
     height: auto;
     max-height: 70vh;
     max-width: 100%;
+}
+
 }

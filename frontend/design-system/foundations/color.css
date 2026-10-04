@@ -47,7 +47,7 @@
   --color-danger-surface: rgb(248 113 113 / 15%);
   --color-success: var(--color-green-400);
   --color-success-surface: rgb(74 222 128 / 15%);
-  --color-accent-text: rgb(210 182 97 / 78%);
+  --color-accent-text: var(--color-gold-300);
   --color-accent-indicator: rgb(210 182 97 / 72%);
   --color-accent-border-strong: rgb(210 182 97 / 40%);
   --color-accent-border: rgb(210 182 97 / 38%);
@@ -122,7 +122,7 @@
   --color-success: var(--color-green-700);
   --color-success-surface: rgb(21 128 61 / 14%);
   --color-on-danger: #fff;
-  --color-accent-text: rgb(126 108 55 / 85%);
+  --color-accent-text: var(--color-gold-500);
   --color-accent-indicator: rgb(126 108 55 / 78%);
   --color-accent-border-strong: rgb(126 108 55 / 42%);
   --color-accent-border: rgb(126 108 55 / 38%);

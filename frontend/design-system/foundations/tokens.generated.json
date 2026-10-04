@@ -115,10 +115,10 @@
   },
   "color-accent-text": {
     "$type": "color",
-    "$value": "rgb(210 182 97 / 78%)",
+    "$value": "{color-gold-300}",
     "$extensions": {
       "org.dlightrag.modes": {
-        "light": "rgb(126 108 55 / 85%)"
+        "light": "{color-gold-500}"
       }
     }
   },

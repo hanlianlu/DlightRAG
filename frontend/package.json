@@ -19,7 +19,7 @@
     "check:icons": "node scripts/generate-icons.mjs --check",
     "check:tokens": "node scripts/generate-tokens.mjs --check",
     "check:generated": "npm run check:icons && npm run check:tokens",
-    "test:browser:cross-engine": "WTR_BROWSERS=chromium,firefox,webkit web-test-runner design-system/testing/design-system.browser.test.ts --config web-test-runner.config.mjs"
+    "test:browser:cross-engine": "WTR_BROWSERS=chromium,firefox,webkit web-test-runner design-system/testing/design-system.browser.test.ts --config web-test-runner.config.mjs --group default"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.14",
