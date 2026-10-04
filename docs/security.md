@@ -149,9 +149,9 @@ routes also require exact same-origin `Origin` and a double-submit
 `dlightrag_web_csrf` cookie echoed as `X-CSRF-Token`; a refused request gets
 403 in the shared error envelope with `error_kind: "cross_origin_rejected"`. A
 proxy that does not forward the browser's `Host` refuses every write this way.
-With `auth_mode: none` the check covers the routes that hold a credential or an
-owner's Settings state, `/web/api/connections/mcp` and `/web/api/agent-accounts`,
-and the video-playback resolver, and no other Web route.
+With `auth_mode: none` the check covers only the Connections routes
+(`/web/api/connections/mcp`), the Agent Accounts routes (`/web/api/agent-accounts`), and the
+video-playback resolver (`/web/api/video-playback`), and no other Web route.
 
 ### Entra Example
 
@@ -605,15 +605,14 @@ at all.
   The Settings routes list an owner's accounts by site, identity, and two dates, and return
   no envelope, key id, or account id either; no route edits an account.
 - **The owner and the deployment bound registration.** `register` is offered only to a Run
-  whose deployment allows it (`account_registration`) and whose owner's switch for new
-  sign-ups was on when the Run was accepted, so an owner who does not want the Agent to open
-  accounts in their name turns that off, and the deployment's setting is a ceiling no switch
-  exceeds. The Run keeps what it was accepted with, and the allowance is read again at
-  execution. Turning registration off withdraws no account and no `login`: removing an
-  account is the owner's own act in Settings, which deletes the saved sign-in and the sealed
-  password and leaves the account on the site. Both are owner-scoped Web routes, so another
-  owner's account is as unknown to them as one nobody has, and their writes meet the CSRF
-  check above in every authentication mode.
+  whose deployment allows it and whose owner has not turned off the Agent's new sign-ups
+  ([how a Run gets it](retrieval-answer.md#agent-accounts-and-the-agent-mailbox)), so an owner
+  who does not want the Agent to open accounts in their name turns that off, and the
+  deployment's setting is a ceiling no switch exceeds. Turning registration off withdraws no
+  account and no `login`: removing an account is the owner's own act in Settings, which
+  deletes the saved sign-in and the sealed password and leaves the account on the site. Both
+  are owner-scoped Web routes, so another owner's account is as unknown to them as one nobody
+  has, and their writes meet the CSRF check above in every authentication mode.
 - **Filled only into the account's own site.** A password goes only into a password field in
   an `https` frame whose registrable domain, by the pinned Public Suffix List's eTLD+1 with
   its private section, is the account's site, judged by the frame's own address and not the
