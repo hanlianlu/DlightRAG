@@ -318,6 +318,11 @@ class BashArgs(BaseModel):
     )
 
 
+def spill_continuation(resource_id: str) -> str:
+    """The line that tells the model where the rest of an oversized output is kept."""
+    return f"Full output: read(resource_id={resource_id!r}, cursor=...)"
+
+
 async def preview_or_spill(
     text: str,
     *,
@@ -331,12 +336,11 @@ async def preview_or_spill(
     if spill is None:
         raise FullOutputUnavailable("oversized tool result has no spill or cursor backing")
     receipt = await spill(text)
-    resource_id = receipt.resource_id
     excerpt = _utf8_excerpt(text, preview=preview)
     rendered = (
         f"{tool} output exceeded {TOOL_RESULT_MAX_BYTES} UTF-8 bytes or "
         f"{TOOL_RESULT_MAX_LINES} lines ({len(text.encode('utf-8'))} bytes). "
-        f"Full output: read(resource_id={resource_id!r}, cursor=...)\n{excerpt}"
+        f"{spill_continuation(receipt.resource_id)}\n{excerpt}"
     )
     return rendered, receipt
 
@@ -1441,9 +1445,7 @@ def _stream_result(
     if snapshot.truncated and not transient:
         if snapshot.receipt is None:
             raise FullOutputUnavailable("oversized process output has no durable spill backing")
-        receipt = snapshot.receipt
-        resource_id = receipt.resource_id
-        protected = f"Full output: read(resource_id={resource_id!r}, cursor=...)"
+        protected = spill_continuation(snapshot.receipt.resource_id)
         prefix = f"{tool} output required a bounded continuation. {protected}\n"
     body = _compose_bounded_process_result(
         prefix=prefix,
@@ -1647,6 +1649,7 @@ __all__ = [
     "ls_tool",
     "preview_or_spill",
     "read_tool",
+    "spill_continuation",
     "within_result_bounds",
     "workspace_integrity_refusal",
     "write_tool",

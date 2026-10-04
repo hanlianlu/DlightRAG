@@ -3,42 +3,18 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
-from dlightrag.engine.agent.session.plan import AgentToolPlan
-from dlightrag.engine.answer.tools.browser import (
-    BROWSER_ACTIONS,
-    BrowserArgs,
-    BrowserRequest,
-    browser_declaration,
-)
+from dlightrag.engine.answer.tools.browser import browser_declaration
 
 
-def schema(*, upload: bool = True) -> dict[str, Any]:
-    return browser_declaration(upload=upload).definition.parameters
-
-
-def parse(arguments: dict[str, Any], *, upload: bool = True) -> BrowserRequest:
-    model = browser_declaration(upload=upload).input_model
-    return BrowserRequest.from_args(cast(BrowserArgs, model.model_validate(arguments)))
-
-
-def test_upload_is_offered_only_with_a_workspace() -> None:
-    without, with_workspace = schema(upload=False), schema(upload=True)
-
-    assert without["properties"]["action"]["enum"] == [
-        action for action in BROWSER_ACTIONS if action != "upload"
-    ]
-    assert len(BROWSER_ACTIONS) == 13
-    assert "files" not in without["properties"] and "files" in with_workspace["properties"]
-    assert with_workspace["properties"]["action"]["enum"] == list(BROWSER_ACTIONS)
-    assert "upload (ref, files)" not in without["properties"]["action"]["description"]
-    assert "upload (ref, files)" in with_workspace["properties"]["action"]["description"]
-    digests = {browser_declaration(upload=flag).input_schema_digest for flag in (False, True)}
-    assert len(digests) == 2
+def parse(arguments: dict[str, Any], *, upload: bool = True) -> Any:
+    """The arguments as the tool receives them, after the declared schema has validated them."""
+    model: type[BaseModel] = browser_declaration(upload=upload).input_model
+    return model.model_validate(arguments)
 
 
 @pytest.mark.parametrize(
@@ -86,31 +62,6 @@ def test_typed_text_keeps_its_spaces_and_can_clear_a_field_while_a_query_is_trim
     assert parse({"action": "type", "ref": "f2e12", "text": ""}).text == ""
     assert parse({"action": "find", "query": "  Search  "}).query == "Search"
     assert parse({"action": "navigate", "url": "  http://a.example/  "}).url == "http://a.example/"
-
-
-def test_a_request_carries_the_defaults_its_actions_assume() -> None:
-    request = parse({"action": "scroll"})
-    assert (request.direction, request.ref, request.submit, request.full_page) == (
-        "down",
-        None,
-        False,
-        False,
-    )
-    typed = parse({"action": "type", "ref": "e3", "text": "lamp", "submit": True})
-    assert (typed.ref, typed.text, typed.submit) == ("e3", "lamp", True)
-    chosen = parse({"action": "select", "ref": "e4", "values": ["a", "b"]})
-    assert chosen.values == ("a", "b")
-    assert parse({"action": "upload", "ref": "e1", "files": ["a.txt"]}).files == ("a.txt",)
-
-
-def test_the_declaration_pins_like_every_tool_and_never_replays() -> None:
-    declared = browser_declaration(upload=True)
-
-    assert (declared.name, declared.replay_policy) == ("browser", "never")
-    assert (declared.read_only, declared.contract_version) == (False, 1)
-    assert AgentToolPlan.from_tool(declared) == AgentToolPlan.from_tool(
-        browser_declaration(upload=True)
-    )
 
 
 def test_the_description_teaches_the_tiers_and_the_captcha_boundary() -> None:

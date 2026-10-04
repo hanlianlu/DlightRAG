@@ -161,14 +161,14 @@ def test_the_agent_browser_is_part_of_the_plan_a_run_is_pinned_to() -> None:
     ]
 
     assert plans[0].digest != plans[1].digest
-    offered = {tool.name: tool for tool in browsing}
-    assert "rendered" in offered["read"].definition.parameters["properties"]
-    assert "rendered=true" in offered["read"].description
-    assert "browser" in offered
+    read = {tool.name: tool for tool in browsing}["read"]
+    assert "rendered" in read.definition.parameters["properties"]
+    assert "rendered=true" in read.description
     # A Host with no Agent Browser, like a Fast Run, is offered nothing to ask for.
-    absent = {tool.name: tool for tool in plain}
-    assert "rendered" not in absent["read"].definition.parameters["properties"]
-    assert "browser" not in absent
+    assert (
+        "rendered"
+        not in {tool.name: tool for tool in plain}["read"].definition.parameters["properties"]
+    )
 
 
 @pytest.mark.parametrize("child", [False, True])

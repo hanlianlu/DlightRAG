@@ -155,4 +155,4 @@ def _note_navigation(page: Page, response: Response, statuses: list[int]) -> Non
         statuses.append(status)
 
 
-__all__ = ["PlaywrightLeasedBrowser", "new_agent_context"]
+__all__ = ["PlaywrightLeasedBrowser"]

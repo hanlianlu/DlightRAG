@@ -52,6 +52,7 @@ from dlightrag.engine.agent.tools.files import (
     ResourceReadRequest,
     SpillWriter,
     head_excerpt,
+    spill_continuation,
     within_result_bounds,
     workspace_integrity_refusal,
 )
@@ -731,7 +732,12 @@ class _Call:
         ]
 
     async def _bounded(self, report: str, snapshot: str) -> ToolResult:
-        """The report and the snapshot, with the snapshot kept in full when it is too big."""
+        """The report and the snapshot, with the snapshot kept in full when it is too big.
+
+        This is not ``preview_or_spill``: the frame and the notes of the call always reach
+        the model whole, only the snapshot is kept and cut to its head, and a Run that cannot
+        keep it still reports the action as completed rather than as a failure.
+        """
         whole = "\n".join((report, snapshot))
         if within_result_bounds(whole):
             return ToolResult.text(whole)
@@ -741,7 +747,7 @@ class _Call:
             # The action completed, so this is not a failure: reporting one would invite a
             # repeat, a second submit among them, and the head carries refs to act on.
             return ToolResult.text("\n".join((report, UNAVAILABLE.format(**bounds), excerpt)))
-        protected = f"Full output: read(resource_id={receipt.resource_id!r}, cursor=...)"
+        protected = spill_continuation(receipt.resource_id)
         notice = SPILLED.format(size=len(snapshot.encode("utf-8")), **bounds)
         return ToolResult.text(
             "\n".join((report, notice, excerpt, protected)),
@@ -772,12 +778,4 @@ def _label(url: str | None) -> str:
     return f"{parts.hostname or ''}{parts.path}"
 
 
-__all__ = [
-    "BROWSER_ACTIONS",
-    "BrowserArgs",
-    "BrowserRequest",
-    "BrowserToolHost",
-    "browser_declaration",
-    "browser_input_model",
-    "browser_tool",
-]
+__all__ = ["BrowserToolHost", "browser_declaration", "browser_tool"]

@@ -32,6 +32,7 @@ from dlightrag.engine.agent.tools.files import (
     preview_or_spill,
     read_declaration,
     read_tool,
+    spill_continuation,
     view_declaration,
     view_tool,
     write_declaration,
@@ -350,7 +351,7 @@ def _bounded_injected_result(tool: AgentTool, spill: SpillWriter | None) -> Agen
         return replace(
             result,
             parts=(ToolTextPart(text), *tool_content_attachments(result.parts)),
-            protected_text=f"Full output: read(resource_id={receipt.resource_id!r}, cursor=...)",
+            protected_text=spill_continuation(receipt.resource_id),
             effects=replace(
                 result.effects, committed_outputs=(*result.effects.committed_outputs, receipt)
             ),
