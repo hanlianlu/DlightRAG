@@ -425,13 +425,26 @@ it has no browser.
 
 ### Agent Accounts And The Agent Mailbox
 
-A Run whose deployment allows Agent Accounts (`answer.agent.browser.account_registration`,
-on by default) offers `register` and `login`, and one that also configures an Agent Mailbox
-offers `inbox` ([ADR 0034](adr/0034-agent-accounts-and-the-agent-mailbox.md); what keeps a
-password from the model is in [Security](security.md#agent-accounts)). An Agent Session acts
-as an identity of its own: the tool's description says never to type the owner's details into
-a form, and that DlightRAG makes every password and fills it by ref. Turning accounts off
-withdraws both actions together, and a Run accepted with them is pinned to them.
+A Run with an Agent Browser offers `login`, and `inbox` when the deployment also configures
+an Agent Mailbox; it offers `register` only if it may register
+([ADR 0034](adr/0034-agent-accounts-and-the-agent-mailbox.md); what keeps a password from the
+model is in [Security](security.md#agent-accounts)). An Agent Session acts as an identity of
+its own: the tool's description says never to type the owner's details into a form, and that
+DlightRAG makes every password and fills it by ref.
+
+A Run may register when the deployment allows it
+([`account_registration`](configuration.md#agent-browser), on by default) and its owner's
+switch for new sign-ups, which is on until the owner turns it off in Settings, was on when the
+Run was accepted. Acceptance reads the switch once, as it reads the Profile Memory
+capability, pins the answer in the Run's prepared input, and plans the browser tool with it,
+so the accepted plan and the tools the Run executes agree, and what the owner switches
+afterwards changes no Run already accepted. A Run accepted before the switch existed has the
+deployment's allowance. The allowance stays the ceiling and is read again at execution: a Run
+pinned to register under one since withdrawn is composed without `register` and refused as
+incompatible, like any Run whose tools changed. A Child's tools follow its parent's, and a
+Child's registration still lasts for the Run alone. A Run that cannot register is told of no `register`:
+the tool's description, its action lines and argument descriptions, and the sentence of a
+refusal name only the actions the Run has, and an `inbox` window opens at a `login`.
 
 - **`register`** acts on the page `navigate` opened and leases nothing. It takes
   `password_refs` (one or two, such as a password and its confirmation), and optionally
@@ -456,7 +469,11 @@ withdraws both actions together, and a Run accepted with them is pinned to them.
   account this site has for the Session: a Child's own Run-scoped account first, else the
   owner's. It opens the password's envelope only when a password field is named, and
   refuses an account that lacks the field named, or whose envelope no key opens, with the
-  site's reset path.
+  site's reset path where the Run may register. Once it has filled an owner's account it
+  records the time as the account's last use, which Settings shows, whichever Session logged
+  in: a Child's login with the owner's account records it, and a Child's own account, which
+  lives in the worker's memory, has none. A store that cannot record it is logged and does not
+  fail the login.
 - **What a result says.** Both end like any action that changes the page: the frame, its
   notes, then a sentence (the account recorded or reset, with `for this owner's later Runs`
   or `for this Run only (a Child Session's account)`, and for a mailbox alias a pointer to `inbox`;
@@ -469,20 +486,21 @@ withdraws both actions together, and a Run accepted with them is pinned to them.
   account that could not be stored, which does the same and tells the model not to submit;
   no account for the site, or one without the field named; and an envelope no key opens.
 - **`inbox`** needs no page and no lease. It shows mail that the mailbox aliases of this
-  Agent Session's accounts received since its latest `register` or `login` in the Run, from
-  two minutes before it, because the time is the bucket's own clock; the Session's other
-  mailbox aliases in the Run stay in the window. Before either action it says so, and so it
-  does for accounts with no mailbox alias, an address the Agent typed being none. It shows
-  the newest five messages of its mailbox aliases, each with its time, mailbox alias, sender,
-  subject, up to four links, and up to five codes, says how many more there were, and says
-  when a mailbox alias holds more than a listing reads
-  ([the bucket's contract](configuration.md#agent-mailbox)). A link over 2,048 characters or
-  beyond the first four is only counted. A code is a token of four to nine characters that
-  looks like one. A message over 1 MiB is listed and not read, and one that cannot be parsed
-  is listed as such. An empty window is not an error: the result says mail can take a minute
-  and to call `inbox` again after a `wait`. A bucket that cannot be read is reported by its
-  error code alone ([Operations](operations.md#agent-mailbox)). Mail is untrusted context,
-  and a link in it is followed with `navigate` ([Security](security.md#agent-accounts)).
+  Agent Session's accounts received since its latest `register` or `login` in the Run (`login`
+  alone where the Run cannot register), from two minutes before it, because the time is the
+  bucket's own clock; the Session's other mailbox aliases in the Run stay in the window.
+  Before either action it says so, and so it does for accounts with no mailbox alias, an
+  address the Agent typed being none. It shows the newest five messages of its mailbox
+  aliases, each with its time, mailbox alias, sender, subject, up to four links, and up to
+  five codes, says how many more there were, and says when a mailbox alias holds more than a
+  listing reads ([the bucket's contract](configuration.md#agent-mailbox)). A link over 2,048
+  characters or beyond the first four is only counted. A code is a token of four to nine
+  characters that looks like one. A message over 1 MiB is listed and not read, and one that
+  cannot be parsed is listed as such. An empty window is not an error: the result says mail
+  can take a minute and to call `inbox` again after a `wait`. A bucket that cannot be read
+  is reported by its error code alone ([Operations](operations.md#agent-mailbox)). Mail is
+  untrusted context, and a link in it is followed with `navigate`
+  ([Security](security.md#agent-accounts)).
 - **Subjects and recovery.** `register` and `login` name the page they act on, as the other
   actions do, and `inbox` names its mailbox aliases. A recovered Run has no Run-scoped
   account, no window, and no page, as it has no browser; the owner's accounts are intact, and
