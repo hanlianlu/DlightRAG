@@ -444,7 +444,10 @@ withdraws both actions together, and a Run accepted with them is pinned to them.
   that `login` will fail with, and so does a password the site rejected.
 - **A password reset is a registration.** `register` on a form of a site whose account
   exists gives the account a new password, keeps its account id and address, and replaces its
-  envelope. That is also how an account recovers when no key opens its envelope.
+  envelope. That is also how an account recovers when no key opens its envelope: `login` with
+  `email_ref` alone, on the site's reset request form, fills the account's address and opens
+  the `inbox` window, the reset mail's link opens with `navigate`, and `register` on the reset
+  form seals a new password.
 - **`login`** takes any of `email_ref`, `username_ref`, and `password_refs`, and fills the
   account this site has for the Session: a Child's own Run-scoped account first, else the
   owner's. It opens the password's envelope only when a password field is named, and

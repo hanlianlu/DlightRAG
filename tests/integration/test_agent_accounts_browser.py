@@ -39,6 +39,7 @@ from dlightrag.engine.answer.agent_browser import (
     RunAgentAccounts,
     RunAgentBrowser,
     StoredAgentAccount,
+    generate_password,
     owner_alias,
 )
 from dlightrag.engine.answer.resources.registry import (
@@ -103,6 +104,13 @@ SIGNIN = page(
 <input aria-label="Password" name="password" type="password">
 <button type="submit">Sign in</button></form>""",
 )
+# The form that asks a site to mail a password-reset link.
+FORGOT = page(
+    "Forgot",
+    """<form action="/sent" method="post">
+<input aria-label="Email" name="email" type="email">
+<button type="submit">Send reset mail</button></form>""",
+)
 # A page that mirrors what is typed into its password fields into its own attributes, title,
 # links and dialogs, and submits one of them with GET: every way a driver or a page prints a value.
 MIRROR = page(
@@ -139,6 +147,9 @@ EMBED = page(
 PAGES = {
     f"{SHOP}/signup": signup(),
     f"{SHOP}/signin": SIGNIN,
+    f"{SHOP}/forgot": FORGOT,
+    f"{SHOP}/sent": page("Sent", "<p>Check your mail</p>"),
+    f"{SHOP}/reset?token=abc123": signup(),
     f"{SHOP}/mirror": MIRROR,
     f"{SHOP}/toggle": TOGGLE,
     f"{SHOP}/embed": EMBED,
@@ -754,7 +765,7 @@ async def test_login_fills_the_stored_account_in_a_fresh_session(tmp_path: Path)
         assert_sent(fields, password, "password")
 
 
-async def test_login_says_what_the_account_lacks_and_what_the_deployment_cannot_open(
+async def test_login_says_what_the_account_lacks_and_that_a_deployment_without_a_ring_has_none(
     tmp_path: Path,
 ) -> None:
     async with browsing(tmp_path) as web:
@@ -778,16 +789,6 @@ async def test_login_says_what_the_account_lacks_and_what_the_deployment_cannot_
             "The Agent Account for example.com has no email address; use username_ref instead."
         )
         store = web.store
-
-    async with browsing(tmp_path, store=store, keyring=OTHER_KEYRING) as lost:
-        signin = await lost.form(f"{SHOP}/signin")
-        unreadable = await lost.call(action="login", password_refs=[signin["password"]])
-        assert unreadable.is_error and unreadable.text_content == (
-            "The stored password for example.com can no longer be opened. Recover the account "
-            f"with the site's password reset: request the reset mail for {HANDLE}, open its link "
-            "with navigate, and call register on the reset form."
-        )
-        assert not lost.run.filled_passwords("parent")
 
     async with browsing(tmp_path, store=store, keyring=None) as keyless:
         signin = await keyless.form(f"{SHOP}/signin")
@@ -1017,3 +1018,56 @@ async def test_inbox_says_why_it_has_nothing_to_show(
             assert not any(
                 secret in seen for secret in (locked.endpoint, "fixture-key", "fixture-secret")
             )
+
+
+async def test_an_account_whose_key_is_lost_recovers_through_its_reset_mail(
+    tmp_path: Path, no_proxy: None
+) -> None:
+    alias, link = owner_alias(OWNER, SITE, DOMAIN), f"{SHOP}/reset?token=abc123"
+    # An earlier Run registered with the owner's alias under a ring that this deployment no
+    # longer has.
+    key_id, envelope = CredentialCipher(SecretStr(KEYRING)).seal(
+        generate_password(), label=ACCOUNT_LABEL, binding=(OWNER, SITE, "account")
+    )
+    store = MemoryAccountStore()
+    store.rows[(OWNER, SITE)] = StoredAgentAccount(
+        OWNER, SITE, "account", alias, None, key_id, envelope
+    )
+    async with s3_stub({}, bucket="mailbox") as bucket:
+        mailbox = bucket_mailbox(bucket)
+        async with browsing(tmp_path, store=store, keyring=OTHER_KEYRING, mailbox=mailbox) as web:
+            signin = await web.form(f"{SHOP}/signin")
+            unreadable = await web.call(
+                action="login", email_ref=signin["email"], password_refs=[signin["password"]]
+            )
+            assert unreadable.is_error and unreadable.text_content == (
+                "The stored password for example.com can no longer be opened. Recover the account "
+                "with the site's password reset: on its reset request form, call "
+                'browser(action="login", email_ref=...) without password_refs to fill the '
+                "account's address, submit it, read the reset mail with inbox, open its link "
+                "with navigate, and call register on the reset form."
+            )
+            assert not web.run.filled_passwords("parent")
+
+            # The path it names: login fills the address alone and opens the inbox window.
+            forgot = await web.form(f"{SHOP}/forgot")
+            filled = await web.call(action="login", email_ref=forgot["email"])
+            assert not filled.is_error, filled.text_content
+            await web.call(action="click", ref=forgot["button"])
+            assert posted(web.proxy, "/sent")["email"] == [alias]
+            bucket.objects[f"mail/{alias}/reset.eml"] = delivered(
+                0, mail(f"Reset your password at {link}", subject="Password reset")
+            )
+            arrived = await web.call(action="inbox")
+            assert f"   link: {link}" in arrived.text_content
+
+            # Its link opens the reset form, where register gives the same account a password the
+            # deployment's ring seals.
+            reset = await web.form(link)
+            replaced = await web.call(
+                action="register", password_refs=[reset["password"], reset["confirm"]]
+            )
+            assert not replaced.is_error, replaced.text_content
+            (row,) = web.rows
+            assert (row.account_id, row.key_id) == ("account", "next")
+            web.stored_password()

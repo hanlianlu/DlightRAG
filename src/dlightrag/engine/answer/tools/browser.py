@@ -480,8 +480,9 @@ NO_EMAIL = "The Agent Account for {site} has no email address; use username_ref 
 NO_USERNAME = "The Agent Account for {site} has no username; use email_ref instead."
 UNREADABLE = (
     "The stored password for {site} can no longer be opened. Recover the account with the "
-    "site's password reset: request the reset mail for {identity}, open its link with navigate, "
-    "and call register on the reset form."
+    'site\'s password reset: on its reset request form, call browser(action="login", '
+    "email_ref=...) without password_refs to fill the account's address, submit it, read the "
+    "reset mail with inbox, open its link with navigate, and call register on the reset form."
 )
 RECORDED = (
     "Recorded the Agent Account {identity} for {site}{whose} and filled its generated password "
@@ -921,9 +922,7 @@ class _Call:
             try:
                 password = accounts.password(account)
             except UnreadableEnvelope:
-                return ToolResult.text(
-                    UNREADABLE.format(site=site, identity=account.identity), is_error=True
-                )
+                return ToolResult.text(UNREADABLE.format(site=site), is_error=True)
             fills.extend(CredentialFill(ref, "password", password) for ref in request.password_refs)
             filled.append(f"{len(request.password_refs)} password field(s)")
         observation = await page.fill_credentials(tuple(fills), site=site)
