@@ -9,7 +9,8 @@ from typing import Any
 
 from dlightrag.adapters.postgres.core._migrations import TableRequirement
 from dlightrag.adapters.postgres.core._operations import ConnectionPool, PostgresOperationRunner
-from dlightrag.engine.answer.agent_browser import AgentAccountSummary, StoredAgentAccount
+from dlightrag.application.agent_accounts import AgentAccountSummary
+from dlightrag.engine.answer.agent_browser import StoredAgentAccount
 
 # ``updated_at`` is the last time the owner's credentials changed, ``created_at`` the first
 # registration, which a reset keeps, and ``last_used_at`` the last login that filled them.
@@ -166,7 +167,8 @@ def _stored(row: Any) -> StoredAgentAccount:
 
 
 class PGAgentAccountStore(PostgresOperationRunner):
-    """Each owner's Agent Accounts, one row per site."""
+    """Each owner's Agent Accounts, one row per site: what the Agent reads and keeps of them
+    (``AgentAccountStore``), and what Settings lists and removes (``AgentAccountDirectory``)."""
 
     def __init__(self, *, pool: ConnectionPool | None = None) -> None:
         super().__init__(pool=pool)

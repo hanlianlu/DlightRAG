@@ -22,11 +22,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from dlightrag.application.errors import ApplicationInputError, ApplicationNotFoundError
-from dlightrag.engine.answer.agent_browser import (
-    AgentAccountStore,
-    AgentAccountSummary,
-    reseal_agent_accounts,
-)
+from dlightrag.engine.answer.agent_browser import AgentAccountStore, reseal_agent_accounts
 from dlightrag.engine.credential_cipher import CredentialCipher
 
 logger = logging.getLogger(__name__)
@@ -37,6 +33,34 @@ _MAINTENANCE_SECONDS = 60.0
 #: What names an account: the registrable domain of its site, in lowercase.
 _SITE = re.compile(r"[a-z0-9_-]{1,63}(\.[a-z0-9_-]{1,63})*")
 _SITE_MAX_CHARS = 253
+
+
+@dataclass(frozen=True, slots=True)
+class AgentAccountSummary:
+    """What Settings shows an owner of one of their accounts: where it is, who it is there, and
+    when it was registered and last signed in. It holds nothing of the password, its envelope,
+    the key that sealed it, or the account's id."""
+
+    site: str
+    email: str | None
+    username: str | None
+    created_at: datetime.datetime
+    """When the owner's account on the site was first registered, which a reset keeps."""
+    last_used_at: datetime.datetime | None
+    """When a login last filled its stored credentials, or None before the first one."""
+
+
+class AgentAccountDirectory(Protocol):
+    """An owner's accounts as Settings lists and removes them. The Agent never does either, so
+    the engine's own port for accounts has neither."""
+
+    async def summaries(self, *, owner_id: str) -> tuple[AgentAccountSummary, ...]:
+        """Every account the owner has, in the order of their sites."""
+        ...
+
+    async def delete(self, *, owner_id: str, site: str) -> bool:
+        """Remove the owner's account on ``site``; whether there was one."""
+        ...
 
 
 class AgentAccountSettingsStore(Protocol):
@@ -102,12 +126,12 @@ class AgentAccounts:
     def __init__(
         self,
         *,
-        store: AgentAccountStore,
+        directory: AgentAccountDirectory,
         settings_store: AgentAccountSettingsStore,
         available: bool,
         registration_allowed: bool,
     ) -> None:
-        self._store = store
+        self._directory = directory
         self._settings = settings_store
         self._available = available
         self._registration_allowed = registration_allowed
@@ -120,7 +144,7 @@ class AgentAccounts:
                 enabled=await self._settings.sign_ups_enabled(owner_id=owner_id),
             ),
             accounts=tuple(
-                _view_of(summary) for summary in await self._store.summaries(owner_id=owner_id)
+                _view_of(summary) for summary in await self._directory.summaries(owner_id=owner_id)
             ),
         )
 
@@ -141,7 +165,7 @@ class AgentAccounts:
         to remove, so it is as unknown as one nobody has."""
         if len(site) > _SITE_MAX_CHARS or _SITE.fullmatch(site) is None:
             raise ApplicationInputError("site must be a lowercase hostname")
-        if not await self._store.delete(owner_id=owner_id, site=site):
+        if not await self._directory.delete(owner_id=owner_id, site=site):
             raise ApplicationNotFoundError("This owner has no Agent Account for that site")
         return await self.view(owner_id=owner_id)
 
@@ -183,8 +207,10 @@ class AgentAccountMaintenance:
 
 
 __all__ = [
+    "AgentAccountDirectory",
     "AgentAccountMaintenance",
     "AgentAccountSettingsStore",
+    "AgentAccountSummary",
     "AgentAccountView",
     "AgentAccounts",
     "AgentAccountsView",

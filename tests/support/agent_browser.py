@@ -26,16 +26,17 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from playwright.async_api import Browser, async_playwright
 
 from dlightrag.adapters.agent_browser.leased_browser import PlaywrightLeasedBrowser
+from dlightrag.application.agent_accounts import AgentAccountDirectory, AgentAccountSummary
 from dlightrag.engine.agent.tools import ToolResult, ToolRuntime
 from dlightrag.engine.agent.tools.files import ResourceReadRequest
 from dlightrag.engine.answer.agent_browser import (
     AgentAccountsBinding,
-    AgentAccountSummary,
+    AgentAccountStore,
     AgentBrowserError,
     AgentBrowserSettings,
     AgentMailbox,
@@ -507,8 +508,13 @@ class FakeProvider:
         self.closed = True
 
 
+class ListedAccountStore(AgentAccountStore, AgentAccountDirectory, Protocol):
+    """An account store that a test can also read the stored accounts of, as Settings does."""
+
+
 class MemoryAccountStore:
-    """An ``AgentAccountStore`` that keeps its rows in memory, one per owner and site.
+    """An ``AgentAccountStore`` and ``AgentAccountDirectory`` that keep their rows in memory, one
+    per owner and site.
 
     ``created`` holds the time each row was first saved, and ``last_used`` the time a login last
     marked it used, which a row has only once one did.
@@ -639,6 +645,7 @@ __all__ = [
     "FakePage",
     "LaunchRecorder",
     "LaunchedProvider",
+    "ListedAccountStore",
     "MemoryAccountStore",
     "ProxiedRequest",
     "RecordingRenderer",

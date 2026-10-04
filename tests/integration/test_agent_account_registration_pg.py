@@ -90,7 +90,7 @@ async def deployment(allowed: bool) -> AsyncIterator[Deployment]:
             accounts_store, CredentialCipher(None), registration_allowed=allowed
         )
         accounts = AgentAccounts(
-            store=accounts_store,
+            directory=accounts_store,
             settings_store=PGAgentAccountSettingsStore(pool=pool),
             available=True,
             registration_allowed=allowed,

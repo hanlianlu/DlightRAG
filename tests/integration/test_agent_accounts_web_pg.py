@@ -128,7 +128,7 @@ async def deployed(
         app.state.application = application_double(
             config,
             agent_accounts=AgentAccounts(
-                store=accounts,
+                directory=accounts,
                 settings_store=settings,
                 available=available,
                 registration_allowed=registration_allowed,

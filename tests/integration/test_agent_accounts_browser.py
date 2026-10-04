@@ -33,7 +33,6 @@ from dlightrag.engine.answer.agent_browser import (
     ACCOUNT_LABEL,
     PASSWORD_MASK,
     AgentAccountsBinding,
-    AgentAccountStore,
     AgentMailbox,
     BrowserHolder,
     RunAgentAccounts,
@@ -52,6 +51,7 @@ from dlightrag.engine.answer.tools.browser import BrowserToolHost, browser_tool
 from dlightrag.engine.answer.tools.resources import make_resource_reader
 from dlightrag.engine.credential_cipher import CredentialCipher
 from tests.support.agent_browser import (
+    ListedAccountStore,
     MemoryAccountStore,
     Served,
     StubMailbox,
@@ -184,7 +184,7 @@ class Browsing:
     tools: dict[bool, AgentTool]
     run: RunAgentBrowser
     proxy: WebProxy
-    store: AgentAccountStore
+    store: ListedAccountStore
     cipher: CredentialCipher
     admitted: list[tuple[FetchedResourceBytes, ResourceEffectOwner | None]]
     #: The text of every result and live update a call produced: where a password could show.
@@ -317,7 +317,7 @@ def assert_sent(fields: dict[str, list[str]], password: SecretStr, *names: str) 
 async def browsing(
     directory: Path,
     *,
-    store: AgentAccountStore | None = None,
+    store: ListedAccountStore | None = None,
     keyring: str | None = KEYRING,
     mailbox: AgentMailbox | None = None,
     may_register: bool = True,

@@ -461,7 +461,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
 
     accounts = None if agent_browser is None else agent_browser.accounts
     agent_accounts = AgentAccounts(
-        store=agent_account_store,
+        directory=agent_account_store,
         settings_store=PGAgentAccountSettingsStore(),
         available=accounts is not None,
         registration_allowed=registration_allowed,

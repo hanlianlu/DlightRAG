@@ -137,21 +137,6 @@ class ChildAccount:
 type AgentAccount = StoredAgentAccount | ChildAccount
 
 
-@dataclass(frozen=True, slots=True)
-class AgentAccountSummary:
-    """What Settings shows an owner of one of their accounts: where it is, who it is there, and
-    when it was registered and last signed in. It holds nothing of the password, its envelope,
-    the key that sealed it, or the account's id."""
-
-    site: str
-    email: str | None
-    username: str | None
-    created_at: datetime
-    """When the owner's account on the site was first registered, which a reset keeps."""
-    last_used_at: datetime | None
-    """When a login last filled its stored credentials, or None before the first one."""
-
-
 class AgentAccountStore(Protocol):
     """The owner-scoped durable record of Agent Accounts."""
 
@@ -159,14 +144,6 @@ class AgentAccountStore(Protocol):
 
     async def save(self, account: StoredAgentAccount) -> None:
         """Insert the account, or replace the owner's account on that site."""
-        ...
-
-    async def summaries(self, *, owner_id: str) -> tuple[AgentAccountSummary, ...]:
-        """Every account the owner has, in the order of their sites."""
-        ...
-
-    async def delete(self, *, owner_id: str, site: str) -> bool:
-        """Remove the owner's account on ``site``; whether there was one."""
         ...
 
     async def mark_used(self, account: StoredAgentAccount) -> None:
@@ -431,7 +408,6 @@ __all__ = [
     "PASSWORD_LENGTH",
     "AgentAccount",
     "AgentAccountStore",
-    "AgentAccountSummary",
     "AgentAccountsBinding",
     "ChildAccount",
     "RunAgentAccounts",
