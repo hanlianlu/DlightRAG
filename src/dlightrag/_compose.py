@@ -94,6 +94,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.adapters.mcp.oauth import PersonalOAuthClient
     from dlightrag.adapters.mcp.personal_http import PersonalMcpClient
     from dlightrag.adapters.observability import LangfuseTelemetry
+    from dlightrag.adapters.postgres.answer.agent_accounts import PGAgentAccountStore
     from dlightrag.adapters.postgres.answer.memory_settings import PGMemorySettingsStore
     from dlightrag.adapters.postgres.connections import PGConnectionsStore
     from dlightrag.adapters.postgres.corpus.corpus import PGReadinessProbe, build_pg_corpus_backend
@@ -159,7 +160,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     )
     from dlightrag.engine.ai.telemetry import safe_log_text
     from dlightrag.engine.ai.vision import ModelImageCapabilities
-    from dlightrag.engine.answer.agent_browser import AgentBrowserBinding
+    from dlightrag.engine.answer.agent_browser import AgentAccountsBinding, AgentBrowserBinding
     from dlightrag.engine.answer.capabilities import (
         AnswerCapabilityCoordinator,
         AnswerCapabilityView,
@@ -391,14 +392,14 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         ),
         auto_install=agent_config.search_tool_auto_install,
     )
+    # One key ring seals Connection credentials and Agent Account passwords alike.
+    cipher = deployment_cipher(config.working_dir_path / KEYRING_FILE, create=not config.is_reader)
     connections = Connections(
         store=PGConnectionsStore(),
         mcp=PersonalMcpClient(),
         oauth=PersonalOAuthClient(),
         policy=config.answer.agent.connections,
-        cipher=deployment_cipher(
-            config.working_dir_path / KEYRING_FILE, create=not config.is_reader
-        ),
+        cipher=cipher,
     )
 
     browser_settings = agent_browser_settings(config)
@@ -417,6 +418,9 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
                 leases=PGAgentBrowserLeaseStore(),
             ),
             browser_settings,
+            AgentAccountsBinding(PGAgentAccountStore(), cipher)
+            if config.answer.agent.browser.account_registration
+            else None,
         )
 
     answer_executor = AnswerExecutor(

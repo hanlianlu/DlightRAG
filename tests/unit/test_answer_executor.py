@@ -579,6 +579,38 @@ def test_a_deployment_offers_a_rendered_read_exactly_when_it_configures_an_agent
     assert "rendered" not in read_properties(test_config)
 
 
+@pytest.mark.parametrize("registration", [True, False], ids=["allowed", "turned-off"])
+def test_a_deployment_offers_register_and_login_exactly_when_it_allows_agent_accounts(
+    test_config: Any, registration: bool
+) -> None:
+    from dlightrag._compose import _compose
+
+    pool = AgentBrowserConfig(
+        endpoints=("ws://agent-browser-1:3000/",),
+        egress_proxy="http://agent-browser-egress:3128",
+        account_registration=registration,
+    )
+    agent = test_config.answer.agent.model_copy(update={"browser": pool})
+    configured = test_config.model_copy(
+        update={"answer": test_config.answer.model_copy(update={"agent": agent})}
+    )
+
+    def browser_actions(config: Any) -> set[str]:
+        executor = _compose(config).coordinator._executors["answer"]
+        declarations = executor.research_tool_declarations(
+            web_search=False, memory=False, model_guidance="", injected=()
+        )
+        browser = {tool.name: tool for tool in declarations}.get("browser")
+        if browser is None:
+            return set()
+        return set(browser.definition.parameters["properties"]["action"]["enum"])
+
+    accounts = {"register", "login"}
+    assert browser_actions(configured) & accounts == (accounts if registration else set())
+    # A deployment with no Agent Browser has no browser tool, and so no account actions.
+    assert browser_actions(test_config) == set()
+
+
 async def test_a_research_runs_browser_tool_drives_the_browser_it_was_given(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -609,6 +641,51 @@ async def test_a_research_runs_browser_tool_drives_the_browser_it_was_given(
         assert opened.text_content.startswith("[browser: navigate | page: http://a.example/")
         assert provider.leased == 1
     await run_browser.aclose()
+
+
+async def test_a_research_runs_browser_tool_acts_on_the_agent_accounts_it_was_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pydantic import ValidationError
+
+    from dlightrag.engine.answer.agent_browser import (
+        AgentAccountsBinding,
+        BrowserHolder,
+        RunAgentAccounts,
+        RunAgentBrowser,
+    )
+    from dlightrag.engine.answer.resources.registry import ResourceRegistry
+    from dlightrag.engine.credential_cipher import CredentialCipher
+    from tests.support.agent_browser import MemoryAccountStore
+    from tests.tool_helpers import tool_runtime
+    from tests.unit.test_child_model_roles import _prepared_executor
+
+    holder = BrowserHolder("owner", "11111111-1111-1111-1111-111111111111", "worker", 1)
+    # A deployment whose key ring is missing: the account actions are offered, and refuse.
+    keyless = RunAgentAccounts(
+        owner_id="owner", binding=AgentAccountsBinding(MemoryAccountStore(), CredentialCipher(None))
+    )
+
+    async def browser_tool(accounts: RunAgentAccounts | None) -> Any:
+        run_browser = RunAgentBrowser(FakeProvider(), holder, browser_settings())
+        async with ResourceRegistry() as registry:
+            _, orchestrator, *_ = await _prepared_executor(
+                monkeypatch, registry=registry, agent_browser=run_browser, agent_accounts=accounts
+            )
+            return {tool.name: tool for tool in orchestrator.prepare_run("question").tools}[
+                "browser"
+            ]
+
+    with_accounts = await browser_tool(keyless)
+    refused = await with_accounts.execute(
+        with_accounts.input_model.model_validate({"action": "login", "email_ref": "e1"}),
+        tool_runtime(tool_name="browser"),
+    )
+    assert refused.is_error and refused.text_content.startswith("Agent Accounts are unavailable")
+
+    without_accounts = await browser_tool(None)
+    with pytest.raises(ValidationError, match="Input should be"):
+        without_accounts.input_model.model_validate({"action": "login", "email_ref": "e1"})
 
 
 async def test_a_research_runs_materialize_tool_copies_from_the_registry_it_was_given(

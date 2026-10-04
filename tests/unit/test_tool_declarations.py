@@ -82,7 +82,9 @@ async def test_binding_preserves_the_plan_and_adds_real_execution() -> None:
         (True, True, True, True, True, ("read", "search_web")),
     ],
 )
-@pytest.mark.parametrize("agent_browser", [False, True])
+@pytest.mark.parametrize(
+    ("agent_browser", "agent_accounts"), [(False, False), (True, False), (True, True)]
+)
 def test_research_acceptance_and_execution_use_identical_declarations(
     tmp_path: Path,
     paths: bool,
@@ -92,6 +94,7 @@ def test_research_acceptance_and_execution_use_identical_declarations(
     child: bool,
     narrow: tuple[str, ...] | None,
     agent_browser: bool,
+    agent_accounts: bool,
 ) -> None:
     factory = SkillsBundleFactory(global_root=tmp_path / "global", owner_root=tmp_path / "owners")
     model_guidance = "Configured model roles."
@@ -100,6 +103,7 @@ def test_research_acceptance_and_execution_use_identical_declarations(
         web_search=web,
         resource_read=True,
         agent_browser=agent_browser,
+        agent_accounts=agent_accounts,
         resource_view=True,
         environment=paths,
         artifact_publication=paths,
@@ -121,7 +125,7 @@ def test_research_acceptance_and_execution_use_identical_declarations(
         search_web=AsyncMock() if web else None,
         register_web_source=None,
         resource_reader=AsyncMock(),
-        browser=inert_browser_host() if agent_browser else None,
+        browser=inert_browser_host(accounts=agent_accounts) if agent_browser else None,
         resource_viewer=AsyncMock(),
         admitted_bytes_reader=AsyncMock(),
         environment=LocalExecutionEnvironment(tmp_path) if paths else None,
@@ -152,6 +156,8 @@ def test_research_acceptance_and_execution_use_identical_declarations(
     for browser in browsers:
         actions = browser.definition.parameters["properties"]["action"]["enum"]
         assert ("upload" in actions) == paths
+        # register and login are offered exactly where the Run has Agent Accounts.
+        assert ("register" in actions, "login" in actions) == (agent_accounts, agent_accounts)
 
 
 def test_the_agent_browser_is_part_of_the_plan_a_run_is_pinned_to() -> None:

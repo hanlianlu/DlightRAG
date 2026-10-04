@@ -225,6 +225,22 @@ def test_chromiums_sandbox_is_on_unless_the_operator_turns_it_off_and_reaches_th
 
 
 @pytest.mark.parametrize(
+    ("bound", "registers"),
+    [(None, True), ("true", True), ("false", False)],
+    ids=["by-default", "on", "off"],
+)
+def test_agent_accounts_are_on_unless_the_operator_turns_them_off(
+    monkeypatch: pytest.MonkeyPatch, bound: str | None, registers: bool
+) -> None:
+    if bound is not None:
+        monkeypatch.setenv("DLIGHTRAG_ANSWER__AGENT__BROWSER__ACCOUNT_REGISTRATION", bound)
+
+    browser = DlightragConfig().answer.agent.browser  # pyright: ignore[reportCallIssue]
+
+    assert browser.account_registration is registers
+
+
+@pytest.mark.parametrize(
     ("bound", "action_timeout", "depth"),
     [(None, 10.0, 12), ({"ACTION_TIMEOUT_SECONDS": "30", "SNAPSHOT_DEPTH": "20"}, 30.0, 20)],
     ids=["by-default", "bound"],

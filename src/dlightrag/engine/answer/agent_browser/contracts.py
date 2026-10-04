@@ -10,9 +10,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from pydantic import SecretStr
+
+if TYPE_CHECKING:
+    from dlightrag.engine.answer.agent_browser.accounts import AgentAccountsBinding
 
 
 @dataclass(frozen=True, slots=True)
@@ -486,10 +489,12 @@ class AgentBrowserSettings:
 
 @dataclass(frozen=True, slots=True)
 class AgentBrowserBinding:
-    """The Agent Browser a deployment composed: its provider, and the settings it runs under."""
+    """The Agent Browser a deployment composed: its provider, the settings it runs under, and
+    the Agent Accounts its Runs may register and log in with (ADR 0034), when it allows them."""
 
     provider: BrowserProvider
     settings: AgentBrowserSettings
+    accounts: AgentAccountsBinding | None = None
 
 
 __all__ = [

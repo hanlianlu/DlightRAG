@@ -99,6 +99,7 @@ from dlightrag.engine.ai.telemetry import (
 from dlightrag.engine.answer.agent_browser import (
     AgentBrowserBinding,
     BrowserHolder,
+    RunAgentAccounts,
     RunAgentBrowser,
 )
 from dlightrag.engine.answer.attachment_replay import AttachmentReplaySelection
@@ -510,6 +511,7 @@ class AnswerExecutor:
             web_search=web_search,
             resource_read=True,
             agent_browser=self._browser is not None,
+            agent_accounts=self._browser is not None and self._browser.accounts is not None,
             resource_view=True,
             environment=self._execution_adapter is not None,
             artifact_publication=self._execution_adapter is not None,
@@ -1272,6 +1274,7 @@ class AnswerExecutor:
             )
 
         agent_browser = self._run_agent_browser(session, resolved_mode)
+        agent_accounts = self._run_agent_accounts(session, agent_browser)
         try:
             run = await self.prepare_orchestrated_run(
                 query=request.query,
@@ -1296,6 +1299,7 @@ class AnswerExecutor:
                     else None
                 ),
                 agent_browser=agent_browser,
+                agent_accounts=agent_accounts,
             )
         except BaseException:
             if agent_browser is not None:
@@ -2124,6 +2128,16 @@ class AnswerExecutor:
             self._browser.settings,
         )
 
+    def _run_agent_accounts(
+        self, session: RunSession, agent_browser: RunAgentBrowser | None
+    ) -> RunAgentAccounts | None:
+        """The Agent Accounts this Research Run registers and logs in with, if it has a browser
+        and the deployment allows them. Their Child-scoped accounts live in this object, so
+        they go with the Run and there is nothing to close."""
+        if agent_browser is None or self._browser is None or self._browser.accounts is None:
+            return None
+        return RunAgentAccounts(owner_id=session.owner_id, binding=self._browser.accounts)
+
     async def prepare_orchestrated_run(
         self,
         *,
@@ -2148,6 +2162,7 @@ class AnswerExecutor:
         connection_tools: tuple[AgentTool, ...] = (),
         lineage_loader: LineageResourceLoader | None = None,
         agent_browser: RunAgentBrowser | None = None,
+        agent_accounts: RunAgentAccounts | None = None,
     ) -> OrchestratorRun:
         pinned_model_selectors(pinned_models)
         child_pins = {pin.role: pin for pin in pinned_models}
@@ -2238,7 +2253,9 @@ class AnswerExecutor:
                     resolved.registry, lineage=lineage_loader
                 )
                 if agent_browser is not None:
-                    browser = BrowserToolHost(agent_browser, resolved.registry, resource_reader)
+                    browser = BrowserToolHost(
+                        agent_browser, resolved.registry, resource_reader, agent_accounts
+                    )
             orchestrator = AnswerOrchestrator(
                 synthesizer=self._models.answer_synthesizer(query_profile),
                 retrieve_knowledge_base=retrieve_knowledge_base,

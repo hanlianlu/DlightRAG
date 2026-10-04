@@ -422,6 +422,13 @@ class AgentBrowserConfig(BaseModel):
             "render in flight; its next page or render leases one again. 0 releases at once."
         ),
     )
+    account_registration: bool = Field(
+        default=True,
+        description=(
+            "Whether the Agent may register on third-party sites and sign in with Agent "
+            "Accounts of its own (ADR 0034). False offers neither register nor login."
+        ),
+    )
 
     @field_validator("endpoints")
     @classmethod

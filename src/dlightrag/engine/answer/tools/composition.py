@@ -143,6 +143,7 @@ def research_tool_declarations(
     web_search: bool = False,
     resource_read: bool = False,
     agent_browser: bool = False,
+    agent_accounts: bool = False,
     resource_view: bool = False,
     environment: bool = False,
     artifact_publication: bool = False,
@@ -167,7 +168,7 @@ def research_tool_declarations(
     if resource_view or environment:
         declarations.append(view_declaration())
     if agent_browser:
-        declarations.append(browser_declaration(upload=environment))
+        declarations.append(browser_declaration(upload=environment, accounts=agent_accounts))
     declarations.extend(injected)
     if environment:
         if not resource_read:
@@ -251,6 +252,7 @@ def compose_research_tools(
         web_search=search_web is not None,
         resource_read=resource_reader is not None,
         agent_browser=browser is not None,
+        agent_accounts=browser is not None and browser.accounts is not None,
         resource_view=resource_viewer is not None,
         environment=environment is not None,
         artifact_publication=artifacts_root is not None,
@@ -300,6 +302,7 @@ def compose_research_tools(
                 scheduler=access,
                 spill=spill,
                 image_preparer=image_preparer,
+                child=child,
             ),
             evidence,
         ),

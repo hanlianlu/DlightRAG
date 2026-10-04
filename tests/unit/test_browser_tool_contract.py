@@ -11,10 +11,14 @@ from pydantic import BaseModel, ValidationError
 from dlightrag.engine.answer.tools.browser import browser_declaration
 
 
-def parse(arguments: dict[str, Any], *, upload: bool = True) -> Any:
+def parse(arguments: dict[str, Any], *, upload: bool = True, accounts: bool = True) -> Any:
     """The arguments as the tool receives them, after the declared schema has validated them."""
-    model: type[BaseModel] = browser_declaration(upload=upload).input_model
+    model: type[BaseModel] = browser_declaration(upload=upload, accounts=accounts).input_model
     return model.model_validate(arguments)
+
+
+def properties(*, upload: bool, accounts: bool) -> dict[str, Any]:
+    return browser_declaration(upload=upload, accounts=accounts).definition.parameters["properties"]
 
 
 @pytest.mark.parametrize(
@@ -39,6 +43,18 @@ def parse(arguments: dict[str, Any], *, upload: bool = True) -> Any:
         ({"action": "snapshot", "submit": True}, "does not take submit"),
         ({"action": "upload", "ref": "e1", "files": []}, "at least 1 item"),
         ({"action": "upload", "ref": "e1"}, "browser upload requires files"),
+        ({"action": "register"}, "browser register requires password_refs"),
+        ({"action": "register", "password_refs": []}, "at least 1 item"),
+        ({"action": "register", "password_refs": ["e1", "e2", "e3"]}, "at most 2 items"),
+        ({"action": "register", "password_refs": ["password"]}, "String should match pattern"),
+        (
+            {"action": "register", "password_refs": ["e1"], "url": "http://a.example/"},
+            "does not take url",
+        ),
+        ({"action": "login"}, "browser login takes email_ref, username_ref, or password_refs"),
+        ({"action": "login", "email_ref": "e1", "text": "x"}, "does not take text"),
+        ({"action": "click", "ref": "e1", "email_ref": "e2"}, "does not take email_ref"),
+        ({"action": "snapshot", "password_refs": ["e1"]}, "does not take password_refs"),
         ({"action": "teleport"}, "Input should be"),
         ({"action": "snapshot", "extra": 1}, "Extra inputs are not permitted"),
     ],
@@ -55,6 +71,47 @@ def test_a_narrower_tool_refuses_what_only_a_wider_one_offers() -> None:
         parse({"action": "upload", "ref": "e1", "files": ["a.txt"]}, upload=False)
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         parse({"action": "click", "ref": "e1", "files": ["a.txt"]}, upload=False)
+    with pytest.raises(ValidationError, match="Input should be"):
+        parse({"action": "register", "password_refs": ["e1"]}, accounts=False)
+    with pytest.raises(ValidationError, match="Input should be"):
+        parse({"action": "login", "email_ref": "e1"}, accounts=False)
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        parse({"action": "click", "ref": "e1", "email_ref": "e2"}, accounts=False)
+
+
+@pytest.mark.parametrize("upload", [False, True])
+def test_agent_accounts_add_their_actions_and_their_fields_to_the_schema_and_nothing_else(
+    upload: bool,
+) -> None:
+    plain, accounting = (properties(upload=upload, accounts=on) for on in (False, True))
+
+    added = set(accounting["action"]["enum"]) - set(plain["action"]["enum"])
+    assert added == {"register", "login"}
+    assert set(accounting) - set(plain) == {"password_refs", "email_ref", "username_ref"}
+    for name in ("password_refs", "email_ref", "username_ref"):
+        assert name not in plain
+    assert (
+        "register (password_refs, email_ref, username_ref)" in accounting["action"]["description"]
+    )
+    assert "register" not in plain["action"]["description"]
+
+
+def test_a_registration_names_the_fields_it_fills_and_a_login_may_name_any_of_them() -> None:
+    registered = parse(
+        {
+            "action": "register",
+            "password_refs": ["e4", "f1e5"],
+            "email_ref": "e2",
+            "username_ref": "e3",
+        }
+    )
+    assert (registered.password_refs, registered.email_ref, registered.username_ref) == (
+        ["e4", "f1e5"],
+        "e2",
+        "e3",
+    )
+    for field, value in (("email_ref", "e1"), ("username_ref", "e1"), ("password_refs", ["e1"])):
+        assert parse({"action": "login", field: value}).action == "login"
 
 
 def test_typed_text_keeps_its_spaces_and_can_clear_a_field_while_a_query_is_trimmed() -> None:
@@ -65,10 +122,24 @@ def test_typed_text_keeps_its_spaces_and_can_clear_a_field_while_a_query_is_trim
 
 
 def test_the_description_teaches_the_tiers_and_the_captcha_boundary() -> None:
-    description = browser_declaration(upload=False).description
+    description = browser_declaration(upload=False, accounts=False).description
 
     assert "rendered=true" in description
     assert "use browser only for interaction" in description
     assert "CAPTCHA" in description and "never solve" in description
     # Nothing a deployment configures can change what a Run is pinned to.
     assert not any(character.isdigit() for character in description.replace("[ref=eN]", ""))
+
+
+def test_a_run_with_agent_accounts_is_told_whose_identity_it_acts_as_and_who_makes_passwords() -> (
+    None
+):
+    plain = browser_declaration(upload=False, accounts=False).description
+    accounting = browser_declaration(upload=False, accounts=True).description
+
+    assert accounting.startswith(plain) and len(accounting) > len(plain)
+    assert "never type the owner's email address, name, password" in accounting
+    assert "you never see or type one" in accounting
+    assert "A Child Session's registration lasts only for this Run" in accounting
+    assert "register and login" not in plain
+    assert not any(character.isdigit() for character in accounting.replace("[ref=eN]", ""))

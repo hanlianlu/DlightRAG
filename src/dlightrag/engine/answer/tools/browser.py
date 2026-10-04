@@ -12,8 +12,11 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import logging
 import mimetypes
+import unicodedata
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from hashlib import sha256
 from typing import Annotated, Any, Literal, Self, cast, get_args
@@ -23,6 +26,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    SecretStr,
     StringConstraints,
     create_model,
     model_validator,
@@ -59,14 +63,21 @@ from dlightrag.engine.agent.tools.files import (
 from dlightrag.engine.agent.tools.listing import escape_path
 from dlightrag.engine.answer.agent_browser import (
     MAX_DOWNLOADS_PER_CALL,
+    MIN_PASSWORD_LENGTH,
+    PASSWORD_LENGTH,
+    AgentAccount,
     AgentBrowserError,
     AgentPage,
+    CredentialFill,
     DownloadRefusal,
     PageEvents,
     PageObservation,
     PageState,
+    RunAgentAccounts,
     RunAgentBrowser,
     UploadFile,
+    account_site,
+    generate_password,
 )
 from dlightrag.engine.answer.resources.models import ResourceRegistryError
 from dlightrag.engine.answer.resources.registry import (
@@ -79,11 +90,14 @@ from dlightrag.engine.answer.resources.registry import (
     browser_download_filename,
     browser_download_media_type,
 )
+from dlightrag.engine.credential_cipher import UnreadableEnvelope
 from dlightrag.engine.public_http import (
     PublicHttpPolicyError,
     avalidate_public_http_url,
     validate_public_http_url,
 )
+
+logger = logging.getLogger(__name__)
 
 BrowserAction = Literal[
     "navigate",
@@ -99,6 +113,8 @@ BrowserAction = Literal[
     "upload",
     "screenshot",
     "capture",
+    "register",
+    "login",
 ]
 BROWSER_ACTIONS: tuple[BrowserAction, ...] = get_args(BrowserAction)
 
@@ -121,6 +137,11 @@ _ACTION_LINES: dict[str, str] = {
     "budget.",
     "capture": "capture: admit the current page as a new citable Web Resource and return its "
     "first window.",
+    "register": "register (password_refs, email_ref, username_ref): fill a generated password, and "
+    "the Agent's mail alias when there is one, into a sign-up or password-reset form of this "
+    "page's site, and store the account; type a username first. Submit with click or press.",
+    "login": "login (email_ref, username_ref, password_refs): fill this site's stored Agent "
+    "Account into a sign-in form. Submit with click or press.",
 }
 
 _REF = Annotated[str, StringConstraints(pattern=r"^(f[0-9]+)?e[0-9]+$", max_length=32)]
@@ -207,6 +228,33 @@ _FIELDS: dict[str, tuple[Any, dict[str, Any], frozenset[str]]] = {
         },
         frozenset({"upload"}),
     ),
+    "password_refs": (
+        list[_REF],
+        {
+            "min_length": 1,
+            "max_length": 2,
+            "description": "register, login: the refs of the password fields to fill, such as a "
+            "password and its confirmation.",
+        },
+        frozenset({"register", "login"}),
+    ),
+    "email_ref": (
+        _REF,
+        {
+            "description": "register, login: the ref of the email field. register fills the "
+            "Agent's alias there, or records the address you typed when there is no Agent "
+            "Mailbox."
+        },
+        frozenset({"register", "login"}),
+    ),
+    "username_ref": (
+        _REF,
+        {
+            "description": "register, login: the ref of the username field. register records "
+            "the username you typed there; login fills it."
+        },
+        frozenset({"register", "login"}),
+    ),
 }
 _REQUIRED: dict[str, tuple[str, ...]] = {
     "navigate": ("url",),
@@ -216,6 +264,7 @@ _REQUIRED: dict[str, tuple[str, ...]] = {
     "select": ("ref", "values"),
     "press": ("key",),
     "upload": ("ref", "files"),
+    "register": ("password_refs",),
 }
 
 _DESCRIPTION = (
@@ -230,6 +279,15 @@ _DESCRIPTION = (
     "the page downloads becomes a Resource to read. If a page shows a CAPTCHA or any other "
     "human-verification check, stop that path and report it; never solve, bypass, or "
     "outsource it."
+)
+
+#: What a Run that offers register and login adds: whose identity they act as, and who makes
+#: the password.
+_ACCOUNTS_FACT = (
+    "register and login act as the Agent's own identity: never type the owner's email address, "
+    "name, password, or other personal information into a form. DlightRAG makes every password "
+    "and fills it by ref, so you never see or type one. A Child Session's registration lasts "
+    "only for this Run."
 )
 
 
@@ -253,6 +311,8 @@ class BrowserArgs(BaseModel):
                 raise ValueError("browser wait takes exactly one of text, text_gone, or seconds")
             if "text" in given and not values["text"].strip():
                 raise ValueError("browser wait text cannot be blank")
+        if self.action == "login" and not given & {"email_ref", "username_ref", "password_refs"}:
+            raise ValueError("browser login takes email_ref, username_ref, or password_refs")
         return self
 
 
@@ -276,16 +336,18 @@ def browser_input_model(actions: tuple[str, ...]) -> type[BrowserArgs]:
     return create_model("BrowserArgs", __base__=BrowserArgs, **fields)
 
 
-def browser_declaration(*, upload: bool) -> ToolDeclaration:
-    """The tool a Run offers. ``upload`` needs an Agent Workspace, so only ``trust`` has it.
+def browser_declaration(*, upload: bool, accounts: bool) -> ToolDeclaration:
+    """The tool a Run offers. ``upload`` needs an Agent Workspace, so only ``trust`` has it, and
+    ``register`` and ``login`` need Agent Accounts, which a deployment may turn off.
 
     No configured value appears in the description or the schema, so changing a timeout or
     the depth never changes the plan a Run is pinned to.
     """
-    actions = tuple(action for action in BROWSER_ACTIONS if upload or action != "upload")
+    offered = {"upload": upload, "register": accounts, "login": accounts}
+    actions = tuple(action for action in BROWSER_ACTIONS if offered.get(action, True))
     return ToolDeclaration(
         name="browser",
-        description=_DESCRIPTION,
+        description=f"{_DESCRIPTION} {_ACCOUNTS_FACT}" if accounts else _DESCRIPTION,
         input_model=browser_input_model(actions),
         replay_policy="never",
         read_only=False,
@@ -310,6 +372,9 @@ class BrowserRequest:
     seconds: float | None = None
     full_page: bool = False
     files: tuple[str, ...] = ()
+    password_refs: tuple[str, ...] = ()
+    email_ref: str | None = None
+    username_ref: str | None = None
 
     @classmethod
     def from_args(cls, args: BrowserArgs) -> BrowserRequest:
@@ -329,6 +394,9 @@ class BrowserRequest:
             seconds=given["seconds"],
             full_page=bool(given["full_page"]),
             files=tuple(given["files"] or ()),
+            password_refs=tuple(given["password_refs"] or ()),
+            email_ref=given["email_ref"],
+            username_ref=given["username_ref"],
         )
 
 
@@ -340,6 +408,9 @@ class BrowserToolHost:
     registry: ResourceRegistry
     read_resource: ResourceReader
     """The Run's own reader, which a capture is read through as ``read`` would read it."""
+    accounts: RunAgentAccounts | None = None
+    """The Run's Agent Accounts, which register and login act on; None where a deployment has
+    turned them off."""
 
 
 NEW_PAGE = "A new tab opened and is now the active page."
@@ -375,9 +446,55 @@ SHOT = (
     "Screenshot of the {extent} page ({media}, {size:,} model bytes); its pixels are context, "
     "not evidence."
 )
+NO_KEY_RING = (
+    "Agent Accounts are unavailable: this deployment has no credential key ring, so no "
+    "password can be stored or read."
+)
+NO_SITE = "register and login need an https page with a registrable domain; this page is {label}."
+SHORT_LIMIT = (
+    "This site's password field takes at most {n} characters, fewer than the {minimum} an Agent "
+    "Account needs, so nothing was filled."
+)
+BAD_EMAIL = "Field {ref} holds no email address to record; type the address first."
+BAD_USERNAME = "Field {ref} holds no username to record; type it first."
+NEEDS_IDENTITY = "A new account needs email_ref or username_ref, so that login can name it later."
+NOT_RECORDED = (
+    "The fields were filled but the account could not be stored, so they were cleared; do not "
+    "submit the form."
+)
+NO_ACCOUNT = (
+    'No Agent Account exists for {site}. Register one with browser(action="register", ...).'
+)
+NO_EMAIL = "The Agent Account for {site} has no email address; use username_ref instead."
+NO_USERNAME = "The Agent Account for {site} has no username; use email_ref instead."
+UNREADABLE = (
+    "The stored password for {site} can no longer be opened. Recover the account with the "
+    "site's password reset: request the reset mail for {identity}, open its link with navigate, "
+    "and call register on the reset form."
+)
+RECORDED = (
+    "Recorded the Agent Account {identity} for {site}{whose} and filled its generated password "
+    "into {n} field(s); the password is never shown. Submit the form with click or press; the "
+    "site has not accepted it yet."
+)
+REPLACED = (
+    "Gave the Agent Account {identity} for {site}{whose} a new generated password, filled into "
+    "{n} field(s). Submit the form with click or press."
+)
+WHOSE = {
+    True: " for this owner's later Runs",
+    False: " for this Run only (a Child Session's account)",
+}
+FILLED = (
+    "Filled the Agent Account {identity} for {site} into {fields}. Submit the form with click "
+    "or press."
+)
 
 _FOUND_SHOWN = 30
 _FRAME_URL_CHARS = 500
+#: The longest email address, and the longest username, an account records.
+_MAX_EMAIL_CHARS = 254
+_MAX_USERNAME_CHARS = 128
 #: Playwright's own limit on the files one call hands a page.
 _MAX_UPLOAD_MIB = 50
 
@@ -389,10 +506,12 @@ def browser_tool(
     scheduler: AccessScheduler,
     spill: SpillWriter | None,
     image_preparer: ImagePreparer | None,
+    child: bool,
 ) -> AgentTool:
     """Bind the ``browser`` declaration to the Run's browser, Resources, and workspace.
 
-    Without an ``image_preparer`` the model takes no images, so a screenshot is refused.
+    Without an ``image_preparer`` the model takes no images, so a screenshot is refused. A
+    ``child`` Session's registrations last only for the Run (ADR 0034).
     """
 
     async def execute(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
@@ -404,10 +523,13 @@ def browser_tool(
             scheduler=scheduler,
             spill=spill,
             image_preparer=image_preparer,
+            child=child,
         )
         return await call.run()
 
-    return browser_declaration(upload=environment is not None).bind(execute)
+    return browser_declaration(
+        upload=environment is not None, accounts=host.accounts is not None
+    ).bind(execute)
 
 
 class _Call:
@@ -423,6 +545,7 @@ class _Call:
         scheduler: AccessScheduler,
         spill: SpillWriter | None,
         image_preparer: ImagePreparer | None,
+        child: bool,
     ) -> None:
         self._host = host
         self._request = request
@@ -431,6 +554,7 @@ class _Call:
         self._scheduler = scheduler
         self._spill = spill
         self._image_preparer = image_preparer
+        self._child = child
         self._scope = runtime.execution_scope
         self._owner = ResourceEffectOwner(self._scope, runtime.intent_id)
 
@@ -509,6 +633,10 @@ class _Call:
                 return await self._screenshot()
             case "capture":
                 return await self._capture()
+            case "register":
+                return await self._with_accounts(self._register)
+            case "login":
+                return await self._with_accounts(self._login)
 
     async def _on_page[T](
         self, call: Callable[[AgentPage], Awaitable[T]], *, open_page: bool = False
@@ -522,8 +650,11 @@ class _Call:
         open_page: bool = False,
     ) -> ToolResult:
         """A call that answers with the page and its snapshot."""
-        observation = await self._on_page(call, open_page=open_page)
-        report = await self._report(observation.page, observation.events)
+        return await self._reported(await self._on_page(call, open_page=open_page))
+
+    async def _reported(self, observation: PageObservation, *lines: str) -> ToolResult:
+        """The frame and notes of what a call left, then ``lines``, then its bounded snapshot."""
+        report = "\n".join((await self._report(observation.page, observation.events), *lines))
         if observation.snapshot is None:
             return ToolResult.text(report)
         return await self._bounded(report, observation.snapshot)
@@ -614,6 +745,135 @@ class _Call:
         # What a read of the capture settles and cites is kept; only its words are framed.
         text = "\n".join((report, CAPTURED.format(resource_id=resource_id), read.text_content))
         return replace(read, parts=(ToolTextPart(text),))
+
+    async def _with_accounts(
+        self, act: Callable[[AgentPage, RunAgentAccounts, str], Awaitable[ToolResult]]
+    ) -> ToolResult:
+        """Run register or login on the page the Session's earlier calls opened."""
+        accounts = cast(RunAgentAccounts, self._host.accounts)
+        if not accounts.available():
+            return ToolResult.text(NO_KEY_RING, is_error=True)
+
+        async def on_page(page: AgentPage) -> ToolResult:
+            current = page.current_url() or ""
+            site = account_site(current)
+            if site is None:
+                return ToolResult.text(NO_SITE.format(label=_label(current)), is_error=True)
+            return await act(page, accounts, site)
+
+        return await self._on_page(on_page)
+
+    async def _register(self, page: AgentPage, accounts: RunAgentAccounts, site: str) -> ToolResult:
+        """Fill a new generated password, and the account's email, into a sign-up form.
+
+        The account is recorded as soon as its fields are filled, before the site accepts the
+        form; a password reset is a registration on a site whose account exists.
+        """
+        request, scope, child = self._request, self._runtime.execution_scope, self._child
+        existing = await accounts.registration_target(scope, site, child=child)
+        form = await page.credential_form(
+            site=site,
+            password_refs=request.password_refs,
+            email_ref=request.email_ref,
+            username_ref=request.username_ref,
+        )
+        length = min(PASSWORD_LENGTH, form.password_limit or PASSWORD_LENGTH)
+        if length < MIN_PASSWORD_LENGTH:
+            return ToolResult.text(
+                SHORT_LIMIT.format(n=length, minimum=MIN_PASSWORD_LENGTH), is_error=True
+            )
+        # What an account already holds is kept unless the form names the field again.
+        email = existing.email if existing else None
+        username = existing.username if existing else None
+        identity: list[CredentialFill] = []
+        if request.email_ref is not None:
+            if email is None:
+                typed = _typed_email(form.email)
+                if typed is None:
+                    return ToolResult.text(BAD_EMAIL.format(ref=request.email_ref), is_error=True)
+                # Without an Agent Mailbox the Agent typed an address of its own, which stays.
+                email = typed
+            else:
+                identity.append(CredentialFill(request.email_ref, "email", SecretStr(email)))
+        if request.username_ref is not None:
+            username = _typed_username(form.username)
+            if username is None:
+                return ToolResult.text(BAD_USERNAME.format(ref=request.username_ref), is_error=True)
+        if email is None and username is None:
+            return ToolResult.text(NEEDS_IDENTITY, is_error=True)
+
+        password = generate_password(length)
+        fills = (
+            *identity,
+            *(CredentialFill(ref, "password", password) for ref in request.password_refs),
+        )
+        observation = await page.fill_credentials(fills, site=site)
+        recorded: AgentAccount | None = None
+        try:
+            recorded = await accounts.record(
+                scope,
+                site,
+                child=child,
+                existing=existing,
+                email=email,
+                username=username,
+                password=password,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("An Agent Account could not be recorded (%s)", type(exc).__name__)
+        if recorded is None:
+            # The form must not be left holding a password nothing stored.
+            with suppress(AgentBrowserError):
+                await page.fill_credentials(
+                    tuple(replace(fill, value=SecretStr("")) for fill in fills), site=site
+                )
+            return ToolResult.text(NOT_RECORDED, is_error=True)
+        note = (REPLACED if existing is not None else RECORDED).format(
+            identity=recorded.identity,
+            site=site,
+            whose=WHOSE[not child],
+            n=len(request.password_refs),
+        )
+        return await self._reported(observation, note)
+
+    async def _login(self, page: AgentPage, accounts: RunAgentAccounts, site: str) -> ToolResult:
+        """Fill the account this site has for the Agent into a sign-in form."""
+        request, scope, child = self._request, self._runtime.execution_scope, self._child
+        account = await accounts.login_target(scope, site, child=child)
+        if account is None:
+            return ToolResult.text(NO_ACCOUNT.format(site=site), is_error=True)
+        if request.email_ref is not None and account.email is None:
+            return ToolResult.text(NO_EMAIL.format(site=site), is_error=True)
+        if request.username_ref is not None and account.username is None:
+            return ToolResult.text(NO_USERNAME.format(site=site), is_error=True)
+        fills: list[CredentialFill] = []
+        filled: list[str] = []
+        if request.email_ref is not None:
+            fills.append(
+                CredentialFill(request.email_ref, "email", SecretStr(cast(str, account.email)))
+            )
+            filled.append("email")
+        if request.username_ref is not None:
+            fills.append(
+                CredentialFill(
+                    request.username_ref, "username", SecretStr(cast(str, account.username))
+                )
+            )
+            filled.append("username")
+        if request.password_refs:
+            try:
+                password = accounts.password(account)
+            except UnreadableEnvelope:
+                return ToolResult.text(
+                    UNREADABLE.format(site=site, identity=account.identity), is_error=True
+                )
+            fills.extend(CredentialFill(ref, "password", password) for ref in request.password_refs)
+            filled.append(f"{len(request.password_refs)} password field(s)")
+        observation = await page.fill_credentials(tuple(fills), site=site)
+        note = FILLED.format(identity=account.identity, site=site, fields=", ".join(filled))
+        return await self._reported(observation, note)
 
     async def _upload(self) -> ToolResult:
         environment = cast(ExecutionEnvironment, self._environment)
@@ -766,6 +1026,28 @@ class _Call:
             return await self._spill(snapshot)
         except OSError:
             return None
+
+
+def _typed_email(text: str) -> str | None:
+    """The address a field holds, when it can be one: one ``@``, no whitespace, a sane length."""
+    address = text.strip()
+    if (
+        address.count("@") == 1
+        and not any(c.isspace() for c in address)
+        and 3 <= len(address) <= _MAX_EMAIL_CHARS
+    ):
+        return address
+    return None
+
+
+def _typed_username(text: str) -> str | None:
+    """The username a field holds, when it can be one: 1 to 128 characters, none a control."""
+    username = text.strip()
+    if 1 <= len(username) <= _MAX_USERNAME_CHARS and not any(
+        unicodedata.category(c) == "Cc" for c in username
+    ):
+        return username
+    return None
 
 
 def _label(url: str | None) -> str:

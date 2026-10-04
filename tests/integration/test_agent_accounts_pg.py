@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
 import asyncpg
@@ -26,6 +27,16 @@ from dlightrag.engine.answer.agent_browser import (
 )
 from dlightrag.engine.credential_cipher import CredentialCipher
 from tests.integration.run_runtime_pg_harness import isolated_run_runtime
+from tests.integration.test_agent_accounts_browser import (
+    EMAIL,
+    KEYRING,
+    SHOP,
+    SITE,
+    assert_sent,
+    browsing,
+    posted,
+)
+from tests.support.dns import public_dns
 from tests.support.pg import skip_without_postgres
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
@@ -45,6 +56,11 @@ def ring(active: str, *keys: str) -> CredentialCipher:
 @pytest.fixture(autouse=True)
 async def _postgres() -> None:
     await skip_without_postgres()
+
+
+@pytest.fixture(autouse=True)
+def _hosts_resolve_public(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
 
 
 @pytest.fixture
@@ -176,3 +192,28 @@ async def test_a_reset_saved_between_the_read_and_the_reseal_wins(pool: Any) -> 
     current = await store.account(owner_id="alice", site="shop.example")
     assert current is not None and current.envelope != envelope
     assert rotated.open(current.envelope, label=ACCOUNT_LABEL, binding=binding) == reset
+
+
+async def test_a_later_run_logs_in_with_the_account_a_parent_registered(
+    pool: Any, tmp_path: Path
+) -> None:
+    cipher = CredentialCipher(SecretStr(KEYRING))
+    async with browsing(tmp_path, store=PGAgentAccountStore(pool=pool)) as first:
+        await first.register(await first.form(f"{SHOP}/signup"))
+    registered = await row_of(pool, "owner", SITE)
+    binding = ("owner", SITE, registered["account_id"])
+    password = cipher.open(registered["encrypted_envelope"], label=ACCOUNT_LABEL, binding=binding)
+
+    # Another Run of the owner, which only the database connects to the first.
+    async with browsing(tmp_path, store=PGAgentAccountStore(pool=pool)) as later:
+        later.watch(password)
+        form = await later.form(f"{SHOP}/signin")
+        await later.call(action="login", email_ref=form["email"], password_refs=[form["password"]])
+        await later.call(action="click", ref=form["button"])
+
+        fields = posted(later.proxy, "/session")
+        assert fields["email"] == [EMAIL]
+        assert_sent(fields, password, "password")
+    after = await row_of(pool, "owner", SITE)
+    # Logging in changed nothing about the account.
+    assert {k: after[k] for k in after.keys()} == {k: registered[k] for k in registered.keys()}

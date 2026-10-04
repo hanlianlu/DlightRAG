@@ -5,10 +5,13 @@ The pool is real where it can be: ``run_server`` is the Playwright server a pool
 runs, driving a real Chromium, so a test observes the same launch options, connections and
 requests production sends. What stands in for the outside world is the proxy a launch is
 given: ``web_proxy`` carries a handful of canned ``http://*.example`` pages, as Squid would
-carry the public Web. ``LaunchRecorder`` is a pool member that refuses every connection and
-keeps what each one asked to launch, and ``RecordingRenderer`` is the Agent Browser as a Run's
-Resource Registry sees it. ``inert_browser_host`` is the browser tool's host for a test that needs
-the tool composed and not driven.
+carry the public Web, and with a certificate it carries ``https://*.example`` pages too, by
+terminating the TLS a ``CONNECT`` tunnel opens. A Chromium the test launched itself, which
+trusts any certificate, drives those pages through ``LaunchedProvider``. ``LaunchRecorder`` is a
+pool member that refuses every connection and keeps what each one asked to launch, and
+``RecordingRenderer`` is the Agent Browser as a Run's Resource Registry sees it.
+``inert_browser_host`` is the browser tool's host for a test that needs the tool composed and
+not driven.
 """
 
 from __future__ import annotations
@@ -24,9 +27,13 @@ from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
+from playwright.async_api import Browser, async_playwright
+
+from dlightrag.adapters.agent_browser.leased_browser import PlaywrightLeasedBrowser
 from dlightrag.engine.agent.tools import ToolResult, ToolRuntime
 from dlightrag.engine.agent.tools.files import ResourceReadRequest
 from dlightrag.engine.answer.agent_browser import (
+    AgentAccountsBinding,
     AgentBrowserError,
     AgentBrowserSettings,
     BrowserHolder,
@@ -37,11 +44,14 @@ from dlightrag.engine.answer.agent_browser import (
     PageObservation,
     PageState,
     RenderedPage,
+    RunAgentAccounts,
     RunAgentBrowser,
     StoredAgentAccount,
 )
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.answer.tools.browser import BrowserToolHost
+from dlightrag.engine.credential_cipher import CredentialCipher
+from tests.support.loopback import LoopbackCertificate
 
 _HEAD_LIMIT = 64 * 1024
 
@@ -122,20 +132,31 @@ class Served:
 class ProxiedRequest:
     method: str
     target: str
+    """The absolute URL asked for: ``https://host/path`` for a request that came through a
+    tunnel, whose own target is only the path."""
     headers: Mapping[str, str]
+    body: bytes = b""
 
 
 class WebProxy:
     """A loopback HTTP proxy that answers ``GET http://host/path`` from a table of pages.
 
-    It records every request the browser makes through it. A target it holds no page for
-    is a 404, and ``CONNECT`` is refused: the pages are plain HTTP.
+    It records every request the browser makes through it. A target it holds no page for is a
+    404. Given a certificate it also answers ``CONNECT host:443`` and terminates the TLS the
+    browser then speaks, so ``https://host/path`` is served like any other page; without one
+    ``CONNECT`` is refused and the pages are plain HTTP. A ``POST`` is answered by the page
+    for its URL, and its body is kept. A body is read by its ``Content-Length``.
     """
 
-    def __init__(self, pages: Mapping[str, Served]) -> None:
+    def __init__(self, pages: Mapping[str, Served], tls: LoopbackCertificate | None = None) -> None:
         self._pages = dict(pages)
+        self._tls = None if tls is None else tls.server_context()
         self.requests: list[ProxiedRequest] = []
         self.url = ""
+
+    def add(self, url: str, page: Served) -> None:
+        """Serve one more page, such as one whose URL the test only learns while it runs."""
+        self._pages[url] = page
 
     def fetched(self, url: str) -> list[ProxiedRequest]:
         """The requests the browser made for exactly ``url``."""
@@ -145,8 +166,15 @@ class WebProxy:
         try:
             head = await reader.readuntil(b"\r\n\r\n")
             method, target, headers = _parse_head(head)
-            self.requests.append(ProxiedRequest(method, target, headers))
-            page = self._pages.get(target) if method == "GET" else None
+            if method == "CONNECT" and self._tls is not None:
+                host = target.rsplit(":", 1)[0]
+                writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                await writer.start_tls(self._tls)
+                method, path, headers = _parse_head(await reader.readuntil(b"\r\n\r\n"))
+                target = f"https://{host}{path}"
+            body = await reader.readexactly(int(headers.get("content-length", 0)))
+            self.requests.append(ProxiedRequest(method, target, headers, body))
+            page = self._pages.get(target) if method in {"GET", "POST"} else None
             if method == "CONNECT":
                 writer.write(_response(403, b"", {}))
             elif page is None:
@@ -165,9 +193,15 @@ class WebProxy:
 
 
 @asynccontextmanager
-async def web_proxy(pages: Mapping[str, Served]) -> AsyncIterator[WebProxy]:
-    """Serve ``pages`` (by absolute URL) as the web the browser reaches through its proxy."""
-    proxy = WebProxy(pages)
+async def web_proxy(
+    pages: Mapping[str, Served], tls: LoopbackCertificate | None = None
+) -> AsyncIterator[WebProxy]:
+    """Serve ``pages`` (by absolute URL) as the web the browser reaches through its proxy.
+
+    With ``tls`` the web includes ``https://`` pages, which a browser that trusts the
+    certificate loads through a ``CONNECT`` tunnel.
+    """
+    proxy = WebProxy(pages, tls)
     server = await asyncio.start_server(proxy.serve, "127.0.0.1", 0, limit=_HEAD_LIMIT)
     proxy.url = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}"
     try:
@@ -218,6 +252,43 @@ async def launch_recorder() -> AsyncIterator[LaunchRecorder]:
     finally:
         server.close()
         await server.wait_closed()
+
+
+class LaunchedProvider:
+    """A ``BrowserProvider`` over a Chromium the test launched itself.
+
+    The pool's own provider sends only the launch options production needs, and none that
+    lets a browser trust the certificate of a test's ``https://`` pages. A test that
+    launches Chromium directly passes it ``--ignore-certificate-errors`` and the web proxy,
+    and leases it to its Run as the pool would lease a member.
+    """
+
+    def __init__(self, browser: Browser) -> None:
+        self._browser = browser
+
+    async def lease(self, holder: BrowserHolder, *, wait_seconds: float) -> LeasedBrowser:
+        return PlaywrightLeasedBrowser(self._browser, _nothing_to_release)
+
+    async def aclose(self) -> None:
+        pass
+
+
+async def _nothing_to_release() -> None:
+    pass
+
+
+@asynccontextmanager
+async def launched_chromium(proxy: WebProxy) -> AsyncIterator[LaunchedProvider]:
+    """A Chromium that reaches the web only through ``proxy`` and trusts any certificate."""
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(
+            args=["--ignore-certificate-errors"], proxy={"server": proxy.url}
+        )
+        try:
+            yield LaunchedProvider(browser)
+        finally:
+            with suppress(Exception):
+                await browser.close()
 
 
 def _parse_head(head: bytes) -> tuple[str, str, dict[str, str]]:
@@ -462,16 +533,23 @@ async def _reads_nothing(_request: ResourceReadRequest, _runtime: ToolRuntime) -
     raise AssertionError("an inert browser host reads nothing")
 
 
-def inert_browser_host() -> BrowserToolHost:
+def inert_browser_host(*, accounts: bool = False) -> BrowserToolHost:
     """The browser tool's host for a test that needs the tool composed and offered, not driven.
 
-    Its browser leases nothing until a page is opened, and its reader is never called.
+    Its browser leases nothing until a page is opened, and its reader is never called. With
+    ``accounts`` the Run has Agent Accounts, which nothing registers or reads.
     """
     holder = BrowserHolder("owner", "11111111-1111-1111-1111-111111111111", "worker", 1)
     return BrowserToolHost(
         RunAgentBrowser(FakeProvider(), holder, browser_settings()),
         ResourceRegistry(),
         _reads_nothing,
+        RunAgentAccounts(
+            owner_id="owner",
+            binding=AgentAccountsBinding(MemoryAccountStore(), CredentialCipher(None)),
+        )
+        if accounts
+        else None,
     )
 
 
@@ -481,6 +559,7 @@ __all__ = [
     "FakeProvider",
     "FakePage",
     "LaunchRecorder",
+    "LaunchedProvider",
     "MemoryAccountStore",
     "ProxiedRequest",
     "RecordingRenderer",
@@ -490,6 +569,7 @@ __all__ = [
     "browser_settings",
     "inert_browser_host",
     "launch_recorder",
+    "launched_chromium",
     "run_server",
     "web_proxy",
 ]

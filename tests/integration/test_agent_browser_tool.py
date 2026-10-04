@@ -243,6 +243,7 @@ async def browsing(
             scheduler=scheduler or AccessScheduler(),
             spill=keep if spill is not None else None,
             image_preparer=prepare,
+            child=False,
         )
         yield Browsing(tool, registry, server, proxy, leases, admitted)
 
