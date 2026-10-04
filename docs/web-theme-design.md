@@ -270,6 +270,14 @@ MathJax output explicitly inherits `currentColor`. Theme changes do not trigger 
 
 Lightbox scrims remain dark in both modes because their purpose is image isolation. Caption, border, shadow, and panel colors use semantic tokens. Uploaded images and source page images are not recolored.
 
+### Links
+
+An answer's links, in chat and in a Markdown Artifact, take Accent text and are
+underlined at rest; the underline thickens under the pointer. No colour reads
+4.5:1 on the page and 3:1 from the Body text around it at once, so colour alone
+cannot mark a link, and an underline shown only on hover still fails WCAG 1.4.1
+(F73).
+
 ## Failure Handling
 
 - Missing storage value resolves to `System`.

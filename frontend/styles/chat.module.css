@@ -604,13 +604,16 @@
   margin: 0.5em 0;
 }
 
+/* No colour reads 4.5:1 on the page and 3:1 from the text around it at once, so
+   the underline, not the gold, is what marks a link. */
 .markdownContent a:not(:where([data-answer-typed] *)) {
   color: var(--color-accent-text);
-  text-decoration: none;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
 }
 
 .markdownContent a:not(:where([data-answer-typed] *)):hover {
-  text-decoration: underline;
+  text-decoration-thickness: 2px;
 }
 
 /* Pygments highlight container inside answer. `.highlight` is emitted by the

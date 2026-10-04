@@ -56,13 +56,13 @@ defineDesignSystemElements();
 const SAFE_PNG =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
 
-// Every kind of gold text an answer draws: a link in a table, a citation, an
-// evidence image's Source button, and enough references to fold.
+// Every kind of gold text an answer draws: a link in prose and in a table, a
+// citation, an evidence image's Source button, and enough references to fold.
 const answerWire = {
   answer_text: 'Retrieval finds passages.',
   parts: [{
     type: 'markdown', text: 'Retrieval finds passages.', artifact: null, evidence_image: null, inline: false,
-    html: '<p>Retrieval finds passages, as a survey shows '
+    html: '<p>Retrieval finds passages, as <a href="https://example.com/survey">the survey</a> shows '
       + '<cite class="citation-badge" data-ref="1" role="button" tabindex="0" aria-label="Reference 1">1</cite>.</p>'
       + '<table><thead><tr><th><a href="https://example.com/methods">Method</a></th></tr></thead>'
       + '<tbody><tr><td><a href="https://example.com/bm25">BM25</a></td></tr>'
