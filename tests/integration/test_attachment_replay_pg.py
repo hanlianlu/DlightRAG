@@ -117,7 +117,7 @@ async def finish(store, session):
     assert result.committed
 
 
-def orchestrator(model, *, registry=None, max_images=8, rendered_read=False):
+def orchestrator(model, *, registry=None, max_images=8, browser=None):
     async def retrieve(*args, **kwargs):
         raise AssertionError("no corpus or provider access")
 
@@ -130,7 +130,7 @@ def orchestrator(model, *, registry=None, max_images=8, rendered_read=False):
         telemetry=NOOP_TELEMETRY,
         resolved_mode="research",
         resource_reader=make_resource_reader(registry, 4000) if registry else None,
-        rendered_read=rendered_read,
+        browser=browser,
         resource_viewer=make_resource_viewer(registry) if registry else None,
         search_toolchain=SearchToolchain(),
     )

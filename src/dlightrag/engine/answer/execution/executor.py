@@ -191,7 +191,6 @@ from dlightrag.engine.answer.resources.registry import (
     BROWSER_ACQUISITIONS,
     BROWSER_RENDER,
     FetchedBytesSink,
-    PageRenderer,
     ResourceStateMismatchError,
 )
 from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
@@ -204,6 +203,7 @@ from dlightrag.engine.answer.session_notes import (
     SessionNotesPlane,
     read_working_copy_or_reason,
 )
+from dlightrag.engine.answer.tools.browser import BrowserToolHost
 from dlightrag.engine.answer.tools.memory import MemoryHost
 from dlightrag.engine.answer.tools.resources import make_resource_reader, make_resource_viewer
 from dlightrag.engine.answer.tools.subagents import (
@@ -505,7 +505,7 @@ class AnswerExecutor:
         return research_tool_declarations(
             web_search=web_search,
             resource_read=True,
-            rendered_read=self._browser is not None,
+            agent_browser=self._browser is not None,
             resource_view=True,
             environment=self._execution_adapter is not None,
             artifact_publication=self._execution_adapter is not None,
@@ -1291,7 +1291,7 @@ class AnswerExecutor:
                     if self._skills_bundle_factory is not None
                     else None
                 ),
-                page_renderer=agent_browser.render if agent_browser is not None else None,
+                agent_browser=agent_browser,
             )
         except BaseException:
             if agent_browser is not None:
@@ -1482,6 +1482,9 @@ class AnswerExecutor:
                     list_guidance=store.list_pending_child_guidance,
                     prepare_dispatch=_bound_child_dispatch_preparer(run.orchestrator),
                     run_child=_bound_child_runner(
+                        close_browser_session=(
+                            agent_browser.close_session if agent_browser is not None else None
+                        ),
                         orchestrator=run.orchestrator,
                         telemetry=self._telemetry,
                         repository=repository,
@@ -2140,7 +2143,7 @@ class AnswerExecutor:
         agent_effort: ReasoningLevel | None = None,
         connection_tools: tuple[AgentTool, ...] = (),
         lineage_loader: LineageResourceLoader | None = None,
-        page_renderer: PageRenderer | None = None,
+        agent_browser: RunAgentBrowser | None = None,
     ) -> OrchestratorRun:
         pinned_model_selectors(pinned_models)
         child_pins = {pin.role: pin for pin in pinned_models}
@@ -2157,7 +2160,7 @@ class AnswerExecutor:
             fetched_bytes_sink=fetched_bytes_sink,
             resolved_mode=resolved_mode,
             resource_identity=resource_identity,
-            page_renderer=page_renderer,
+            page_renderer=agent_browser.render if agent_browser is not None else None,
         )
         try:
             models = resolved.models
@@ -2218,6 +2221,16 @@ class AnswerExecutor:
                     raise IncompatibleActiveRunError("child model binding changed after acceptance")
                 return selected, selected.stream_text, profile
 
+            resource_reader = None
+            browser = None
+            if resolved.registry is not None:
+                resource_reader = make_resource_reader(
+                    resolved.registry,
+                    CONTEXT_POLICY.read_window_tokens(query_profile),
+                    lineage=lineage_loader,
+                )
+                if agent_browser is not None:
+                    browser = BrowserToolHost(agent_browser, resolved.registry, resource_reader)
             orchestrator = AnswerOrchestrator(
                 synthesizer=self._models.answer_synthesizer(query_profile),
                 retrieve_knowledge_base=retrieve_knowledge_base,
@@ -2260,16 +2273,8 @@ class AnswerExecutor:
                     if resolved.registry
                     else None
                 ),
-                resource_reader=(
-                    make_resource_reader(
-                        resolved.registry,
-                        CONTEXT_POLICY.read_window_tokens(query_profile),
-                        lineage=lineage_loader,
-                    )
-                    if resolved.registry is not None
-                    else None
-                ),
-                rendered_read=page_renderer is not None,
+                resource_reader=resource_reader,
+                browser=browser,
                 child_model_resolver=resolve_child_model,
                 child_model_identities={
                     pin.role: {

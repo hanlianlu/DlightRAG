@@ -33,6 +33,7 @@ from dlightrag.adapters.agent_browser.driver import (
     page_content,
 )
 from dlightrag.engine.answer.agent_browser import (
+    MAX_DOWNLOADS_PER_CALL,
     AgentBrowserError,
     DownloadedFile,
     DownloadRefusal,
@@ -54,7 +55,6 @@ logger = logging.getLogger(__name__)
 #: the click that caused it returns (25 ms measured). A call that may have caused one waits
 #: this long for it before it reports what the pages did.
 _EVENT_GRACE_SECONDS = 0.2
-_MAX_DOWNLOADS = 4
 _MAX_DIALOGS = 5
 _DOWNLOAD_POLL_SECONDS = 0.1
 _DOWNLOAD_DIRECTORY_PREFIX = "dlightrag-browser-download-"
@@ -326,6 +326,7 @@ class PlaywrightBrowserSession:
         )
 
     async def aclose(self) -> None:
+        """Close the context and every page in it; a context that does not answer is given up."""
         await _close_context(self._context)
 
     # -- the pages ------------------------------------------------------------------------
@@ -357,7 +358,10 @@ class PlaywrightBrowserSession:
             # The page closed with its dialog open.
             return
         verdict = "accepted" if accepted else "dismissed"
-        self._dialogs.append(f'The page showed a {dialog.type} dialog: "{message}" ({verdict}).')
+        if len(self._dialogs) < _MAX_DIALOGS:
+            self._dialogs.append(
+                f'The page showed a {dialog.type} dialog: "{message}" ({verdict}).'
+            )
 
     def _open_pages(self) -> list[Page]:
         return [page for page in self._pages if not page.is_closed()]
@@ -478,11 +482,11 @@ class PlaywrightBrowserSession:
         """Add what the pages did besides the call: the files they downloaded, the dialogs
         they showed, and the status their navigation answered."""
         downloads, self._downloads = self._downloads, []
-        dialogs, self._dialogs = self._dialogs[:_MAX_DIALOGS], []
+        dialogs, self._dialogs = self._dialogs, []
         saved: list[DownloadedFile] = []
         refused: list[DownloadRefusal] = []
         for index, download in enumerate(downloads):
-            if index >= _MAX_DOWNLOADS:
+            if index >= MAX_DOWNLOADS_PER_CALL:
                 await _discard(download)
                 refused.append(DownloadRefusal(download.suggested_filename, "limit"))
                 continue

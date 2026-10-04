@@ -107,6 +107,7 @@ from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.answer.session_notes import SESSION_NOTES_DEGRADED_KEY
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 from dlightrag.engine.answer.tools import KnowledgeRetrieval, WebSearch, compose_research_tools
+from dlightrag.engine.answer.tools.browser import BrowserToolHost
 from dlightrag.engine.answer.tools.memory import MemoryHost
 from dlightrag.engine.answer.tools.subagents import (
     ChildContextSnapshot,
@@ -205,7 +206,7 @@ class AnswerOrchestrator:
         telemetry: Telemetry,
         search_toolchain: SearchToolchain,
         resource_reader: ResourceReader | None = None,
-        rendered_read: bool = False,
+        browser: BrowserToolHost | None = None,
         resource_viewer: ResourceViewer | None = None,
         resolved_mode: ResolvedMode,
         subagent_host: SubagentHost | None = None,
@@ -232,7 +233,7 @@ class AnswerOrchestrator:
         self._telemetry = telemetry
         self._search_toolchain = search_toolchain
         self._resource_reader = resource_reader
-        self._rendered_read = rendered_read
+        self._browser = browser
         self._resource_viewer = resource_viewer
         self._workspace: RunWorkspace | None = None
         #: The Run's durable spill rows, read when a summary must name the handles
@@ -942,7 +943,7 @@ class AnswerOrchestrator:
             injected_tools=self._injected_tools,
             register_web_source=self._register_web_source,
             resource_reader=self._resource_reader_for_run(),
-            rendered_read=self._rendered_read,
+            browser=self._browser,
             resource_viewer=self._resource_viewer,
             environment=None if self._workspace is None else self._workspace.environment,
             scheduler=self._access,

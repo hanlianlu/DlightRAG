@@ -7,7 +7,8 @@ requests production sends. What stands in for the outside world is the proxy a l
 given: ``web_proxy`` carries a handful of canned ``http://*.example`` pages, as Squid would
 carry the public Web. ``LaunchRecorder`` is a pool member that refuses every connection and
 keeps what each one asked to launch, and ``RecordingRenderer`` is the Agent Browser as a Run's
-Resource Registry sees it.
+Resource Registry sees it. ``inert_browser_host`` is the browser tool's host for a test that needs
+the tool composed and not driven.
 """
 
 from __future__ import annotations
@@ -23,6 +24,8 @@ from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from dlightrag.engine.agent.tools import ToolResult, ToolRuntime
+from dlightrag.engine.agent.tools.files import ResourceReadRequest
 from dlightrag.engine.answer.agent_browser import (
     AgentBrowserError,
     AgentBrowserSettings,
@@ -33,7 +36,10 @@ from dlightrag.engine.answer.agent_browser import (
     PageObservation,
     PageState,
     RenderedPage,
+    RunAgentBrowser,
 )
+from dlightrag.engine.answer.resources.registry import ResourceRegistry
+from dlightrag.engine.answer.tools.browser import BrowserToolHost
 
 _HEAD_LIMIT = 64 * 1024
 
@@ -417,6 +423,23 @@ class FakeProvider:
         self.closed = True
 
 
+async def _reads_nothing(_request: ResourceReadRequest, _runtime: ToolRuntime) -> ToolResult:
+    raise AssertionError("an inert browser host reads nothing")
+
+
+def inert_browser_host() -> BrowserToolHost:
+    """The browser tool's host for a test that needs the tool composed and offered, not driven.
+
+    Its browser leases nothing until a page is opened, and its reader is never called.
+    """
+    holder = BrowserHolder("owner", "11111111-1111-1111-1111-111111111111", "worker", 1)
+    return BrowserToolHost(
+        RunAgentBrowser(FakeProvider(), holder, browser_settings()),
+        ResourceRegistry(),
+        _reads_nothing,
+    )
+
+
 __all__ = [
     "FakeLease",
     "FakeLeases",
@@ -429,6 +452,7 @@ __all__ = [
     "Served",
     "WebProxy",
     "browser_settings",
+    "inert_browser_host",
     "launch_recorder",
     "run_server",
     "web_proxy",

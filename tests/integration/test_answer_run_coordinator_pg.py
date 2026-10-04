@@ -100,7 +100,12 @@ from dlightrag.engine.runtime.records import (
     run_request_fingerprint,
 )
 from tests.conftest import FingerprintingRunStore
-from tests.support.agent_browser import FakeLease, FakeProvider, browser_settings
+from tests.support.agent_browser import (
+    FakeLease,
+    FakeProvider,
+    browser_settings,
+    inert_browser_host,
+)
 from tests.support.dns import public_dns
 from tests.support.pg import (
     PG_CONN_KWARGS,
@@ -2248,7 +2253,7 @@ async def test_a_research_run_leases_its_browser_on_first_need_and_returns_it_at
         registries.append(
             ResourceRegistry(
                 resource_secret=b"k" * 32,
-                page_renderer=prepared["page_renderer"],
+                page_renderer=prepared["agent_browser"].render,
                 fetched_bytes_sink=prepared["fetched_bytes_sink"],
             )
         )
@@ -2267,7 +2272,7 @@ async def test_a_research_run_leases_its_browser_on_first_need_and_returns_it_at
         telemetry=NOOP_TELEMETRY,
         resolved_mode="research",
         resource_reader=read,
-        rendered_read=True,
+        browser=inert_browser_host(),
         search_toolchain=SearchToolchain(),
     )
     plan = AgentRunPlan.from_tools(
@@ -2335,7 +2340,7 @@ async def test_a_fast_run_has_no_browser_to_lease(store: FingerprintingRunStore)
 
     run = await store.get_run(owner_id=_OWNER, run_id=creation.run.run_id)
     assert run is not None and run.result is not None
-    assert [call["page_renderer"] for call in prepared] == [None]
+    assert [call["agent_browser"] for call in prepared] == [None]
     assert provider.leased == 0
 
 

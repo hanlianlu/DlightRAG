@@ -155,6 +155,8 @@ jobs:
         run: >-
           uv run pytest
           tests/integration/test_agent_browser_pg.py
+          tests/integration/test_agent_browser_tool.py
+          tests/integration/test_agent_browser_tool_pg.py
           tests/integration/test_agent_session_pg.py
           tests/integration/test_answer_runs_pg.py
           tests/integration/test_answer_run_api_pg.py

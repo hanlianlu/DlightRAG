@@ -32,6 +32,7 @@ from dlightrag.engine.answer.tools.composition import _resource_rows
 from dlightrag.engine.answer.workspace import RunWorkspace
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
 from dlightrag.engine.runtime.workspace import CommittedSpillRecord
+from tests.support.agent_browser import inert_browser_host
 from tests.support.workspace_store import InMemoryWorkspaceStore
 from tests.tool_helpers import tool_runtime
 from tests.unit.conftest import answer_image_policy, answer_model_profile
@@ -300,18 +301,18 @@ async def test_e2_a_continuation_carries_the_note_the_parent_compacted(
     )
 
 
-def test_a_child_can_read_rendered_exactly_when_its_run_has_a_browser() -> None:
+def test_a_child_can_read_rendered_and_browse_exactly_when_its_run_has_a_browser() -> None:
     from dlightrag.engine.answer.tools.subagents import ChildContextSnapshot, ChildRequest
 
     async def model(**_kwargs):
         return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
 
-    def read_properties(*, rendered_read: bool) -> dict[str, Any]:
+    def child_tools(*, browser: bool) -> dict[str, Any]:
         orchestrator = _orchestrator(
             mode="research",
             model=model,
             resource_reader=AsyncMock(),
-            rendered_read=rendered_read,
+            browser=inert_browser_host() if browser else None,
         )
         child = orchestrator.prepare_child_session(
             ChildRequest(objective="investigate"),
@@ -322,10 +323,13 @@ def test_a_child_can_read_rendered_exactly_when_its_run_has_a_browser() -> None:
                 messages=[],
             ),
         )
-        return {tool.name: tool for tool in child.tools}["read"].definition.parameters["properties"]
+        return {tool.name: tool for tool in child.tools}
 
-    assert "rendered" in read_properties(rendered_read=True)
-    assert "rendered" not in read_properties(rendered_read=False)
+    offered, absent = child_tools(browser=True), child_tools(browser=False)
+    assert "rendered" in offered["read"].definition.parameters["properties"]
+    assert "browser" in offered
+    assert "rendered" not in absent["read"].definition.parameters["properties"]
+    assert "browser" not in absent
 
 
 def test_child_preparation_excludes_every_parent_subagent_control() -> None:
@@ -432,14 +436,14 @@ async def test_a_child_states_its_objective_once_and_a_steer_keeps_the_last_word
     assert all(objective not in str(message["content"]) for message in messages[steer_at:])
 
 
-def _research_owner_with_subagents(tmp_path: Path):
+def _research_owner_with_subagents(tmp_path: Path, **options):
     """A parent that can compose path tools, so capability and authority both exist."""
     from dlightrag.engine.answer.tools.subagents import SubagentHost
 
     async def model(**_kwargs):
         return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
 
-    orchestrator = _orchestrator(mode="research", model=model)
+    orchestrator = _orchestrator(mode="research", model=model, **options)
     orchestrator.bind_workspace(
         RunWorkspace(
             epoch=1,
@@ -493,6 +497,25 @@ def test_a_childs_default_is_its_parents_capability_minus_authority(tmp_path: Pa
     assert child_names - parent_names == {"ask_parent"}
     for authority in ("remember", "forget", "attach_artifact", "spawn_agent"):
         assert authority not in child_names
+
+
+def test_every_child_of_a_run_with_an_agent_browser_holds_the_browser_tool_unless_narrowed(
+    tmp_path: Path,
+) -> None:
+    """The browser is capability: the table withholds nothing of it, and `tools` only narrows."""
+    from dlightrag.engine.answer.tools.composition import CHILD_FORBIDDEN_TOOLS
+
+    orchestrator = _research_owner_with_subagents(tmp_path, browser=inert_browser_host())
+    parent = {tool.name: tool for tool in orchestrator.prepare_run("question").tools}
+    child = {tool.name: tool for tool in _prepared_child(orchestrator).tools}
+
+    assert "browser" in parent and "browser" in child
+    assert set(parent) - set(child) <= CHILD_FORBIDDEN_TOOLS
+    # The workspace is there, so a Child may send its files to a page as its parent may.
+    for tools in (parent, child):
+        assert "upload" in tools["browser"].definition.parameters["properties"]["action"]["enum"]
+    assert _child_tools(orchestrator, tools=["bash"]) == {"bash", "ask_parent"}
+    assert _child_tools(orchestrator, tools=["browser"]) == {"browser", "ask_parent"}
 
 
 def test_an_explicit_tool_list_narrows_a_child_and_restores_nothing(tmp_path: Path) -> None:

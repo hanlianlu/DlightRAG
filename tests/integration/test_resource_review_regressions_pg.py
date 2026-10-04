@@ -95,7 +95,7 @@ from tests.integration.test_attachment_replay_pg import (  # noqa: F401
     orchestrator,
     origin,
 )
-from tests.support.agent_browser import RecordingRenderer
+from tests.support.agent_browser import RecordingRenderer, inert_browser_host
 from tests.support.dns import public_dns
 from tests.support.resources import pdf_bytes
 from tests.support.resources import png as png_bytes
@@ -359,7 +359,7 @@ async def test_a_rendered_read_settles_and_a_resumed_run_reads_it_without_a_brow
                 )
             return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
 
-        host = orchestrator(model, registry=registry, rendered_read=True)
+        host = orchestrator(model, registry=registry, browser=inert_browser_host())
         await drive(
             session,
             session_id,
@@ -439,7 +439,7 @@ async def test_a_shell_read_through_the_chain_settles_its_bytes_and_rendering_to
                 )
             return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
 
-        host = orchestrator(model, registry=registry, rendered_read=True)
+        host = orchestrator(model, registry=registry, browser=inert_browser_host())
         await drive(
             session,
             session_id,

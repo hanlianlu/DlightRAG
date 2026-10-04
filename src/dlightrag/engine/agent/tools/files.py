@@ -326,7 +326,7 @@ async def preview_or_spill(
     preview: Literal["head", "tail"] = "head",
 ) -> tuple[str, CommittedOutput | None]:
     """Return (model text, optional committed-spill receipt)."""
-    if _within_result_bounds(text):
+    if within_result_bounds(text):
         return text, None
     if spill is None:
         raise FullOutputUnavailable("oversized tool result has no spill or cursor backing")
@@ -418,7 +418,7 @@ def read_tool(
                 )
         if environment is None or args.path is None:
             return ToolResult.text("path read requires an execution environment", is_error=True)
-        if blocked := _integrity_blocked(environment):
+        if blocked := workspace_integrity_refusal(environment):
             return blocked
         try:
             path = environment.resolve(args.path)
@@ -427,7 +427,7 @@ def read_tool(
         canonical_path = _workspace_relative_path(environment.root, path)
         await runtime.emit_update(ToolResult.text("", subject=_escape_path(canonical_path)))
         async with scheduler.hold(PathAccess(path=str(path), kind="read")):
-            if blocked := _integrity_blocked(environment):
+            if blocked := workspace_integrity_refusal(environment):
                 return blocked
             kind = environment.stat_kind(path)
             if kind == "directory":
@@ -551,14 +551,14 @@ def view_tool(
             return await resource_viewer(args, runtime, prepare)
         if environment is None:
             return ToolResult.text("path view requires an execution environment", is_error=True)
-        if blocked := _integrity_blocked(environment):
+        if blocked := workspace_integrity_refusal(environment):
             return blocked
         try:
             path = environment.resolve(args.path)
             canonical = _workspace_relative_path(environment.root, path)
             await runtime.emit_update(ToolResult.text("", subject=_escape_path(canonical)))
             async with scheduler.hold(PathAccess(path=str(path), kind="read")):
-                if blocked := _integrity_blocked(environment):
+                if blocked := workspace_integrity_refusal(environment):
                     return blocked
                 if environment.stat_kind(path) != "file":
                     return ToolResult.text("view requires a regular image file", is_error=True)
@@ -598,7 +598,7 @@ def write_declaration() -> ToolDeclaration:
 def write_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) -> AgentTool:
     async def execute(args: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = cast(WriteArgs, args)
-        if blocked := _integrity_blocked(environment):
+        if blocked := workspace_integrity_refusal(environment):
             return blocked
         try:
             path = environment.resolve(args.path)
@@ -607,7 +607,7 @@ def write_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) ->
         canonical = _workspace_relative_path(environment.root, path)
         await runtime.emit_update(ToolResult.text("", subject=_escape_path(canonical)))
         async with scheduler.hold(PathAccess(path=str(path), kind="write")):
-            if blocked := _integrity_blocked(environment):
+            if blocked := workspace_integrity_refusal(environment):
                 return blocked
             try:
                 environment.write_bytes(path, args.content.encode("utf-8"))
@@ -643,7 +643,7 @@ def edit_tool(
 ) -> AgentTool:
     async def execute(args: BaseModel, runtime: ToolRuntime) -> ToolResult:
         edit_args = cast(EditArgs, args)
-        if blocked := _integrity_blocked(environment):
+        if blocked := workspace_integrity_refusal(environment):
             return blocked
         try:
             path = environment.resolve(edit_args.path)
@@ -652,7 +652,7 @@ def edit_tool(
         canonical = _workspace_relative_path(environment.root, path)
         await runtime.emit_update(ToolResult.text("", subject=_escape_path(canonical)))
         async with scheduler.hold(PathAccess(path=str(path), kind="readwrite")):
-            if blocked := _integrity_blocked(environment):
+            if blocked := workspace_integrity_refusal(environment):
                 return blocked
             if environment.stat_kind(path) != "file":
                 return ToolResult.text(
@@ -736,7 +736,7 @@ def grep_tool(
 ) -> AgentTool:
     async def execute(args: BaseModel, runtime: ToolRuntime) -> ToolResult:
         grep_args = cast(GrepArgs, args)
-        if blocked := _integrity_blocked(environment):
+        if blocked := workspace_integrity_refusal(environment):
             return blocked
         try:
             root = (
@@ -782,7 +782,7 @@ def grep_tool(
 
         try:
             async with scheduler.hold(PathAccess(path=str(root), kind="search")):
-                if blocked := _integrity_blocked(environment):
+                if blocked := workspace_integrity_refusal(environment):
                     output.abort()
                     return blocked
                 home, tmp = environment.prepare_process_directories()
@@ -856,7 +856,7 @@ def bash_tool(
 ) -> AgentTool:
     async def execute(args: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = cast(BashArgs, args)
-        if blocked := _integrity_blocked(environment):
+        if blocked := workspace_integrity_refusal(environment):
             return blocked
         await runtime.emit_update(ToolResult.text("", subject=args.command))
         output = _streaming_output("bash", output_stage_factory)
@@ -872,7 +872,7 @@ def bash_tool(
 
         try:
             async with scheduler.hold(WorkspaceAccess()):
-                if blocked := _integrity_blocked(environment):
+                if blocked := workspace_integrity_refusal(environment):
                     output.abort()
                     return blocked
                 try:
@@ -1080,7 +1080,8 @@ def _render_violations(violations: tuple[str, ...]) -> str:
     return ", ".join(shown)
 
 
-def _integrity_blocked(environment: ExecutionEnvironment) -> ToolResult | None:
+def workspace_integrity_refusal(environment: ExecutionEnvironment) -> ToolResult | None:
+    """The refusal every tool gives while the workspace is latched, or None while it is sound."""
     violations = environment.integrity_violations
     quota_violation = environment.quota_violation
     if not violations and quota_violation is None:
@@ -1118,7 +1119,7 @@ def find_tool(
 ) -> AgentTool:
     async def execute(args: BaseModel, runtime: ToolRuntime) -> ToolResult:
         find_args = cast(FindArgs, args)
-        if blocked := _integrity_blocked(environment):
+        if blocked := workspace_integrity_refusal(environment):
             return blocked
         try:
             root = (
@@ -1152,7 +1153,7 @@ def find_tool(
         collector = _NulPathCollector(root=root)
         try:
             async with scheduler.hold(PathAccess(path=str(root), kind="search")):
-                if blocked := _integrity_blocked(environment):
+                if blocked := workspace_integrity_refusal(environment):
                     return blocked
                 home, tmp = environment.prepare_process_directories()
                 completed = await environment.run(
@@ -1200,7 +1201,7 @@ def ls_declaration() -> ToolDeclaration:
 def ls_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) -> AgentTool:
     async def execute(args: BaseModel, runtime: ToolRuntime) -> ToolResult:
         ls_args = cast(LsArgs, args)
-        if blocked := _integrity_blocked(environment):
+        if blocked := workspace_integrity_refusal(environment):
             return blocked
         try:
             root = environment.root if ls_args.path == "." else environment.resolve(ls_args.path)
@@ -1212,7 +1213,7 @@ def ls_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) -> Ag
             relative = _workspace_relative_path(environment.root, root)
             await runtime.emit_update(ToolResult.text("", subject=_escape_path(relative)))
             async with scheduler.hold(PathAccess(path=str(root), kind="read")):
-                if blocked := _integrity_blocked(environment):
+                if blocked := workspace_integrity_refusal(environment):
                     return blocked
                 entries = environment.list_directory(root)
         except (PathRejected, OSError) as exc:
@@ -1474,23 +1475,24 @@ def _compose_bounded_process_result(
         return body
 
     candidate = compose(0)
-    if _within_result_bounds(candidate):
+    if within_result_bounds(candidate):
         return candidate
     low = 1
     high = len(tail_lines)
     while low < high:
         middle = (low + high) // 2
-        if _within_result_bounds(compose(middle)):
+        if within_result_bounds(compose(middle)):
             high = middle
         else:
             low = middle + 1
     candidate = compose(low)
-    if not _within_result_bounds(candidate):
+    if not within_result_bounds(candidate):
         raise FullOutputUnavailable("process result framing exceeded its bounded reserve")
     return candidate
 
 
-def _within_result_bounds(text: str) -> bool:
+def within_result_bounds(text: str) -> bool:
+    """Whether a tool result's text fits the byte and line bounds a model is shown."""
     return (
         len(text.encode("utf-8")) <= TOOL_RESULT_MAX_BYTES
         and len(text.splitlines()) <= TOOL_RESULT_MAX_LINES
@@ -1502,6 +1504,11 @@ def _utf8_prefix(text: str, *, max_bytes: int) -> str:
     if len(encoded) <= max_bytes:
         return text
     return encoded[:max_bytes].decode("utf-8", errors="ignore") + "…"
+
+
+def head_excerpt(text: str) -> str:
+    """The leading lines of ``text`` that fit a result's preview."""
+    return _utf8_excerpt(text, preview="head")
 
 
 def _utf8_excerpt(text: str, *, preview: Literal["head", "tail"]) -> str:
@@ -1595,7 +1602,7 @@ def _paginate_lines(
         return "\n".join(chunk for chunk in chunks if chunk), continuation, remaining
 
     rendered = render(end)
-    if _within_result_bounds(rendered[0]) or end <= start + 1:
+    if within_result_bounds(rendered[0]) or end <= start + 1:
         return rendered
 
     # Find the largest advancing page that leaves room for its complete notice
@@ -1607,7 +1614,7 @@ def _paginate_lines(
     while low <= high:
         middle = (low + high) // 2
         candidate = render(middle)
-        if _within_result_bounds(candidate[0]):
+        if within_result_bounds(candidate[0]):
             best = middle
             low = middle + 1
         else:
@@ -1636,8 +1643,11 @@ __all__ = [
     "edit_tool",
     "find_tool",
     "grep_tool",
+    "head_excerpt",
     "ls_tool",
     "preview_or_spill",
     "read_tool",
+    "within_result_bounds",
+    "workspace_integrity_refusal",
     "write_tool",
 ]

@@ -91,6 +91,11 @@ class RunAgentBrowser:
             self._in_flight -= 1
             self._rest()
 
+    @property
+    def limits(self) -> InteractiveLimits:
+        """The bounds every page of this Run works within."""
+        return self._limits
+
     def current_url(self, scope: str) -> str | None:
         """Where the Agent Session's active page is, or None when it has no page."""
         session = self._sessions.get(scope)

@@ -32,6 +32,7 @@ from dlightrag.engine.answer.tools.subagents import (
     child_guidance_declarations,
     subagent_declarations,
 )
+from tests.support.agent_browser import inert_browser_host
 
 
 class Arguments(BaseModel):
@@ -81,7 +82,7 @@ async def test_binding_preserves_the_plan_and_adds_real_execution() -> None:
         (True, True, True, True, True, ("read", "search_web")),
     ],
 )
-@pytest.mark.parametrize("rendered", [False, True])
+@pytest.mark.parametrize("agent_browser", [False, True])
 def test_research_acceptance_and_execution_use_identical_declarations(
     tmp_path: Path,
     paths: bool,
@@ -90,7 +91,7 @@ def test_research_acceptance_and_execution_use_identical_declarations(
     skills: bool,
     child: bool,
     narrow: tuple[str, ...] | None,
-    rendered: bool,
+    agent_browser: bool,
 ) -> None:
     factory = SkillsBundleFactory(global_root=tmp_path / "global", owner_root=tmp_path / "owners")
     model_guidance = "Configured model roles."
@@ -98,7 +99,7 @@ def test_research_acceptance_and_execution_use_identical_declarations(
     declared = research_tool_declarations(
         web_search=web,
         resource_read=True,
-        rendered_read=rendered,
+        agent_browser=agent_browser,
         resource_view=True,
         environment=paths,
         artifact_publication=paths,
@@ -120,7 +121,7 @@ def test_research_acceptance_and_execution_use_identical_declarations(
         search_web=AsyncMock() if web else None,
         register_web_source=None,
         resource_reader=AsyncMock(),
-        rendered_read=rendered,
+        browser=inert_browser_host() if agent_browser else None,
         resource_viewer=AsyncMock(),
         environment=LocalExecutionEnvironment(tmp_path) if paths else None,
         artifacts_root=tmp_path / "artifacts" if paths else None,
@@ -141,26 +142,33 @@ def test_research_acceptance_and_execution_use_identical_declarations(
         assert "attach_artifact" not in {tool.name for tool in declared}
         assert "remember" not in {tool.name for tool in declared}
         assert "ask_parent" in {tool.name for tool in declared}
+    # The browser is offered to every Session of a Run that has one, and to no other, and
+    # it can send workspace files to a page only where there is a workspace.
+    browsers = [tool for tool in declared if tool.name == "browser"]
+    assert bool(browsers) == (agent_browser and (narrow is None))
+    for browser in browsers:
+        actions = browser.definition.parameters["properties"]["action"]["enum"]
+        assert ("upload" in actions) == paths
 
 
-def test_the_rendered_read_is_part_of_the_plan_a_run_is_pinned_to() -> None:
+def test_the_agent_browser_is_part_of_the_plan_a_run_is_pinned_to() -> None:
     """Acceptance pins the tools, so a Run accepted with a browser executes with one."""
     plain = research_tool_declarations(resource_read=True)
-    rendered = research_tool_declarations(resource_read=True, rendered_read=True)
+    browsing = research_tool_declarations(resource_read=True, agent_browser=True)
     plans = [
         AgentRunPlan.from_tools(tools, model_role="query", context_policy_revision="test-policy")
-        for tools in (plain, rendered)
+        for tools in (plain, browsing)
     ]
 
     assert plans[0].digest != plans[1].digest
-    read = {tool.name: tool for tool in rendered}["read"]
-    assert "rendered" in read.definition.parameters["properties"]
-    assert "rendered=true" in read.description
+    offered = {tool.name: tool for tool in browsing}
+    assert "rendered" in offered["read"].definition.parameters["properties"]
+    assert "rendered=true" in offered["read"].description
+    assert "browser" in offered
     # A Host with no Agent Browser, like a Fast Run, is offered nothing to ask for.
-    assert (
-        "rendered"
-        not in {tool.name: tool for tool in plain}["read"].definition.parameters["properties"]
-    )
+    absent = {tool.name: tool for tool in plain}
+    assert "rendered" not in absent["read"].definition.parameters["properties"]
+    assert "browser" not in absent
 
 
 @pytest.mark.parametrize("child", [False, True])
@@ -170,6 +178,7 @@ def test_no_built_in_tool_is_named_like_a_connection_tool(tmp_path: Path, child:
     declared = research_tool_declarations(
         web_search=True,
         resource_read=True,
+        agent_browser=True,
         resource_view=True,
         environment=True,
         artifact_publication=True,
@@ -195,6 +204,7 @@ def test_only_tools_that_change_nothing_outside_their_run_are_read_only(tmp_path
     declared = research_tool_declarations(
         web_search=True,
         resource_read=True,
+        agent_browser=True,
         resource_view=True,
         environment=True,
         artifact_publication=True,
@@ -213,9 +223,15 @@ def test_only_tools_that_change_nothing_outside_their_run_are_read_only(tmp_path
         "grep",
         "find",
     }
-    assert {"bash", "write", "edit", "attach_artifact", "remember", "mcp__test__lookup"} <= {
-        tool.name for tool in declared if not tool.read_only
-    }
+    assert {
+        "browser",
+        "bash",
+        "write",
+        "edit",
+        "attach_artifact",
+        "remember",
+        "mcp__test__lookup",
+    } <= {tool.name for tool in declared if not tool.read_only}
 
 
 def test_workspace_tools_state_what_a_run_workspace_holds() -> None:

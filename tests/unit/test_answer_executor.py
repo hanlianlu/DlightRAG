@@ -552,7 +552,7 @@ def test_research_declarations_include_every_configured_surface_without_binding(
     assert not {"remember", "forget", "recall_memory"} & {tool.name for tool in without_memory}
 
 
-def test_a_deployment_offers_a_rendered_read_exactly_when_it_configures_an_agent_browser(
+def test_a_deployment_offers_the_browser_tool_and_a_rendered_read_exactly_when_it_configures_one(
     test_config: Any,
 ) -> None:
     from dlightrag._compose import _compose
@@ -565,17 +565,56 @@ def test_a_deployment_offers_a_rendered_read_exactly_when_it_configures_an_agent
         update={"answer": test_config.answer.model_copy(update={"agent": agent})}
     )
 
-    def read_properties(config: Any) -> dict[str, Any]:
+    def offered(config: Any) -> dict[str, Any]:
         executor = _compose(config).coordinator._executors["answer"]
         declarations = executor.research_tool_declarations(
             web_search=False, memory=False, model_guidance="", injected=()
         )
-        return {tool.name: tool for tool in declarations}["read"].definition.parameters[
-            "properties"
-        ]
+        return {tool.name: tool for tool in declarations}
 
-    assert "rendered" in read_properties(configured)
-    assert "rendered" not in read_properties(test_config)
+    with_browser, without = offered(configured), offered(test_config)
+    assert "rendered" in with_browser["read"].definition.parameters["properties"]
+    assert "rendered" not in without["read"].definition.parameters["properties"]
+    assert "browser" in with_browser and "browser" not in without
+
+
+async def test_a_research_run_renders_and_browses_through_the_browser_it_was_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dlightrag.engine.answer.agent_browser import BrowserHolder, RunAgentBrowser
+    from dlightrag.engine.answer.resources.registry import ResourceRegistry
+    from tests.tool_helpers import tool_runtime
+    from tests.unit.test_child_model_roles import _prepared_executor
+
+    provider = FakeProvider()
+    holder = BrowserHolder("owner", "11111111-1111-1111-1111-111111111111", "worker", 1)
+    run_browser = RunAgentBrowser(provider, holder, browser_settings())
+
+    def offered(prepared: Any) -> dict[str, Any]:
+        return {tool.name: tool for tool in prepared.tools}
+
+    async with ResourceRegistry() as registry:
+        executor, orchestrator, *_ = await _prepared_executor(
+            monkeypatch, registry=registry, agent_browser=run_browser
+        )
+        browsing = offered(orchestrator.prepare_run("question", registry=registry))
+        # The registry renders through the Run's browser, and the browser tool is that browser.
+        resolved = cast(AsyncMock, executor._resources.resolve)
+        assert resolved.await_args is not None
+        assert resolved.await_args.kwargs["page_renderer"] == run_browser.render
+        assert "rendered" in browsing["read"].definition.parameters["properties"]
+        unopened = await browsing["browser"].execute(
+            browsing["browser"].input_model.model_validate({"action": "snapshot"}),
+            tool_runtime(tool_name="browser"),
+        )
+        assert unopened.is_error and "No page is open" in unopened.text_content
+        assert provider.leased == 0
+
+        _, bare, *_ = await _prepared_executor(monkeypatch, registry=registry)
+        plain = offered(bare.prepare_run("question", registry=registry))
+        assert "browser" not in plain
+        assert "rendered" not in plain["read"].definition.parameters["properties"]
+    await run_browser.aclose()
 
 
 @pytest.mark.parametrize("sandbox", [True, False], ids=["sandboxed", "unsandboxed"])

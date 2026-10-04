@@ -14,6 +14,7 @@ const TOOL_VERBS: Record<string, string> = {
   search_knowledge_base: 'Searching the knowledge base',
   search_web: 'Searching the web',
   read: 'Reading a document',
+  browser: 'Using the browser',
   write: 'Writing a file',
   edit: 'Editing a file',
   grep: 'Searching files',

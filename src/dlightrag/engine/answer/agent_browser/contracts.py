@@ -35,6 +35,10 @@ class RenderedPage:
     """The last main-frame navigation response, when the browser saw one."""
 
 
+#: The most files one call delivers from its pages; a page that downloads more has the rest refused.
+MAX_DOWNLOADS_PER_CALL = 4
+
+
 @dataclass(frozen=True, slots=True)
 class InteractiveLimits:
     """The bounds one Agent Session's page works within, from the settings of its Run."""
@@ -374,6 +378,7 @@ class AgentBrowserBinding:
 
 
 __all__ = [
+    "MAX_DOWNLOADS_PER_CALL",
     "AgentBrowserBinding",
     "AgentBrowserError",
     "AgentBrowserFailure",

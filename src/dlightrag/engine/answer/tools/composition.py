@@ -50,6 +50,11 @@ from dlightrag.engine.answer.tools.artifacts import (
     attach_artifact_declaration,
     attach_artifact_tool,
 )
+from dlightrag.engine.answer.tools.browser import (
+    BrowserToolHost,
+    browser_declaration,
+    browser_tool,
+)
 from dlightrag.engine.answer.tools.memory import (
     MemoryHost,
     forget_declaration,
@@ -119,7 +124,7 @@ def research_tool_declarations(
     *,
     web_search: bool = False,
     resource_read: bool = False,
-    rendered_read: bool = False,
+    agent_browser: bool = False,
     resource_view: bool = False,
     environment: bool = False,
     artifact_publication: bool = False,
@@ -137,12 +142,14 @@ def research_tool_declarations(
     if resource_read:
         declarations.append(
             _reading(
-                read_declaration(public_url=True, rendered=rendered_read),
+                read_declaration(public_url=True, rendered=agent_browser),
                 earlier_artifacts=artifact_publication,
             )
         )
     if resource_view or environment:
         declarations.append(view_declaration())
+    if agent_browser:
+        declarations.append(browser_declaration(upload=environment))
     declarations.extend(injected)
     if environment:
         if not resource_read:
@@ -189,7 +196,7 @@ def compose_research_tools(
     injected_tools: list[AgentTool],
     register_web_source: RegisterWebSource | None,
     resource_reader: Any | None = None,
-    rendered_read: bool = False,
+    browser: BrowserToolHost | None = None,
     resource_viewer: ResourceViewer | None = None,
     environment: ExecutionEnvironment | None = None,
     scheduler: AccessScheduler | None = None,
@@ -217,7 +224,7 @@ def compose_research_tools(
     declarations = research_tool_declarations(
         web_search=search_web is not None,
         resource_read=resource_reader is not None,
-        rendered_read=rendered_read,
+        agent_browser=browser is not None,
         resource_view=resource_viewer is not None,
         environment=environment is not None,
         artifact_publication=artifacts_root is not None,
@@ -245,7 +252,7 @@ def compose_research_tools(
                     access,
                     resource_reader=resource_reader,
                     spill=spill,
-                    rendered=rendered_read,
+                    rendered=browser is not None,
                 ),
                 earlier_artifacts=resource_reader is not None and artifacts_root is not None,
             ),
@@ -256,6 +263,16 @@ def compose_research_tools(
                 environment,
                 access,
                 resource_viewer=resource_viewer,
+                image_preparer=image_preparer,
+            ),
+            evidence,
+        ),
+        "browser": lambda: _ledger_backed(
+            browser_tool(
+                cast(BrowserToolHost, browser),
+                environment=environment,
+                scheduler=access,
+                spill=spill,
                 image_preparer=image_preparer,
             ),
             evidence,

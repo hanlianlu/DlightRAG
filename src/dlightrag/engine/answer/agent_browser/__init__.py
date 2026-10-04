@@ -2,6 +2,7 @@
 """The Agent Browser port and the Run's policy over it (ADR 0032)."""
 
 from dlightrag.engine.answer.agent_browser.contracts import (
+    MAX_DOWNLOADS_PER_CALL,
     AgentBrowserBinding,
     AgentBrowserError,
     AgentBrowserFailure,
@@ -28,6 +29,7 @@ from dlightrag.engine.answer.agent_browser.contracts import (
 from dlightrag.engine.answer.agent_browser.run import RunAgentBrowser
 
 __all__ = [
+    "MAX_DOWNLOADS_PER_CALL",
     "AgentBrowserBinding",
     "AgentBrowserError",
     "AgentBrowserFailure",

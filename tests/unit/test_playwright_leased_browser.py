@@ -8,11 +8,13 @@ from typing import Any, cast
 
 import pytest
 
-from dlightrag.adapters.agent_browser import playwright_session
+from dlightrag.adapters.agent_browser import interactive, playwright_session
+from dlightrag.adapters.agent_browser.interactive import PlaywrightBrowserSession
 from dlightrag.adapters.agent_browser.playwright_session import PlaywrightLeasedBrowser
 from dlightrag.engine.answer.agent_browser import (
     AgentBrowserError,
     BrowserHolder,
+    InteractiveLimits,
     RunAgentBrowser,
 )
 from tests.support.agent_browser import FakeLease, FakeProvider, browser_settings
@@ -67,7 +69,7 @@ class _WedgedBrowser:
 async def test_a_browser_whose_context_will_not_close_is_given_up_though_its_render_succeeded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(playwright_session, "_CLOSE_SECONDS", 0.05)
+    monkeypatch.setattr(playwright_session, "CLOSE_SECONDS", 0.05)
     released: list[str] = []
 
     async def release() -> None:
@@ -90,3 +92,20 @@ async def test_a_browser_whose_context_will_not_close_is_given_up_though_its_ren
     assert (await browser.render(PAGE)).final_url == "http://slow.example/"
     assert (provider.leased, healthy.rendered) == (2, [PAGE])
     await browser.aclose()
+
+
+async def test_an_agent_sessions_context_that_will_not_close_does_not_hold_the_run_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(interactive, "CLOSE_SECONDS", 0.05)
+    context = _Context()
+    session = PlaywrightBrowserSession(
+        cast(Any, _WedgedBrowser()),
+        cast(Any, context),
+        cast(Any, await context.new_page()),
+        InteractiveLimits(5, 5, 0, 12, 1024),
+    )
+
+    # A close with no limit would hold the Run's settlement open for good.
+    async with asyncio.timeout(5):
+        await session.aclose()
