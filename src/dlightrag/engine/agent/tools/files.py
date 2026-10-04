@@ -588,6 +588,20 @@ def view_tool(
     return view_declaration().bind(execute)
 
 
+async def _write_rooted(
+    environment: ExecutionEnvironment, scheduler: AccessScheduler, path: Path, data: bytes
+) -> WorkspaceInventoryFacts | ToolResult:
+    """Replace one file with ``data`` under its path's write hold, and report what is on disk."""
+    async with scheduler.hold(PathAccess(path=str(path), kind="write")):
+        if blocked := workspace_integrity_refusal(environment):
+            return blocked
+        try:
+            environment.write_bytes(path, data)
+        except (WorkspaceQuotaExceeded, PathRejected) as exc:
+            return ToolResult.text(str(exc), is_error=True)
+        return _inventory_facts(environment.root, path)
+
+
 def write_declaration() -> ToolDeclaration:
     return ToolDeclaration(
         name="write",
@@ -610,18 +624,12 @@ def write_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) ->
             return ToolResult.text(str(exc), is_error=True)
         canonical = _workspace_relative_path(environment.root, path)
         await runtime.emit_update(ToolResult.text("", subject=_escape_path(canonical)))
-        async with scheduler.hold(PathAccess(path=str(path), kind="write")):
-            if blocked := workspace_integrity_refusal(environment):
-                return blocked
-            try:
-                environment.write_bytes(path, args.content.encode("utf-8"))
-            except WorkspaceQuotaExceeded as exc:
-                return ToolResult.text(str(exc), is_error=True)
-            except PathRejected as exc:
-                return ToolResult.text(str(exc), is_error=True)
-            inventory = _inventory_facts(environment.root, path)
+        data = args.content.encode("utf-8")
+        inventory = await _write_rooted(environment, scheduler, path, data)
+        if isinstance(inventory, ToolResult):
+            return inventory
         return ToolResult.text(
-            f"wrote {args.path} ({len(args.content.encode('utf-8'))} bytes)",
+            f"wrote {args.path} ({len(data)} bytes)",
             effects=ToolEffects(workspace_inventory=inventory),
         )
 
