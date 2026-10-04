@@ -104,6 +104,7 @@ from tests.support.agent_browser import (
     FakeLease,
     FakeProvider,
     browser_settings,
+    idle_accounts_binding,
     inert_browser_host,
 )
 from tests.support.dns import public_dns
@@ -2253,7 +2254,7 @@ async def test_a_research_run_leases_its_browser_on_first_need_and_returns_it_at
         registries.append(
             ResourceRegistry(
                 resource_secret=b"k" * 32,
-                page_renderer=prepared["agent_browser"].render,
+                page_renderer=prepared["browsing"].browser.render,
                 fetched_bytes_sink=prepared["fetched_bytes_sink"],
             )
         )
@@ -2340,7 +2341,7 @@ async def test_a_fast_run_has_no_browser_to_lease(store: FingerprintingRunStore)
 
     run = await store.get_run(owner_id=_OWNER, run_id=creation.run.run_id)
     assert run is not None and run.result is not None
-    assert [call["agent_browser"] for call in prepared] == [None]
+    assert [call["browsing"] for call in prepared] == [None]
     assert provider.leased == 0
 
 
@@ -2799,7 +2800,9 @@ def _answer_runtime(
         shell_confinement=ConfinementPolicy(),
         search_toolchain=SearchToolchain(),
         browser=(
-            AgentBrowserBinding(browser_provider, browser_settings(idle=30.0))
+            AgentBrowserBinding(
+                browser_provider, browser_settings(idle=30.0), idle_accounts_binding()
+            )
             if browser_provider is not None
             else None
         ),

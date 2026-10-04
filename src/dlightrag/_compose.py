@@ -116,7 +116,10 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.adapters.mcp.oauth import PersonalOAuthClient
     from dlightrag.adapters.mcp.personal_http import PersonalMcpClient
     from dlightrag.adapters.observability import LangfuseTelemetry
-    from dlightrag.adapters.postgres.answer.agent_accounts import PGAgentAccountStore
+    from dlightrag.adapters.postgres.answer.agent_accounts import (
+        PGAgentAccountSettingsStore,
+        PGAgentAccountStore,
+    )
     from dlightrag.adapters.postgres.answer.memory_settings import PGMemorySettingsStore
     from dlightrag.adapters.postgres.connections import PGConnectionsStore
     from dlightrag.adapters.postgres.corpus.corpus import PGReadinessProbe, build_pg_corpus_backend
@@ -128,7 +131,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.adapters.postgres.runtime import PGRunBlobStore, PGRunStore
     from dlightrag.adapters.postgres.web.web_conversations import PGWebConversationStore
     from dlightrag.application.access import access_control_from_settings
-    from dlightrag.application.agent_accounts import AgentAccountMaintenance
+    from dlightrag.application.agent_accounts import AgentAccountMaintenance, AgentAccounts
     from dlightrag.application.answer_runs import AnswerService
     from dlightrag.application.connections import Connections
     from dlightrag.application.corpus_admin import (
@@ -425,6 +428,8 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         cipher=cipher,
     )
 
+    agent_account_store = PGAgentAccountStore()
+    registration_allowed = config.answer.agent.browser.account_registration
     browser_settings = agent_browser_settings(config)
     agent_browser = None
     if browser_settings is not None:
@@ -441,16 +446,26 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
                 leases=PGAgentBrowserLeaseStore(),
             ),
             browser_settings,
-            AgentAccountsBinding(PGAgentAccountStore(), cipher, _agent_mailbox(config))
-            if config.answer.agent.browser.account_registration
-            else None,
+            AgentAccountsBinding(
+                agent_account_store,
+                cipher,
+                _agent_mailbox(config),
+                registration_allowed=registration_allowed,
+            ),
         )
 
     accounts = None if agent_browser is None else agent_browser.accounts
+    agent_accounts = AgentAccounts(
+        store=agent_account_store,
+        settings_store=PGAgentAccountSettingsStore(),
+        available=accounts is not None,
+        registration_allowed=registration_allowed,
+    )
     health.set_agent_browser(
         endpoints=len(config.answer.agent.browser.endpoints),
         sandbox=config.answer.agent.browser.chromium_sandbox,
         accounts=accounts is not None,
+        registration=accounts is not None and registration_allowed,
         mailbox=has_mailbox(accounts),
     )
 
@@ -595,6 +610,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         model_invocation_fingerprint_for_role=fingerprint_for_role,
         research_tool_declarations=answer_executor.research_tool_declarations,
         memory_capability=memory.execution_capability,
+        agent_registration=agent_accounts.registration,
         bind_research=connections.bind_research,
         # Stable across workers sharing the operational database. Cursors
         # carry no authorization state and expire on credential rotation.
@@ -614,11 +630,12 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
 
     return _ApplicationComponents(
         connections=connections,
+        agent_accounts=agent_accounts,
         # A writer re-seals Agent Account envelopes whatever its browser configuration, since
         # envelopes sealed earlier must still follow a rotation; a reader writes nothing.
         agent_account_maintenance=None
         if config.is_reader
-        else AgentAccountMaintenance(store=PGAgentAccountStore(), cipher=cipher),
+        else AgentAccountMaintenance(store=agent_account_store, cipher=cipher),
         health=health,
         capabilities=capabilities,
         model_catalogue=model_catalogue,

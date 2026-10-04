@@ -24,6 +24,10 @@ from typing import Any, cast
 import asyncpg
 import pytest
 
+from dlightrag.adapters.postgres.answer.agent_accounts import (
+    AGENT_ACCOUNT_SETTINGS_SCHEMA_TABLE,
+    AGENT_ACCOUNTS_SCHEMA_TABLE,
+)
 from dlightrag.adapters.postgres.answer.workspace import (
     PGWorkspaceStore,
     write_committed_spill,
@@ -142,6 +146,24 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_runs (
         CHECK ((status IN ('queued', 'running')) = (prepared_input_json IS NOT NULL)),
     CONSTRAINT dlightrag_answer_runs_workspace_epoch_check
         CHECK (workspace_epoch IS NULL OR workspace_epoch >= 1)
+)
+"""
+
+# The Agent Accounts table as it first shipped (feat/agent-browser), before it kept when an
+# account was registered or last used and before an owner had a switch for new sign-ups.
+_EARLIER_AGENT_ACCOUNTS_DDL = """
+CREATE TABLE dlightrag_agent_accounts (
+    owner_id           TEXT        NOT NULL,
+    site               TEXT        NOT NULL,
+    account_id         TEXT        NOT NULL,
+    email              TEXT,
+    username           TEXT,
+    key_id             TEXT        NOT NULL,
+    encrypted_envelope TEXT        NOT NULL,
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (owner_id, site),
+    CONSTRAINT dlightrag_agent_accounts_identity_check
+        CHECK (email IS NOT NULL OR username IS NOT NULL)
 )
 """
 
@@ -589,6 +611,47 @@ class TestSchema:
                 "AND conname = 'dlightrag_runs_permit_check')"
             )
 
+    async def test_accounts_made_before_their_times_and_the_switch_gain_both(
+        self, store, pool
+    ) -> None:
+        """A database holding the table as it first shipped is advanced, never reset.
+
+        It gains the two times, an account that had no registration time takes the time its
+        credentials last changed, and the owner's switch appears; a reader then verifies it as
+        it verifies a fresh database.
+        """
+        async with pool.acquire() as conn:
+            await conn.execute("DROP TABLE dlightrag_agent_account_settings")
+            await conn.execute("DROP TABLE dlightrag_agent_accounts")
+            await conn.execute(_EARLIER_AGENT_ACCOUNTS_DDL)
+            await conn.execute(
+                "INSERT INTO dlightrag_agent_accounts"
+                " (owner_id, site, account_id, email, key_id, encrypted_envelope, updated_at)"
+                " VALUES ('alice', 'shop.example', 'id', 'a@alias.example', 'k', '{}',"
+                " TIMESTAMPTZ '2026-10-01 12:00:00+00')"
+            )
+            changed = await conn.fetchval("SELECT updated_at FROM dlightrag_agent_accounts")
+            await conn.execute(
+                "DELETE FROM dlightrag_schema_migrations"
+                " WHERE scope = 'runs' AND version = 'agent_account_activity'"
+            )
+
+        await PGRunStore(pool=pool).initialize()
+
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT created_at, updated_at, last_used_at FROM dlightrag_agent_accounts"
+            )
+            assert row is not None
+            assert (row["created_at"], row["updated_at"], row["last_used_at"]) == (
+                changed,
+                changed,
+                None,
+            )
+            for declared in (AGENT_ACCOUNTS_SCHEMA_TABLE, AGENT_ACCOUNT_SETTINGS_SCHEMA_TABLE):
+                assert await catalog_table(conn, declared.name) == declared_shape(declared)
+        await PGRunStore(pool=pool).initialize(validate_only=True)
+
     async def test_creates_exactly_the_answer_schema_tables(self, store, pool) -> None:
         async with pool.acquire() as conn:
             rows = await conn.fetch(
@@ -619,6 +682,7 @@ class TestSchema:
             "dlightrag_answer_memory_settings",
             "dlightrag_agent_browser_leases",
             "dlightrag_agent_accounts",
+            "dlightrag_agent_account_settings",
             "dlightrag_corpus_mutation_windows",
         }
 

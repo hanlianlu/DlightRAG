@@ -47,7 +47,7 @@ from dlightrag.engine.agent.tools.files import (
     write_tool,
 )
 from dlightrag.engine.agent.tools.registry import DuplicateToolError, ToolRegistry
-from dlightrag.engine.answer.agent_browser import has_mailbox
+from dlightrag.engine.answer.agent_browser import has_mailbox, may_register
 from dlightrag.engine.answer.citations.utils import ATTACHMENT_WORKSPACE, WEB_SEARCH_WORKSPACE
 from dlightrag.engine.answer.continuation_handles import SESSION_NOTE_DIRECTORY
 from dlightrag.engine.answer.errors import (
@@ -134,6 +134,7 @@ class ResearchToolDeclarations(Protocol):
         *,
         web_search: bool,
         memory: bool,
+        agent_registration: bool,
         model_guidance: str,
         injected: Sequence[ToolDeclaration],
     ) -> tuple[ToolDeclaration, ...]: ...
@@ -144,7 +145,7 @@ def research_tool_declarations(
     web_search: bool = False,
     resource_read: bool = False,
     agent_browser: bool = False,
-    agent_accounts: bool = False,
+    agent_registration: bool = False,
     agent_mailbox: bool = False,
     resource_view: bool = False,
     environment: bool = False,
@@ -171,7 +172,9 @@ def research_tool_declarations(
         declarations.append(view_declaration())
     if agent_browser:
         declarations.append(
-            browser_declaration(upload=environment, accounts=agent_accounts, mailbox=agent_mailbox)
+            browser_declaration(
+                upload=environment, registration=agent_registration, mailbox=agent_mailbox
+            )
         )
     declarations.extend(injected)
     if environment:
@@ -257,7 +260,7 @@ def compose_research_tools(
         web_search=search_web is not None,
         resource_read=resource_reader is not None,
         agent_browser=browser is not None,
-        agent_accounts=accounts is not None,
+        agent_registration=may_register(accounts),
         agent_mailbox=has_mailbox(accounts),
         resource_view=resource_viewer is not None,
         environment=environment is not None,

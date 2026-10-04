@@ -6,15 +6,17 @@ reference, and seals it under the deployment key ring, so no password enters mod
 context and no surface ever shows one. A parent Agent Session's accounts persist per
 owner for that owner's later Runs; a Child's last only for the Run. An optional
 Agent Mailbox delivers verification mail to per-owner aliases from an S3-compatible
-bucket that the deployment fills. A CAPTCHA still stops the Agent, and the Settings
-section for accounts is designed with the product owner later and not built now.
+bucket that the deployment fills. A CAPTCHA still stops the Agent. An owner lists and
+removes the accounts in Settings and switches the Agent's new sign-ups on or off there; the
+deployment's own flag stays the ceiling.
 
 ## Status
 
 Accepted; implementation in progress. It lands as slices 4 and 5 of the sequence
 [ADR 0032](0032-the-agent-browser.md) records, and each passes a review on four axes
 — Standards, Spec, correctness and security, and performance — before the next one
-begins.
+begins. Slice 4 built the accounts and the mailbox, and slice 5 their Settings section
+with the owner's switch for new sign-ups.
 
 It amends one earlier statement.
 [ADR 0005](0005-public-web-resource-acquisition.md)'s closing line keeps
@@ -49,9 +51,17 @@ Corpus S3 source, reads an S3-compatible bucket.
 
 ## Decision
 
-**The Agent may register, and registration is on by default.**
-`answer.agent.browser.account_registration` defaults to `true`. Set to `false`,
-`browser` does not offer `register`.
+**The Agent may register, and registration is on by default; the deployment and each
+owner can turn it off.** `answer.agent.browser.account_registration` defaults to `true` and
+is the deployment's allowance. Set to `false`, `browser` does not offer `register`, and
+`login` and `inbox` are unaffected: accounts an owner already has keep working. Each owner
+also has a switch for the Agent's new sign-ups, on until they turn it off, and a Run may
+register only if the allowance and the owner's switch are both on. Acceptance reads the
+switch once and pins the answer with the Run, as it pins the Profile Memory capability, so
+the Run's plan and its tools agree and switching later changes no Run already accepted. The
+allowance is the ceiling: it is read again at execution, and a Run pinned to register under
+one since withdrawn is refused like any Run whose tools changed. A Child's tools follow its
+Run's.
 
 **The identity is the Agent's own.** No credential, name, address, or other personal
 information of the owner enters a form, and an alias carries nothing of the owner's
@@ -89,8 +99,10 @@ with the owner's persistent accounts, as it recalls the owner's memory: using
 durable owner state is capability, and adding to it is authority.
 
 **Credentials are write-only everywhere.** No route, Settings view, export, event, or
-tool result returns a password, following the Connections precedent. The deferred
-Settings section lists and removes accounts; it does not show passwords.
+tool result returns a password, following the Connections precedent. The Settings routes
+(`/web/api/agent-accounts`) list accounts by site, identity and two dates, set the owner's
+switch, and remove an account; they return no password, envelope, key id, or account id, and
+no route edits an account.
 
 **A CAPTCHA stops registration as it stops browsing.** ADR 0032's boundary has no
 account exception: a sign-up behind human verification is abandoned and reported,
@@ -131,10 +143,16 @@ first-URL check.
 temporary-mail website in the browser and use that address. No product code
 supports it, and `register` records the address the Agent typed.
 
-**The Settings section is co-designed later.** Agent Accounts get a Settings section
-designed with the product owner, not a minimal list, in the phase that also
-redesigns the Profile Memory and Conversation Sessions sections for compactness and
-visual style. Nothing of it is built in slice 4.
+**Settings lists, switches, and removes; it edits and reveals nothing.** Slice 5 built the
+Agent Accounts section with the product owner, in the Settings dialog that also redesigned
+the Profile Memory and Conversation Sessions sections. It lists each account's site, the
+identity the Agent registered under, the day it was registered and the day it was last
+signed in, removes an account, and holds the owner's switch. Removing deletes the saved
+sign-in and its sealed password; the account itself stays on the site. The registered day
+is kept by a password reset, which is the same account, and the last sign-in is the day a
+login last filled its stored credentials, which a Child's login with the owner's account
+records too, since recording a use adds no authority. The routes are Web-only, like
+Connections: owner Settings state has no REST counterpart.
 
 ## Considered options
 
@@ -182,8 +200,9 @@ Landing order, the sequence shared with ADR 0032 and ADR 0033:
    `account_registration` and `answer.agent.mailbox`; and ADR 0032's acceptance 5 —
    register on a free site with email verification, verify, log in, read a gated
    page, and reuse the account in a later Run.
-5. **The frontend co-design** (this decision): the Agent Accounts Settings section,
-   with the Profile Memory and Conversation Sessions redesign.
+5. **The frontend co-design** (this decision): the Settings dialog and its Agent Accounts
+   section, with the Profile Memory and Conversation Sessions redesign, the two dates an
+   account shows, and the owner's switch for new sign-ups.
 
 `CredentialCipher` lives in the Connections package today, and its associated data
 and its errors name Connections. A second consumer moves the cipher and the loading
@@ -197,8 +216,10 @@ Live documents to revise as slices 4 and 5 land:
 and Execution boundary, and the key ring paragraph),
 [Personal MCP Connections](../personal-mcp-connections.md) (the key ring's second
 consumer), [configuration](../configuration.md) (`account_registration` and
-`answer.agent.mailbox`), `.env.example` (the bucket credentials), and
-[operations](../operations.md) (key ring rotation, and the mail routing example).
+`answer.agent.mailbox`), `.env.example` (the bucket credentials),
+[operations](../operations.md) (key ring rotation, and the mail routing example),
+[interfaces](../interfaces.md) (the Settings routes and what health says), and
+[PostgreSQL](../postgresql.md) (the account tables).
 
 Residual risks, recorded rather than solved:
 

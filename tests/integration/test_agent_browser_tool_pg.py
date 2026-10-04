@@ -57,7 +57,14 @@ from tests.integration.test_attachment_replay_pg import (
     new_run,
     orchestrator,
 )
-from tests.support.agent_browser import Served, WebProxy, browser_settings, run_server, web_proxy
+from tests.support.agent_browser import (
+    Served,
+    WebProxy,
+    browser_settings,
+    idle_accounts,
+    run_server,
+    web_proxy,
+)
 from tests.support.dns import public_dns
 from tests.support.pg import skip_without_postgres
 from tests.tool_helpers import tool_runtime
@@ -228,7 +235,9 @@ def attempt_of(
     host = orchestrator(
         model,
         registry=registry,
-        browser=BrowserToolHost(run, registry, make_resource_reader(registry, 4000)),
+        browser=BrowserToolHost(
+            run, registry, make_resource_reader(registry, 4000), idle_accounts()
+        ),
     )
     return run, registry, buffer, host
 

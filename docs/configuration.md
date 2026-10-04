@@ -949,12 +949,13 @@ and Research has no `browser` tool.
   ([when](architecture.md#agent-browser)). The next render or page leases again, and `0`
   gives it back as soon as nothing is open. Settlement releases whatever is held either
   way.
-- `account_registration` is whether the Agent may register on third-party sites and sign
-  in with Agent Accounts of its own ([ADR 0034](adr/0034-agent-accounts-and-the-agent-mailbox.md);
+- `account_registration` is the deployment's allowance for the Agent to register new
+  accounts on third-party sites ([ADR 0034](adr/0034-agent-accounts-and-the-agent-mailbox.md);
   [what the actions do](retrieval-answer.md#agent-accounts-and-the-agent-mailbox)). `false`
-  offers neither `register` nor `login`, and so no `inbox`. Accounts the Agent made earlier
-  stay in PostgreSQL and still follow a key ring rotation. Without a key ring, register and
-  login fail closed whatever this says.
+  withdraws `register` alone: `login` and `inbox` still serve the accounts an owner has, and
+  those stay in PostgreSQL and follow a key ring rotation. Each owner's own switch for new
+  sign-ups in Settings can only turn registration off further than this. Without a key ring,
+  register and login fail closed whatever this says.
 
 The pool's size is the deployment's limit on Runs using a browser at the same moment
 ([sizing](operations.md#agent-browser-pool)). What `GET /health` says of the Agent
@@ -977,7 +978,8 @@ The Agent Mailbox is optional ([ADR 0034](adr/0034-agent-accounts-and-the-agent-
 gives the Agent addresses of its own to register with and lets it read the mail that arrives
 at them with `inbox`; without it the Agent may use a temporary-mail site through the
 browser itself, and `register` records the address it typed. No bucket means no Agent
-Mailbox, and an Agent Mailbox needs [Agent Accounts](#agent-browser) to be on.
+Mailbox, and an Agent Mailbox needs an [Agent Browser](#agent-browser), whose accounts it
+serves.
 
 - The two keys are secrets, so they belong in `.env` and nowhere in YAML
   ([ADR 0006](adr/0006-configuration-ownership-and-deployment-bindings.md)):

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import cast
 
 from pydantic import SecretStr
 
@@ -14,7 +13,6 @@ from dlightrag.engine.answer.agent_browser import (
     AgentMailboxError,
     MailListing,
     MailObject,
-    RunAgentAccounts,
     StoredAgentAccount,
     owner_alias,
 )
@@ -71,9 +69,9 @@ class Inbox:
     """The browser tool of a Run with an Agent Mailbox, and what a Session did in it."""
 
     def __init__(self, mailbox: ScriptedMailbox) -> None:
-        host = inert_browser_host(accounts=True, mailbox=mailbox)
+        host = inert_browser_host(mailbox=mailbox)
         self.browser = host.browser
-        self.accounts = cast(RunAgentAccounts, host.accounts)
+        self.accounts = host.accounts
         self.tool = browser_tool(
             host,
             environment=None,

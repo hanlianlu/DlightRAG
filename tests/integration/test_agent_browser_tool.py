@@ -48,6 +48,7 @@ from tests.support.agent_browser import (
     Served,
     WebProxy,
     browser_settings,
+    idle_accounts,
     run_server,
     web_proxy,
 )
@@ -234,7 +235,7 @@ async def browsing(
         run = RunAgentBrowser(provider, HOLDER, settings)
         stack.push_async_callback(run.aclose)
         registry = await stack.enter_async_context(ResourceRegistry(fetched_bytes_sink=sink))
-        host = BrowserToolHost(run, registry, make_resource_reader(registry, 4000))
+        host = BrowserToolHost(run, registry, make_resource_reader(registry, 4000), idle_accounts())
         tool = browser_tool(
             host,
             environment=(

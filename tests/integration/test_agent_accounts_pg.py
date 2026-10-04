@@ -1,5 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Agent Accounts in PostgreSQL: owner-scoped rows, and their re-sealing after a key rotation.
+"""Agent Accounts in PostgreSQL: owner-scoped rows, the times they keep, the owner's switch for new
+sign-ups, and the re-sealing of their envelopes after a key rotation.
 
 Every test owns a scratch database. A generated password is compared in code and never put into
 an assertion, so a failure reports a count or a flag and never the value.
@@ -9,6 +10,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +18,10 @@ import asyncpg
 import pytest
 from pydantic import SecretStr
 
-from dlightrag.adapters.postgres.answer.agent_accounts import PGAgentAccountStore
+from dlightrag.adapters.postgres.answer.agent_accounts import (
+    PGAgentAccountSettingsStore,
+    PGAgentAccountStore,
+)
 from dlightrag.engine.answer.agent_browser import (
     ACCOUNT_LABEL,
     AgentAccountsBinding,
@@ -75,7 +80,11 @@ async def register(
     store: PGAgentAccountStore, cipher: CredentialCipher, owner: str, site: str
 ) -> SecretStr:
     """The owner's parent registers on the site, and the password sealed for it comes back."""
-    run = RunAgentAccounts(owner_id=owner, binding=AgentAccountsBinding(store, cipher))
+    run = RunAgentAccounts(
+        owner_id=owner,
+        binding=AgentAccountsBinding(store, cipher, registration_allowed=True),
+        registration=True,
+    )
     session = run.session("parent", child=False)
     password = generate_password()
     await session.record(
@@ -141,6 +150,110 @@ async def test_an_account_names_an_email_or_a_username(pool: Any) -> None:
         await store.save(StoredAgentAccount("alice", "b.example", "id", None, None, "test", "{}"))
 
 
+async def test_an_account_keeps_when_it_was_registered_and_records_the_logins_that_fill_it(
+    pool: Any,
+) -> None:
+    store, cipher = PGAgentAccountStore(pool=pool), ring("test", "test")
+    await register(store, cipher, "alice", "shop.example")
+    registered = await row_of(pool, "alice", "shop.example")
+    assert registered["last_used_at"] is None
+    assert registered["created_at"] == registered["updated_at"]
+
+    account = await store.account(owner_id="alice", site="shop.example")
+    assert account is not None
+    await store.mark_used(account)
+    used = await row_of(pool, "alice", "shop.example")
+    assert used["last_used_at"] >= registered["created_at"]
+    assert (used["created_at"], used["updated_at"]) == (
+        registered["created_at"],
+        registered["updated_at"],
+    )
+
+    # A reset is the same account under a new password: not a second registration, not a login.
+    await register(store, cipher, "alice", "shop.example")
+    reset = await row_of(pool, "alice", "shop.example")
+    assert reset["created_at"] == registered["created_at"]
+    assert reset["updated_at"] > registered["updated_at"]
+    assert reset["last_used_at"] == used["last_used_at"]
+
+
+async def test_a_login_marks_the_account_it_filled_and_never_one_that_was_replaced_or_removed(
+    pool: Any,
+) -> None:
+    store, cipher = PGAgentAccountStore(pool=pool), ring("test", "test")
+    await register(store, cipher, "alice", "shop.example")
+    await register(store, cipher, "bob", "shop.example")
+    filled = await store.account(owner_id="alice", site="shop.example")
+    assert filled is not None
+
+    # The owner removed the account the login had read, and the Agent registered another there.
+    assert await store.delete(owner_id="alice", site="shop.example") is True
+    await register(store, cipher, "alice", "shop.example")
+    await store.mark_used(filled)
+
+    assert [
+        (await row_of(pool, owner, "shop.example"))["last_used_at"] for owner in ("alice", "bob")
+    ] == [None, None]
+    # Nor does it bring back an account that is gone.
+    assert await store.delete(owner_id="alice", site="shop.example") is True
+    await store.mark_used(filled)
+    assert await row_of(pool, "alice", "shop.example") is None
+
+
+async def test_an_owner_lists_and_removes_only_their_own_accounts_in_the_order_of_their_sites(
+    pool: Any,
+) -> None:
+    store, cipher = PGAgentAccountStore(pool=pool), ring("test", "test")
+    for owner, site in (
+        ("alice", "b.example"),
+        ("alice", "a.example"),
+        ("bob", "c.example"),
+        ("bob", "a.example"),
+    ):
+        await register(store, cipher, owner, site)
+    used = await store.account(owner_id="alice", site="b.example")
+    assert used is not None
+    await store.mark_used(used)
+
+    listed = await store.summaries(owner_id="alice")
+
+    assert [(row.site, row.email) for row in listed] == [
+        ("a.example", "alice@alias.example"),
+        ("b.example", "alice@alias.example"),
+    ]
+    assert [row.last_used_at is not None for row in listed] == [False, True]
+    created = (await row_of(pool, "alice", "a.example"))["created_at"]
+    assert listed[0].created_at == created
+    # What the owner is shown names no secret and no id.
+    assert set(asdict(listed[0])) == {"site", "email", "username", "created_at", "last_used_at"}
+    assert await store.summaries(owner_id="carol") == ()
+
+    # Removing is the owner's own: another owner's account on the same site stays.
+    assert await store.delete(owner_id="carol", site="a.example") is False
+    assert await store.delete(owner_id="alice", site="a.example") is True
+    assert await store.delete(owner_id="alice", site="a.example") is False
+    assert [row.site for row in await store.summaries(owner_id="alice")] == ["b.example"]
+    assert [row.site for row in await store.summaries(owner_id="bob")] == [
+        "a.example",
+        "c.example",
+    ]
+
+
+async def test_new_sign_ups_are_on_until_the_owner_turns_them_off_and_the_switch_is_theirs(
+    pool: Any,
+) -> None:
+    settings = PGAgentAccountSettingsStore(pool=pool)
+
+    assert await settings.registration_enabled(owner_id="alice") is True
+    assert await settings.set_registration_enabled(owner_id="alice", enabled=False) is False
+    assert await settings.registration_enabled(owner_id="alice") is False
+    assert await settings.registration_enabled(owner_id="bob") is True
+    assert await settings.set_registration_enabled(owner_id="alice", enabled=True) is True
+    assert await settings.registration_enabled(owner_id="alice") is True
+    async with pool.acquire() as conn:
+        assert await conn.fetchval("SELECT count(*) FROM dlightrag_agent_account_settings") == 1
+
+
 async def test_reseal_moves_retired_envelopes_and_skips_ones_no_key_opens(pool: Any) -> None:
     store, old = PGAgentAccountStore(pool=pool), ring("test", "test")
     readable = {
@@ -166,8 +279,13 @@ async def test_reseal_moves_retired_envelopes_and_skips_ones_no_key_opens(pool: 
         row, was = await row_of(pool, owner, site), before[(owner, site)]
         assert row["key_id"] == "next" and row["encrypted_envelope"] != was["encrypted_envelope"]
         # The account is the same one, only sealed anew: nothing the owner did to it moved.
-        assert (row["account_id"], row["updated_at"]) == (was["account_id"], was["updated_at"])
-        run = RunAgentAccounts(owner_id=owner, binding=AgentAccountsBinding(store, rotated))
+        moved = ("account_id", "created_at", "updated_at", "last_used_at")
+        assert [row[name] for name in moved] == [was[name] for name in moved]
+        run = RunAgentAccounts(
+            owner_id=owner,
+            binding=AgentAccountsBinding(store, rotated, registration_allowed=True),
+            registration=True,
+        )
         session = run.session("parent", child=False)
         account = await session.login_target(site)
         assert account is not None and session.password(account) == password
@@ -225,6 +343,10 @@ async def test_a_later_run_logs_in_with_the_account_a_parent_registered(
         assert fields["email"] == [alias]
         assert_sent(fields, password, "password")
     after = await row_of(pool, "owner", SITE)
-    # The account is the alias the first Run minted, and logging in changed nothing about it.
+    # The account is the alias the first Run minted, and logging in changed nothing about it
+    # but the day it was last used.
     assert registered["email"] == alias
-    assert {k: after[k] for k in after.keys()} == {k: registered[k] for k in registered.keys()}
+    assert registered["last_used_at"] is None and after["last_used_at"] is not None
+    assert {k: after[k] for k in after.keys() if k != "last_used_at"} == {
+        k: registered[k] for k in registered.keys() if k != "last_used_at"
+    }

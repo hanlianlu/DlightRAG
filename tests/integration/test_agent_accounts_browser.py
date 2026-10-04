@@ -23,7 +23,7 @@ from typing import Any
 from urllib.parse import parse_qs
 
 import pytest
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from dlightrag.adapters.agent_mailbox import S3AgentMailbox
 from dlightrag.engine.agent.environment import AccessScheduler
@@ -320,10 +320,14 @@ async def browsing(
     store: AgentAccountStore | None = None,
     keyring: str | None = KEYRING,
     mailbox: AgentMailbox | None = None,
+    registration: bool = True,
     pages: dict[str, Served] | None = None,
     **bounds: Any,
 ) -> AsyncIterator[Browsing]:
-    """A Run's browser tool over a Chromium that reaches ``pages`` through a TLS-terminating proxy."""
+    """A Run's browser tool over a Chromium that reaches ``pages`` through a TLS-terminating proxy.
+
+    The Run may register unless ``registration`` is off, which is the owner's switch pinned to it.
+    """
     admitted: list[tuple[FetchedResourceBytes, ResourceEffectOwner | None]] = []
 
     async def sink(fetched: FetchedResourceBytes, owner: ResourceEffectOwner | None) -> None:
@@ -341,7 +345,11 @@ async def browsing(
         stack.push_async_callback(run.aclose)
         registry = await stack.enter_async_context(ResourceRegistry(fetched_bytes_sink=sink))
         accounts = RunAgentAccounts(
-            owner_id=OWNER, binding=AgentAccountsBinding(accounts_store, cipher, mailbox)
+            owner_id=OWNER,
+            binding=AgentAccountsBinding(
+                accounts_store, cipher, mailbox, registration_allowed=True
+            ),
+            registration=registration,
         )
         host = BrowserToolHost(run, registry, make_resource_reader(registry, 4000), accounts)
         tools = {
@@ -517,8 +525,8 @@ async def test_a_password_fills_only_password_fields_of_the_pages_site(tmp_path:
         not_text = await web.call(action="register", password_refs=[password], email_ref=password)
 
         assert elsewhere.is_error and elsewhere.text_content == (
-            f"Field {other} is not on an https page of {SITE}, so nothing was filled: register "
-            "and login fill only the fields of the page's own site."
+            f"Field {other} is not on an https page of {SITE}, so nothing was filled: an Agent "
+            "Account is filled only into the fields of the page's own site."
         )
         assert not_a_password.text_content == (
             f"Element {email} is not a password field, so nothing was filled."
@@ -552,7 +560,7 @@ async def test_a_password_fills_only_password_fields_of_the_pages_site(tmp_path:
         form = await web.form("http://example.com/signup")
         plain = await web.register(form)
         assert plain.is_error and plain.text_content == (
-            "register and login need an https page with a registrable domain; this page is "
+            "register needs an https page with a registrable domain; this page is "
             "example.com/signup."
         )
         assert len(web.rows) == 1
@@ -746,12 +754,17 @@ async def test_login_fills_the_stored_account_in_a_fresh_session(tmp_path: Path)
     async with browsing(tmp_path, store=store) as later:
         later.watch(password)
         form = await later.form(f"{SHOP}/signin")
+        assert [row.last_used_at for row in await store.summaries(owner_id=OWNER)] == [None]
 
         filled = await later.call(
             action="login", email_ref=form["email"], password_refs=[form["password"]]
         )
 
         assert not filled.is_error, filled.text_content
+        # The owner's Settings show the day this login filled the account.
+        assert [row.last_used_at is not None for row in await store.summaries(owner_id=OWNER)] == [
+            True
+        ]
         text = filled.text_content
         assert (
             f"Filled the Agent Account {EMAIL} for {SITE} into email, 1 password field(s). "
@@ -762,6 +775,29 @@ async def test_login_fills_the_stored_account_in_a_fresh_session(tmp_path: Path)
         fields = posted(later.proxy, "/session")
         assert fields["email"] == [EMAIL]
         assert_sent(fields, password, "password")
+
+
+async def test_a_login_whose_last_use_cannot_be_recorded_still_fills_the_form(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    class Down(MemoryAccountStore):
+        async def mark_used(self, account: StoredAgentAccount) -> None:
+            raise ConnectionError("the database is down")
+
+    caplog.set_level(logging.WARNING)
+    async with browsing(tmp_path, store=Down()) as web:
+        await web.register(await web.form(f"{SHOP}/signup"))
+        password = web.stored_password()
+        form = await web.form(f"{SHOP}/signin")
+
+        filled = await web.call(
+            action="login", email_ref=form["email"], password_refs=[form["password"]]
+        )
+
+        assert not filled.is_error, filled.text_content
+        assert shows_mask(filled.text_content, "Password", form["password"])
+        assert "An Agent Account's last use could not be recorded (ConnectionError)" in caplog.text
+        assert_hidden(password, caplog.text)
 
 
 async def test_login_says_what_the_account_lacks_and_that_a_deployment_without_a_ring_has_none(
@@ -836,6 +872,7 @@ async def test_a_childs_registration_is_run_scoped(tmp_path: Path) -> None:
         web.watch(SecretStr(join["password"][0]))
 
         # Its login fills its own account, and another Child's falls back to the owner's.
+        last_used = []
         for scope in ("child-a", "child-b"):
             signin = await web.form(f"{SHOP}/signin", scope, child=True)
             await web.call(
@@ -846,6 +883,12 @@ async def test_a_childs_registration_is_run_scoped(tmp_path: Path) -> None:
                 password_refs=[signin["password"]],
             )
             await web.call(scope, child=True, action="click", ref=signin["button"])
+            last_used.append(
+                [row.last_used_at is not None for row in await web.store.summaries(owner_id=OWNER)]
+            )
+        # A login with a Child's own account writes nothing, and one with the owner's account
+        # records its use, which adds the Child no authority.
+        assert last_used == [[False], [True]]
 
         own, fallback = posts(web.proxy, "/session")
         assert own["email"] == [alias]
@@ -858,6 +901,86 @@ async def test_a_childs_registration_is_run_scoped(tmp_path: Path) -> None:
         assert fallback["email"] == [owners_alias]
         assert_sent(fallback, owners, "password")
         assert web.rows == [owners_row]
+
+
+async def test_a_run_that_may_not_register_logs_in_with_what_its_owner_has_and_cannot_register(
+    tmp_path: Path,
+) -> None:
+    async with browsing(tmp_path) as first:
+        await first.register(await first.form(f"{SHOP}/signup"))
+        store, password = first.store, first.stored_password()
+
+    # The owner turned new sign-ups off after this account was registered: the next Run keeps the
+    # account and loses the action that makes one.
+    async with browsing(tmp_path, store=store, registration=False) as later:
+        later.watch(password)
+        form = await later.form(f"{SHOP}/signin")
+        assert (
+            "register"
+            not in later.tools[False].input_model.model_json_schema()["properties"]["action"][
+                "enum"
+            ]
+        )
+
+        filled = await later.call(
+            action="login", email_ref=form["email"], password_refs=[form["password"]]
+        )
+        with pytest.raises(ValidationError, match="Input should be"):
+            await later.call(action="register", password_refs=[form["password"]])
+
+        assert not filled.is_error, filled.text_content
+        await later.call(action="click", ref=form["button"])
+        assert_sent(posted(later.proxy, "/session"), password, "password")
+        # Nothing was registered, and a Child of the Run has no more of the action than it.
+        assert [row.email for row in later.rows] == [EMAIL]
+        with pytest.raises(ValidationError, match="Input should be"):
+            await later.call("child", child=True, action="register", password_refs=["e1"])
+
+
+async def test_what_a_run_that_may_not_register_is_told_names_only_what_it_has(
+    tmp_path: Path,
+) -> None:
+    alias = owner_alias(OWNER, SITE, DOMAIN)
+    _, envelope = CredentialCipher(SecretStr(KEYRING)).seal(
+        generate_password(), label=ACCOUNT_LABEL, binding=(OWNER, SITE, "account")
+    )
+    store = MemoryAccountStore()
+    store.rows[(OWNER, SITE)] = StoredAgentAccount(
+        OWNER, SITE, "account", alias, None, "test", envelope
+    )
+
+    async with browsing(
+        tmp_path, store=store, mailbox=StubMailbox(DOMAIN), registration=False
+    ) as web:
+        # The inbox opens at a login here, so that is the only thing it says.
+        unopened = await web.call(action="inbox")
+        assert unopened.is_error and unopened.text_content == (
+            "inbox shows mail only after login in this Agent Session, and it has not logged in "
+            "during this Run."
+        )
+        # A site where the owner has no account: the Run is told so, and of no way to make one.
+        other = await web.call(action="navigate", url="https://pay.example.org/card")
+        card = ref_of(other.text_content, 'textbox "Other secret"')
+        none = await web.call(action="login", password_refs=[card])
+        assert none.is_error and none.text_content == "No Agent Account exists for example.org."
+        # A page with no registrable domain has no account to fill, in the words of the call.
+        form = await web.form("http://example.com/signup")
+        plain = await web.call(action="login", email_ref=form["email"])
+        assert plain.is_error and plain.text_content == (
+            "login needs an https page with a registrable domain; this page is example.com/signup."
+        )
+
+    # An account whose key the ring lost cannot be recovered by a Run that cannot register.
+    async with browsing(
+        tmp_path, store=store, keyring=OTHER_KEYRING, registration=False
+    ) as keyless:
+        signin = await keyless.form(f"{SHOP}/signin")
+        unreadable = await keyless.call(
+            action="login", email_ref=signin["email"], password_refs=[signin["password"]]
+        )
+        assert unreadable.is_error and unreadable.text_content == (
+            "The stored password for example.com can no longer be opened."
+        )
 
 
 # -- screenshots ------------------------------------------------------------------------------

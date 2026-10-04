@@ -5,9 +5,11 @@ from dlightrag.engine.answer.agent_browser.accounts import (
     ACCOUNT_LABEL,
     MIN_PASSWORD_LENGTH,
     PASSWORD_LENGTH,
+    REGISTRATION_PIN,
     AgentAccount,
     AgentAccountsBinding,
     AgentAccountStore,
+    AgentAccountSummary,
     ChildAccount,
     RunAgentAccounts,
     SessionAccounts,
@@ -15,8 +17,10 @@ from dlightrag.engine.answer.agent_browser.accounts import (
     account_site,
     generate_password,
     has_mailbox,
+    may_register,
     owner_alias,
     reseal_agent_accounts,
+    run_agent_accounts,
     run_alias,
 )
 from dlightrag.engine.answer.agent_browser.contracts import (
@@ -61,7 +65,7 @@ from dlightrag.engine.answer.agent_browser.mailbox import (
     summarize_mail,
 )
 from dlightrag.engine.answer.agent_browser.passwords import PASSWORD_MASK, FilledPasswords
-from dlightrag.engine.answer.agent_browser.run import RunAgentBrowser
+from dlightrag.engine.answer.agent_browser.run import RunAgentBrowser, RunBrowsing
 
 __all__ = [
     "ACCOUNT_LABEL",
@@ -72,8 +76,10 @@ __all__ = [
     "MIN_PASSWORD_LENGTH",
     "PASSWORD_LENGTH",
     "PASSWORD_MASK",
+    "REGISTRATION_PIN",
     "AgentAccount",
     "AgentAccountStore",
+    "AgentAccountSummary",
     "AgentAccountsBinding",
     "AgentBrowserBinding",
     "AgentBrowserError",
@@ -107,6 +113,7 @@ __all__ = [
     "RenderedPage",
     "RunAgentAccounts",
     "RunAgentBrowser",
+    "RunBrowsing",
     "SessionAccounts",
     "StoredAgentAccount",
     "UploadFile",
@@ -115,9 +122,11 @@ __all__ = [
     "generate_password",
     "has_mailbox",
     "inbox_text",
+    "may_register",
     "owner_alias",
     "page_failure",
     "reseal_agent_accounts",
+    "run_agent_accounts",
     "run_alias",
     "summarize_mail",
 ]
