@@ -364,18 +364,24 @@ it('shows a page\'s notice in its own region while open, and hands it to the she
   expect(toast.textContent).to.contain('After it closed');
 });
 
-it('lets a notice that still offers Undo outlive the dialog', async () => {
+it('lets a notice that still offers Undo outlive the dialog, and gives focus back to where it was opened', async () => {
   window.fetch = populated().fetch;
   const {settings, toast} = mountSettings();
-  const dialog = await openSettings(settings);
+  const trigger = document.createElement('button');
+  document.body.append(trigger);
+  trigger.focus();
+  await settings.open(trigger);
+  const dialog = settings.querySelector<HTMLDialogElement>('#settings-dialog')!;
+  await waitFor(() => dialog.open);
   settings.querySelector('dl-settings-language')!.dispatchEvent(new CustomEvent('dl-toast-request', {
-    detail: {message: 'Forgot: one', action: {actionLabel: 'Undo', onAction: async () => 'Undone'}},
+    detail: {message: 'Forgot: one', action: {actionLabel: 'Undo', onAction: async () => 'Undone', focus: true}},
     bubbles: true,
     composed: true,
   }));
   const own = settings.querySelector('dl-toast-region')!;
   await own.updateComplete;
   expect(own.querySelector('button')?.textContent?.trim()).to.equal('Undo');
+  await waitFor(() => document.activeElement === own.querySelector('button'));
 
   dialog.close();
   await waitFor(() => !document.body.classList.contains('settings-open'));
@@ -383,7 +389,28 @@ it('lets a notice that still offers Undo outlive the dialog', async () => {
 
   expect(toast.textContent).to.contain('Forgot: one');
   expect(toast.querySelector('button')?.textContent?.trim()).to.equal('Undo');
+  // The reader never reached that Undo: focus is back on what opened Settings.
+  expect(document.activeElement).to.equal(trigger);
 });
+
+/** A page's notice with an Undo, and the Undo as a finger would find it: showing, and under the point it covers. */
+async function noticeWithUndo(settings: DlSettingsDialog): Promise<{region: Element; undo: Element | null; hit: Element | null}> {
+  settings.querySelector('dl-settings-language')!.dispatchEvent(new CustomEvent('dl-toast-request', {
+    detail: {message: 'Forgot: one', action: {actionLabel: 'Undo', onAction: async () => 'Undone'}},
+    bubbles: true,
+    composed: true,
+  }));
+  const region = settings.querySelector('dl-toast-region')!;
+  await region.updateComplete;
+  await waitFor(() => getComputedStyle(region).opacity === '1');
+  const undo = region.querySelector('button');
+  const box = undo?.getBoundingClientRect();
+  return {
+    region,
+    undo,
+    hit: box ? document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2) : null,
+  };
+}
 
 describe('on a phone', () => {
   let unlink: () => void;
@@ -391,6 +418,7 @@ describe('on a phone', () => {
     await setViewport({width: 390, height: 844});
     unlink = await linkStyles([
       '../design-system/index.css',
+      '../styles/global.css',
       '../styles/layout.css',
       '../styles/settings.css',
       '../styles/settings-dialog.module.css',
@@ -447,6 +475,23 @@ describe('on a phone', () => {
     expect(memory.hasAttribute('aria-current')).to.equal(false);
   });
 
+  it('shows a notice on the section list as well as on a page, with its Undo within reach', async () => {
+    window.fetch = populated().fetch;
+    const {settings} = mountSettings();
+    await openSettings(settings);
+
+    // The list hides the page pane, and a notice from a page that is not showing still lands.
+    let shown = await noticeWithUndo(settings);
+    expect(visible(settings.querySelector('[role="region"]')!)).to.equal(false);
+    expect(shown.undo).not.to.equal(null);
+    expect(shown.hit).to.equal(shown.undo);
+
+    row(settings, 'language').click();
+    await settings.updateComplete;
+    shown = await noticeWithUndo(settings);
+    expect(shown.hit).to.equal(shown.undo);
+  });
+
   it('opens straight on a page it is asked for, with the list one Back away', async () => {
     window.fetch = populated().fetch;
     const {settings} = mountSettings();
@@ -464,6 +509,7 @@ describe('on a desktop', () => {
     await setViewport({width: 1280, height: 800});
     unlink = await linkStyles([
       '../design-system/index.css',
+      '../styles/global.css',
       '../styles/layout.css',
       '../styles/settings.css',
       '../styles/settings-dialog.module.css',
@@ -498,6 +544,16 @@ describe('on a desktop', () => {
     await settings.updateComplete;
     const after = dialog.getBoundingClientRect();
     expect([after.width, after.height]).to.deep.equal([880, 640]);
+  });
+
+  it('shows a notice with its Undo within reach of a pointer', async () => {
+    window.fetch = populated().fetch;
+    const {settings} = mountSettings();
+    await openSettings(settings);
+
+    const shown = await noticeWithUndo(settings);
+    expect(shown.undo).not.to.equal(null);
+    expect(shown.hit).to.equal(shown.undo);
   });
 
   it('opens every page at its top, and scrolls its own pane rather than the dialog', async () => {

@@ -6,7 +6,9 @@
  * data and reports a typed summary for the navigation row to show. Pages are mounted while the
  * dialog is open and hidden while another shows, so a page that polls keeps its status fresh;
  * closing tears them down. Profile Memory is the one page that stays in the dialog while it is
- * closed, because a live Memory change arrives with an Undo whenever Chat says so.
+ * closed, because a live Memory change arrives with an Undo whenever Chat says so. A notice shows
+ * in a toast region of the dialog's own, in the top layer with it, because the shell's would sit
+ * under the scrim; a page's notice reaches it whichever level a phone is on.
  *
  * On a phone the same markup is two levels: the section list, then one page with a Back button.
  */
@@ -267,10 +269,10 @@ export class DlSettingsDialog extends LightElement {
                   ?hidden=${!isPage('conversations')}></dl-settings-conversations>
                 <dl-settings-language ?hidden=${!isPage('language')}></dl-settings-language>` : nothing}
             </div>
-            ${this.mounted ? html`
-              <dl-toast-region class=${styles.notice} role="status" aria-live="polite"></dl-toast-region>` : nothing}
           </section>
         </div>
+        ${this.mounted ? html`
+          <dl-toast-region class="toast" role="status" aria-live="polite"></dl-toast-region>` : nothing}
       </dialog>
     `;
   }
@@ -367,7 +369,10 @@ export class DlSettingsDialog extends LightElement {
     // A notice that still offers Undo outlives the dialog: the shell's region takes it over.
     const toast = this.querySelector('dl-toast-region');
     const notice = toast?.request;
-    if (notice?.action && !toast?.pending) requestToast(this, {message: notice.message, action: notice.action});
+    // Focus goes back to where Settings was opened from, not to an Undo the reader never reached.
+    if (notice?.action && !toast?.pending) {
+      requestToast(this, {message: notice.message, action: {...notice.action, focus: false}});
+    }
     this.mounted = false;
     this.summaries = {};
     publishModalState(this);

@@ -165,7 +165,8 @@ that owns its data and reports a short summary for its navigation row.
   It takes `--radius-dialog`, a hairline `--color-border-subtle` border, `--shadow-overlay`,
   `--color-bg-surface` and the shared scrim. The navigation column is 15rem (240px) wide, wide enough
   for "Conversation Sessions" and a count on one line, and a hairline sets it off from the page.
-  Nothing inside the dialog casts a shadow: the dialog is the one overlapping surface.
+  Docked surfaces inside the dialog (the navigation, the pages, their cards) cast no shadow: the dialog
+  is the one overlapping surface, and the notice is the one thing that floats over it, as a toast.
 - **Navigation.** `<nav aria-label="Settings">` holds three labelled groups: Agent (Connections, Agent
   Accounts, Profile Memory), Data (Conversation Sessions), and General (Language). Each item is a native
   `.dl-nav-item` button with an icon, its label, and a short status (`1/2`, `3`, `5`, `18`; none for
@@ -175,8 +176,10 @@ that owns its data and reports a short summary for its navigation row.
   region named by its heading, and a page that is not showing is `hidden`, not unmounted.
 - **Pages.** A page is a column of cards: `--radius-card`, a 1px `--color-border-subtle` border, rows
   separated by the same hairline. A switch card is its switch's label, so a tap anywhere on it turns the
-  switch. A destructive action is a `.dl-btn.dl-btn-danger-text` button in its own card. Notices float over
-  the foot of the pane, wherever the reader is, because a Memory change can arrive on any page.
+  switch. A destructive action is a `.dl-btn.dl-btn-danger-text` button in its own card. A notice is the
+  app's toast (`.toast`, with its shadow and its Undo) in a region the dialog owns, because the shell's
+  region would sit under the scrim. It sits outside the page pane, so a Memory change shows wherever the
+  reader is, including a phone's section list.
 - **Controls.** Icon buttons are `dl-icon-button`. Inside the dialog the control ladder sets
   `--control-hit-target: var(--size-button)`, so they are compact beside a pointer and 44px under 1200px.
   Switches are `dl-switch--dense`: the compact track on desktop and the regular 40 by 24 on a phone,

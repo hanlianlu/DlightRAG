@@ -109,8 +109,11 @@ export class DlSettingsAgentAccounts extends LightElement {
       this.error = false;
     } catch {
       if (signal.aborted) return;
-      if (this.view) this.#say(msg('Could not load agent accounts.', {id: 'agentAccounts.loadFailed'}));
-      else this.error = true;
+      if (this.view) {
+        requestToast(this, {message: msg('Could not load agent accounts.', {id: 'agentAccounts.loadFailed'}), duration: 3000});
+      } else {
+        this.error = true;
+      }
     }
   }
 
@@ -118,10 +121,6 @@ export class DlSettingsAgentAccounts extends LightElement {
     this.error = false;
     void this.#load();
   };
-
-  #say(message: string): void {
-    requestToast(this, {message, duration: 3000});
-  }
 
   #toggleRegistration = async (event: Event): Promise<void> => {
     const signal = this.#events?.signal;
@@ -134,7 +133,9 @@ export class DlSettingsAgentAccounts extends LightElement {
       const fresh = await setAgentAccountRegistration(!view.registration.enabled, signal);
       if (!signal.aborted) this.view = fresh;
     } catch {
-      if (!signal.aborted) this.#say(msg('Could not save the sign-up setting.', {id: 'agentAccounts.saveFailed'}));
+      if (!signal.aborted) {
+        requestToast(this, {message: msg('Could not save the sign-up setting.', {id: 'agentAccounts.saveFailed'}), duration: 3000});
+      }
     } finally {
       if (!signal.aborted) {
         this.pending = false;
@@ -162,7 +163,7 @@ export class DlSettingsAgentAccounts extends LightElement {
       if (signal.aborted) return;
       // The account is already gone, here or in another tab: the fresh view says so.
       if (error instanceof ApiError && error.status === 404) await this.#load();
-      else this.#say(msg('Could not remove the account.', {id: 'agentAccounts.removeFailed'}));
+      else requestToast(this, {message: msg('Could not remove the account.', {id: 'agentAccounts.removeFailed'}), duration: 3000});
     } finally {
       if (!signal.aborted) {
         this.pending = false;

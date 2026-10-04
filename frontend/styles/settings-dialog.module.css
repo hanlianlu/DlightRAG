@@ -1,10 +1,9 @@
 /* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
 
-/* stylelint-disable selector-pseudo-class-no-unknown -- CSS Modules :global */
-
 /* Inside the Settings dialog (the box itself is settings.css): a navigation column and one page
- * beside it, and on a phone a section list that opens a page. Cards sit on hairlines; nothing in
- * here casts a shadow, because the dialog is the one overlapping surface. */
+ * beside it, and on a phone a section list that opens a page. Docked surfaces (the navigation,
+ * the pages, their cards) sit on hairlines and cast no shadow, because the dialog is the one
+ * overlapping surface; a notice is a toast and floats over it like one. */
 
 @layer features {
   .frame {
@@ -153,48 +152,6 @@
     display: none;
   }
 
-  /* ── Notices ── */
-
-  /* Floats over the foot of the pane, wherever the reader is: a Memory change can arrive on any
-   * page. It is empty and out of the way until the region shows a message. */
-  .notice {
-    align-items: center;
-    background: var(--color-bg-elevated);
-    border-radius: var(--radius-popover);
-    bottom: var(--space-related);
-    box-shadow: var(--shadow-toast);
-    box-sizing: border-box;
-    color: var(--color-text-tertiary);
-    display: none;
-    font-size: var(--font-size-detail);
-    gap: var(--space-component);
-    inset-inline: var(--space-section);
-    padding: var(--space-inline) var(--space-inline) var(--space-inline) var(--space-component);
-    position: absolute;
-  }
-
-  .notice:global(.visible) {
-    display: flex;
-  }
-
-  .notice :global(.toast-message) {
-    flex: 1;
-    overflow-wrap: anywhere;
-    white-space: normal;
-  }
-
-  .notice :global(.toast-action) {
-    background: transparent;
-    border-color: transparent;
-    color: var(--color-accent-action);
-  }
-
-  .notice :global(.toast-action:hover:not(:disabled)) {
-    background: var(--color-accent-surface);
-    border-color: transparent;
-    color: var(--color-accent-action);
-  }
-
   /* ── Phone: full screen, a section list, then a page ── */
 
   @media (width <= 720px), (height <= 480px) {
@@ -263,11 +220,6 @@
 
     .description {
       padding-inline-end: 0;
-    }
-
-    .notice {
-      bottom: var(--space-section);
-      inset-inline: var(--space-related);
     }
   }
 }

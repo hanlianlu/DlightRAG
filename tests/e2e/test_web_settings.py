@@ -224,10 +224,11 @@ def test_settings_is_a_centered_dialog_with_a_navigation_beside_its_page(page: P
                 return getComputedStyle(element).backgroundColor === expected;
             }"""
         )
-    # Nothing inside the dialog casts a shadow: the dialog is the one overlapping surface.
+    # Docked surfaces cast no shadow: the dialog is the one overlapping surface, and the notice
+    # is a toast that floats over it.
     assert (
         settings.evaluate(
-            """element => [...element.querySelectorAll('*')].filter(node =>
+            """element => [...element.querySelectorAll('*:not(.toast, .toast *)')].filter(node =>
             node.getClientRects().length && getComputedStyle(node).boxShadow !== 'none').length"""
         )
         == 0
