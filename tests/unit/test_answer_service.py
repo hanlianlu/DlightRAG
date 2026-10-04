@@ -612,7 +612,7 @@ def _service(
     capability_view: Any = None,
     resources: Any = None,
     memory_capability: Any = None,
-    agent_registration: Any = None,
+    agent_may_register: Any = None,
     research_tool_declarations: Any = None,
     bind_research: Any = None,
     models: Any = None,
@@ -633,7 +633,7 @@ def _service(
         resources=resources or _Resources(),
         model_invocation_fingerprint_for_role=_fingerprint,
         memory_capability=memory_capability,
-        agent_registration=agent_registration,
+        agent_may_register=agent_may_register,
         research_tool_declarations=research_tool_declarations,
         bind_research=bind_research,
         child_roster_cursor_secret=b"answer-service-child-roster-test",
@@ -667,7 +667,7 @@ async def test_acceptance_pins_disabled_profile_memory_without_reserving_its_cap
 async def test_acceptance_pins_whether_the_run_may_register_and_plans_its_browser_to_match(
     registers: bool,
 ) -> None:
-    from dlightrag.engine.answer.agent_browser import REGISTRATION_PIN, AgentBrowserBinding
+    from dlightrag.engine.answer.agent_browser import MAY_REGISTER_PIN, AgentBrowserBinding
     from tests.support.agent_browser import FakeProvider, browser_settings, idle_accounts_binding
     from tests.unit.test_answer_executor import _executor
 
@@ -683,7 +683,7 @@ async def test_acceptance_pins_whether_the_run_may_register_and_plans_its_browse
     )
     service = _service(
         store=store,
-        agent_registration=registration,
+        agent_may_register=registration,
         research_tool_declarations=executor.research_tool_declarations,
     )
 
@@ -692,7 +692,7 @@ async def test_acceptance_pins_whether_the_run_may_register_and_plans_its_browse
     # Read once, for the owner, and kept as the Run was accepted.
     assert asked == [{"owner_id": _OWNER}]
     prepared = store.created[0]["prepared_input"]
-    assert prepared[REGISTRATION_PIN] is registers
+    assert prepared[MAY_REGISTER_PIN] is registers
     plan = AnswerRunInput.from_prepared_input(prepared).agent_run_plan
     assert plan is not None
     browser = next(tool for tool in plan.tools if tool.name == "browser")

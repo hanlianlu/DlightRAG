@@ -40,12 +40,12 @@ _SITE_MAX_CHARS = 253
 
 
 class AgentAccountSettingsStore(Protocol):
-    """Whether each owner lets the Agent register new accounts; an owner who never chose has them
-    on."""
+    """Whether each owner lets the Agent sign up for new accounts; an owner who never chose has
+    them on."""
 
-    async def registration_enabled(self, *, owner_id: str) -> bool: ...
+    async def sign_ups_enabled(self, *, owner_id: str) -> bool: ...
 
-    async def set_registration_enabled(self, *, owner_id: str, enabled: bool) -> bool: ...
+    async def set_sign_ups(self, *, owner_id: str, enabled: bool) -> bool: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,22 +117,23 @@ class AgentAccounts:
             available=self._available,
             registration=AgentRegistrationView(
                 allowed=self._registration_allowed,
-                enabled=await self._settings.registration_enabled(owner_id=owner_id),
+                enabled=await self._settings.sign_ups_enabled(owner_id=owner_id),
             ),
             accounts=tuple(
                 _view_of(summary) for summary in await self._store.summaries(owner_id=owner_id)
             ),
         )
 
-    async def registration(self, *, owner_id: str) -> bool:
+    async def may_register(self, *, owner_id: str) -> bool:
         """Whether a Run accepted for the owner now may register: the deployment allows it and
-        the owner has not turned it off. The Run keeps this answer, whatever is switched next."""
-        return self._registration_allowed and await self._settings.registration_enabled(
+        the owner has not turned sign-ups off. The Run keeps this answer, whatever is switched
+        next."""
+        return self._registration_allowed and await self._settings.sign_ups_enabled(
             owner_id=owner_id
         )
 
-    async def set_registration(self, *, owner_id: str, enabled: bool) -> AgentAccountsView:
-        await self._settings.set_registration_enabled(owner_id=owner_id, enabled=enabled)
+    async def set_sign_ups(self, *, owner_id: str, enabled: bool) -> AgentAccountsView:
+        await self._settings.set_sign_ups(owner_id=owner_id, enabled=enabled)
         return await self.view(owner_id=owner_id)
 
     async def remove(self, *, owner_id: str, site: str) -> AgentAccountsView:

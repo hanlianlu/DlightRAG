@@ -633,7 +633,7 @@ class TestSchema:
             changed = await conn.fetchval("SELECT updated_at FROM dlightrag_agent_accounts")
             await conn.execute(
                 "DELETE FROM dlightrag_schema_migrations"
-                " WHERE scope = 'runs' AND version = 'agent_account_activity'"
+                " WHERE scope = 'runs' AND version = 'agent_account_activity_and_sign_ups'"
             )
 
         await PGRunStore(pool=pool).initialize()

@@ -193,7 +193,7 @@ async def test_the_switch_for_new_sign_ups_is_set_and_read_back(mode: str) -> No
 
         assert off.status_code == 200
         assert off.json()["registration"] == {"allowed": True, "enabled": False}
-        assert await web.settings.registration_enabled(owner_id=web.owner("a")) is False
+        assert await web.settings.sign_ups_enabled(owner_id=web.owner("a")) is False
         again = (await client.get("/web/api/agent-accounts")).json()
         assert again["registration"] == {"allowed": True, "enabled": False}
         on = await client.put(
@@ -208,7 +208,7 @@ async def test_the_switch_for_new_sign_ups_is_set_and_read_back(mode: str) -> No
                 "/web/api/agent-accounts/settings", json=body, headers=writing(client)
             )
             assert refused.status_code == 422
-        assert await web.settings.registration_enabled(owner_id=web.owner("a")) is True
+        assert await web.settings.sign_ups_enabled(owner_id=web.owner("a")) is True
 
 
 async def test_a_switch_is_each_owners_own_in_a_deployment_that_tells_owners_apart() -> None:
@@ -337,5 +337,5 @@ async def test_a_write_the_page_did_not_make_is_refused_and_changes_nothing(
 
         assert refused == [403, 403, 403]
         assert await web.accounts.account(owner_id=web.owner("a"), site="shop.example") is not None
-        assert await web.settings.registration_enabled(owner_id=web.owner("a")) is True
+        assert await web.settings.sign_ups_enabled(owner_id=web.owner("a")) is True
         assert (await write(client, writing(client))).status_code == 200

@@ -522,7 +522,7 @@ def test_research_declarations_include_every_configured_surface_without_binding(
     monkeypatch.setattr(SkillsBundleFactory, "__call__", forbid_execution_setup)
     monkeypatch.setattr(SkillsBundle, "catalog", forbid_execution_setup)
     declarations = executor.research_tool_declarations(
-        web_search=False, memory=True, agent_registration=True, model_guidance="", injected=()
+        web_search=False, memory=True, agent_may_register=True, model_guidance="", injected=()
     )
     assert all(type(tool) is ToolDeclaration for tool in declarations)
     names = {tool.name for tool in declarations}
@@ -548,7 +548,7 @@ def test_research_declarations_include_every_configured_surface_without_binding(
         "load_skill",
     } <= names
     without_memory = executor.research_tool_declarations(
-        web_search=False, memory=False, agent_registration=True, model_guidance="", injected=()
+        web_search=False, memory=False, agent_may_register=True, model_guidance="", injected=()
     )
     assert not {"remember", "forget", "recall_memory"} & {tool.name for tool in without_memory}
 
@@ -569,7 +569,7 @@ def test_a_deployment_offers_a_rendered_read_exactly_when_it_configures_an_agent
     def read_properties(config: Any) -> dict[str, Any]:
         executor = _compose(config).coordinator._executors["answer"]
         declarations = executor.research_tool_declarations(
-            web_search=False, memory=False, agent_registration=True, model_guidance="", injected=()
+            web_search=False, memory=False, agent_may_register=True, model_guidance="", injected=()
         )
         return {tool.name: tool for tool in declarations}["read"].definition.parameters[
             "properties"
@@ -620,7 +620,7 @@ def test_a_deployment_with_a_browser_offers_login_and_the_inbox_it_can_read_and_
         declarations = executor.research_tool_declarations(
             web_search=False,
             memory=False,
-            agent_registration=pinned,
+            agent_may_register=pinned,
             model_guidance="",
             injected=(),
         )
@@ -842,7 +842,7 @@ def test_acceptance_plan_matches_runtime_tool_composition(tmp_path: Path) -> Non
         search_toolchain=SearchToolchain(),
     )
     accepted = executor.research_tool_declarations(
-        web_search=False, memory=True, agent_registration=True, model_guidance="", injected=()
+        web_search=False, memory=True, agent_may_register=True, model_guidance="", injected=()
     )
 
     async def retrieve(_query: str) -> Any:

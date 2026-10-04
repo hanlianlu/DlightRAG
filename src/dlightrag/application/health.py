@@ -122,7 +122,7 @@ class ApplicationHealth:
         self._agent_browser_endpoints = 0
         self._agent_browser_sandbox = True
         self._agent_accounts = False
-        self._agent_registration = False
+        self._agent_registration_allowed = False
         self._agent_mailbox = False
 
     @property
@@ -186,17 +186,23 @@ class ApplicationHealth:
             "endpoints": self._agent_browser_endpoints,
             "sandbox": self._agent_browser_sandbox,
             "accounts": self._agent_accounts,
-            "registration": self._agent_registration,
+            "registration": self._agent_registration_allowed,
             "mailbox": self._agent_mailbox,
         }
 
     def set_agent_browser(
-        self, *, endpoints: int, sandbox: bool, accounts: bool, registration: bool, mailbox: bool
+        self,
+        *,
+        endpoints: int,
+        sandbox: bool,
+        accounts: bool,
+        registration_allowed: bool,
+        mailbox: bool,
     ) -> None:
         self._agent_browser_endpoints = endpoints
         self._agent_browser_sandbox = sandbox
         self._agent_accounts = accounts
-        self._agent_registration = registration
+        self._agent_registration_allowed = registration_allowed
         self._agent_mailbox = mailbox
 
     def mark_component_degraded(self, component: HealthComponentName) -> None:

@@ -36,7 +36,7 @@ async def test_a_research_run_executes_with_the_browser_it_was_accepted_with(
         store = _Store()
         service = _service(
             store=store,
-            agent_registration=registration,
+            agent_may_register=registration,
             research_tool_declarations=executor.research_tool_declarations,
         )
         await service.create(request=_request(mode="research"), owner_id="owner-1")

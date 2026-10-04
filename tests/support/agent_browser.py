@@ -596,33 +596,33 @@ def idle_accounts_binding(
 
 
 def idle_accounts(
-    *, registration: bool = True, mailbox: AgentMailbox | None = None
+    *, may_register: bool = True, mailbox: AgentMailbox | None = None
 ) -> RunAgentAccounts:
     """The Agent Accounts of a Run that signs in to nothing, for a test that drives or composes
-    the browser and not its accounts. The Run may register unless ``registration`` is off, and
+    the browser and not its accounts. The Run may register unless ``may_register`` is off, and
     ``mailbox`` delivers its mail when it has one."""
     return RunAgentAccounts(
         owner_id="owner",
         binding=idle_accounts_binding(mailbox=mailbox),
-        registration=registration,
+        may_register=may_register,
     )
 
 
 def inert_browser_host(
-    *, registration: bool = True, mailbox: AgentMailbox | None = None
+    *, may_register: bool = True, mailbox: AgentMailbox | None = None
 ) -> BrowserToolHost:
     """The browser tool's host for a test that needs the tool composed and offered, not driven.
 
     Its browser leases nothing until a page is opened, and its reader is never called. Its Run
     has Agent Accounts, which nothing registers or reads, delivered by ``mailbox`` when it has
-    one, and which it may register unless ``registration`` is off.
+    one, and which it may register unless ``may_register`` is off.
     """
     holder = BrowserHolder("owner", "11111111-1111-1111-1111-111111111111", "worker", 1)
     return BrowserToolHost(
         RunAgentBrowser(FakeProvider(), holder, browser_settings()),
         ResourceRegistry(),
         _reads_nothing,
-        idle_accounts(registration=registration, mailbox=mailbox),
+        idle_accounts(may_register=may_register, mailbox=mailbox),
     )
 
 

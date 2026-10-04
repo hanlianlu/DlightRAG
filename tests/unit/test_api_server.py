@@ -1410,7 +1410,7 @@ class TestHealthEndpoint:
         }
 
         mock_application.health.set_agent_browser(
-            endpoints=2, sandbox=False, accounts=True, registration=True, mailbox=True
+            endpoints=2, sandbox=False, accounts=True, registration_allowed=True, mailbox=True
         )
         body = (await client.get("/health")).json()
         # The count, the configured sandbox and whether accounts, their registration and a mailbox

@@ -210,13 +210,8 @@ def has_mailbox(accounts: _Mailboxed | None) -> bool:
     return accounts is not None and accounts.mailbox is not None
 
 
-def may_register(accounts: RunAgentAccounts | None) -> bool:
-    """Whether a Run composed Agent Accounts that may register."""
-    return accounts is not None and accounts.registration
-
-
 #: Where acceptance pins whether the owner's Run may register, in the Run's prepared input.
-REGISTRATION_PIN = "agent_account_registration"
+MAY_REGISTER_PIN = "agent_may_register"
 
 
 def run_agent_accounts(
@@ -230,11 +225,11 @@ def run_agent_accounts(
     its accepted plan does not match, so it is refused like any Run whose tools have changed.
     A Run accepted before the switch existed was pinned to nothing, and has the allowance.
     """
-    pinned = prepared_input.get(REGISTRATION_PIN, True)
+    pinned = prepared_input.get(MAY_REGISTER_PIN, True)
     return RunAgentAccounts(
         owner_id=owner_id,
         binding=binding,
-        registration=binding.registration_allowed and bool(pinned),
+        may_register=binding.registration_allowed and bool(pinned),
     )
 
 
@@ -375,15 +370,15 @@ class ChildSessionAccounts(SessionAccounts):
 class RunAgentAccounts:
     """One Research Run's Agent Accounts, as each of its Agent Sessions sees them.
 
-    ``registration`` is whether the Run may register: it logs in with the accounts its owner
+    ``may_register`` is whether the Run may register: it logs in with the accounts its owner
     has either way, and no other fact of the Run depends on it.
     """
 
-    def __init__(self, *, owner_id: str, binding: AgentAccountsBinding, registration: bool) -> None:
+    def __init__(self, *, owner_id: str, binding: AgentAccountsBinding, may_register: bool) -> None:
         self._owner_id = owner_id
         self._binding = binding
         self.mailbox = binding.mailbox
-        self.registration = registration
+        self.may_register = may_register
         self._sessions: dict[str, SessionAccounts] = {}
 
     def available(self) -> bool:
@@ -433,9 +428,9 @@ async def reseal_agent_accounts(
 
 __all__ = [
     "ACCOUNT_LABEL",
+    "MAY_REGISTER_PIN",
     "MIN_PASSWORD_LENGTH",
     "PASSWORD_LENGTH",
-    "REGISTRATION_PIN",
     "AgentAccount",
     "AgentAccountStore",
     "AgentAccountSummary",
@@ -447,7 +442,6 @@ __all__ = [
     "account_site",
     "generate_password",
     "has_mailbox",
-    "may_register",
     "owner_alias",
     "reseal_agent_accounts",
     "run_agent_accounts",

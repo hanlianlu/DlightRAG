@@ -23,7 +23,7 @@ from pydantic import SecretStr
 
 from dlightrag.engine.answer.agent_browser import (
     ACCOUNT_LABEL,
-    REGISTRATION_PIN,
+    MAY_REGISTER_PIN,
     AgentAccount,
     AgentAccountsBinding,
     RunAgentAccounts,
@@ -168,7 +168,7 @@ def accounts(
     return RunAgentAccounts(
         owner_id=OWNER,
         binding=AgentAccountsBinding(store, cipher, mailbox, registration_allowed=True),
-        registration=True,
+        may_register=True,
     )
 
 
@@ -194,14 +194,14 @@ async def register(
 @pytest.mark.parametrize(
     ("allowed", "prepared", "registers"),
     [
-        (True, {REGISTRATION_PIN: True}, True),
-        (True, {REGISTRATION_PIN: False}, False),
+        (True, {MAY_REGISTER_PIN: True}, True),
+        (True, {MAY_REGISTER_PIN: False}, False),
         # A Run accepted before the owner had a switch was pinned to nothing: it has the allowance.
         (True, {}, True),
         (False, {}, False),
         # The deployment's allowance is read again and is the ceiling of what a Run was pinned to.
-        (False, {REGISTRATION_PIN: True}, False),
-        (False, {REGISTRATION_PIN: False}, False),
+        (False, {MAY_REGISTER_PIN: True}, False),
+        (False, {MAY_REGISTER_PIN: False}, False),
     ],
     ids=["pinned-on", "pinned-off", "unpinned", "unpinned-not-allowed", "withdrawn", "both-off"],
 )
@@ -214,7 +214,7 @@ def test_a_run_registers_as_acceptance_pinned_it_under_the_deployments_allowance
 
     run = run_agent_accounts(binding, owner_id=OWNER, prepared_input=prepared)
 
-    assert run.registration is registers
+    assert run.may_register is registers
 
 
 async def test_a_parents_account_is_sealed_for_its_owner_site_and_account() -> None:

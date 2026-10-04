@@ -502,13 +502,13 @@ class AnswerExecutor:
         *,
         web_search: bool,
         memory: bool,
-        agent_registration: bool,
+        agent_may_register: bool,
         model_guidance: str,
         injected: Sequence[ToolDeclaration],
     ) -> tuple[ToolDeclaration, ...]:
         """Project configured capabilities without constructing execution dependencies.
 
-        ``agent_registration`` is whether the Run being accepted may register, which is the
+        ``agent_may_register`` is whether the Run being accepted may register, which is the
         owner's switch under the deployment's allowance and is pinned with the Run.
         """
         from dlightrag.engine.answer.tools.composition import research_tool_declarations
@@ -519,7 +519,7 @@ class AnswerExecutor:
             web_search=web_search,
             resource_read=True,
             agent_browser=self._browser is not None,
-            agent_registration=agent_registration,
+            agent_may_register=agent_may_register,
             agent_mailbox=has_mailbox(accounts),
             resource_view=True,
             environment=self._execution_adapter is not None,

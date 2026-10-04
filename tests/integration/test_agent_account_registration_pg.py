@@ -27,7 +27,7 @@ from dlightrag.engine.agent.environment import AccessScheduler
 from dlightrag.engine.agent.session.plan import AgentToolPlan
 from dlightrag.engine.ai.settings import ModelSettings
 from dlightrag.engine.answer.agent_browser import (
-    REGISTRATION_PIN,
+    MAY_REGISTER_PIN,
     AgentAccountsBinding,
     AgentBrowserBinding,
     run_agent_accounts,
@@ -137,7 +137,7 @@ async def deployment(allowed: bool) -> AsyncIterator[Deployment]:
             resources=cast(Any, _Resources()),
             model_invocation_fingerprint_for_role=_fingerprint,
             research_tool_declarations=executor.research_tool_declarations,
-            agent_registration=accounts.registration,
+            agent_may_register=accounts.may_register,
             child_roster_cursor_secret=b"registration-pin-child-roster-test",
         )
         yield Deployment(runs, accounts, binding, service)
@@ -159,13 +159,13 @@ async def test_a_run_keeps_the_switch_it_was_accepted_with_whatever_the_owner_sw
     allowing: Deployment,
 ) -> None:
     first = await allowing.accept("alice")
-    await allowing.accounts.set_registration(owner_id="alice", enabled=False)
+    await allowing.accounts.set_sign_ups(owner_id="alice", enabled=False)
     second = await allowing.accept("alice")
-    await allowing.accounts.set_registration(owner_id="alice", enabled=True)
+    await allowing.accounts.set_sign_ups(owner_id="alice", enabled=True)
 
     # An owner who has not chosen has sign-ups on, and one who turned them off before
     # acceptance gets a plan without register, though login stays.
-    assert (first[REGISTRATION_PIN], second[REGISTRATION_PIN]) == (True, False)
+    assert (first[MAY_REGISTER_PIN], second[MAY_REGISTER_PIN]) == (True, False)
     assert actions(allowing.planned(first)) >= {"register", "login"}
     assert "register" not in actions(allowing.planned(second))
     assert "login" in actions(allowing.planned(second))
@@ -175,7 +175,7 @@ async def test_a_run_keeps_the_switch_it_was_accepted_with_whatever_the_owner_sw
     assert allowing.executed("alice", second) == allowing.planned(second)
     # The switch is each owner's own.
     other = await allowing.accept("bob")
-    assert other[REGISTRATION_PIN] is True
+    assert other[MAY_REGISTER_PIN] is True
 
 
 async def test_a_deployment_that_does_not_allow_registration_pins_every_run_to_login_alone(
@@ -183,10 +183,10 @@ async def test_a_deployment_that_does_not_allow_registration_pins_every_run_to_l
 ) -> None:
     accepted = await forbidding.accept("alice")
 
-    assert accepted[REGISTRATION_PIN] is False
+    assert accepted[MAY_REGISTER_PIN] is False
     assert "register" not in actions(forbidding.planned(accepted))
     assert "login" in actions(forbidding.planned(accepted))
     assert forbidding.executed("alice", accepted) == forbidding.planned(accepted)
     # The owner's own switch is theirs to set, and the deployment is still the ceiling.
-    await forbidding.accounts.set_registration(owner_id="alice", enabled=True)
-    assert (await forbidding.accept("alice"))[REGISTRATION_PIN] is False
+    await forbidding.accounts.set_sign_ups(owner_id="alice", enabled=True)
+    assert (await forbidding.accept("alice"))[MAY_REGISTER_PIN] is False

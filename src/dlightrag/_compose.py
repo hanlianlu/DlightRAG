@@ -465,7 +465,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         endpoints=len(config.answer.agent.browser.endpoints),
         sandbox=config.answer.agent.browser.chromium_sandbox,
         accounts=accounts is not None,
-        registration=accounts is not None and registration_allowed,
+        registration_allowed=accounts is not None and registration_allowed,
         mailbox=has_mailbox(accounts),
     )
 
@@ -610,7 +610,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         model_invocation_fingerprint_for_role=fingerprint_for_role,
         research_tool_declarations=answer_executor.research_tool_declarations,
         memory_capability=memory.execution_capability,
-        agent_registration=agent_accounts.registration,
+        agent_may_register=agent_accounts.may_register,
         bind_research=connections.bind_research,
         # Stable across workers sharing the operational database. Cursors
         # carry no authorization state and expire on credential rotation.

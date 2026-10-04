@@ -34,7 +34,7 @@ async def read_agent_accounts(request: Request) -> dict[str, Any]:
 
 @router.put("/settings")
 async def update_agent_account_settings(request: Request, body: SettingsInput) -> dict[str, Any]:
-    view = await get_application(request).agent_accounts.set_registration(
+    view = await get_application(request).agent_accounts.set_sign_ups(
         owner_id=_owner(request), enabled=body.registration_enabled
     )
     return asdict(view)

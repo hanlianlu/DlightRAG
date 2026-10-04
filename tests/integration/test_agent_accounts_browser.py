@@ -320,13 +320,13 @@ async def browsing(
     store: AgentAccountStore | None = None,
     keyring: str | None = KEYRING,
     mailbox: AgentMailbox | None = None,
-    registration: bool = True,
+    may_register: bool = True,
     pages: dict[str, Served] | None = None,
     **bounds: Any,
 ) -> AsyncIterator[Browsing]:
     """A Run's browser tool over a Chromium that reaches ``pages`` through a TLS-terminating proxy.
 
-    The Run may register unless ``registration`` is off, which is the owner's switch pinned to it.
+    The Run may register unless ``may_register`` is off, which is the owner's switch pinned to it.
     """
     admitted: list[tuple[FetchedResourceBytes, ResourceEffectOwner | None]] = []
 
@@ -349,7 +349,7 @@ async def browsing(
             binding=AgentAccountsBinding(
                 accounts_store, cipher, mailbox, registration_allowed=True
             ),
-            registration=registration,
+            may_register=may_register,
         )
         host = BrowserToolHost(run, registry, make_resource_reader(registry, 4000), accounts)
         tools = {
@@ -912,7 +912,7 @@ async def test_a_run_that_may_not_register_logs_in_with_what_its_owner_has_and_c
 
     # The owner turned new sign-ups off after this account was registered: the next Run keeps the
     # account and loses the action that makes one.
-    async with browsing(tmp_path, store=store, registration=False) as later:
+    async with browsing(tmp_path, store=store, may_register=False) as later:
         later.watch(password)
         form = await later.form(f"{SHOP}/signin")
         assert (
@@ -950,7 +950,7 @@ async def test_what_a_run_that_may_not_register_is_told_names_only_what_it_has(
     )
 
     async with browsing(
-        tmp_path, store=store, mailbox=StubMailbox(DOMAIN), registration=False
+        tmp_path, store=store, mailbox=StubMailbox(DOMAIN), may_register=False
     ) as web:
         # The inbox opens at a login here, so that is the only thing it says.
         unopened = await web.call(action="inbox")
@@ -972,7 +972,7 @@ async def test_what_a_run_that_may_not_register_is_told_names_only_what_it_has(
 
     # An account whose key the ring lost cannot be recovered by a Run that cannot register.
     async with browsing(
-        tmp_path, store=store, keyring=OTHER_KEYRING, registration=False
+        tmp_path, store=store, keyring=OTHER_KEYRING, may_register=False
     ) as keyless:
         signin = await keyless.form(f"{SHOP}/signin")
         unreadable = await keyless.call(
