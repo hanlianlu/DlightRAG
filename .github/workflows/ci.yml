@@ -154,6 +154,7 @@ jobs:
       - name: Run deterministic durable PostgreSQL integration tests
         run: >-
           uv run pytest
+          tests/integration/test_agent_accounts_pg.py
           tests/integration/test_agent_browser_pg.py
           tests/integration/test_agent_browser_tool.py
           tests/integration/test_agent_browser_tool_pg.py

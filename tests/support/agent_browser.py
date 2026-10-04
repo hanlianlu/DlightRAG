@@ -21,7 +21,7 @@ import signal
 import sys
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 from dlightrag.engine.agent.tools import ToolResult, ToolRuntime
@@ -37,6 +37,7 @@ from dlightrag.engine.answer.agent_browser import (
     PageState,
     RenderedPage,
     RunAgentBrowser,
+    StoredAgentAccount,
 )
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.answer.tools.browser import BrowserToolHost
@@ -427,6 +428,32 @@ class FakeProvider:
         self.closed = True
 
 
+class MemoryAccountStore:
+    """An ``AgentAccountStore`` that keeps its rows in memory, one per owner and site."""
+
+    def __init__(self) -> None:
+        self.rows: dict[tuple[str, str], StoredAgentAccount] = {}
+
+    async def account(self, *, owner_id: str, site: str) -> StoredAgentAccount | None:
+        return self.rows.get((owner_id, site))
+
+    async def save(self, account: StoredAgentAccount) -> None:
+        self.rows[(account.owner_id, account.site)] = account
+
+    async def sealed_under(
+        self, *, key_ids: Sequence[str], limit: int
+    ) -> tuple[StoredAgentAccount, ...]:
+        sealed = [row for row in self.rows.values() if row.key_id in key_ids]
+        return tuple(sorted(sealed, key=lambda row: (row.owner_id, row.site))[:limit])
+
+    async def reseal(self, account: StoredAgentAccount, *, key_id: str, envelope: str) -> bool:
+        row = self.rows.get((account.owner_id, account.site))
+        if row is None or row.envelope != account.envelope:
+            return False
+        self.rows[(row.owner_id, row.site)] = replace(row, key_id=key_id, envelope=envelope)
+        return True
+
+
 async def _reads_nothing(_request: ResourceReadRequest, _runtime: ToolRuntime) -> ToolResult:
     raise AssertionError("an inert browser host reads nothing")
 
@@ -450,6 +477,7 @@ __all__ = [
     "FakeProvider",
     "FakePage",
     "LaunchRecorder",
+    "MemoryAccountStore",
     "ProxiedRequest",
     "RecordingRenderer",
     "RunServer",

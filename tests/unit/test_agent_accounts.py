@@ -1,0 +1,192 @@
+# Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
+"""Agent Accounts: the key of a site, the generated password, and one Run's view of its accounts.
+
+A generated password is never put into an assertion: a test compares in code and asserts a
+count or a flag, so a failure reports a number and never the value.
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+from pydantic import SecretStr
+
+from dlightrag.engine.answer.agent_browser import (
+    ACCOUNT_LABEL,
+    AgentAccount,
+    AgentAccountsBinding,
+    RunAgentAccounts,
+    account_site,
+    generate_password,
+)
+from dlightrag.engine.credential_cipher import CredentialCipher, UnreadableEnvelope
+from tests.support.agent_browser import MemoryAccountStore
+
+KEYRING = json.dumps(
+    {"active": "test", "keys": {"test": "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE="}}
+)
+OTHER_KEYRING = json.dumps(
+    {"active": "next", "keys": {"next": "YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI="}}
+)
+OWNER = "owner"
+SITE = "shop.example"
+
+
+@pytest.mark.parametrize(
+    ("url", "site"),
+    [
+        ("https://www.example.co.uk/signup", "example.co.uk"),
+        ("https://accounts.shop.example/login?next=/", "shop.example"),
+        ("https://alice.github.io/", "alice.github.io"),
+        ("https://www.xn--bcher-kva.example/", "xn--bcher-kva.example"),
+        ("https://github.io/", None),
+        ("http://shop.example/", None),
+        ("https://127.0.0.1/", None),
+        ("https://[::1]/", None),
+        ("about:blank", None),
+        ("", None),
+    ],
+)
+def test_an_account_is_keyed_by_the_registrable_domain_of_an_https_page(
+    url: str, site: str | None
+) -> None:
+    assert account_site(url) == site
+
+
+def well_formed(password: str, length: int) -> bool:
+    """Whether a password has the length, only characters HTML, JSON and URL encoding leave
+    unchanged (so each has one spelling), and every class a site's composition rule asks for."""
+    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789*-._")
+    return (
+        len(password) == length
+        and set(password) <= allowed
+        and any(c.islower() for c in password)
+        and any(c.isupper() for c in password)
+        and any(c.isdigit() for c in password)
+        and "*" in password
+    )
+
+
+def test_a_generated_password_has_the_length_asked_and_every_class_and_never_repeats() -> None:
+    passwords = [generate_password().get_secret_value() for _ in range(200)]
+    shorter = generate_password(14).get_secret_value()
+
+    formed = sum(well_formed(password, 20) for password in passwords)
+    distinct = len(set(passwords))
+    assert (formed, distinct) == (200, 200)
+    assert well_formed(shorter, 14) is True
+
+
+def accounts(store: MemoryAccountStore, *, keyring: str | None = KEYRING) -> RunAgentAccounts:
+    cipher = CredentialCipher(None if keyring is None else SecretStr(keyring))
+    return RunAgentAccounts(owner_id=OWNER, binding=AgentAccountsBinding(store, cipher))
+
+
+async def register(
+    run: RunAgentAccounts,
+    scope: str,
+    *,
+    child: bool = False,
+    email: str | None = "a@x.example",
+    existing: AgentAccount | None = None,
+) -> tuple[AgentAccount, SecretStr]:
+    password = generate_password()
+    account = await run.record(
+        scope,
+        SITE,
+        child=child,
+        existing=existing,
+        email=email,
+        username=None if email else "handle",
+        password=password,
+    )
+    return account, password
+
+
+async def test_a_parents_account_is_sealed_for_its_owner_site_and_account() -> None:
+    store, cipher = MemoryAccountStore(), CredentialCipher(SecretStr(KEYRING))
+    run = accounts(store)
+
+    account, password = await register(run, "parent")
+
+    (row,) = store.rows.values()
+    assert (row.owner_id, row.site, row.email, row.username) == (OWNER, SITE, "a@x.example", None)
+    assert account.persistent and account.identity == "a@x.example"
+    assert cipher.open(
+        row.envelope, label=ACCOUNT_LABEL, binding=(OWNER, SITE, row.account_id)
+    ) == (password)
+    assert run.password(account) == password
+    for other in ((OWNER, "other.example", row.account_id), ("someone", SITE, row.account_id)):
+        with pytest.raises(UnreadableEnvelope):
+            cipher.open(row.envelope, label=ACCOUNT_LABEL, binding=other)
+
+
+async def test_a_reset_replaces_the_password_and_keeps_the_account_id_and_the_email() -> None:
+    store = MemoryAccountStore()
+    run = accounts(store)
+    await register(run, "parent")
+    (before,) = store.rows.values()
+
+    existing = await run.registration_target("parent", SITE, child=False)
+    assert existing is not None
+    renewed, password = await register(run, "parent", email=existing.email, existing=existing)
+
+    (after,) = store.rows.values()
+    assert (after.account_id, after.email) == (before.account_id, before.email)
+    assert after.envelope != before.envelope
+    assert run.password(renewed) == password
+
+
+async def test_a_childs_registration_stays_in_the_run_and_serves_only_its_own_session() -> None:
+    store = MemoryAccountStore()
+    run = accounts(store)
+
+    _, own = await register(run, "child-a", child=True, email="alias-a@x.example")
+    _, siblings = await register(run, "child-b", child=True, email="alias-b@x.example")
+
+    assert store.rows == {}
+    first = await run.registration_target("child-a", SITE, child=True)
+    second = await run.registration_target("child-b", SITE, child=True)
+    assert first is not None and second is not None
+    assert (first.email, second.email) == ("alias-a@x.example", "alias-b@x.example")
+    assert run.password(first) == own and run.password(second) == siblings
+    assert not first.persistent
+    # What a Child registered is not the owner's account, so a parent finds nothing.
+    assert await run.registration_target("parent", SITE, child=False) is None
+
+
+async def test_a_childs_login_prefers_its_own_account_then_the_owners() -> None:
+    run = accounts(MemoryAccountStore())
+    _, owners = await register(run, "parent", email="owner@x.example")
+    await register(run, "child-a", child=True, email="alias@x.example")
+
+    own = await run.login_target("child-a", SITE, child=True)
+    fallback = await run.login_target("child-b", SITE, child=True)
+    parent = await run.login_target("parent", SITE, child=False)
+
+    assert own is not None and fallback is not None and parent is not None
+    assert (own.email, fallback.email, parent.email) == (
+        "alias@x.example",
+        "owner@x.example",
+        "owner@x.example",
+    )
+    assert fallback.persistent and run.password(fallback) == owners
+    assert await run.login_target("parent", "other.example", child=False) is None
+
+
+async def test_an_account_whose_key_the_ring_lost_cannot_be_opened() -> None:
+    store = MemoryAccountStore()
+    await register(accounts(store), "parent")
+    after_loss = accounts(store, keyring=OTHER_KEYRING)
+
+    account = await after_loss.login_target("parent", SITE, child=False)
+
+    assert account is not None
+    with pytest.raises(UnreadableEnvelope):
+        after_loss.password(account)
+
+
+def test_without_a_ring_accounts_are_unavailable() -> None:
+    assert accounts(MemoryAccountStore()).available()
+    assert not accounts(MemoryAccountStore(), keyring=None).available()

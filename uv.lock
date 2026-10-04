@@ -927,6 +927,7 @@ dependencies = [
     { name = "pgvector" },
     { name = "pillow" },
     { name = "playwright" },
+    { name = "publicsuffixlist" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pygments" },
@@ -1000,6 +1001,7 @@ requires-dist = [
     { name = "pgvector", specifier = ">=0.5.0" },
     { name = "pillow", specifier = ">=12.3.0" },
     { name = "playwright", specifier = "==1.63.0" },
+    { name = "publicsuffixlist", specifier = "==1.0.2.20261003" },
     { name = "pydantic", specifier = ">=2.13.5" },
     { name = "pydantic-settings", specifier = ">=2.15.0" },
     { name = "pygments", specifier = ">=2.17" },
@@ -3187,6 +3189,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/04/78/0acd37ca84ce3ddffaa92ef0f571e073faa6d8ff1f0559ab1272188ea2be/psutil-7.2.2-cp36-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:b58fabe35e80b264a4e3bb23e6b96f9e45a3df7fb7eed419ac0e5947c61e47cc", size = 148266, upload-time = "2026-01-28T18:15:31.597Z" },
     { url = "https://files.pythonhosted.org/packages/b4/90/e2159492b5426be0c1fef7acba807a03511f97c5f86b3caeda6ad92351a7/psutil-7.2.2-cp37-abi3-win_amd64.whl", hash = "sha256:eb7e81434c8d223ec4a219b5fc1c47d0417b12be7ea866e24fb5ad6e84b3d988", size = 137737, upload-time = "2026-01-28T18:15:33.849Z" },
     { url = "https://files.pythonhosted.org/packages/8c/c7/7bb2e321574b10df20cbde462a94e2b71d05f9bbda251ef27d104668306a/psutil-7.2.2-cp37-abi3-win_arm64.whl", hash = "sha256:8c233660f575a5a89e6d4cb65d9f938126312bca76d8fe087b947b3a1aaac9ee", size = 134617, upload-time = "2026-01-28T18:15:36.514Z" },
+]
+
+[[package]]
+name = "publicsuffixlist"
+version = "1.0.2.20261003"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/8a/5d/5d96888f65ea1936ed264e232be1794d33f758751baade8a2aeb038dfc8d/publicsuffixlist-1.0.2.20261003.tar.gz", hash = "sha256:d88339d4752d866a5be66ca4234257ca1e8277541c8518f6e6615d581a8d8b03", size = 109285, upload-time = "2026-10-03T09:03:47.867Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/40/52/1e16fcde6a770966a7fafea81169a54f8dc49dd16f232707b261d1772ed3/publicsuffixlist-1.0.2.20261003-py2.py3-none-any.whl", hash = "sha256:836bcbfb66f44eea6ee7917864635a0d5f49ef5220e3074bc8611f683a34c11c", size = 109061, upload-time = "2026-10-03T09:03:46.55Z" },
 ]
 
 [[package]]

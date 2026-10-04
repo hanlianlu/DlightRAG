@@ -1,6 +1,19 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """The Agent Browser port and the Run's policy over it (ADR 0032)."""
 
+from dlightrag.engine.answer.agent_browser.accounts import (
+    ACCOUNT_LABEL,
+    MIN_PASSWORD_LENGTH,
+    PASSWORD_LENGTH,
+    AgentAccount,
+    AgentAccountsBinding,
+    AgentAccountStore,
+    RunAgentAccounts,
+    StoredAgentAccount,
+    account_site,
+    generate_password,
+    reseal_agent_accounts,
+)
 from dlightrag.engine.answer.agent_browser.contracts import (
     MAX_DOWNLOADS_PER_CALL,
     AgentBrowserBinding,
@@ -30,7 +43,13 @@ from dlightrag.engine.answer.agent_browser.contracts import (
 from dlightrag.engine.answer.agent_browser.run import RunAgentBrowser
 
 __all__ = [
+    "ACCOUNT_LABEL",
     "MAX_DOWNLOADS_PER_CALL",
+    "MIN_PASSWORD_LENGTH",
+    "PASSWORD_LENGTH",
+    "AgentAccount",
+    "AgentAccountStore",
+    "AgentAccountsBinding",
     "AgentBrowserBinding",
     "AgentBrowserError",
     "AgentBrowserFailure",
@@ -51,8 +70,13 @@ __all__ = [
     "PageScreenshot",
     "PageState",
     "RenderedPage",
+    "RunAgentAccounts",
     "RunAgentBrowser",
+    "StoredAgentAccount",
     "UploadFile",
+    "account_site",
     "browser_failure",
+    "generate_password",
     "page_failure",
+    "reseal_agent_accounts",
 ]

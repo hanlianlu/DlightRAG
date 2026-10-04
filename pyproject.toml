@@ -76,6 +76,9 @@ dependencies = [
     # The Agent Browser's Playwright client (ADR 0032). The pool image pins the same
     # version; scripts/verify_release_contract.py holds every pin together.
     "playwright==1.63.0",
+    # The Public Suffix List behind an Agent Account's site (ADR 0034). The list ships in
+    # the wheel and is never fetched, so this exact pin is the list a deployment runs.
+    "publicsuffixlist==1.0.2.20261003",
 ]
 
 [project.optional-dependencies]

@@ -17,6 +17,10 @@ from typing import Any, Literal, cast
 
 import asyncpg
 
+from dlightrag.adapters.postgres.answer.agent_accounts import (
+    AGENT_ACCOUNTS_DDL,
+    AGENT_ACCOUNTS_SCHEMA_TABLE,
+)
 from dlightrag.adapters.postgres.answer.memory_settings import (
     MEMORY_SETTINGS_DDL,
     MEMORY_SETTINGS_SCHEMA_TABLE,
@@ -958,6 +962,7 @@ RUN_MIGRATIONS = (
             _CREATE_SESSION_NOTES,
             *MEMORY_SETTINGS_DDL,
             *AGENT_BROWSER_LEASES_DDL,
+            *AGENT_ACCOUNTS_DDL,
         ),
     ),
     Migration(
@@ -1137,6 +1142,11 @@ RUN_MIGRATIONS = (
         "agent_browser_leases",
         "Lease Agent Browser endpoints to Runs",
         AGENT_BROWSER_LEASES_DDL,
+    ),
+    Migration(
+        "agent_accounts",
+        "Keep each owner's Agent Accounts, sealed under the key ring",
+        AGENT_ACCOUNTS_DDL,
     ),
 )
 
@@ -1650,6 +1660,7 @@ _RUN_TABLES = (
     ),
     MEMORY_SETTINGS_SCHEMA_TABLE,
     AGENT_BROWSER_LEASES_SCHEMA_TABLE,
+    AGENT_ACCOUNTS_SCHEMA_TABLE,
     TableRequirement(
         name="dlightrag_answer_committed_spills",
         columns=(

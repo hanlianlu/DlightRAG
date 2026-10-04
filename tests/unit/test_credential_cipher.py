@@ -7,6 +7,8 @@ import stat
 import pytest
 from pydantic import SecretStr
 
+from dlightrag.application.connections.credentials import GRANT_LABEL
+from dlightrag.engine.answer.agent_browser import ACCOUNT_LABEL
 from dlightrag.engine.credential_cipher import (
     KEYRING_FILE,
     CredentialCipher,
@@ -107,10 +109,16 @@ def test_retired_keys_still_open_the_active_one_seals_and_a_lost_one_opens_for_n
         assert str(raised.value) == ""
 
 
-def test_an_envelope_opens_only_under_the_label_it_was_sealed_under() -> None:
+def test_an_account_envelope_never_opens_as_a_grant_nor_a_grant_as_an_account() -> None:
     cipher = CredentialCipher(SecretStr(KEYRING))
-    envelope = _seal(cipher, label="dlightrag-one-v1")
+    binding = ("owner", "site", "id")
+    account = _seal(cipher, label=ACCOUNT_LABEL, binding=binding)
+    grant = _seal(cipher, label=GRANT_LABEL, binding=binding)
 
-    assert _open(cipher, envelope, label="dlightrag-one-v1") == SecretStr("fixture-secret")
-    with pytest.raises(UnreadableEnvelope):
-        _open(cipher, envelope, label="dlightrag-two-v1")
+    assert _open(cipher, account, label=ACCOUNT_LABEL, binding=binding) == SecretStr(
+        "fixture-secret"
+    )
+    assert _open(cipher, grant, label=GRANT_LABEL, binding=binding) == SecretStr("fixture-secret")
+    for envelope, label in ((account, GRANT_LABEL), (grant, ACCOUNT_LABEL)):
+        with pytest.raises(UnreadableEnvelope):
+            _open(cipher, envelope, label=label, binding=binding)
