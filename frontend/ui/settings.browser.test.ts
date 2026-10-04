@@ -493,6 +493,16 @@ describe('on a phone', () => {
     expect(shown.hit).to.equal(shown.undo);
   });
 
+  it('lists the accounts as rows when Settings opens straight on them, though the page was out of sight when it mounted', async () => {
+    window.fetch = populated().fetch;
+    const {settings} = mountSettings();
+    await openSettings(settings, 'agent-accounts');
+
+    const accounts = pageElement(settings, 'dl-settings-agent-accounts');
+    await waitFor(() => accounts.querySelectorAll('li').length === 3);
+    expect(accounts.querySelector('table')).to.equal(null);
+  });
+
   it('opens straight on a page it is asked for, with the list one Back away', async () => {
     window.fetch = populated().fetch;
     const {settings} = mountSettings();
