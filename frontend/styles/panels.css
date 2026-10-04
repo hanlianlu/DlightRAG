@@ -45,7 +45,7 @@ dl-inspector[aria-hidden='true'] {
 }
 
 #panel-title {
-    color: var(--color-text-subtle);
+    color: var(--color-text-muted);
     font-size: var(--font-size-detail);
     font-weight: 500;
     letter-spacing: 0;
@@ -63,7 +63,7 @@ dl-inspector[aria-hidden='true'] {
     transform: translate(-50%, -50%);
     background: transparent;
     border: none;
-    color: var(--color-text-subtle);
+    color: var(--color-text-muted);
     cursor: pointer;
     font-size: var(--font-size-detail);
     font-weight: 500;

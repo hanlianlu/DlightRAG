@@ -243,7 +243,7 @@
 
 :global(.conversation-list-status) {
     align-items: flex-start;
-    color: var(--color-text-subtle);
+    color: var(--color-text-muted);
     display: flex;
     flex-direction: column;
     font-size: var(--font-size-detail);
