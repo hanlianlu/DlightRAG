@@ -176,10 +176,8 @@ async def register(
     existing: AgentAccount | None = None,
 ) -> tuple[AgentAccount, SecretStr]:
     password = generate_password()
-    account = await run.record(
-        scope,
+    account = await run.session(scope, child=child).record(
         site,
-        child=child,
         existing=existing,
         email=email,
         username=None if email else "handle",
@@ -196,9 +194,9 @@ async def test_a_parents_account_is_sealed_for_its_owner_site_and_account() -> N
 
     (row,) = store.rows.values()
     assert (row.owner_id, row.site, row.email, row.username) == (OWNER, SITE, "a@x.example", None)
-    assert account.persistent and account.identity == "a@x.example"
+    assert account.persistent
     opened = cipher.open(row.envelope, label=ACCOUNT_LABEL, binding=(OWNER, SITE, row.account_id))
-    assert opened == password and run.password(account) == password
+    assert opened == password and run.session("parent", child=False).password(account) == password
     for other in ((OWNER, "other.example", row.account_id), ("someone", SITE, row.account_id)):
         with pytest.raises(UnreadableEnvelope):
             cipher.open(row.envelope, label=ACCOUNT_LABEL, binding=other)
@@ -210,14 +208,14 @@ async def test_a_reset_replaces_the_password_and_keeps_the_account_id_and_the_em
     await register(run, "parent")
     (before,) = store.rows.values()
 
-    existing = await run.registration_target("parent", SITE, child=False)
+    existing = await run.session("parent", child=False).registration_target(SITE)
     assert existing is not None
     renewed, password = await register(run, "parent", email=existing.email, existing=existing)
 
     (after,) = store.rows.values()
     assert (after.account_id, after.email) == (before.account_id, before.email)
     assert after.envelope != before.envelope
-    assert run.password(renewed) == password
+    assert run.session("parent", child=False).password(renewed) == password
 
 
 async def test_a_childs_registration_stays_in_the_run_and_serves_only_its_own_session() -> None:
@@ -228,14 +226,18 @@ async def test_a_childs_registration_stays_in_the_run_and_serves_only_its_own_se
     _, siblings = await register(run, "child-b", child=True, email="alias-b@x.example")
 
     assert store.rows == {}
-    first = await run.registration_target("child-a", SITE, child=True)
-    second = await run.registration_target("child-b", SITE, child=True)
+    first_session, second_session = (
+        run.session("child-a", child=True),
+        run.session("child-b", child=True),
+    )
+    first = await first_session.registration_target(SITE)
+    second = await second_session.registration_target(SITE)
     assert first is not None and second is not None
     assert (first.email, second.email) == ("alias-a@x.example", "alias-b@x.example")
-    assert run.password(first) == own and run.password(second) == siblings
+    assert first_session.password(first) == own and second_session.password(second) == siblings
     assert not first.persistent
     # What a Child registered is not the owner's account, so a parent finds nothing.
-    assert await run.registration_target("parent", SITE, child=False) is None
+    assert await run.session("parent", child=False).registration_target(SITE) is None
 
 
 async def test_a_childs_login_prefers_its_own_account_then_the_owners() -> None:
@@ -243,9 +245,10 @@ async def test_a_childs_login_prefers_its_own_account_then_the_owners() -> None:
     _, owners = await register(run, "parent", email="owner@x.example")
     await register(run, "child-a", child=True, email="alias@x.example")
 
-    own = await run.login_target("child-a", SITE, child=True)
-    fallback = await run.login_target("child-b", SITE, child=True)
-    parent = await run.login_target("parent", SITE, child=False)
+    own = await run.session("child-a", child=True).login_target(SITE)
+    child_b = run.session("child-b", child=True)
+    fallback = await child_b.login_target(SITE)
+    parent = await run.session("parent", child=False).login_target(SITE)
 
     assert own is not None and fallback is not None and parent is not None
     assert (own.email, fallback.email, parent.email) == (
@@ -253,20 +256,20 @@ async def test_a_childs_login_prefers_its_own_account_then_the_owners() -> None:
         "owner@x.example",
         "owner@x.example",
     )
-    assert fallback.persistent and run.password(fallback) == owners
-    assert await run.login_target("parent", "other.example", child=False) is None
+    assert fallback.persistent and child_b.password(fallback) == owners
+    assert await run.session("parent", child=False).login_target("other.example") is None
 
 
 async def test_an_account_whose_key_the_ring_lost_cannot_be_opened() -> None:
     store = MemoryAccountStore()
     await register(accounts(store), "parent")
-    after_loss = accounts(store, keyring=OTHER_KEYRING)
+    session = accounts(store, keyring=OTHER_KEYRING).session("parent", child=False)
 
-    account = await after_loss.login_target("parent", SITE, child=False)
+    account = await session.login_target(SITE)
 
     assert account is not None
     with pytest.raises(UnreadableEnvelope):
-        after_loss.password(account)
+        session.password(account)
 
 
 def test_without_a_ring_accounts_are_unavailable() -> None:
@@ -299,14 +302,14 @@ def test_a_childs_alias_is_random_on_the_same_domain() -> None:
 
 async def test_the_inbox_window_opens_at_each_sign_in_and_names_only_mailbox_aliases() -> None:
     run = accounts(MemoryAccountStore(), mailbox=StubMailbox("orliantra.cc"))
-    alias = run.new_alias(SITE, child=False)
-    other = run.new_alias("other.example", child=False)
-    assert run.inbox_window("parent") is None
+    session = run.session("parent", child=False)
+    alias, other = session.new_alias(SITE), session.new_alias("other.example")
+    assert session.inbox_window() is None
 
     before = datetime.now(UTC)
     first, _ = await register(run, "parent", email=alias)
-    run.signed_in("parent", first)
-    window = run.inbox_window("parent")
+    session.signed_in(first)
+    window = session.inbox_window()
 
     assert window is not None and window.aliases == (alias,)
     assert timedelta(0) <= window.since - before < timedelta(seconds=5)
@@ -314,18 +317,20 @@ async def test_the_inbox_window_opens_at_each_sign_in_and_names_only_mailbox_ali
     # typed is no alias, though it ends in the mailbox's domain. Another Session has no window.
     typed, _ = await register(run, "parent", site="typed.example", email="info@orliantra.cc")
     second, _ = await register(run, "parent", site="other.example", email=other)
-    run.signed_in("parent", typed)
-    run.signed_in("parent", second)
-    run.signed_in("parent", first)
-    moved = run.inbox_window("parent")
+    session.signed_in(typed)
+    session.signed_in(second)
+    session.signed_in(first)
+    moved = session.inbox_window()
     assert moved is not None and moved.aliases == (alias, other) and moved.since >= window.since
-    assert run.inbox_window("child") is None
+    assert run.session("child", child=True).inbox_window() is None
 
 
 async def test_a_deployment_with_no_mailbox_keeps_no_inbox_window() -> None:
     run = accounts(MemoryAccountStore())
+    session = run.session("parent", child=False)
     account, _ = await register(run, "parent", email="a@orliantra.cc")
 
-    run.signed_in("parent", account)
+    session.signed_in(account)
 
-    assert run.inbox_window("parent") is None and run.alias(account) is None
+    assert session.inbox_window() is None and session.alias(account) is None
+    assert session.new_alias(SITE) is None

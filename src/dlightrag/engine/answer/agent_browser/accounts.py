@@ -17,7 +17,7 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Protocol, cast
+from typing import ClassVar, Protocol
 from urllib.parse import urlsplit
 
 import tldextract
@@ -102,7 +102,9 @@ def run_alias(domain: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class StoredAgentAccount:
-    """One owner's account on one site, as the store keeps it."""
+    """One owner's account on one site, as the store keeps it: its password stays sealed."""
+
+    persistent: ClassVar[bool] = True
 
     owner_id: str
     site: str
@@ -112,6 +114,27 @@ class StoredAgentAccount:
     username: str | None
     key_id: str
     envelope: str = field(repr=False)
+
+    @property
+    def binding(self) -> tuple[str, str, str]:
+        """What its envelope is sealed to: its owner, its site, and this account."""
+        return (self.owner_id, self.site, self.account_id)
+
+
+@dataclass(frozen=True, slots=True)
+class ChildAccount:
+    """A Child's account on one site, which lives in this process until its Run settles."""
+
+    persistent: ClassVar[bool] = False
+
+    site: str
+    email: str | None
+    username: str | None
+    password: SecretStr = field(repr=False)
+
+
+#: An account as ``register`` and ``login`` see it: the owner's, or a Child's own.
+type AgentAccount = StoredAgentAccount | ChildAccount
 
 
 class AgentAccountStore(Protocol):
@@ -136,28 +159,6 @@ class AgentAccountStore(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
-class AgentAccount:
-    """One account as ``register`` and ``login`` see it; its password stays sealed or in memory."""
-
-    site: str
-    email: str | None
-    username: str | None
-    stored: StoredAgentAccount | None = field(default=None, repr=False)
-    """The owner's account, which later Runs find. None for a Child's."""
-    run_password: SecretStr | None = field(default=None, repr=False)
-    """A Child's password, which lives only as long as its Run."""
-
-    @property
-    def persistent(self) -> bool:
-        return self.stored is not None
-
-    @property
-    def identity(self) -> str:
-        """What names the account to a person: its email address, else its username."""
-        return cast(str, self.email or self.username)
-
-
-@dataclass(frozen=True, slots=True)
 class InboxWindow:
     """The mail an Agent Session may read: what its aliases received since it last signed in."""
 
@@ -177,69 +178,49 @@ class AgentAccountsBinding:
     mailbox: AgentMailbox | None = None
 
 
-class RunAgentAccounts:
-    """One Research Run's Agent Accounts: the owner's persistent ones, sealed under the key
-    ring, and its Children's Run-scoped ones, held in this process until the Run settles."""
+class SessionAccounts:
+    """The Agent Accounts one parent Agent Session acts on: the owner's, sealed under the key ring.
 
-    def __init__(self, *, owner_id: str, binding: AgentAccountsBinding) -> None:
+    It also keeps the Session's inbox window, which only a registration or a login opens. A
+    Child's rules differ in what it registers and which account its login prefers, and are in
+    ``ChildSessionAccounts``.
+    """
+
+    def __init__(self, owner_id: str, binding: AgentAccountsBinding) -> None:
         self._owner_id = owner_id
         self._store = binding.store
         self._cipher = binding.cipher
-        self.mailbox = binding.mailbox
-        #: A Child's registrations by the Agent Session that made them and the site.
-        self._children: dict[tuple[str, str], AgentAccount] = {}
-        #: Each Agent Session's inbox window, which only a registration or a login opens.
-        self._windows: dict[str, InboxWindow] = {}
+        self._mailbox = binding.mailbox
+        self._window: InboxWindow | None = None
 
-    def available(self) -> bool:
-        """Whether the key ring can seal a password. Without one, register and login fail closed."""
-        return self._cipher.active_key_id is not None
-
-    async def registration_target(
-        self, scope: str, site: str, *, child: bool
-    ) -> AgentAccount | None:
-        """The account a registration on ``site`` replaces the password of, if there is one.
-
-        A parent resets the owner's account; a Child only ever replaces its own, never the owner's.
-        """
-        if child:
-            return self._children.get((scope, site))
+    async def registration_target(self, site: str) -> AgentAccount | None:
+        """The account a registration on ``site`` replaces the password of, if there is one."""
         return await self._owned(site)
 
-    def new_alias(self, site: str, *, child: bool) -> str:
-        """The address a registration on ``site`` fills in: the owner's for the site, or a
-        random one for a Child, so an account that goes with the Run never takes the owner's."""
-        domain = cast(AgentMailbox, self.mailbox).alias_domain
-        return run_alias(domain) if child else owner_alias(self._owner_id, site, domain)
+    def new_alias(self, site: str) -> str | None:
+        """The mailbox alias a registration on ``site`` fills in, the owner's for the site, or
+        None where the deployment has no Agent Mailbox."""
+        if self._mailbox is None:
+            return None
+        return owner_alias(self._owner_id, site, self._mailbox.alias_domain)
 
-    async def login_target(self, scope: str, site: str, *, child: bool) -> AgentAccount | None:
-        """The account a login on ``site`` fills: a Child's own first, else the owner's."""
-        if child and (own := self._children.get((scope, site))) is not None:
-            return own
+    async def login_target(self, site: str) -> AgentAccount | None:
+        """The account a login on ``site`` fills."""
         return await self._owned(site)
 
     async def record(
         self,
-        scope: str,
         site: str,
         *,
-        child: bool,
         existing: AgentAccount | None,
         email: str | None,
         username: str | None,
         password: SecretStr,
     ) -> AgentAccount:
-        """Keep a new account, or the new password of ``existing``.
-
-        A parent's account is sealed and stored for its owner under the account id the first
-        registration minted. A Child's goes no further than this process.
-        """
-        if child:
-            account = AgentAccount(site, email, username, run_password=password)
-            self._children[(scope, site)] = account
-            return account
+        """Keep a new account, or the new password of ``existing``, sealed and stored for the
+        owner under the account id the first registration minted."""
         account_id = (
-            existing.stored.account_id if existing and existing.stored else uuid.uuid4().hex
+            existing.account_id if isinstance(existing, StoredAgentAccount) else uuid.uuid4().hex
         )
         key_id, envelope = self._cipher.seal(
             password, label=ACCOUNT_LABEL, binding=(self._owner_id, site, account_id)
@@ -248,54 +229,102 @@ class RunAgentAccounts:
             self._owner_id, site, account_id, email, username, key_id, envelope
         )
         await self._store.save(stored)
-        return AgentAccount(site, email, username, stored=stored)
+        return stored
+
+    def password(self, account: AgentAccount) -> SecretStr:
+        """The account's password. An envelope no key opens raises ``UnreadableEnvelope``."""
+        if isinstance(account, ChildAccount):
+            return account.password
+        return self._cipher.open(account.envelope, label=ACCOUNT_LABEL, binding=account.binding)
 
     def alias(self, account: AgentAccount) -> str | None:
         """The account's address when DlightRAG minted it on the Agent Mailbox's domain.
 
         The domain does not say so: an Agent with no mailbox typed an address of its own, which
         may end in the same domain, and reading its folder would read mail it is not owed. The
-        owner's account has an alias exactly when its address is the one worked out for the
-        owner and the site. A Child's takes only the address its session minted, so with a
-        mailbox its address is one.
+        owner's account has an alias exactly when its address is the one worked out for its owner
+        and site. A Child's takes only the address its session minted, so with a mailbox its
+        address is one.
         """
-        if self.mailbox is None or account.email is None:
+        if self._mailbox is None or account.email is None:
             return None
-        if not account.persistent:
+        if isinstance(account, ChildAccount):
             return account.email
-        minted = owner_alias(self._owner_id, account.site, self.mailbox.alias_domain)
+        minted = owner_alias(account.owner_id, account.site, self._mailbox.alias_domain)
         return account.email if account.email == minted else None
 
-    def signed_in(self, scope: str, account: AgentAccount) -> None:
-        """The Agent Session registered or logged in with ``account`` now: its inbox window opens
-        here, and keeps the aliases of the accounts it used earlier in this Run."""
-        if self.mailbox is None:
+    def signed_in(self, account: AgentAccount) -> None:
+        """The Session registered or logged in with ``account`` now: its inbox window opens here,
+        and keeps the aliases of the accounts it used earlier in this Run."""
+        if self._mailbox is None:
             return
-        aliases = self._windows[scope].aliases if scope in self._windows else ()
+        aliases = self._window.aliases if self._window is not None else ()
         if (alias := self.alias(account)) is not None and alias not in aliases:
             aliases = (*aliases, alias)
-        self._windows[scope] = InboxWindow(datetime.now(UTC), aliases)
+        self._window = InboxWindow(datetime.now(UTC), aliases)
 
-    def inbox_window(self, scope: str) -> InboxWindow | None:
-        """The window the Agent Session reads mail through, or None before it has signed in."""
-        return self._windows.get(scope)
+    def inbox_window(self) -> InboxWindow | None:
+        """The window the Session reads mail through, or None before it has signed in."""
+        return self._window
 
-    def password(self, account: AgentAccount) -> SecretStr:
-        """The account's password. An envelope no key opens raises ``UnreadableEnvelope``."""
-        if account.run_password is not None:
-            return account.run_password
-        stored = cast(StoredAgentAccount, account.stored)
-        return self._cipher.open(
-            stored.envelope,
-            label=ACCOUNT_LABEL,
-            binding=(stored.owner_id, stored.site, stored.account_id),
-        )
+    async def _owned(self, site: str) -> StoredAgentAccount | None:
+        return await self._store.account(owner_id=self._owner_id, site=site)
 
-    async def _owned(self, site: str) -> AgentAccount | None:
-        stored = await self._store.account(owner_id=self._owner_id, site=site)
-        if stored is None:
-            return None
-        return AgentAccount(site, stored.email, stored.username, stored=stored)
+
+class ChildSessionAccounts(SessionAccounts):
+    """The Agent Accounts one Child Session acts on: its own, kept in this process until the Run
+    settles, and the owner's, which it may sign in with, as capability and not authority."""
+
+    def __init__(self, owner_id: str, binding: AgentAccountsBinding) -> None:
+        super().__init__(owner_id, binding)
+        self._own: dict[str, ChildAccount] = {}
+
+    async def registration_target(self, site: str) -> AgentAccount | None:
+        """Only its own account, never the owner's."""
+        return self._own.get(site)
+
+    def new_alias(self, site: str) -> str | None:
+        """A random mailbox alias, so an account that goes with the Run never takes the owner's."""
+        return None if self._mailbox is None else run_alias(self._mailbox.alias_domain)
+
+    async def login_target(self, site: str) -> AgentAccount | None:
+        """Its own account first, else the owner's."""
+        return self._own.get(site) or await super().login_target(site)
+
+    async def record(
+        self,
+        site: str,
+        *,
+        existing: AgentAccount | None,
+        email: str | None,
+        username: str | None,
+        password: SecretStr,
+    ) -> AgentAccount:
+        """Keep a new account, or the new password of ``existing``, in this process alone."""
+        account = self._own[site] = ChildAccount(site, email, username, password)
+        return account
+
+
+class RunAgentAccounts:
+    """One Research Run's Agent Accounts, as each of its Agent Sessions sees them."""
+
+    def __init__(self, *, owner_id: str, binding: AgentAccountsBinding) -> None:
+        self._owner_id = owner_id
+        self._binding = binding
+        self.mailbox = binding.mailbox
+        self._sessions: dict[str, SessionAccounts] = {}
+
+    def available(self) -> bool:
+        """Whether the key ring can seal a password. Without one, register and login fail closed."""
+        return self._binding.cipher.active_key_id is not None
+
+    def session(self, scope: str, *, child: bool) -> SessionAccounts:
+        """The accounts of the Agent Session whose tool calls run in ``scope``: the same object
+        each time, so what a registration or a login opens stays open for the Session's next call."""
+        if scope not in self._sessions:
+            kind = ChildSessionAccounts if child else SessionAccounts
+            self._sessions[scope] = kind(self._owner_id, self._binding)
+        return self._sessions[scope]
 
 
 async def reseal_agent_accounts(
@@ -316,12 +345,13 @@ async def reseal_agent_accounts(
     while True:
         page = await store.sealed_under(key_ids=retired, after=after, limit=limit)
         for account in page:
-            binding = (account.owner_id, account.site, account.account_id)
             try:
-                password = cipher.open(account.envelope, label=ACCOUNT_LABEL, binding=binding)
+                password = cipher.open(
+                    account.envelope, label=ACCOUNT_LABEL, binding=account.binding
+                )
             except UnreadableEnvelope:
                 continue
-            key_id, envelope = cipher.seal(password, label=ACCOUNT_LABEL, binding=binding)
+            key_id, envelope = cipher.seal(password, label=ACCOUNT_LABEL, binding=account.binding)
             if await store.reseal(account, key_id=key_id, envelope=envelope):
                 resealed += 1
         if len(page) < limit:
@@ -336,8 +366,10 @@ __all__ = [
     "AgentAccount",
     "AgentAccountStore",
     "AgentAccountsBinding",
+    "ChildAccount",
     "InboxWindow",
     "RunAgentAccounts",
+    "SessionAccounts",
     "StoredAgentAccount",
     "account_site",
     "generate_password",

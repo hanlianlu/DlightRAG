@@ -11,18 +11,34 @@ from pydantic import SecretStr
 from dlightrag.engine.agent.environment import AccessScheduler
 from dlightrag.engine.agent.tools import ToolResult
 from dlightrag.engine.answer.agent_browser import (
-    AgentAccount,
     AgentMailboxError,
     MailListing,
     MailObject,
     RunAgentAccounts,
+    StoredAgentAccount,
+    owner_alias,
 )
 from dlightrag.engine.answer.tools.browser import browser_tool
 from tests.support.agent_browser import inert_browser_host
 from tests.tool_helpers import recording_tool_runtime
 
 DOMAIN = "orliantra.cc"
+OWNER = "owner"
 NOW = datetime(2026, 10, 4, 12, 0, tzinfo=UTC)
+
+
+def alias_of(site: str) -> str:
+    """The mailbox alias the owner has for ``site``."""
+    return owner_alias(OWNER, site, DOMAIN)
+
+
+def account(site: str, email: str) -> StoredAgentAccount:
+    return StoredAgentAccount(OWNER, site, "account", email, None, "key", "envelope")
+
+
+def minted(site: str) -> StoredAgentAccount:
+    """The owner's account on ``site`` as a registration with a mailbox leaves it."""
+    return account(site, alias_of(site))
 
 
 class ScriptedMailbox:
@@ -68,9 +84,9 @@ class Inbox:
         )
         self.subjects: list[str] = []
 
-    def signed_in(self, *aliases: str, scope: str = "parent") -> None:
-        for alias in aliases:
-            self.accounts.signed_in(scope, AgentAccount("shop.example", alias, None))
+    def signed_in(self, *accounts: StoredAgentAccount, scope: str = "parent") -> None:
+        for each in accounts:
+            self.accounts.session(scope, child=False).signed_in(each)
 
     async def call(self, scope: str = "parent") -> ToolResult:
         updates: list[ToolResult] = []
@@ -83,11 +99,11 @@ class Inbox:
 
 
 async def test_inbox_asks_each_alias_for_its_newest_mail_a_little_before_the_window() -> None:
-    first, second = f"a1@{DOMAIN}", f"b2@{DOMAIN}"
+    first, second = alias_of("a.example"), alias_of("b.example")
     mailbox = ScriptedMailbox({first: MailListing((), 0, False), second: MailListing((), 0, False)})
     inbox = Inbox(mailbox)
-    inbox.signed_in(first, second)
-    window = inbox.accounts.inbox_window("parent")
+    inbox.signed_in(minted("a.example"), minted("b.example"))
+    window = inbox.accounts.session("parent", child=False).inbox_window()
     assert window is not None
 
     empty = await inbox.call()
@@ -105,7 +121,7 @@ async def test_inbox_asks_each_alias_for_its_newest_mail_a_little_before_the_win
 
 
 async def test_inbox_merges_the_aliases_newest_first_and_says_what_it_does_not_show() -> None:
-    first, second = f"a1@{DOMAIN}", f"b2@{DOMAIN}"
+    first, second = alias_of("a.example"), alias_of("b.example")
     long_link = "https://shop.example/" + "z" * 2100
     mailbox = ScriptedMailbox(
         {
@@ -126,7 +142,7 @@ async def test_inbox_merges_the_aliases_newest_first_and_says_what_it_does_not_s
         }
     )
     inbox = Inbox(mailbox)
-    inbox.signed_in(first, second)
+    inbox.signed_in(minted("a.example"), minted("b.example"))
 
     result = await inbox.call()
 
@@ -151,7 +167,7 @@ async def test_inbox_merges_the_aliases_newest_first_and_says_what_it_does_not_s
 
 
 async def test_inbox_shows_the_newest_five_of_what_the_aliases_returned() -> None:
-    first, second = f"a1@{DOMAIN}", f"b2@{DOMAIN}"
+    first, second = alias_of("a.example"), alias_of("b.example")
     mailbox = ScriptedMailbox(
         {
             alias: MailListing(
@@ -163,7 +179,7 @@ async def test_inbox_shows_the_newest_five_of_what_the_aliases_returned() -> Non
         }
     )
     inbox = Inbox(mailbox)
-    inbox.signed_in(first, second)
+    inbox.signed_in(minted("a.example"), minted("b.example"))
 
     result = await inbox.call()
 
@@ -180,14 +196,14 @@ async def test_inbox_shows_the_newest_five_of_what_the_aliases_returned() -> Non
 
 
 async def test_inbox_needs_a_sign_in_and_an_alias_and_reports_a_bucket_it_cannot_read() -> None:
-    alias = f"a1@{DOMAIN}"
+    alias = alias_of("a.example")
     mailbox = ScriptedMailbox(AgentMailboxError("AccessDenied"))
     inbox = Inbox(mailbox)
 
     unopened = await inbox.call()
-    inbox.signed_in("someone@example.com")
+    inbox.signed_in(account("typed.example", f"info@{DOMAIN}"))
     unaliased = await inbox.call()
-    inbox.signed_in(alias)
+    inbox.signed_in(minted("a.example"))
     unreadable = await inbox.call()
 
     assert [r.is_error for r in (unopened, unaliased, unreadable)] == [True] * 3
@@ -199,10 +215,10 @@ async def test_inbox_needs_a_sign_in_and_an_alias_and_reports_a_bucket_it_cannot
 
 
 async def test_a_session_reads_only_its_own_window() -> None:
-    alias = f"a1@{DOMAIN}"
+    alias = alias_of("a.example")
     mailbox = ScriptedMailbox({alias: MailListing((), 0, False)})
     inbox = Inbox(mailbox)
-    inbox.signed_in(alias, scope="child")
+    inbox.signed_in(minted("a.example"), scope="child")
 
     parents = await inbox.call("parent")
     childs = await inbox.call("child")
@@ -212,7 +228,7 @@ async def test_a_session_reads_only_its_own_window() -> None:
 
 
 async def test_a_password_a_mail_echoes_never_reaches_the_inbox() -> None:
-    alias = f"a1@{DOMAIN}"
+    alias = alias_of("a.example")
     password = SecretStr("Zq7-Fixture.Pass_9x")
     mailbox = ScriptedMailbox(
         {
@@ -222,7 +238,7 @@ async def test_a_password_a_mail_echoes_never_reaches_the_inbox() -> None:
         }
     )
     inbox = Inbox(mailbox)
-    inbox.signed_in(alias)
+    inbox.signed_in(minted("a.example"))
     inbox.browser.filled_passwords("parent").add(password)
 
     result = await inbox.call()

@@ -81,6 +81,7 @@ from dlightrag.engine.answer.agent_browser import (
     PageState,
     RunAgentAccounts,
     RunAgentBrowser,
+    SessionAccounts,
     UploadFile,
     account_site,
     generate_password,
@@ -621,7 +622,7 @@ class _Call:
         if request.action == "find":
             return request.query or ""
         if request.action == "inbox":
-            window = cast(RunAgentAccounts, self._host.accounts).inbox_window(self._scope)
+            window = self._session_accounts().inbox_window()
             return "" if window is None else ", ".join(window.aliases)
         current = self._host.browser.current_url(self._scope)
         if current is None:
@@ -796,13 +797,18 @@ class _Call:
         text = "\n".join((report, CAPTURED.format(resource_id=resource_id), read.text_content))
         return replace(read, parts=(ToolTextPart(text),))
 
+    def _session_accounts(self) -> SessionAccounts:
+        """The Agent Accounts of the Session this call runs in."""
+        accounts = cast(RunAgentAccounts, self._host.accounts)
+        return accounts.session(self._scope, child=self._child)
+
     async def _with_accounts(
-        self, act: Callable[[AgentPage, RunAgentAccounts, str], Awaitable[ToolResult]]
+        self, act: Callable[[AgentPage, SessionAccounts, str], Awaitable[ToolResult]]
     ) -> ToolResult:
         """Run register or login on the page the Session's earlier calls opened."""
-        accounts = cast(RunAgentAccounts, self._host.accounts)
-        if not accounts.available():
+        if not cast(RunAgentAccounts, self._host.accounts).available():
             return ToolResult.text(NO_KEY_RING, is_error=True)
+        accounts = self._session_accounts()
 
         async def on_page(page: AgentPage) -> ToolResult:
             current = page.current_url() or ""
@@ -813,14 +819,14 @@ class _Call:
 
         return await self._on_page(on_page)
 
-    async def _register(self, page: AgentPage, accounts: RunAgentAccounts, site: str) -> ToolResult:
+    async def _register(self, page: AgentPage, accounts: SessionAccounts, site: str) -> ToolResult:
         """Fill a new generated password, and the account's email, into a sign-up form.
 
         The account is recorded as soon as its fields are filled, before the site accepts the
         form; a password reset is a registration on a site whose account exists.
         """
-        request, scope, child = self._request, self._runtime.execution_scope, self._child
-        existing = await accounts.registration_target(scope, site, child=child)
+        request = self._request
+        existing = await accounts.registration_target(site)
         form = await page.credential_form(
             site=site,
             password_refs=request.password_refs,
@@ -835,40 +841,35 @@ class _Call:
         # What an account already holds is kept unless the form names the field again.
         email = existing.email if existing else None
         username = existing.username if existing else None
-        identity: list[CredentialFill] = []
+        email_fills: list[CredentialFill] = []
         if request.email_ref is not None:
-            if email is None and accounts.mailbox is None:
+            # An address the account has, or one the mailbox mints, is filled by DlightRAG.
+            email = email or accounts.new_alias(site)
+            if email is not None:
+                email_fills.append(CredentialFill(request.email_ref, "email", SecretStr(email)))
+            else:
                 # With no Agent Mailbox the Agent typed an address of its own, which stays.
                 email = _typed_email(form.email)
                 if email is None:
                     return ToolResult.text(BAD_EMAIL.format(ref=request.email_ref), is_error=True)
-            else:
-                # An address the account has, or one the mailbox delivers, is filled by DlightRAG.
-                email = email or accounts.new_alias(site, child=child)
-                identity.append(CredentialFill(request.email_ref, "email", SecretStr(email)))
         if request.username_ref is not None:
             username = _typed_username(form.username)
             if username is None:
                 return ToolResult.text(BAD_USERNAME.format(ref=request.username_ref), is_error=True)
-        if email is None and username is None:
+        identity = email or username
+        if identity is None:
             return ToolResult.text(NEEDS_IDENTITY, is_error=True)
 
         password = generate_password(length)
         fills = (
-            *identity,
+            *email_fills,
             *(CredentialFill(ref, "password", password) for ref in request.password_refs),
         )
         observation = await page.fill_credentials(fills, site=site)
         recorded: AgentAccount | None = None
         try:
             recorded = await accounts.record(
-                scope,
-                site,
-                child=child,
-                existing=existing,
-                email=email,
-                username=username,
-                password=password,
+                site, existing=existing, email=email, username=username, password=password
             )
         except asyncio.CancelledError:
             raise
@@ -879,12 +880,12 @@ class _Call:
             with suppress(AgentBrowserError):
                 await page.clear_fields(tuple(fill.ref for fill in fills), site=site)
             return ToolResult.text(NOT_RECORDED, is_error=True)
-        accounts.signed_in(scope, recorded)
+        accounts.signed_in(recorded)
         notes = [
             (REPLACED if existing is not None else RECORDED).format(
-                identity=recorded.identity,
+                identity=identity,
                 site=site,
-                whose=WHOSE[not child],
+                whose=WHOSE[recorded.persistent],
                 n=len(request.password_refs),
             )
         ]
@@ -892,28 +893,24 @@ class _Call:
             notes.append(MAIL_NOTE.format(alias=alias))
         return await self._reported(observation, *notes)
 
-    async def _login(self, page: AgentPage, accounts: RunAgentAccounts, site: str) -> ToolResult:
+    async def _login(self, page: AgentPage, accounts: SessionAccounts, site: str) -> ToolResult:
         """Fill the account this site has for the Agent into a sign-in form."""
-        request, scope, child = self._request, self._runtime.execution_scope, self._child
-        account = await accounts.login_target(scope, site, child=child)
+        request = self._request
+        account = await accounts.login_target(site)
         if account is None:
             return ToolResult.text(NO_ACCOUNT.format(site=site), is_error=True)
-        if request.email_ref is not None and account.email is None:
-            return ToolResult.text(NO_EMAIL.format(site=site), is_error=True)
-        if request.username_ref is not None and account.username is None:
-            return ToolResult.text(NO_USERNAME.format(site=site), is_error=True)
         fills: list[CredentialFill] = []
         filled: list[str] = []
         if request.email_ref is not None:
-            fills.append(
-                CredentialFill(request.email_ref, "email", SecretStr(cast(str, account.email)))
-            )
+            if account.email is None:
+                return ToolResult.text(NO_EMAIL.format(site=site), is_error=True)
+            fills.append(CredentialFill(request.email_ref, "email", SecretStr(account.email)))
             filled.append("email")
         if request.username_ref is not None:
+            if account.username is None:
+                return ToolResult.text(NO_USERNAME.format(site=site), is_error=True)
             fills.append(
-                CredentialFill(
-                    request.username_ref, "username", SecretStr(cast(str, account.username))
-                )
+                CredentialFill(request.username_ref, "username", SecretStr(account.username))
             )
             filled.append("username")
         if request.password_refs:
@@ -924,8 +921,10 @@ class _Call:
             fills.extend(CredentialFill(ref, "password", password) for ref in request.password_refs)
             filled.append(f"{len(request.password_refs)} password field(s)")
         observation = await page.fill_credentials(tuple(fills), site=site)
-        accounts.signed_in(scope, account)
-        note = FILLED.format(identity=account.identity, site=site, fields=", ".join(filled))
+        accounts.signed_in(account)
+        note = FILLED.format(
+            identity=account.email or account.username, site=site, fields=", ".join(filled)
+        )
         return await self._reported(observation, note)
 
     async def _inbox(self) -> ToolResult:
@@ -934,13 +933,12 @@ class _Call:
         It needs no page and leases nothing. The text is mail, which anyone who learns an alias
         can write: untrusted context, said so, and never Evidence.
         """
-        accounts = cast(RunAgentAccounts, self._host.accounts)
-        window = accounts.inbox_window(self._scope)
+        window = self._session_accounts().inbox_window()
         if window is None:
             return ToolResult.text(NO_WINDOW, is_error=True)
         if not window.aliases:
             return ToolResult.text(NO_ALIAS, is_error=True)
-        mailbox = cast(AgentMailbox, accounts.mailbox)
+        mailbox = cast(AgentMailbox, cast(RunAgentAccounts, self._host.accounts).mailbox)
         listings: list[tuple[str, MailListing]] = []
         try:
             for alias in window.aliases:

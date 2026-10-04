@@ -76,12 +76,11 @@ async def register(
 ) -> SecretStr:
     """The owner's parent registers on the site, and the password sealed for it comes back."""
     run = RunAgentAccounts(owner_id=owner, binding=AgentAccountsBinding(store, cipher))
+    session = run.session("parent", child=False)
     password = generate_password()
-    await run.record(
-        "parent",
+    await session.record(
         site,
-        child=False,
-        existing=await run.registration_target("parent", site, child=False),
+        existing=await session.registration_target(site),
         email=f"{owner}@alias.example",
         username=None,
         password=password,
@@ -171,8 +170,9 @@ async def test_reseal_moves_retired_envelopes_and_skips_ones_no_key_opens(pool: 
         # The account is the same one, only sealed anew: nothing the owner did to it moved.
         assert (row["account_id"], row["updated_at"]) == (was["account_id"], was["updated_at"])
         run = RunAgentAccounts(owner_id=owner, binding=AgentAccountsBinding(store, rotated))
-        account = await run.login_target("parent", site, child=False)
-        assert account is not None and run.password(account) == password
+        session = run.session("parent", child=False)
+        account = await session.login_target(site)
+        assert account is not None and session.password(account) == password
     assert (await row_of(pool, "carol", "lost.example"))["key_id"] == "gone"
     assert [(await row_of(pool, o, "bad.example"))["key_id"] for o in ("aaron", "dave")] == [
         "test",
