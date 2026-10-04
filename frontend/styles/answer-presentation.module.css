@@ -217,11 +217,6 @@
     padding: var(--space-tight) var(--space-inline) var(--space-inline);
 }
 
-/* === Source Action Icons === */
-
-
-}
-
 /* === Inline Video Artifact === */
 
 /* The player fits the answer column and may grow to most of the viewport; a
@@ -294,4 +289,6 @@
 .answer-link-card-site {
     color: var(--color-text-muted);
     font-size: var(--font-size-caption);
+}
+
 }

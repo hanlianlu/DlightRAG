@@ -1,8 +1,9 @@
 /* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
 
-/* Markdown typography for answer content and Markdown artifacts. The server
-   converts Markdown to sanitized HTML; this layer provides the visual design
-   so model output renders with real hierarchy instead of browser defaults. */
+/* Answer resource placements (Artifact cards and notices, inline images, Visual
+   Evidence) and the Artifact Canvas's header, actions and previews. Markdown
+   typography for answers and Markdown Artifacts belongs to .markdownContent in
+   chat.module.css. */
 
 /* Answer Artifact placements */
 .answer-parts {
