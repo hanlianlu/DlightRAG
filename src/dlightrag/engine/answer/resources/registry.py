@@ -30,8 +30,7 @@ from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from dlightrag.engine.agent.session.ids import IntentId
-from dlightrag.engine.agent.tools import ResourceAttachmentBytes
-from dlightrag.engine.agent.tools.files import AdmittedBytes
+from dlightrag.engine.agent.tools import AdmittedBytes, ResourceAttachmentBytes
 from dlightrag.engine.ai.media import verify_web_image_bytes
 from dlightrag.engine.ai.tokens import estimate_tokens
 from dlightrag.engine.answer.agent_browser import AgentBrowserError, RenderedPage, browser_failure

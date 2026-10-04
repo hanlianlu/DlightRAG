@@ -46,6 +46,7 @@ from dlightrag.engine.agent.session.runtime import (
 )
 from dlightrag.engine.agent.skills import SkillsBundle
 from dlightrag.engine.agent.tools import (
+    AdmittedBytesReader,
     AgentTool,
     ExecutedTurn,
     ToolResult,
@@ -53,7 +54,6 @@ from dlightrag.engine.agent.tools import (
 )
 from dlightrag.engine.agent.tools.contracts import ToolModelFunc
 from dlightrag.engine.agent.tools.files import (
-    AdmittedBytesReader,
     PreparedImageAttachment,
     ResourceReader,
     ResourceReadRequest,

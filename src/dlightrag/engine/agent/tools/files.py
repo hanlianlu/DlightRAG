@@ -44,6 +44,7 @@ from dlightrag.engine.agent.tool_content import (
     VisualSource,
 )
 from dlightrag.engine.agent.tools.contracts import (
+    AdmittedBytesReader,
     AgentTool,
     CommittedOutput,
     EvidenceSourceFact,
@@ -634,20 +635,6 @@ def write_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) ->
         )
 
     return write_declaration().bind(execute)
-
-
-@dataclass(frozen=True, slots=True)
-class AdmittedBytes:
-    """The bytes a Host's Resource admitted, as materialize copies them."""
-
-    resource_id: str
-    """The canonical handle: after an adoption, this Run's own."""
-    media_type: str
-    content: bytes
-
-
-type AdmittedBytesReader = Callable[[str, ToolRuntime], Awaitable[AdmittedBytes | ToolResult]]
-"""A Host's way to the bytes of one resource_id; a ToolResult it returns is its refusal."""
 
 
 class MaterializeArgs(BaseModel):
@@ -1713,8 +1700,6 @@ def _paginate_lines(
 
 
 __all__ = [
-    "AdmittedBytes",
-    "AdmittedBytesReader",
     "BashArgs",
     "EditArgs",
     "EditOperation",

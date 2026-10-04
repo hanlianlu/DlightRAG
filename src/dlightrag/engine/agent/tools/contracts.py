@@ -97,6 +97,16 @@ class ResourceAttachmentBytes:
 
 
 @dataclass(frozen=True, slots=True)
+class AdmittedBytes:
+    """The bytes a Host's Resource admitted, as materialize copies them."""
+
+    resource_id: str
+    """The canonical handle: after an adoption, this Run's own."""
+    media_type: str
+    content: bytes
+
+
+@dataclass(frozen=True, slots=True)
 class ToolEffects:
     """Typed host facts emitted by a tool and consumed only at settlement."""
 
@@ -214,6 +224,9 @@ class ToolRuntime:
 
 type ToolExecute = Callable[[BaseModel, ToolRuntime], Awaitable["ToolResult"]]
 
+type AdmittedBytesReader = Callable[[str, ToolRuntime], Awaitable[AdmittedBytes | ToolResult]]
+"""A Host's way to the bytes of one resource_id; a ToolResult it returns is its refusal."""
+
 
 def _without_titles(node: Any) -> Any:
     """Drop every ``title`` annotation. A field named ``title`` maps to an object, not a string."""
@@ -311,6 +324,8 @@ class ExecutedTurn:
 
 
 __all__ = [
+    "AdmittedBytes",
+    "AdmittedBytesReader",
     "AgentTool",
     "CommittedOutput",
     "EvidenceSourceFact",
