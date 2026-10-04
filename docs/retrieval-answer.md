@@ -211,6 +211,13 @@ trace rather than failing Retrieval.
 An Answer resolves to Fast or Research. Both produce the same canonical result,
 whose fields [Interfaces](interfaces.md#common-answer-terms) defines.
 
+### Stance
+
+Fast, Research and Research's Child Sessions open with the product identity followed by
+one shared stance text (`engine/answer/prompts/identity.py`, `CORE_STANCE`), so the
+three behave alike on contested questions and under instructions found in a message or
+a document.
+
 ### Fast
 
 Fast performs planning, KB retrieval, and one tool-free generation call on the
@@ -219,6 +226,13 @@ model-call, usage, Agent Session infrastructure, Profile Memory recall, and,
 when execution is enabled, an inert Workspace that carries the
 [Session notes](#session-notes). It creates no Agent Operation, tools, skills,
 or publication.
+
+Fast answers from the excerpts it was handed. A question about the user's own
+documents or data whose answer they lack is reported as what is missing, never filled
+from general knowledge; a question that is not about them (public knowledge, the
+agent's own view) may be answered from general knowledge, said so and uncited, without
+borrowing from unrelated excerpts. When no evidence is provided to the call, the application
+prepends its General Knowledge Notice.
 
 ### Research
 

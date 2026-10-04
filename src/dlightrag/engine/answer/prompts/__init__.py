@@ -2,8 +2,8 @@
 """Centralized prompts for DlightRAG: one module per consumer.
 
 A prompt lives in the module named after the call that sends it; `identity.py` holds the
-identity every answer shares, and `answer.py` the evidence, link, and citation rules
-Research takes from Fast. This facade exports the complete prompts.
+identity and stance every answer shares, and `answer.py` the evidence, link, and citation
+rules Research takes from Fast. This facade exports the complete prompts.
 """
 
 from .agent import agent_control_prompt
