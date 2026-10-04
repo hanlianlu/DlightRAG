@@ -165,8 +165,8 @@ containers plus one Squid proxy. The bundled Compose stack runs two members
 (`agent-browser-1`, `agent-browser-2`) and `agent-browser-egress`, and binds their
 addresses into `dlightrag-api`, `dlightrag-mcp`, and `dlightrag-reader`
 ([fields](configuration.md#agent-browser); the boundary is in
-[Security](security.md#agent-browser-boundary)). No service waits for them: a render
-with no browser up fails as `unreachable` and the Run goes on.
+[Security](security.md#agent-browser-boundary)). No service waits for them: a render or a
+page's first `navigate` with no browser up fails as `unreachable` and the Run goes on.
 
 ```bash
 # From the repository root, so the seccomp profile path in docker-compose.yml resolves.
@@ -183,13 +183,16 @@ docker compose logs agent-browser-egress
   names a Run holds its member only while that Run's lease is live
   ([when](architecture.md#agent-browser)), whatever the row still says. The proxy logs
   every request to its stdout; a destination it refuses is `TCP_DENIED`.
-- **Size.** A Run holds a member only while it renders and for
-  `idle_release_seconds` after, so the pool's size bounds how many Runs render at the
-  same moment across every process that runs Query workers. When every member is held,
-  a render waits up to `lease_wait_seconds` and then fails as `busy`; the model reads
-  that and works from the direct read. Add members, or lower `idle_release_seconds`,
-  when that is frequent. Each member is capped at `COMPOSE_AGENT_BROWSER_MEM_LIMIT`
-  (default `2g`) and 1024 processes.
+- **Size.** A Run holds a member while it renders or has a page open, and for
+  `idle_release_seconds` after the last of them ends, so the pool's size bounds how many
+  Runs use a browser at the same moment across every process that runs Query workers. A
+  page the `browser` tool opened stays open until its Session ends, a Child's when its
+  drive ends and the parent's when the Run settles, so `idle_release_seconds` frees a
+  member only for a Run whose pages have all closed. When every member is held, a render
+  or a first `navigate` waits up to `lease_wait_seconds` and then fails as `busy`; the
+  model reads that and works from the direct read. Add members when that is frequent.
+  Each member is capped at `COMPOSE_AGENT_BROWSER_MEM_LIMIT` (default `2g`) and 1024
+  processes.
 - **Adding a member.** Add its service (`<<: *agent-browser`) on a network of its own,
   declare that network `internal: true`, add the network to `agent-browser-egress` and
   to `dlightrag-api`, `dlightrag-mcp`, and `dlightrag-reader`, and add the member's
@@ -211,8 +214,8 @@ docker compose logs agent-browser-egress
     lease store, PostgreSQL, can also be the one that cannot be reached; the
     application then logs `Agent Browser lease store failed` with the error type.
   - `busy`: every member's row names a Run that holds its lease. Wait for one to
-    finish rendering, or for the lease of a Run whose worker died to expire (about a
-    minute).
+    finish rendering or browsing, or for the lease of a Run whose worker died to expire
+    (about a minute).
   - A page that never loads: look for `TCP_DENIED` in the proxy's log. A private
     destination or a port other than 80 and 443 is refused by design.
   - `unreachable` for every member while the members are healthy, with
@@ -230,7 +233,10 @@ docker compose logs agent-browser-egress
   - A member refuses to start: the seccomp path did not resolve because Compose ran
     outside the repository root.
 - **Development.** `tests/integration/test_agent_browser_pg.py` runs a real
-  `playwright run-server` with Chromium, launched inside its sandbox. Install the browser
+  `playwright run-server` with Chromium, launched inside its sandbox.
+  `tests/integration/test_agent_browser_tool.py` drives the `browser` tool in that browser
+  without a database, and `tests/integration/test_agent_browser_tool_pg.py` runs a Research
+  Run through settlement, Child Sessions, and recovery. Install the browser
   once with `uv run playwright install chromium` (on Linux, `--with-deps`); on a host that
   restricts unprivileged user namespaces, also lift the restriction CI lifts
   (`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`).

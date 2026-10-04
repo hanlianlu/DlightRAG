@@ -320,12 +320,16 @@ Citable, run-scoped source material with durable identity and content/locator in
 _Avoid_: Summary, agent prose
 
 **Web Resource**:
-A run-scoped public HTTP(S) source admitted from a caller, Web Search, or an Agent-selected URL and represented by a Resource Handle. Admission origin and acquisition method are independent provenance facts. Within one Answer Run, the same normalized URL resolves to its first successfully admitted durable snapshot rather than silently refetching mutable content. A Rendered Read appends a second representation to it without replacing that snapshot. Raw Bash output is model context, not Web Evidence.
+A run-scoped public HTTP(S) source admitted from a caller, Web Search, or an Agent-selected URL and represented by a Resource Handle. Admission origin and acquisition method are independent provenance facts; the Agent Browser's acquisitions are `browser_render`, `browser_capture`, and `browser_download`. Within one Answer Run, the same normalized URL resolves to its first successfully admitted durable snapshot rather than silently refetching mutable content. A Rendered Read appends a second representation to it without replacing that snapshot, while a Browser Capture or a browser download is a Resource of its own. Raw Bash output is model context, not Web Evidence.
 _Avoid_: Web Search result, URL attachment, raw URL, Bash output
 
 **Rendered Read**:
 A `read` of a Web Resource through the Agent Browser. Its representation is appended to the same Web Resource, with acquisition `browser_render`, and never replaces an admitted snapshot; the Resource keeps one handle, and a cursor names the representation it continues. The model asks for one with `rendered=true`, or the Extract chain's browser step makes one when the direct fetch failed or held no text. Its text is the browser's assertion of the page after its scripts ran, not an attestation that an anonymous GET serves the same page.
 _Avoid_: screenshot, page capture, snapshot replacement, hosted extraction
+
+**Browser Capture**:
+A Web Resource admitted from the Agent Browser's current page (acquisition `browser_capture`). Browser downloads are admitted as Resources with acquisition `browser_download`. Each capture is its own Resource and never rebinds its URL's snapshot, because the page it holds is the one the Agent drove to, which a fetch of its URL may not reproduce. Its citation is the page's final public URL, or its Resource Handle when the page has none.
+_Avoid_: screenshot, Rendered Read, URL snapshot, page cache
 
 **Resource Handle**:
 An owner/run-scoped identity through which prepared, fetched, evidence-backed, spilled, or published content remains addressable across recovery; it is opaque except for a Published Artifact's deterministic address (`artifact-<hash of its Artifact path>`), which is derived on purpose so the Tool can name it before the publication exists. A later Run on the same Agent Session may adopt an earlier Run's Resource on first use; the adopting Run then holds the canonical handle, the earlier handle stays readable only as its alias, and the adopting Run never converts newly adopted bytes: a convertible document reads text only through the conversion view stored with it, and other formats are decoded from the adopted bytes. What a later Run may adopt is declared once, as (capability, resource kind) pairs, so a new re-readable kind is added where it is written rather than in each reader.
@@ -408,7 +412,7 @@ The adapter behind exactly two modes: `disabled` and `trust`. Trust runs the Age
 _Avoid_: implicit downgrade, permission catalog, approval prompt, shell-command filtering as a security boundary
 
 **Agent Browser**:
-The Run-scoped browser capability: one browser per Research Run, leased from a pool the deployment runs, with a short-lived anonymous context for each Rendered Read. It is a deployment capability reached through tools, never a Connection or a process of the Agent, and the deployment's network, not DlightRAG, confines what it reaches. Fast never has one.
+The Run-scoped browser capability: one browser per Research Run, leased from a pool the deployment runs, with a short-lived anonymous context for each Rendered Read and one for each Agent Session (the parent's and every Child's) that opens a page. It is a deployment capability reached through tools, never a Connection or a process of the Agent, and the deployment's network, not DlightRAG, confines what it reaches. Fast never has one.
 _Avoid_: Connection, Chromium in the answering container, browsing session, browser profile
 
 **BrowserProvider**:

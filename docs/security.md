@@ -399,7 +399,8 @@ redirects. The shared egress boundary repeats scheme/host/DNS/SSRF checks at
 every redirect, pins the validated address for each connection, and never permits
 HTTPS to downgrade to HTTP. Agent reads can vary only `User-Agent`, `Accept`, and
 `Accept-Language`; cookies, authorization, arbitrary headers, and browser sessions
-are unavailable to `read`, whose rendered form uses a temporary anonymous context
+are unavailable to `read`. The Agent's only sessions are the Run-scoped Agent
+Browser's, whose pages are anonymous contexts
 ([Agent Browser Boundary](#agent-browser-boundary)). A successful acquisition becomes
 one immutable run snapshot.
 
@@ -446,12 +447,13 @@ Execution modes:
 Root checks are not a shell sandbox. Research reaches outside tools only through
 its owner's Personal MCP Connections, pinned per Run and gated per effect, with
 in-flight writes cancelled best-effort and never replayed
-([contract](personal-mcp-connections.md)). Network policy can deny access but
+([contract](personal-mcp-connections.md)), and through the deployment's Agent Browser
+([boundary](#agent-browser-boundary)). Network policy can deny access but
 cannot grant external account authority. Public Web Search exists only for
 configured Exa/Tavily provider chains, and Extract for those chains and the
-deployment's Agent Browser, which no owner authorizes and the Agent reaches only
-through `read`; provider failures may fail over, while successful empty results do
-not.
+deployment's Agent Browser, which no owner authorizes and the Agent reaches through
+`read` and the `browser` tool; provider failures may fail over, while successful empty
+results do not.
 
 All Agent/child/Fast mutations are fenced by owner, run lease, epoch, and
 register sequence. A completed child outcome is persisted so replay cannot
@@ -460,12 +462,12 @@ re-enter it. A staged Fast result replays without another model call.
 ## Agent Browser Boundary
 
 The Agent Browser ([ADR 0032](adr/0032-the-agent-browser.md)) renders a public page for
-a Research `read` in a Chromium that runs in a pool container, outside the answering
-process. The Agent gains no process, path, socket, or binary from it, and an owner
-authorizes nothing: it is a deployment capability, not a Connection. Fast never
-reaches it. What the browser loads is untrusted, so the boundary is the deployment's
-network, which fails closed, and DlightRAG checks only the URLs it hands over and
-accepts back.
+a Research `read` and lets the `browser` tool drive one, in a Chromium that runs in a
+pool container, outside the answering process. The Agent gains no process, path, socket,
+or binary from it, and an owner authorizes nothing: it is a deployment capability, not a
+Connection. Fast never reaches it. What the browser loads is untrusted, so the boundary
+is the deployment's network, which fails closed, and DlightRAG checks only the URLs it
+hands over and accepts back.
 
 - **URLs.** The first URL passes the direct read's rules before the browser sees it:
   an HTTP(S) scheme, no embedded credentials or credential query parameters, and a host
@@ -473,7 +475,11 @@ accepts back.
   the same form, without a lookup, and a page that ends at one the rules refuse fails as
   `final_url_refused` with nothing admitted. Everything between, redirects,
   subresources, a script's requests, and a page's own navigations, is confined by the
-  network below, not by DlightRAG.
+  network below, not by DlightRAG. The `browser` tool's `navigate` applies the first three
+  of these checks, before any browser is leased, and a URL they refuse ends the call with
+  the reason. It leaves out the credential-parameter rule, which guards what becomes an
+  Agent Resource, not where a page may go: a verification link from a mailbox often
+  carries such a parameter.
 - **Topology.** Each pool member sits alone on an `internal: true` network that has no
   route out and none to any other member. The egress proxy is on the default network
   and on every member network, and so are `dlightrag-api`, `dlightrag-mcp`, and
@@ -489,13 +495,34 @@ accepts back.
   `network_admission`, and admits ports 80 and 443 with `CONNECT` only to 443. The
   launch carries no bypass list, so loopback requests go through it too, and the
   connection never uses Playwright's `expose_network`, which would route browser
-  traffic back through the application's own network. A missing or wrong proxy setting
-  therefore reaches nothing beyond the member's network. Denials appear as
-  `TCP_DENIED` in the proxy's log.
+  traffic back through the application's own network. Every context, a render's and an
+  Agent Session's alike, is made by one function in the adapter that passes no proxy
+  option of its own, so each inherits the launch proxy. A missing or wrong proxy setting
+  therefore reaches nothing beyond the member's network. Denials appear as `TCP_DENIED` in the proxy's log.
 - **Sessions.** Every render uses a temporary anonymous context with no cookies,
-  storage, or service workers, and downloads off; the browser is launched for one
-  connection and closed with it, and the lease gives a pool container to one Run at a
-  time. The browser holds no credential of the owner.
+  storage, or service workers, and downloads off. Each Agent Session that opens a page
+  gets an anonymous context of its own in the Run's browser, empty at the start and with
+  service workers blocked, and keeps downloads on only so the tool can read them. It
+  closes when a Child's drive ends, however it ends, and at the latest when the Run
+  settles; cookies and storage never outlive the Run, and two Sessions never share any.
+  The browser is launched for one connection and closed with it, and the lease gives a
+  pool container to one Run at a time. The browser holds no credential of the owner.
+- **Dialogs.** A page waits for a JavaScript dialog, so the session answers each at once:
+  `alert`, `confirm`, and `beforeunload` are accepted, because refusing one would silently
+  undo the action that raised it, and a `prompt` is dismissed, because it asks for text the
+  model never gave. Every dialog is reported to the model with its message, up to five
+  lines a call.
+- **Downloads.** A download is copied over the Playwright protocol into a temporary
+  directory made for that file alone, under a fixed name that neither the page nor the model
+  supplies, and read from it. The copy's size is checked every tenth of a second and it stops
+  once it passes `max_attachment_bytes`, or after `navigation_timeout_seconds`; at most four
+  files are taken in a call and the rest are refused. The pool's copy is cancelled and
+  deleted whatever the outcome, and the directory is removed when the copy ends.
+- **Upload.** `upload` exists only where the Run has an Agent Workspace (`trust`). It reads
+  regular files the workspace tools could read, through the same path rules and the same
+  integrity latch, and hands them to a file input, at most 50 MiB in a call: it sends
+  workspace files to whatever page asks for them, so it is as much authority as the page can
+  borrow from the model's judgment. A Child holds it as its parent does.
 - **Chromium's sandbox.** The container runs as the unprivileged `pwuser` under
   Playwright's recommended seccomp profile, with an init process and memory and process
   limits. `answer.agent.browser.chromium_sandbox` (default `true`) is whether each launch
@@ -507,16 +534,33 @@ accepts back.
   relaxed or the setting is `false` ([Operations](operations.md#agent-browser-pool));
   nothing runs unsandboxed on a guess. With `false` the container and its network are the
   isolation boundary. `GET /health` reports the setting.
-- **Evidence.** Rendered text is the browser's assertion. DlightRAG attests the binding
-  between the returned page, the Resource Handle, and the URL; it does not attest that
-  an anonymous GET serves the same page, and a site may serve a browser what it does
-  not serve a client. The acquisition `browser_render` on every row says which tier
-  produced it. Page text is untrusted model context, like any fetched page.
-- **Verification walls.** A CAPTCHA or bot wall surfaces as an HTTP error or as page
-  text. DlightRAG never solves, bypasses, or outsources one.
+- **Evidence.** Rendered and captured text is the browser's assertion. DlightRAG attests
+  the binding between the returned page, the Resource Handle, and the URL; it does not
+  attest that an anonymous GET serves the same page, and a site may serve a browser what it
+  does not serve a client. The acquisition `browser_render`, `browser_capture`, or
+  `browser_download` on every row says which tier produced it. Page text, snapshots, dialog
+  messages, and screenshots are untrusted model context, never Evidence, like any fetched
+  page: only `capture` and a downloaded file become Resources, and a download is Evidence
+  only once it is read. A capture or download whose URL carries a credential or signature
+  parameter, or is not a public HTTP(S) URL (`blob:`, `data:`, `about:`), keeps that URL
+  private: ADR 0005's signed-URL rule makes its Resource Handle the citation locator, and
+  the URL is never stored.
+- **Verification walls.** A CAPTCHA or any other human-verification check surfaces as an
+  HTTP error or as page text. The `browser` tool's description tells the model to stop that
+  path and report it. DlightRAG never solves, bypasses, or outsources one and holds no
+  solver integration; this is a rule the model follows, not a mechanism, because nothing
+  detects a CAPTCHA.
 
 Residual risks, recorded rather than solved:
 
+- Page content is untrusted model context. A page can try to steer the Agent, and the
+  browser gives it forms as well as URLs to act through; with `trust`, `upload` can send a
+  workspace file to a page. As with Bash, the boundary is the deployment's egress, not a
+  filter.
+- The CAPTCHA boundary is a rule, not a mechanism: nothing detects a CAPTCHA, and a vision
+  model could read one from a screenshot.
+- A frame names the full URL of the page, so a token-bearing verification link appears in
+  the result the model reads and in the Run's record of it.
 - The application services share each member network with it, so a compromised pool
   container can reach their listeners. With the development default
   `access.auth_mode: none` those listeners are unauthenticated; a deployment that renders

@@ -9,13 +9,15 @@ read as a browser renders it follows
 [ADR 0016](adr/0016-one-run-resource-read-surface.md), and adoption follows
 [ADR 0013](adr/0013-lineage-adoption-of-earlier-run-resources.md).
 [Domain Language](domain-language.md) defines Resource Handle, Web Resource,
-Rendered Read, and Blob.
+Rendered Read, Browser Capture, and Blob.
 
 ## Scope
 
 - A Resource belongs to one Answer Run: an accepted upload, an earlier upload
   re-registered for a follow-up or fork, a caller link, a search result link, a
-  public URL the Agent chose, or an earlier Run's Resource adopted by this Run.
+  public URL the Agent chose, a page the Agent Browser captured or a file it
+  downloaded ([Browser captures and downloads](#browser-captures-and-downloads)),
+  or an earlier Run's Resource adopted by this Run.
 - Corpus ingestion is separate: Answer Resources never invoke MinerU or Docling
   and never become corpus documents, chunks, vectors, BM25 rows, or graph data.
   Workspace files are not converted; `read(path)` decodes UTF-8 or BOM-tagged
@@ -132,6 +134,57 @@ Rendered Read, and Blob.
   `image; view`, `PDF; read text or view physical pages`,
   `DOCX|PPTX|XLSX; read extracted text and embedded-image inventory`, the MIME
   type, or `resource; type verified on acquisition` when none is declared.
+
+## Browser captures and downloads
+
+The `browser` tool ([Agent Browser](retrieval-answer.md#agent-browser)) turns two
+things its page yields into Resources: the page as it stands, and a file the page
+downloads. Both are Web Resources with admission origin `agent` and acquisition
+`browser_capture` or `browser_download`, admitted by
+[ADR 0032](adr/0032-the-agent-browser.md). Neither lands in the Agent Workspace by
+itself.
+
+- **A Resource of its own.** Each capture and each download is a new Resource. It never
+  enters the URL dedup map, so what a page showed after interaction cannot rebind the
+  snapshot its URL serves: capturing a page and then reading its URL are two Resources,
+  and two captures of one URL are two. A capture takes no attachment slot and no share of
+  `max_total_attachment_bytes`, as a fetched URL takes none, and `rendered=true` is
+  refused on one, which has no URL of its own to render.
+- **Bytes, not a fetch.** The bytes are inline: a read converts or decodes them and never
+  fetches, extracts, or renders. A capture is the page's serialized DOM, UTF-8 whatever
+  its own `<meta charset>` says. It is stored as `<last path segment>.html`, or
+  `<host>.html` when the path has none, or `capture.html` when it has no public URL, so the
+  `.html` suffix routes it to the HTML converter whatever its URL's path ends in, and its
+  text view and conversion snapshot are the ones direct HTML has. The call returns the
+  Resource's handle and its first window as `read` returns it. A page with no text reads
+  `no_extracted_text`, admits no Evidence, and still settles its bytes.
+- **Citation identity.** A capture is cited by the URL its page ended at, and a download by
+  the URL it came from, normalized as every Web identity is. A URL that carries a credential
+  or signature parameter, and one that is not an HTTP(S) URL of a public host (`blob:`,
+  `data:`, `about:`), follows ADR 0005's signed-URL rule: the full URL is never stored, the
+  durable locator is the Resource Handle, and the Resource is cited by its handle (a source
+  of type `web_attachment` rather than `web_search`). A file a script generates has no
+  public URL of its own, so it is cited by its handle.
+- **Size.** `answer.generation.max_attachment_bytes` bounds a capture and a download, and
+  it stops a download's transfer. An oversized capture is refused as
+  `the captured page exceeds <n> bytes`. A download that is refused, for its size, for a
+  transfer that did not finish within `navigation_timeout_seconds`, or for being a fifth
+  in one call, is named in the result and never fails the call, and no copy of it survives.
+- **Downloads.** A download is typed by its filename, then by a PDF signature, and is
+  otherwise opaque. It becomes Evidence when `read` or `view` reads it, as any Resource
+  does, not when it is admitted.
+- **Handles and settlement.** A handle is minted from the Agent Session, the call, and the
+  file's place in the call, so a recovered Run mints the handles it already printed. The
+  bytes settle with the call that produced them, in the same transaction as its result:
+  a `web` row whose locator is the citable URL or the handle and whose `intent_id` is that
+  call's, and beside a capture its conversion snapshot. A call pending at a crash settles
+  its outcome as unknown, and bytes buffered for it die with the process.
+- **Recovery.** A resumed Run restores a settled capture or download under its handle, and
+  reads it identically, without a browser and without converting it again. It refuses a row
+  that the Agent did not admit, or that names a locator ADR 0005 keeps private, which
+  admission never stores.
+- **Adoption.** A later turn of the Session adopts a capture or a download as it adopts any
+  Web row, by its handle ([Earlier Runs](#earlier-runs)).
 
 ## Rendered reads
 

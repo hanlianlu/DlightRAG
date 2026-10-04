@@ -226,6 +226,7 @@ Research drives `AgentSessionRuntime` over one selected Lane. Its closed
 run-local registry may include:
 
 - knowledge-base, resource, and optional provider-neutral public Web tools;
+- the `browser` tool, when the deployment configures an [Agent Browser](#agent-browser);
 - rooted file/Bash tools when execution is enabled;
 - Profile Memory tools for the parent (children recall only);
 - progressive `load_skill`, plus `publish_skill`/`delete_skill` for the parent;
@@ -347,6 +348,73 @@ failed or held no text, the chain's steps run in order and the first usable text
 so a browser at the end renders the page in the Run's browser only when no hosted
 provider supplied any. `read(..., rendered=true)` asks for that rendering directly
 ([Rendered reads](resource-reading.md#rendered-reads)).
+
+### Agent Browser
+
+A deployment that configures an [Agent Browser](architecture.md#agent-browser) gives
+Research four tiers of reading ([ADR 0032](adr/0032-the-agent-browser.md)): `read(url)`
+over direct HTTP, always first; the configured hosted Extract chain; a Rendered Read,
+for a page whose content a script builds ([Rendered reads](resource-reading.md#rendered-reads));
+and the `browser` tool, for a task that needs interaction. The tool's description
+teaches the tiers: read pages with `read`, pass `rendered=true` only when a read
+returned a JavaScript shell, and use `browser` only for a search form, a filter,
+pagination behind a button, or a file behind a download control. Fast has no tools, so
+it has no browser.
+
+- **One page per Agent Session.** An Agent Session's first `navigate` leases the Run's
+  browser, if the Run holds none, and opens that Session's anonymous page, a context of
+  its own. Any other first action answers that no page is open and leases nothing. A
+  Child Session holds the tool by default ([ADR 0025](adr/0025-a-child-inherits-capability-not-authority.md))
+  and browses in a context of its own in the same browser, so two Children never see
+  each other's cookies or pages. A Child's page closes when its drive ends, so a Child
+  that is continued starts without one, and the Parent's closes at settlement. The Run
+  keeps its browser while any Session has a page
+  ([when a lease is live](architecture.md#agent-browser)).
+- **Actions.** `navigate`, `snapshot`, `find`, `back`, and `wait` (for text, for text to
+  go, or for seconds); `click`, `type` (optionally pressing Enter), `select`, `press`,
+  and `scroll`; `screenshot` and `capture`; and `upload`, which is offered only where the
+  Run has a workspace (`trust`). Only a configured capability's actions are offered, and
+  no configured value appears in the description or the schema, so changing a timeout
+  never changes a pinned plan. The tool is not read-only and never replays: each call runs
+  alone, and a call pending at a crash settles its outcome as unknown.
+- **Snapshots and refs.** An action that changes the page returns the page's frame
+  (`[browser: <action> | page: <url> | title: <title>]`, with `| HTTP <status>` when the
+  page answered 400 or above, which is reported and never a failure) and a depth-limited
+  accessibility snapshot whose `[ref=eN]` markers name the elements the next action
+  uses. A ref comes from the latest snapshot or `find` of its page and acts only on that
+  page. `find` returns the snapshot lines that contain a query, at most 30, with their
+  refs, and reaches elements below the snapshot's depth. A snapshot beyond the result
+  bounds (51,200 UTF-8 bytes or 2,000 lines) is kept whole in the workspace and its head
+  shown, with the `read` call that returns the rest; without a workspace the call says the
+  full snapshot is unavailable and does not fail, because its action completed and a
+  failure would invite a repeat.
+- **Popups, dialogs, downloads.** A popup or a new tab becomes the active page once the
+  call that opened it has acted, and the result says so. A page that closes itself
+  returns the previous page, or leaves none until the next `navigate`. `alert`,
+  `confirm`, and `beforeunload` dialogs are accepted, a `prompt` is dismissed, and each
+  is reported with its message, because refusing one would undo what the call set in
+  motion. A file a page downloads is admitted and named in the result
+  ([Browser captures and downloads](resource-reading.md#browser-captures-and-downloads)).
+- **Captures and screenshots.** `capture` admits the current page as a new citable Web
+  Resource and returns its first window as `read` would. A screenshot is the page's
+  pixels attached to the result against the Run's image budget
+  (`answer.generation.max_images` and its byte and pixel limits, which `view` shares), and
+  it is context, never evidence. Everything else a page yields, its text, snapshots, and
+  screenshots, is untrusted model context; only a capture or a download can be cited.
+- **Failures.** A failed call is an error result with one fixed sentence per reason: no
+  page open, the page closed, the page lost when the browser disconnected, no element
+  with the ref, an element not clickable within the action timeout, a key the browser does
+  not know, no earlier page, a target that is not a file input, a wait that timed out, a
+  page that did not load, and a pool that is busy or unreachable. Driver error text
+  enters only the first line of a failed action.
+- **A CAPTCHA stops the path.** On a CAPTCHA or any other human-verification check the
+  model stops that path and reports it; the tool's description says so
+  ([Security](security.md#agent-browser-boundary)).
+- **Recovery.** A recovered Run starts with no page and leases a fresh browser at its next
+  `navigate`; a call that was pending settles its outcome as unknown and nothing
+  navigates again on the model's behalf, so the next call that is not a `navigate` says
+  that a Run that resumed after an interruption starts with no open page. Captures and
+  downloads that settled are restored without a browser.
 
 ## Context And Model Budgets
 

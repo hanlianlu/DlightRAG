@@ -98,7 +98,8 @@ retrieval capability as an internal stage when needed:
   retrieves, and generates without an Agent Operation, tools, skills, or
   publication.
 - **Research** drives the product-neutral `AgentSessionRuntime` on one Lane with
-  a closed run-local tool registry: attachments, corpus and Web search, rooted
+  a closed run-local tool registry: attachments, corpus and Web search, the
+  deployment's [Agent Browser](#agent-browser) when configured, rooted
   files and Bash when enabled, the owner's
   [Personal MCP Connections](personal-mcp-connections.md), Profile Memory,
   Skills, and bounded Child Sessions.
@@ -148,6 +149,9 @@ Accepted uploads and settled Web fetches are owner-scoped content-addressed
 blobs, so recovery neither re-fetches nor crosses owners. A Web Resource can also
 hold a page as the [Agent Browser](#agent-browser) rendered it, a second
 representation that settles the same way and is restored without rendering again.
+A page the browser captured and a file it downloaded are Resources of their own, which
+settle with the call that made them and are restored without a browser
+([Resource reading](resource-reading.md#browser-captures-and-downloads)).
 Resources never become corpus documents, chunks, vectors, BM25 rows, or KG data.
 
 ### Agent Execution
@@ -161,33 +165,42 @@ come from packaged built-ins, the global root (default `~/.dlightrag/skills`),
 and the owner's own published Skills (default `~/.dlightrag/owner_skills`), in
 that precedence. Research parents may publish and delete their owner's Skills;
 built-in and global Skills are read-only. Outside tools come only from the
-owner's enabled Personal MCP Connections, pinned per Run; Fast has no external
-tools ([ADR 0012](adr/0012-personal-connections-and-hot-plug.md)). The
-deployment's Agent Browser is not one of them.
+owner's enabled Personal MCP Connections, pinned per Run, and the deployment's
+[Agent Browser](#agent-browser), which no owner enables and which is no Connection;
+Fast has no external tools
+([ADR 0012](adr/0012-personal-connections-and-hot-plug.md)).
 
 ### Agent Browser
 
 Research renders a page as a browser would when `read` asks for it with
-`rendered=true`, or when the Extract chain reaches its browser step
-([ADR 0032](adr/0032-the-agent-browser.md)): a configured browser joins the automatic
-chain at its end unless `extract_providers` names it elsewhere
-([Public Web Sources](configuration.md#public-web-sources)). The browser is a
+`rendered=true`, or when the Extract chain reaches its browser step, and drives a page
+through the `browser` tool ([ADR 0032](adr/0032-the-agent-browser.md)): a configured
+browser joins the automatic chain at its end unless `extract_providers` names it
+elsewhere ([Public Web Sources](configuration.md#public-web-sources)). The browser is a
 deployment capability in containers of its own, so the Agent's processes gain nothing
 and the Landlock allow-list is unchanged.
 
 ```text
-read(rendered=true) or the Extract chain's browser step
-  -> ResourceRegistry asks its PageRenderer
+read(rendered=true), the Extract chain's browser step, or a browser(...) call
+  -> ResourceRegistry's PageRenderer, or the browser tool's BrowserToolHost
   -> RunAgentBrowser leases on first need (PostgreSQL row bound to the Run lease)
-  -> Playwright run-server: one Chromium per connection, one context per render
+  -> Playwright run-server: one Chromium per connection, one context per render or Agent Session
   -> Squid egress proxy -> public Web
 ```
 
 - **One browser per Run.** `RunAgentBrowser` belongs to one Research Run. It leases a
-  browser at the first render, shares it between the Run's Agent Sessions, renders
-  through a temporary context per read, gives the browser back after
-  `idle_release_seconds` without a render, and closes it at settlement, before the
-  coordinator's terminal write. Fast gets none.
+  browser the first time a render or an Agent Session's page needs one, and shares it
+  between the Run's Agent Sessions. The browser is in use while any Agent Session has a
+  page open or a render is in flight; the Run gives it back `idle_release_seconds` after
+  the last of them ends, and closes it at settlement, before the coordinator's terminal
+  write. A Run that browses therefore holds its pool member for as long as a page stays
+  open, up to the end of the Run. Fast gets none.
+- **A context for each render and each Agent Session.** A render uses a temporary
+  context that ends with it. The `browser` tool's first `navigate` opens a context for
+  the calling Agent Session, keyed by its execution scope: the parent's, and each Child's,
+  so no two Sessions share cookies, storage, or a page. A Child's context closes when its
+  drive ends, however it ends, which is why a continued Child starts without a page; the
+  rest close with the browser. Every context is made by one function in the adapter.
 - **The lease is the Run's lease.** The pool's leases are PostgreSQL rows that count as
   live exactly while the holder's Run lease does: the same worker and fencing epoch on
   a running Run whose lease has not expired. The Run's own heartbeat therefore renews
@@ -195,13 +208,22 @@ read(rendered=true) or the Extract chain's browser step
   dead worker, frees its browser with nothing left to release. A recovered Run leases a
   fresh browser on first need.
 - **A port and one adapter.** The engine states `BrowserProvider`, `LeasedBrowser`,
-  `BrowserLeases` (the shared record of who holds each endpoint), and `RenderedPage`;
-  `adapters/agent_browser` implements the provider as `PooledBrowserProvider`, over the
-  Playwright protocol, and is the only module that imports Playwright. The registry
-  receives a `PageRenderer` and never a driver; composition (`_compose`) builds the
-  provider only when `answer.agent.browser` names endpoints.
+  `BrowserSession` (one page's actions), `BrowserLeases` (the shared record of who holds
+  each endpoint), and `RenderedPage`; `adapters/agent_browser` implements the provider as
+  `PooledBrowserProvider` and a page as `PlaywrightBrowserSession`, over the Playwright
+  protocol, and is the only module that imports Playwright. The registry receives a
+  `PageRenderer` and the tool a `BrowserToolHost`, never a driver; composition
+  (`_compose`) builds the provider only when `answer.agent.browser` names endpoints.
+- **The tool is composed beside `read`.** `browser` is one tool with an `action`, declared
+  when the Run has a browser, with `upload` only where it has an Agent Workspace. It is not
+  read-only and never replays, so a call runs alone and one pending at a crash settles its
+  outcome as unknown; the recovered Run's browser has no page, and the next call that needs
+  one says so. A capture and a file a page downloads are admitted through the
+  ResourceRegistry as Resources of the call that made them
+  ([Resource reading](resource-reading.md#browser-captures-and-downloads)).
 - **Fails closed, and the Run goes on.** A busy or unreachable pool, a page that fails,
-  or a lost browser is a model-visible reason on that `read`, not a Run failure.
+  or a lost browser is a model-visible reason on that `read` or `browser` call, not a Run
+  failure.
 
 ## Durable Execution
 

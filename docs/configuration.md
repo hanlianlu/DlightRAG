@@ -866,11 +866,12 @@ Interactive HTML is separately opt-in and isolated by the Web artifact boundary
 ([Security](security.md#answer-artifact-browser-boundary)).
 
 Research reaches external tools only through its owner's Personal MCP
-Connections; `answer.agent.connections` holds their non-secret policy, whose
+Connections and the deployment's [Agent Browser](#agent-browser);
+`answer.agent.connections` holds the Connections' non-secret policy, whose
 fields and limits are in
 [Personal MCP Connections](personal-mcp-connections.md#streamable-http-security-and-limits).
-The deployment's [Agent Browser](#agent-browser) is not one of them: `read` uses it to
-render public pages, and no owner authorizes it.
+No owner authorizes the Agent Browser: `read` uses it to render public pages, and the
+`browser` tool drives one.
 
 Research discovers Skills from packaged built-ins, an operator-global root, and
 owner roots ([Architecture](architecture.md#agent-execution) gives the
@@ -898,15 +899,17 @@ answer:
       connect_timeout_seconds: 15     # above 0, at most 120
       navigation_timeout_seconds: 30  # above 0, at most 300
       settle_timeout_seconds: 5       # 0–60
+      action_timeout_seconds: 10      # above 0, at most 120
+      snapshot_depth: 12              # 1–64
       idle_release_seconds: 30        # 0–600
 ```
 
-The Agent Browser lets Research read a page as a browser renders it, in a pool of
-Playwright containers the deployment runs ([ADR 0032](adr/0032-the-agent-browser.md);
-the pool's topology and boundary are in
+The Agent Browser lets Research read a page as a browser renders it and drive one with
+the `browser` tool, in a pool of Playwright containers the deployment runs
+([ADR 0032](adr/0032-the-agent-browser.md); the pool's topology and boundary are in
 [Security](security.md#agent-browser-boundary)). No endpoint means no Agent
-Browser: `read` declares no `rendered` argument and the Extract chain has no browser
-step.
+Browser: `read` declares no `rendered` argument, the Extract chain has no browser step,
+and Research has no `browser` tool.
 
 - `endpoints` lists one Playwright run-server WebSocket URL (`ws://` or `wss://`) per
   pool container; each serves one Run at a time. They must be unique, hold no query,
@@ -926,17 +929,26 @@ step.
   ([troubleshooting](operations.md#agent-browser-pool)) or this is `false`. `false` launches
   Chromium with `--no-sandbox`, leaving the container and its network as the only
   isolation ([Security](security.md#agent-browser-boundary)).
-- `lease_wait_seconds` is how long a render waits for a free browser before it
-  reports the pool busy. `connect_timeout_seconds` bounds connecting to one browser.
-- `navigation_timeout_seconds` is how long a page may take to load.
-  `settle_timeout_seconds` is how long a loaded page may take to go quiet before it
-  is read as it stands.
-- `idle_release_seconds`: a Run leases a browser at its first render and gives it back
-  once it has gone this long without one, so a Run that rendered once does not hold a
-  pool member for its whole duration. Its next render leases again, and `0` gives it
-  back after every render. Settlement releases whatever is held either way.
+- `lease_wait_seconds` is how long a render, or the first `navigate` of an Agent
+  Session's page, waits for a free browser before it reports the pool busy.
+  `connect_timeout_seconds` bounds connecting to one browser.
+- `navigation_timeout_seconds` is how long a page may take to load, and how long one
+  downloaded file may take to arrive. `settle_timeout_seconds` is how long a loaded page
+  may take to go quiet before it is read as it stands.
+- `action_timeout_seconds` is how long one element action, one snapshot, or one `find` may
+  take on a page the `browser` tool drives. `snapshot_depth` is how many levels of the
+  page its accessibility snapshot shows; deeper elements keep their refs, and `find`
+  locates them. A file a page downloads is bounded by `answer.generation.max_attachment_bytes`
+  ([Answer Generation And Attachments](#answer-generation-and-attachments)).
+- `idle_release_seconds`: a Run leases a browser at its first render or first page and
+  gives it back once it has gone this long with no page open and no render in flight, so
+  a Run that rendered once does not hold a pool member for its whole duration. A page that
+  stays open keeps the browser leased
+  ([when](architecture.md#agent-browser)). The next render or page leases again, and `0`
+  gives it back as soon as nothing is open. Settlement releases whatever is held either
+  way.
 
-The pool's size is the deployment's limit on Runs rendering at the same moment
+The pool's size is the deployment's limit on Runs using a browser at the same moment
 ([sizing](operations.md#agent-browser-pool)). What `GET /health` says of the Agent
 Browser is in [Interfaces](interfaces.md#health-and-errors).
 
