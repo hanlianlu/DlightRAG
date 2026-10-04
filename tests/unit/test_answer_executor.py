@@ -643,7 +643,40 @@ def test_a_deployment_with_a_browser_offers_login_and_the_inbox_it_can_read_and_
     )
     # A deployment with no Agent Browser has no browser tool, and so no account actions.
     assert browser_actions(test_config) == set()
-    assert _compose(test_config).health.agent_browser["registration"] is False
+
+
+@pytest.mark.parametrize(
+    ("browser", "flag", "allowed"),
+    [(False, True, False), (False, False, False), (True, False, False), (True, True, True)],
+    ids=["no-browser", "no-browser-flag-off", "flag-off", "allowed"],
+)
+async def test_a_deployment_allows_registration_only_with_an_agent_browser_and_the_flag_on(
+    test_config: Any, browser: bool, flag: bool, allowed: bool
+) -> None:
+    from dlightrag._compose import _compose
+
+    pool = (
+        AgentBrowserConfig(
+            endpoints=("ws://agent-browser-1:3000/",),
+            egress_proxy="http://agent-browser-egress:3128",
+        )
+        if browser
+        else test_config.answer.agent.browser
+    )
+    agent = test_config.answer.agent.model_copy(
+        update={"browser": pool.model_copy(update={"account_registration": flag})}
+    )
+    configured = test_config.model_copy(
+        update={"answer": test_config.answer.model_copy(update={"agent": agent})}
+    )
+
+    components = _compose(configured)
+
+    assert components.health.agent_browser["registration"] is allowed
+    if not allowed:
+        # Acceptance takes the same answer, so no Run of any owner may register whatever their
+        # switch says, and a deployment that does not allow it never asks the owner's switch.
+        assert await components.agent_accounts.may_register(owner_id="alice") is False
 
 
 async def test_a_research_runs_browser_tool_drives_the_browser_it_was_given(

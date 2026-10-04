@@ -116,9 +116,9 @@ class ApplicationHealth:
         #: inferred (ADR 0024).
         self._agent_shell_confinement: str = "disabled"
         #: How many Agent Browser endpoints the deployment configures, whether it asks for
-        #: Chromium's own sandbox, and whether Agent Accounts, their registration and an Agent
-        #: Mailbox are composed. Health reports the configuration alone and never reaches the
-        #: pool or the bucket (ADR 0032, ADR 0034).
+        #: Chromium's own sandbox, whether Agent Accounts and an Agent Mailbox are composed, and
+        #: whether the deployment allows the Agent to register. Health reports the configuration
+        #: alone and never reaches the pool or the bucket (ADR 0032, ADR 0034).
         self._agent_browser_endpoints = 0
         self._agent_browser_sandbox = True
         self._agent_accounts = False

@@ -229,7 +229,7 @@ read(rendered=true), the Extract chain's browser step, or a browser(...) call
   ([contract](retrieval-answer.md#agent-accounts-and-the-agent-mailbox)) are composed wherever
   there is an Agent Browser: `AgentBrowserBinding.accounts` carries the account store, the key
   ring's cipher, the mailbox, if any, and the deployment's allowance to register. Each Research
-  Run gets one `RunAgentAccounts` from it (`run_agent_accounts`), with the registration its
+  Run gets one `RunAgentAccounts` from it (`run_agent_accounts`), with the `may_register` its
   acceptance pinned, which holds the Run's Child-scoped accounts and each Agent Session's inbox
   window in the worker's memory until the Run settles. The set of passwords each Agent Session
   filled lives in `RunAgentBrowser` beside its pages, outlives them, and is what the Agent Page

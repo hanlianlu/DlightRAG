@@ -429,8 +429,13 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     )
 
     agent_account_store = PGAgentAccountStore()
-    registration_allowed = config.answer.agent.browser.account_registration
     browser_settings = agent_browser_settings(config)
+    # Whether the deployment lets the Agent register is one answer: there is an Agent Browser to
+    # register with, and the operator has not turned account registration off. The binding,
+    # health, Settings and acceptance all take it from here.
+    registration_allowed = (
+        browser_settings is not None and config.answer.agent.browser.account_registration
+    )
     agent_browser = None
     if browser_settings is not None:
         # Playwright loads only where an Agent Browser is configured.
@@ -465,7 +470,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         endpoints=len(config.answer.agent.browser.endpoints),
         sandbox=config.answer.agent.browser.chromium_sandbox,
         accounts=accounts is not None,
-        registration_allowed=accounts is not None and registration_allowed,
+        registration_allowed=registration_allowed,
         mailbox=has_mailbox(accounts),
     )
 
