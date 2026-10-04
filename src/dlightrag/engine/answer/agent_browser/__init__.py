@@ -21,7 +21,6 @@ from dlightrag.engine.answer.agent_browser.accounts import (
 )
 from dlightrag.engine.answer.agent_browser.contracts import (
     MAX_DOWNLOADS_PER_CALL,
-    PASSWORD_MASK,
     AgentBrowserBinding,
     AgentBrowserError,
     AgentBrowserFailure,
@@ -34,7 +33,6 @@ from dlightrag.engine.answer.agent_browser.contracts import (
     CredentialForm,
     DownloadedFile,
     DownloadRefusal,
-    FilledPasswords,
     FoundElements,
     LeasedBrowser,
     PageCapture,
@@ -57,6 +55,7 @@ from dlightrag.engine.answer.agent_browser.mailbox import (
     MailSummary,
     summarize_mail,
 )
+from dlightrag.engine.answer.agent_browser.passwords import PASSWORD_MASK, FilledPasswords
 from dlightrag.engine.answer.agent_browser.run import RunAgentBrowser
 
 __all__ = [

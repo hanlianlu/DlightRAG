@@ -23,13 +23,13 @@ from dlightrag.engine.answer.agent_browser.contracts import (
     AgentPage,
     BrowserHolder,
     BrowserProvider,
-    FilledPasswords,
     LeasedBrowser,
     PageLimits,
     RenderedPage,
     browser_failure,
     page_failure,
 )
+from dlightrag.engine.answer.agent_browser.passwords import FilledPasswords
 
 logger = logging.getLogger(__name__)
 

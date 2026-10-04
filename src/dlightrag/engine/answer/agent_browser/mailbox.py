@@ -18,7 +18,7 @@ from datetime import datetime
 from html.parser import HTMLParser
 from typing import Protocol
 
-from dlightrag.engine.answer.agent_browser.contracts import FilledPasswords
+from dlightrag.engine.answer.agent_browser.passwords import FilledPasswords
 
 
 @dataclass(frozen=True, slots=True)

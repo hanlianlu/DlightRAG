@@ -10,12 +10,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import Literal, Protocol
 
 from pydantic import SecretStr
 
-if TYPE_CHECKING:
-    from dlightrag.engine.answer.agent_browser.accounts import AgentAccountsBinding
+from dlightrag.engine.answer.agent_browser.accounts import AgentAccountsBinding
+from dlightrag.engine.answer.agent_browser.passwords import FilledPasswords
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,48 +164,6 @@ class UploadFile:
     name: str
     mime_type: str
     content: bytes
-
-
-#: What stands in for a filled password in every text a page or a mail yields.
-PASSWORD_MASK = "********"  # noqa: S105 - what replaces a password, not a password
-
-
-class FilledPasswords:
-    """The passwords DlightRAG filled into one Agent Session's pages in this Run (ADR 0034).
-
-    Every text a page or a mail yields passes through it before the tool sees it. A generated
-    password is made of letters, digits and ``-._``, which no encoding changes, and begins and
-    ends with a letter or a digit, which a browser's naming of a download leaves alone, so the
-    one spelling it has is all there is to find. A page that rewrites a value on purpose is not
-    found.
-    """
-
-    def __init__(self) -> None:
-        self._values: set[str] = set()
-
-    def add(self, password: SecretStr) -> None:
-        self._values.add(password.get_secret_value())
-
-    def __bool__(self) -> bool:
-        return bool(self._values)
-
-    def found_in(self, text: str) -> bool:
-        return any(value in text for value in self._values)
-
-    def redact(self, text: str) -> str:
-        """``text`` with every filled password replaced by the mask."""
-        for value in self._values:
-            text = text.replace(value, PASSWORD_MASK)
-        return text
-
-    def redact_bytes(self, data: bytes) -> bytes:
-        """The same over UTF-8, for a page's serialized HTML."""
-        for value in self._values:
-            data = data.replace(value.encode(), PASSWORD_MASK.encode())
-        return data
-
-    def __repr__(self) -> str:
-        return f"FilledPasswords({len(self._values)} filled)"
 
 
 @dataclass(frozen=True, slots=True)
@@ -507,7 +465,6 @@ class AgentBrowserBinding:
 
 __all__ = [
     "MAX_DOWNLOADS_PER_CALL",
-    "PASSWORD_MASK",
     "AgentBrowserBinding",
     "AgentBrowserError",
     "AgentBrowserFailure",
@@ -520,7 +477,6 @@ __all__ = [
     "CredentialForm",
     "DownloadRefusal",
     "DownloadedFile",
-    "FilledPasswords",
     "FoundElements",
     "PageLimits",
     "LeasedBrowser",
