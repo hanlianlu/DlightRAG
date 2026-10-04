@@ -126,7 +126,7 @@ a.dl-btn {
 
 /* The 1px border sits outside the padding box, so the thumb inset loses exactly one pixel. */
 .dl-switch::after {
-    background: var(--color-text-dim);
+    background: var(--color-text-subtle);
     block-size: var(--size-switch-thumb);
     border-radius: var(--radius-circle);
     content: '';
@@ -377,7 +377,7 @@ textarea.dl-dialog-input {
 }
 
 .dl-popover-input::placeholder {
-    color: var(--color-text-dim);
+    color: var(--color-text-muted);
 }
 
 .dl-popover-create-btn {

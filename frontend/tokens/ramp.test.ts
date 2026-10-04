@@ -2,9 +2,11 @@
 
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import {readdirSync, readFileSync} from 'node:fs';
+import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
+const frontend = fileURLToPath(new URL('..', import.meta.url));
 const css = readFileSync(
     fileURLToPath(new URL('../design-system/foundations/color.css', import.meta.url)),
     'utf8',
@@ -86,6 +88,33 @@ for (const theme of ['dark', 'light'] as const) {
         }
     });
 }
+
+// Dim, one step below Subtle, clears neither floor, and WCAG waives contrast
+// only for an inactive control, so a disabled control is all it may colour.
+// Placeholders, captions, chevrons, and the switch thumb had drifted onto it
+// and read at 1.69:1 on an elevated surface.
+test('only a disabled control is coloured Dim', () => {
+    const sources = ['styles', 'design-system'].flatMap((directory) =>
+        readdirSync(join(frontend, directory), {recursive: true, encoding: 'utf8'})
+            .filter((path) => /\.(css|ts)$/.test(path) && !path.endsWith('.test.ts'))
+            .map((path) => join(directory, path)));
+
+    for (const path of sources) {
+        const source = readFileSync(join(frontend, path), 'utf8');
+        // A design-system element carries its Shadow CSS in its template's <style>.
+        const rules = (path.endsWith('.ts')
+            ? [...source.matchAll(/<style>([\s\S]*?)<\/style>/g)].map((match) => match[1]).join('\n')
+            : source
+        ).replace(/\/\*[\s\S]*?\*\//g, '');
+        for (const [, selectors, declarations] of rules.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+            if (!/var\(--color-text-dim\b(?!-)/.test(declarations)) continue;
+            for (const selector of selectors.split(',')) {
+                assert.match(selector, /:disabled|\[disabled\]|\[aria-disabled='true'\]/,
+                    `${selector.trim()} in ${path} is not a disabled control`);
+            }
+        }
+    }
+});
 
 // Every drift here arrived as a literal nobody could place by eye: an inverted
 // surface ramp, an accent a step off the gold scale, borders a few units off

@@ -45,7 +45,7 @@
    * takes a width: rotation pivots on the glyph, not on flexible row space. */
   .groupChevron,
   .chevron {
-    color: var(--color-text-dim);
+    color: var(--color-text-subtle);
     display: flex;
     flex-shrink: 0;
     margin-inline-start: auto;
@@ -141,7 +141,7 @@
   }
 
   .dotIdle {
-    color: var(--color-text-dim);
+    color: var(--color-text-subtle);
   }
 
   /* ── Fields and rows ── */

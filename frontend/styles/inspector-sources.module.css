@@ -112,7 +112,7 @@
 }
 
 .source-chunk-page {
-    color: var(--color-text-dim);
+    color: var(--color-text-muted);
     font-size: var(--font-size-caption);
 }
 

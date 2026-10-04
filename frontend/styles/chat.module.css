@@ -166,7 +166,7 @@
 .toolDuration {
   margin-left: auto;
   font-size: 0.72rem;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   flex-shrink: 0;
 }
 
@@ -456,7 +456,7 @@
 .stoppedNote {
   margin-top: var(--space-tight);
   font-size: var(--font-size-detail);
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
 }
 
 /* === Markdown Content (scoped to AI answer) === */

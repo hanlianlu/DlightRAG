@@ -9,7 +9,7 @@ const SIZES = new Set<IconSize>(['xs', 'sm', 'md', 'lg']);
 const template = document.createElement('template');
 template.innerHTML = `
   <style>
-    :host { display: inline-flex; color: var(--color-text-dim, currentColor); }
+    :host { display: inline-flex; color: var(--color-text-subtle, currentColor); }
     button {
       align-items: center;
       background: none;
