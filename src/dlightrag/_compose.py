@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from dlightrag.application.application import Application, _ApplicationComponents
 from dlightrag.application.config import DlightragConfig, get_config
@@ -19,6 +19,9 @@ from dlightrag.engine.ai.embedding import MultimodalEmbedder
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.telemetry import Telemetry
 from dlightrag.engine.runtime.workspace import SessionNotesLimits
+
+if TYPE_CHECKING:
+    from dlightrag.engine.answer.agent_browser import AgentMailbox
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +87,25 @@ def agent_confinement_policy(config: DlightragConfig) -> ConfinementPolicy:
     for path, capability in skill_roots(config):
         policy.refuse(path, capability)
     return policy
+
+
+def _agent_mailbox(config: DlightragConfig) -> AgentMailbox | None:
+    """The Agent Mailbox this deployment configures, or None where it names no bucket."""
+    from dlightrag.adapters.agent_mailbox import S3AgentMailbox
+
+    mailbox = config.answer.agent.mailbox
+    if not mailbox.enabled:
+        return None
+    # The configuration requires the rest of the settings whenever it names a bucket.
+    return S3AgentMailbox(
+        alias_domain=cast(str, mailbox.alias_domain),
+        bucket=cast(str, mailbox.bucket),
+        prefix=mailbox.prefix,
+        endpoint=mailbox.endpoint,
+        region=mailbox.region,
+        access_key_id=cast(str, mailbox.access_key_id),
+        secret_access_key=cast(str, mailbox.secret_access_key),
+    )
 
 
 def _compose(config: DlightragConfig) -> _ApplicationComponents:
@@ -418,7 +440,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
                 leases=PGAgentBrowserLeaseStore(),
             ),
             browser_settings,
-            AgentAccountsBinding(PGAgentAccountStore(), cipher)
+            AgentAccountsBinding(PGAgentAccountStore(), cipher, _agent_mailbox(config))
             if config.answer.agent.browser.account_registration
             else None,
         )

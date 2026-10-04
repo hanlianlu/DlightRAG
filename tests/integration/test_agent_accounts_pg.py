@@ -23,12 +23,13 @@ from dlightrag.engine.answer.agent_browser import (
     RunAgentAccounts,
     StoredAgentAccount,
     generate_password,
+    owner_alias,
     reseal_agent_accounts,
 )
 from dlightrag.engine.credential_cipher import CredentialCipher
 from tests.integration.run_runtime_pg_harness import isolated_run_runtime
 from tests.integration.test_agent_accounts_browser import (
-    EMAIL,
+    DOMAIN,
     KEYRING,
     SHOP,
     SITE,
@@ -36,6 +37,7 @@ from tests.integration.test_agent_accounts_browser import (
     browsing,
     posted,
 )
+from tests.support.agent_browser import StubMailbox
 from tests.support.dns import public_dns
 from tests.support.pg import skip_without_postgres
 
@@ -198,22 +200,28 @@ async def test_a_later_run_logs_in_with_the_account_a_parent_registered(
     pool: Any, tmp_path: Path
 ) -> None:
     cipher = CredentialCipher(SecretStr(KEYRING))
-    async with browsing(tmp_path, store=PGAgentAccountStore(pool=pool)) as first:
-        await first.register(await first.form(f"{SHOP}/signup"))
+    alias = owner_alias("owner", SITE, DOMAIN)
+    async with browsing(
+        tmp_path, store=PGAgentAccountStore(pool=pool), mailbox=StubMailbox(DOMAIN)
+    ) as first:
+        await first.register(await first.form(f"{SHOP}/signup"), email=None)
     registered = await row_of(pool, "owner", SITE)
     binding = ("owner", SITE, registered["account_id"])
     password = cipher.open(registered["encrypted_envelope"], label=ACCOUNT_LABEL, binding=binding)
 
     # Another Run of the owner, which only the database connects to the first.
-    async with browsing(tmp_path, store=PGAgentAccountStore(pool=pool)) as later:
+    async with browsing(
+        tmp_path, store=PGAgentAccountStore(pool=pool), mailbox=StubMailbox(DOMAIN)
+    ) as later:
         later.watch(password)
         form = await later.form(f"{SHOP}/signin")
         await later.call(action="login", email_ref=form["email"], password_refs=[form["password"]])
         await later.call(action="click", ref=form["button"])
 
         fields = posted(later.proxy, "/session")
-        assert fields["email"] == [EMAIL]
+        assert fields["email"] == [alias]
         assert_sent(fields, password, "password")
     after = await row_of(pool, "owner", SITE)
-    # Logging in changed nothing about the account.
+    # The account is the alias the first Run minted, and logging in changed nothing about it.
+    assert registered["email"] == alias
     assert {k: after[k] for k in after.keys()} == {k: registered[k] for k in registered.keys()}

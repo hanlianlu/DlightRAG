@@ -144,6 +144,7 @@ def research_tool_declarations(
     resource_read: bool = False,
     agent_browser: bool = False,
     agent_accounts: bool = False,
+    agent_mailbox: bool = False,
     resource_view: bool = False,
     environment: bool = False,
     artifact_publication: bool = False,
@@ -168,7 +169,9 @@ def research_tool_declarations(
     if resource_view or environment:
         declarations.append(view_declaration())
     if agent_browser:
-        declarations.append(browser_declaration(upload=environment, accounts=agent_accounts))
+        declarations.append(
+            browser_declaration(upload=environment, accounts=agent_accounts, mailbox=agent_mailbox)
+        )
     declarations.extend(injected)
     if environment:
         if not resource_read:
@@ -248,11 +251,16 @@ def compose_research_tools(
             if child
             else subagent_declarations(model_guidance=subagent_host.model_guidance)
         )
+    # A Run has a mailbox only through its accounts: its aliases belong to them.
+    accounts = None if browser is None else browser.accounts
+    agent_accounts = accounts is not None
+    agent_mailbox = accounts is not None and accounts.mailbox is not None
     declarations = research_tool_declarations(
         web_search=search_web is not None,
         resource_read=resource_reader is not None,
         agent_browser=browser is not None,
-        agent_accounts=browser is not None and browser.accounts is not None,
+        agent_accounts=agent_accounts,
+        agent_mailbox=agent_mailbox,
         resource_view=resource_viewer is not None,
         environment=environment is not None,
         artifact_publication=artifacts_root is not None,

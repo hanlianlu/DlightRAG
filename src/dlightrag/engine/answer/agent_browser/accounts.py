@@ -8,19 +8,23 @@ accounts persist for its owner; a Child's last for its Run and live only in this
 
 from __future__ import annotations
 
+import base64
 import functools
+import hashlib
 import ipaddress
 import secrets
 import string
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Protocol, cast
 from urllib.parse import urlsplit
 
 from publicsuffixlist import PublicSuffixList
 from pydantic import SecretStr
 
+from dlightrag.engine.answer.agent_browser.mailbox import AgentMailbox
 from dlightrag.engine.credential_cipher import CredentialCipher, UnreadableEnvelope
 
 #: An account's envelope is sealed under this label, so it never opens as a Connection Grant.
@@ -69,6 +73,22 @@ def generate_password(length: int = PASSWORD_LENGTH) -> SecretStr:
     ]
     secrets.SystemRandom().shuffle(characters)
     return SecretStr("".join(characters))
+
+
+def owner_alias(owner_id: str, site: str, domain: str) -> str:
+    """The address an owner registers with on a site, on the Agent Mailbox's domain.
+
+    It is the same every time for one owner and site, so mail for the account keeps reaching it
+    in later Runs, and it names nothing of the owner: 16 characters of ``[a-z2-7]`` from a hash.
+    The hash is unkeyed, so an alias survives the rotation of the key ring.
+    """
+    digest = hashlib.sha256(f"dlightrag-agent-alias-v1\0{owner_id}\0{site}".encode()).digest()
+    return f"{base64.b32encode(digest[:10]).decode().lower()}@{domain}"
+
+
+def run_alias(domain: str) -> str:
+    """A random address on the Agent Mailbox's domain, which no other registration shares."""
+    return f"{base64.b32encode(secrets.token_bytes(10)).decode().lower()}@{domain}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,11 +146,23 @@ class AgentAccount:
 
 
 @dataclass(frozen=True, slots=True)
+class InboxWindow:
+    """The mail an Agent Session may read: what its aliases received since it last signed in."""
+
+    since: datetime
+    """When the Session last registered or logged in, in UTC."""
+    aliases: tuple[str, ...]
+    """The Agent Mailbox addresses of the accounts it has used in this Run."""
+
+
+@dataclass(frozen=True, slots=True)
 class AgentAccountsBinding:
-    """What a deployment composed for Agent Accounts: where they are kept, and the key ring."""
+    """What a deployment composed for Agent Accounts: where they are kept, the key ring, and the
+    Agent Mailbox that delivers their mail, when it has one."""
 
     store: AgentAccountStore
     cipher: CredentialCipher
+    mailbox: AgentMailbox | None = None
 
 
 class RunAgentAccounts:
@@ -141,8 +173,11 @@ class RunAgentAccounts:
         self._owner_id = owner_id
         self._store = binding.store
         self._cipher = binding.cipher
+        self.mailbox = binding.mailbox
         #: A Child's registrations by the Agent Session that made them and the site.
         self._children: dict[tuple[str, str], AgentAccount] = {}
+        #: Each Agent Session's inbox window, which only a registration or a login opens.
+        self._windows: dict[str, InboxWindow] = {}
 
     def available(self) -> bool:
         """Whether the key ring can seal a password. Without one, register and login fail closed."""
@@ -158,6 +193,12 @@ class RunAgentAccounts:
         if child:
             return self._children.get((scope, site))
         return await self._owned(site)
+
+    def new_alias(self, site: str, *, child: bool) -> str:
+        """The address a registration on ``site`` fills in: the owner's for the site, or a
+        random one for a Child, so an account that goes with the Run never takes the owner's."""
+        domain = cast(AgentMailbox, self.mailbox).alias_domain
+        return run_alias(domain) if child else owner_alias(self._owner_id, site, domain)
 
     async def login_target(self, scope: str, site: str, *, child: bool) -> AgentAccount | None:
         """The account a login on ``site`` fills: a Child's own first, else the owner's."""
@@ -196,6 +237,26 @@ class RunAgentAccounts:
         )
         await self._store.save(stored)
         return AgentAccount(site, email, username, stored=stored)
+
+    def alias(self, account: AgentAccount) -> str | None:
+        """The account's address when it is one the Agent Mailbox delivers."""
+        if self.mailbox is None or account.email is None:
+            return None
+        return account.email if account.email.endswith(f"@{self.mailbox.alias_domain}") else None
+
+    def signed_in(self, scope: str, account: AgentAccount) -> None:
+        """The Agent Session registered or logged in with ``account`` now: its inbox window opens
+        here, and keeps the aliases of the accounts it used earlier in this Run."""
+        if self.mailbox is None:
+            return
+        aliases = self._windows[scope].aliases if scope in self._windows else ()
+        if (alias := self.alias(account)) is not None and alias not in aliases:
+            aliases = (*aliases, alias)
+        self._windows[scope] = InboxWindow(datetime.now(UTC), aliases)
+
+    def inbox_window(self, scope: str) -> InboxWindow | None:
+        """The window the Agent Session reads mail through, or None before it has signed in."""
+        return self._windows.get(scope)
 
     def password(self, account: AgentAccount) -> SecretStr:
         """The account's password. An envelope no key opens raises ``UnreadableEnvelope``."""
@@ -246,9 +307,12 @@ __all__ = [
     "AgentAccount",
     "AgentAccountStore",
     "AgentAccountsBinding",
+    "InboxWindow",
     "RunAgentAccounts",
     "StoredAgentAccount",
     "account_site",
     "generate_password",
+    "owner_alias",
     "reseal_agent_accounts",
+    "run_alias",
 ]

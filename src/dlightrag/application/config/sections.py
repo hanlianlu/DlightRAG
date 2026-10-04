@@ -476,6 +476,72 @@ class AgentBrowserConfig(BaseModel):
         return bool(self.endpoints)
 
 
+class AgentMailboxConfig(BaseModel):
+    """The Agent Mailbox (ADR 0034): mail to the Agent's aliases, read from an S3-compatible
+    bucket the deployment fills. No bucket means no Agent Mailbox.
+
+    The bucket's layout is the contract: each message whole, as one object, under
+    ``<prefix>/<envelope recipient, lower case>/``. How mail gets there is the deployment's.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    endpoint: ServiceUrl | None = Field(
+        default=None,
+        description="The bucket's S3 endpoint. Unset, AWS S3's own endpoint for the region.",
+    )
+    region: str = Field(
+        default="auto",
+        min_length=1,
+        max_length=64,
+        description="The bucket's region; Cloudflare R2's is auto.",
+    )
+    bucket: str | None = Field(
+        default=None,
+        pattern=r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$",
+        description="The bucket the deployment's mail routing writes to. Unset disables the mailbox.",
+    )
+    prefix: str = Field(
+        default="mail",
+        pattern=r"^([A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*)?$",
+        description="The key prefix the routing writes under; empty puts alias folders at the root.",
+    )
+    alias_domain: str | None = Field(
+        default=None,
+        max_length=253,
+        pattern=(r"^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$"),
+        description="The domain the Agent's addresses are minted on, which the routing delivers.",
+    )
+    access_key_id: str | None = Field(default=None, repr=False)
+    secret_access_key: str | None = Field(default=None, repr=False)
+
+    @field_validator(
+        "endpoint", "bucket", "alias_domain", "access_key_id", "secret_access_key", mode="before"
+    )
+    @classmethod
+    def _blank_is_unset(cls, value: Any) -> Any:
+        """A blank variable in ``.env`` is an unset setting."""
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
+
+    @model_validator(mode="after")
+    def _a_bucket_comes_with_what_reads_it(self) -> Self:
+        if self.bucket is None:
+            if any((self.endpoint, self.alias_domain, self.access_key_id, self.secret_access_key)):
+                raise ValueError("answer.agent.mailbox settings require bucket")
+        elif not (self.alias_domain and self.access_key_id and self.secret_access_key):
+            raise ValueError(
+                "answer.agent.mailbox.bucket requires alias_domain, access_key_id and "
+                "secret_access_key"
+            )
+        return self
+
+    @property
+    def enabled(self) -> bool:
+        return self.bucket is not None
+
+
 class AgentExecutionConfig(BaseModel):
     """Optional Agent execution: no environment, or one confined to its workspace."""
 
@@ -575,6 +641,7 @@ class AgentExecutionConfig(BaseModel):
     publication: ArtifactPublicationConfig = Field(default_factory=ArtifactPublicationConfig)
     connections: ConnectionPolicy = Field(default_factory=ConnectionPolicy)
     browser: AgentBrowserConfig = Field(default_factory=AgentBrowserConfig)
+    mailbox: AgentMailboxConfig = Field(default_factory=AgentMailboxConfig)
 
 
 class WebConversationsConfig(BaseModel):

@@ -579,18 +579,37 @@ def test_a_deployment_offers_a_rendered_read_exactly_when_it_configures_an_agent
     assert "rendered" not in read_properties(test_config)
 
 
-@pytest.mark.parametrize("registration", [True, False], ids=["allowed", "turned-off"])
-def test_a_deployment_offers_register_and_login_exactly_when_it_allows_agent_accounts(
-    test_config: Any, registration: bool
+@pytest.mark.parametrize(
+    ("registration", "mailbox", "offered"),
+    [
+        (True, False, {"register", "login"}),
+        (True, True, {"register", "login", "inbox"}),
+        # The mailbox delivers an account's mail, so a deployment that turns accounts off has none.
+        (False, True, set()),
+        (False, False, set()),
+    ],
+    ids=["accounts", "accounts-and-mailbox", "mailbox-without-accounts", "turned-off"],
+)
+def test_a_deployment_offers_the_account_actions_it_allows_and_the_inbox_it_can_read(
+    test_config: Any, registration: bool, mailbox: bool, offered: set[str]
 ) -> None:
     from dlightrag._compose import _compose
+    from dlightrag.application.config import AgentMailboxConfig
 
     pool = AgentBrowserConfig(
         endpoints=("ws://agent-browser-1:3000/",),
         egress_proxy="http://agent-browser-egress:3128",
         account_registration=registration,
     )
-    agent = test_config.answer.agent.model_copy(update={"browser": pool})
+    inbox = AgentMailboxConfig(
+        bucket="agent-mail",
+        alias_domain="orliantra.cc",
+        access_key_id="fixture-key-id",
+        secret_access_key="fixture-secret-key",
+    )
+    agent = test_config.answer.agent.model_copy(
+        update={"browser": pool, "mailbox": inbox if mailbox else AgentMailboxConfig()}
+    )
     configured = test_config.model_copy(
         update={"answer": test_config.answer.model_copy(update={"agent": agent})}
     )
@@ -605,8 +624,7 @@ def test_a_deployment_offers_register_and_login_exactly_when_it_allows_agent_acc
             return set()
         return set(browser.definition.parameters["properties"]["action"]["enum"])
 
-    accounts = {"register", "login"}
-    assert browser_actions(configured) & accounts == (accounts if registration else set())
+    assert browser_actions(configured) & {"register", "login", "inbox"} == offered
     # A deployment with no Agent Browser has no browser tool, and so no account actions.
     assert browser_actions(test_config) == set()
 

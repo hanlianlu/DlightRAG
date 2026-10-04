@@ -8,6 +8,8 @@ count or a flag, so a failure reports a number and never the value.
 from __future__ import annotations
 
 import json
+import re
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from pydantic import SecretStr
@@ -19,9 +21,11 @@ from dlightrag.engine.answer.agent_browser import (
     RunAgentAccounts,
     account_site,
     generate_password,
+    owner_alias,
+    run_alias,
 )
 from dlightrag.engine.credential_cipher import CredentialCipher, UnreadableEnvelope
-from tests.support.agent_browser import MemoryAccountStore
+from tests.support.agent_browser import MemoryAccountStore, StubMailbox
 
 KEYRING = json.dumps(
     {"active": "test", "keys": {"test": "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE="}}
@@ -78,9 +82,11 @@ def test_a_generated_password_has_the_length_asked_and_every_class_and_never_rep
     assert well_formed(shorter, 14) is True
 
 
-def accounts(store: MemoryAccountStore, *, keyring: str | None = KEYRING) -> RunAgentAccounts:
+def accounts(
+    store: MemoryAccountStore, *, keyring: str | None = KEYRING, mailbox: StubMailbox | None = None
+) -> RunAgentAccounts:
     cipher = CredentialCipher(None if keyring is None else SecretStr(keyring))
-    return RunAgentAccounts(owner_id=OWNER, binding=AgentAccountsBinding(store, cipher))
+    return RunAgentAccounts(owner_id=OWNER, binding=AgentAccountsBinding(store, cipher, mailbox))
 
 
 async def register(
@@ -190,3 +196,58 @@ async def test_an_account_whose_key_the_ring_lost_cannot_be_opened() -> None:
 def test_without_a_ring_accounts_are_unavailable() -> None:
     assert accounts(MemoryAccountStore()).available()
     assert not accounts(MemoryAccountStore(), keyring=None).available()
+
+
+def test_an_owners_alias_is_stable_for_a_site_and_differs_for_every_other_owner_and_site() -> None:
+    alias = owner_alias("owner", "shop.example", "orliantra.cc")
+
+    assert re.fullmatch(r"[a-z2-7]{16}@orliantra\.cc", alias)
+    assert owner_alias("owner", "shop.example", "orliantra.cc") == alias
+    distinct = {
+        alias,
+        owner_alias("another", "shop.example", "orliantra.cc"),
+        owner_alias("owner", "other.example", "orliantra.cc"),
+    }
+    assert len(distinct) == 3
+    # It names nothing of the owner or the site.
+    assert "owner" not in alias and "shop" not in alias
+
+
+def test_a_childs_alias_is_random_on_the_same_domain() -> None:
+    aliases = {run_alias("orliantra.cc") for _ in range(50)}
+
+    assert len(aliases) == 50
+    assert all(re.fullmatch(r"[a-z2-7]{16}@orliantra\.cc", alias) for alias in aliases)
+    assert owner_alias("owner", SITE, "orliantra.cc") not in aliases
+
+
+async def test_the_inbox_window_opens_at_each_sign_in_and_names_only_mailbox_aliases() -> None:
+    run = accounts(MemoryAccountStore(), mailbox=StubMailbox("orliantra.cc"))
+    alias = run.new_alias(SITE, child=False)
+    other = run.new_alias("other.example", child=False)
+    assert run.inbox_window("parent") is None
+
+    before = datetime.now(UTC)
+    first, _ = await register(run, "parent", email=alias)
+    run.signed_in("parent", first)
+    window = run.inbox_window("parent")
+
+    assert window is not None and window.aliases == (alias,)
+    assert timedelta(0) <= window.since - before < timedelta(seconds=5)
+    # A later sign-in moves the window on and keeps the aliases of the Run, and an address the
+    # Agent typed is no alias. Another Session has no window at all.
+    typed = AgentAccount("typed.example", "me@example.com", None)
+    run.signed_in("parent", typed)
+    run.signed_in("parent", AgentAccount("other.example", other, None))
+    run.signed_in("parent", first)
+    moved = run.inbox_window("parent")
+    assert moved is not None and moved.aliases == (alias, other) and moved.since >= window.since
+    assert run.inbox_window("child") is None
+
+
+def test_a_deployment_with_no_mailbox_keeps_no_inbox_window() -> None:
+    run = accounts(MemoryAccountStore())
+
+    run.signed_in("parent", AgentAccount(SITE, "a@orliantra.cc", None))
+
+    assert run.inbox_window("parent") is None and run.alias(AgentAccount(SITE, "a@x", None)) is None

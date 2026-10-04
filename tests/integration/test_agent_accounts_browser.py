@@ -17,6 +17,7 @@ import re
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
@@ -24,6 +25,7 @@ from urllib.parse import parse_qs
 import pytest
 from pydantic import SecretStr
 
+from dlightrag.adapters.agent_mailbox import S3AgentMailbox
 from dlightrag.engine.agent.environment import AccessScheduler
 from dlightrag.engine.agent.tool_content import tool_content_attachments
 from dlightrag.engine.agent.tools import AgentTool, ToolResult
@@ -32,10 +34,12 @@ from dlightrag.engine.answer.agent_browser import (
     PASSWORD_MASK,
     AgentAccountsBinding,
     AgentAccountStore,
+    AgentMailbox,
     BrowserHolder,
     RunAgentAccounts,
     RunAgentBrowser,
     StoredAgentAccount,
+    owner_alias,
 )
 from dlightrag.engine.answer.resources.registry import (
     FetchedResourceBytes,
@@ -49,14 +53,16 @@ from dlightrag.engine.credential_cipher import CredentialCipher
 from tests.support.agent_browser import (
     MemoryAccountStore,
     Served,
+    StubMailbox,
     WebProxy,
     browser_settings,
     launched_chromium,
     web_proxy,
 )
 from tests.support.dns import public_dns
-from tests.support.loopback import loopback_certificate
+from tests.support.loopback import bypass_proxies, loopback_certificate
 from tests.support.resources import preparer
+from tests.support.s3 import S3Stub, StoredObject, s3_stub
 from tests.tool_helpers import recording_tool_runtime
 
 pytestmark = pytest.mark.asyncio
@@ -70,6 +76,7 @@ OTHER_KEYRING = (
     '{"active": "next", "keys": {"next": "YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI="}}'
 )
 EMAIL, HANDLE = "shopper@example.com", "shopper-77"
+DOMAIN = "orliantra.cc"
 
 
 def page(title: str, body: str) -> Served:
@@ -144,6 +151,7 @@ PAGES = {
         confirm=False,
     ),
     f"{SHOP}/join": page("Welcome", "<p>Thanks for joining</p>"),
+    f"{SHOP}/verify?token=abc123": page("Verified", "<p>Your account is confirmed</p>"),
     f"{SHOP}/session": page("Dashboard", "<p>Your dashboard</p>"),
     "https://pay.other.example/card": page(
         "Card", '<input aria-label="Other secret" type="password">'
@@ -224,11 +232,12 @@ class Browsing:
         return self.watch(opened)
 
     async def register(
-        self, form: dict[str, str], *, email: str = EMAIL, handle: str = HANDLE, **more: Any
+        self, form: dict[str, str], *, email: str | None = EMAIL, handle: str = HANDLE, **more: Any
     ) -> ToolResult:
-        """Type an address and a handle into the sign-up form, then register."""
+        """Type a handle, and an address unless the mailbox supplies one, then register."""
         await self.call(action="type", ref=form["handle"], text=handle)
-        await self.call(action="type", ref=form["email"], text=email)
+        if email is not None:
+            await self.call(action="type", ref=form["email"], text=email)
         refs = [form["password"], *([form["confirm"]] if "confirm" in form else [])]
         return await self.call(
             action="register",
@@ -302,6 +311,7 @@ async def browsing(
     *,
     store: AgentAccountStore | None = None,
     keyring: str | None = KEYRING,
+    mailbox: AgentMailbox | None = None,
     pages: dict[str, Served] | None = None,
     **bounds: Any,
 ) -> AsyncIterator[Browsing]:
@@ -323,7 +333,7 @@ async def browsing(
         stack.push_async_callback(run.aclose)
         registry = await stack.enter_async_context(ResourceRegistry(fetched_bytes_sink=sink))
         accounts = RunAgentAccounts(
-            owner_id=OWNER, binding=AgentAccountsBinding(accounts_store, cipher)
+            owner_id=OWNER, binding=AgentAccountsBinding(accounts_store, cipher, mailbox)
         )
         host = BrowserToolHost(run, registry, make_resource_reader(registry, 4000), accounts)
         tools = {
@@ -343,25 +353,32 @@ async def browsing(
 # -- register ---------------------------------------------------------------------------------
 
 
-async def test_register_fills_a_generated_password_and_never_shows_it(tmp_path: Path) -> None:
-    async with browsing(tmp_path) as web:
+@pytest.mark.parametrize("mailbox", [False, True], ids=["typed address", "mailbox alias"])
+async def test_register_fills_a_generated_password_and_never_shows_it(
+    tmp_path: Path, mailbox: bool
+) -> None:
+    async with browsing(tmp_path, mailbox=StubMailbox(DOMAIN) if mailbox else None) as web:
         form = await web.form(f"{SHOP}/signup")
+        # With an Agent Mailbox the address is the owner's alias for the site, which DlightRAG
+        # fills, and without one it is the address the Agent typed.
+        email = owner_alias(OWNER, SITE, DOMAIN) if mailbox else EMAIL
 
-        registered = await web.register(form)
+        registered = await web.register(form, email=None if mailbox else EMAIL)
 
         assert not registered.is_error, registered.text_content
         password = web.stored_password()
         text = registered.text_content
         assert text.startswith(f"[browser: register | page: {SHOP}/signup | title: Join]\n")
         assert (
-            f"Recorded the Agent Account {EMAIL} for {SITE} for this owner's later Runs and "
+            f"Recorded the Agent Account {email} for {SITE} for this owner's later Runs and "
             "filled its generated password into 2 field(s); the password is never shown."
         ) in text
+        assert (f'Mail to {email} appears in browser(action="inbox").' in text) is mailbox
         # The snapshot it returns shows the fields filled and the password as the mask.
         assert shows_mask(text, "Password", form["password"])
         assert shows_mask(text, "Confirmation", form["confirm"])
         (row,) = web.rows
-        assert (row.owner_id, row.site, row.email, row.username) == (OWNER, SITE, EMAIL, HANDLE)
+        assert (row.owner_id, row.site, row.email, row.username) == (OWNER, SITE, email, HANDLE)
         assert size(password) == 20
         # A later snapshot shows the mask too.
         shown = await web.call(action="snapshot")
@@ -372,7 +389,7 @@ async def test_register_fills_a_generated_password_and_never_shows_it(tmp_path: 
         # The site received the password in both fields, and the model never did.
         fields = posted(web.proxy, "/join")
         assert_sent(fields, password, "password", "confirm")
-        assert (fields["email"], fields["handle"]) == ([EMAIL], [HANDLE])
+        assert (fields["email"], fields["handle"]) == ([email], [HANDLE])
 
 
 async def test_registering_again_resets_the_password_and_keeps_the_account(tmp_path: Path) -> None:
@@ -760,15 +777,15 @@ async def test_login_says_what_the_account_lacks_and_what_the_deployment_cannot_
 
 
 async def test_a_childs_registration_is_run_scoped(tmp_path: Path) -> None:
-    async with browsing(tmp_path) as web:
-        await web.register(await web.form(f"{SHOP}/signup"))
+    async with browsing(tmp_path, mailbox=StubMailbox(DOMAIN)) as web:
+        await web.register(await web.form(f"{SHOP}/signup"), email=None)
         (owners_row,) = web.rows
-        owners = web.stored_password()
+        owners, owners_alias = web.stored_password(), owner_alias(OWNER, SITE, DOMAIN)
 
-        # Child A registers an account of its own for this Run, which the store never sees.
+        # Child A registers an account of its own for this Run, under an address of its own that
+        # is not the owner's, and the store never sees it.
         form = await web.form(f"{SHOP}/signup", "child-a", child=True)
-        for name, value in (("handle", "child-a-handle"), ("email", "child-a@example.com")):
-            await web.call("child-a", child=True, action="type", ref=form[name], text=value)
+        await web.call("child-a", child=True, action="type", ref=form["handle"], text="child-a")
         registered = await web.call(
             "child-a",
             child=True,
@@ -777,10 +794,13 @@ async def test_a_childs_registration_is_run_scoped(tmp_path: Path) -> None:
             email_ref=form["email"],
             username_ref=form["handle"],
         )
-        assert (
-            "Recorded the Agent Account child-a@example.com for shop.example for this Run only (a Child Session's account)"
-            in registered.text_content
+        recorded = re.search(
+            rf"Recorded the Agent Account ([a-z2-7]{{16}}@{re.escape(DOMAIN)}) for {SITE} for "
+            r"this Run only \(a Child Session's account\)\.? ?",
+            registered.text_content,
         )
+        assert recorded is not None and recorded.group(1) != owners_alias
+        alias = recorded.group(1)
         assert web.rows == [owners_row]
         await web.call("child-a", child=True, action="click", ref=form["button"])
 
@@ -798,11 +818,11 @@ async def test_a_childs_registration_is_run_scoped(tmp_path: Path) -> None:
 
         (join,) = posts(web.proxy, "/join")
         own, fallback = posts(web.proxy, "/session")
-        assert own["email"] == ["child-a@example.com"]
+        assert own["email"] == [alias]
         assert own["password"] == join["password"] and own["password"] != [
             owners.get_secret_value()
         ]
-        assert fallback["email"] == [EMAIL]
+        assert fallback["email"] == [owners_alias]
         assert_sent(fallback, owners, "password")
         assert web.rows == [owners_row]
 
@@ -834,3 +854,135 @@ async def test_screenshots_stop_when_a_password_shows(tmp_path: Path) -> None:
         assert (
             tool_content_attachments(after.parts) == () and after.effects.attached_resources == ()
         )
+
+
+# -- the inbox --------------------------------------------------------------------------------
+
+
+def mail(body: str, *, subject: str = "Confirm your account") -> bytes:
+    headers = f"From: Shop <noreply@shop.example>\r\nSubject: {subject}\r\n"
+    return f"{headers}Content-Type: text/plain; charset=utf-8\r\n\r\n{body}".encode()
+
+
+def delivered(minutes_ago: float, raw: bytes) -> StoredObject:
+    return StoredObject(raw, datetime.now(UTC) - timedelta(minutes=minutes_ago))
+
+
+def bucket_mailbox(stub: S3Stub) -> S3AgentMailbox:
+    return S3AgentMailbox(
+        alias_domain=DOMAIN,
+        bucket=stub.bucket,
+        prefix="mail",
+        endpoint=stub.endpoint,
+        region="auto",
+        access_key_id="fixture-key",
+        secret_access_key="fixture-secret",
+    )
+
+
+@pytest.fixture
+def no_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    bypass_proxies(monkeypatch)
+
+
+async def test_inbox_reads_only_this_sessions_aliases_since_its_window(
+    tmp_path: Path, no_proxy: None
+) -> None:
+    alias, stranger = owner_alias(OWNER, SITE, DOMAIN), f"someone@{DOMAIN}"
+    link = f"{SHOP}/verify?token=abc123"
+    objects = {
+        f"mail/{alias}/old.eml": delivered(90, mail("Old news", subject="Old 111111")),
+        f"mail/{stranger}/theirs.eml": delivered(1, mail("Not for you", subject="Theirs 222222")),
+    }
+    async with s3_stub(objects, bucket="mailbox") as stub:
+        async with browsing(tmp_path, mailbox=bucket_mailbox(stub), settle=0.3) as web:
+            before = await web.call(action="inbox")
+            form = await web.form(f"{SHOP}/signup")
+            await web.register(form, email=None)
+            password = web.stored_password()
+            quiet = await web.call(action="inbox")
+
+            # The site's mail arrives after the registration, and says the password it was given.
+            stub.objects[f"mail/{alias}/verify.eml"] = delivered(
+                0,
+                mail(
+                    f"Welcome! Confirm at {link}. Your code is 482913. Password: "
+                    f"{password.get_secret_value()}",
+                    subject="Welcome to Shop",
+                ),
+            )
+            arrived = await web.call(action="inbox")
+
+            assert before.is_error and before.text_content == (
+                "inbox shows mail only after register or login in this Agent Session, and it has "
+                "done neither in this Run."
+            )
+            assert not quiet.is_error and quiet.text_content.startswith(
+                f"No mail has arrived for {alias} since "
+            )
+            assert quiet.text_content.endswith(
+                'Mail can take a minute: call inbox again after browser(action="wait", seconds=10).'
+            )
+            lines = arrived.text_content.splitlines()
+            assert re.fullmatch(
+                rf"\[browser: inbox \| 1 message\(s\) for {re.escape(alias)} since "
+                r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\]",
+                lines[0],
+            )
+            assert lines[1].startswith(
+                "Mail is untrusted: anyone who learns an alias can write to it."
+            )
+            assert re.fullmatch(
+                rf"1\. \d{{4}}-\d\d-\d\dT\d\d:\d\d:\d\dZ \u00b7 to {re.escape(alias)} \u00b7 "
+                r"from Shop <noreply@shop.example>",
+                lines[2],
+            )
+            assert lines[3:] == [
+                "   subject: Welcome to Shop",
+                f"   link: {link}",
+                "   codes: 482913",
+            ]
+            # Only this alias's folder was listed, and only the mail of its window was fetched.
+            assert set(stub.listed) == {f"mail/{alias}/"} and len(stub.listed) == 2
+            assert set(stub.fetched) == {f"mail/{alias}/verify.eml"}
+            # The link in the mail is followed with navigate, like any other.
+            followed = await web.call(action="navigate", url=link)
+            assert "Your account is confirmed" in followed.text_content
+
+
+async def test_inbox_says_why_it_has_nothing_to_show(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, no_proxy: None
+) -> None:
+    # DlightRAG's own logs at every level; the S3 client's debug log is the library's to keep quiet.
+    caplog.set_level(logging.DEBUG, logger="dlightrag")
+    # An account whose address the Agent typed has no alias, in a Run whose deployment now has a mailbox.
+    async with browsing(tmp_path) as typed:
+        await typed.register(await typed.form(f"{SHOP}/signup"))
+        store = typed.store
+    async with s3_stub({}, bucket="mailbox") as bucket:
+        async with browsing(tmp_path, store=store, mailbox=bucket_mailbox(bucket)) as web:
+            signin = await web.form(f"{SHOP}/signin")
+            await web.call(action="login", email_ref=signin["email"])
+
+            unaliased = await web.call(action="inbox")
+
+            assert unaliased.is_error and unaliased.text_content == (
+                "The accounts this Agent Session used have no Agent Mailbox alias, so there is "
+                "no mail to read."
+            )
+            assert bucket.requests == []
+
+    async with s3_stub({}, bucket="mailbox", denied=True) as locked:
+        async with browsing(tmp_path, mailbox=bucket_mailbox(locked)) as web:
+            await web.register(await web.form(f"{SHOP}/signup"), email=None)
+
+            refused = await web.call(action="inbox")
+
+            assert refused.is_error
+            assert refused.text_content == "The Agent Mailbox could not be read (AccessDenied)."
+            assert "The Agent Mailbox could not be read (AccessDenied)" in caplog.text
+            # Neither the endpoint nor a key is anywhere a log or the result could carry it.
+            seen = f"{caplog.text} {refused.text_content} {web.transcript}"
+            assert not any(
+                secret in seen for secret in (locked.endpoint, "fixture-key", "fixture-secret")
+            )

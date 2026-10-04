@@ -507,11 +507,13 @@ class AnswerExecutor:
         from dlightrag.engine.answer.tools.composition import research_tool_declarations
         from dlightrag.engine.answer.tools.subagents import subagent_declarations
 
+        accounts = None if self._browser is None else self._browser.accounts
         return research_tool_declarations(
             web_search=web_search,
             resource_read=True,
             agent_browser=self._browser is not None,
-            agent_accounts=self._browser is not None and self._browser.accounts is not None,
+            agent_accounts=accounts is not None,
+            agent_mailbox=accounts is not None and accounts.mailbox is not None,
             resource_view=True,
             environment=self._execution_adapter is not None,
             artifact_publication=self._execution_adapter is not None,

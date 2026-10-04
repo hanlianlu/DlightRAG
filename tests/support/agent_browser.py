@@ -25,6 +25,7 @@ import sys
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
+from datetime import datetime
 from typing import Any, Literal
 
 from playwright.async_api import Browser, async_playwright
@@ -36,9 +37,11 @@ from dlightrag.engine.answer.agent_browser import (
     AgentAccountsBinding,
     AgentBrowserError,
     AgentBrowserSettings,
+    AgentMailbox,
     BrowserHolder,
     FilledPasswords,
     LeasedBrowser,
+    MailListing,
     PageEvents,
     PageLimits,
     PageObservation,
@@ -529,15 +532,30 @@ class MemoryAccountStore:
         return True
 
 
+class StubMailbox:
+    """An ``AgentMailbox`` on a domain whose bucket holds no mail."""
+
+    def __init__(self, alias_domain: str = "orliantra.cc") -> None:
+        self.alias_domain = alias_domain
+
+    async def messages(
+        self, address: str, *, since: datetime, limit: int, max_bytes: int
+    ) -> MailListing:
+        return MailListing((), 0, False)
+
+
 async def _reads_nothing(_request: ResourceReadRequest, _runtime: ToolRuntime) -> ToolResult:
     raise AssertionError("an inert browser host reads nothing")
 
 
-def inert_browser_host(*, accounts: bool = False) -> BrowserToolHost:
+def inert_browser_host(
+    *, accounts: bool = False, mailbox: AgentMailbox | None = None
+) -> BrowserToolHost:
     """The browser tool's host for a test that needs the tool composed and offered, not driven.
 
     Its browser leases nothing until a page is opened, and its reader is never called. With
-    ``accounts`` the Run has Agent Accounts, which nothing registers or reads.
+    ``accounts`` the Run has Agent Accounts, which nothing registers or reads, delivered by
+    ``mailbox`` when it has one.
     """
     holder = BrowserHolder("owner", "11111111-1111-1111-1111-111111111111", "worker", 1)
     return BrowserToolHost(
@@ -546,7 +564,7 @@ def inert_browser_host(*, accounts: bool = False) -> BrowserToolHost:
         _reads_nothing,
         RunAgentAccounts(
             owner_id="owner",
-            binding=AgentAccountsBinding(MemoryAccountStore(), CredentialCipher(None)),
+            binding=AgentAccountsBinding(MemoryAccountStore(), CredentialCipher(None), mailbox),
         )
         if accounts
         else None,
@@ -565,6 +583,7 @@ __all__ = [
     "RecordingRenderer",
     "RunServer",
     "Served",
+    "StubMailbox",
     "WebProxy",
     "browser_settings",
     "inert_browser_host",

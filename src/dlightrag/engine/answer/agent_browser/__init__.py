@@ -8,11 +8,14 @@ from dlightrag.engine.answer.agent_browser.accounts import (
     AgentAccount,
     AgentAccountsBinding,
     AgentAccountStore,
+    InboxWindow,
     RunAgentAccounts,
     StoredAgentAccount,
     account_site,
     generate_password,
+    owner_alias,
     reseal_agent_accounts,
+    run_alias,
 )
 from dlightrag.engine.answer.agent_browser.contracts import (
     MAX_DOWNLOADS_PER_CALL,
@@ -44,6 +47,14 @@ from dlightrag.engine.answer.agent_browser.contracts import (
     browser_failure,
     page_failure,
 )
+from dlightrag.engine.answer.agent_browser.mailbox import (
+    AgentMailbox,
+    AgentMailboxError,
+    MailListing,
+    MailObject,
+    MailSummary,
+    summarize_mail,
+)
 from dlightrag.engine.answer.agent_browser.run import RunAgentBrowser
 
 __all__ = [
@@ -59,6 +70,8 @@ __all__ = [
     "AgentBrowserError",
     "AgentBrowserFailure",
     "AgentBrowserSettings",
+    "AgentMailbox",
+    "AgentMailboxError",
     "BrowserHolder",
     "BrowserLeases",
     "BrowserProvider",
@@ -69,6 +82,10 @@ __all__ = [
     "DownloadedFile",
     "FilledPasswords",
     "FoundElements",
+    "InboxWindow",
+    "MailListing",
+    "MailObject",
+    "MailSummary",
     "PageLimits",
     "LeasedBrowser",
     "PageCapture",
@@ -85,6 +102,9 @@ __all__ = [
     "account_site",
     "browser_failure",
     "generate_password",
+    "owner_alias",
     "page_failure",
     "reseal_agent_accounts",
+    "run_alias",
+    "summarize_mail",
 ]

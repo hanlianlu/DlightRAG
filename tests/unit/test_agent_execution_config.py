@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from dlightrag.application.config import (
     AgentBrowserConfig,
     AgentExecutionConfig,
+    AgentMailboxConfig,
     AnswerSectionSettings,
     DlightragConfig,
     WebSourcesConfig,
@@ -238,6 +239,98 @@ def test_agent_accounts_are_on_unless_the_operator_turns_them_off(
     browser = DlightragConfig().answer.agent.browser  # pyright: ignore[reportCallIssue]
 
     assert browser.account_registration is registers
+
+
+_MAILBOX = {
+    "bucket": "agent-mail",
+    "alias_domain": "orliantra.cc",
+    "access_key_id": "fixture-key-id",
+    "secret_access_key": "fixture-secret-key",
+}
+
+
+def test_without_a_bucket_there_is_no_agent_mailbox() -> None:
+    mailbox = AgentMailboxConfig()
+
+    assert (mailbox.enabled, mailbox.region, mailbox.prefix) == (False, "auto", "mail")
+    assert AgentExecutionConfig().mailbox == mailbox
+
+
+def test_a_bucket_comes_with_the_domain_and_the_keys_that_read_it() -> None:
+    assert AgentMailboxConfig(**_MAILBOX).enabled is True
+    for missing in ("alias_domain", "access_key_id", "secret_access_key"):
+        with pytest.raises(
+            ValidationError,
+            match="answer.agent.mailbox.bucket requires alias_domain, access_key_id and "
+            "secret_access_key",
+        ):
+            AgentMailboxConfig(**{k: v for k, v in _MAILBOX.items() if k != missing})
+
+
+@pytest.mark.parametrize(
+    ("setting", "value"),
+    [
+        ("endpoint", "https://account.r2.cloudflarestorage.com"),
+        ("alias_domain", "orliantra.cc"),
+        ("access_key_id", "fixture-key-id"),
+        ("secret_access_key", "fixture-secret-key"),
+    ],
+)
+def test_mailbox_settings_without_a_bucket_are_refused(setting: str, value: str) -> None:
+    with pytest.raises(ValidationError, match="answer.agent.mailbox settings require bucket"):
+        AgentMailboxConfig(**{setting: value})  # pyright: ignore[reportArgumentType]
+
+
+@pytest.mark.parametrize(
+    ("setting", "value"),
+    [
+        ("bucket", "Agent-Mail"),
+        ("bucket", "ab"),
+        ("alias_domain", "localhost"),
+        ("alias_domain", "Mail.Example.com"),
+        ("prefix", "/mail"),
+        ("prefix", "a//b"),
+        ("region", ""),
+        ("endpoint", "https://user:secret@account.r2.cloudflarestorage.com"),
+    ],
+)
+def test_a_mailbox_value_outside_what_it_names_is_refused(setting: str, value: str) -> None:
+    with pytest.raises(ValidationError):
+        AgentMailboxConfig(**{**_MAILBOX, setting: value})  # pyright: ignore[reportArgumentType]
+
+
+def test_a_blank_mailbox_variable_is_an_unset_setting(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("ENDPOINT", "BUCKET", "ALIAS_DOMAIN", "ACCESS_KEY_ID", "SECRET_ACCESS_KEY"):
+        monkeypatch.setenv(f"DLIGHTRAG_ANSWER__AGENT__MAILBOX__{name}", "")
+
+    mailbox = DlightragConfig().answer.agent.mailbox  # pyright: ignore[reportCallIssue]
+
+    assert (mailbox.enabled, mailbox.endpoint, mailbox.alias_domain) == (False, None, None)
+
+
+def test_the_agent_mailbox_is_bound_through_the_environment_and_its_keys_never_render(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bound = {
+        **{name.upper(): value for name, value in _MAILBOX.items()},
+        "ENDPOINT": "https://account.r2.cloudflarestorage.com",
+        "REGION": "auto",
+        "PREFIX": "inbound",
+    }
+    for name, value in bound.items():
+        monkeypatch.setenv(f"DLIGHTRAG_ANSWER__AGENT__MAILBOX__{name}", value)
+
+    config = DlightragConfig()  # pyright: ignore[reportCallIssue]
+    mailbox = config.answer.agent.mailbox
+
+    assert (mailbox.bucket, mailbox.alias_domain, mailbox.endpoint, mailbox.prefix) == (
+        "agent-mail",
+        "orliantra.cc",
+        "https://account.r2.cloudflarestorage.com",
+        "inbound",
+    )
+    rendered = f"{config!r} {config} {config.model_dump()} {mailbox!r}"
+    assert "fixture-key-id" not in rendered and "fixture-secret-key" not in rendered
 
 
 @pytest.mark.parametrize(

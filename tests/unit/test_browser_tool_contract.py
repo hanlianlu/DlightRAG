@@ -11,14 +11,22 @@ from pydantic import BaseModel, ValidationError
 from dlightrag.engine.answer.tools.browser import browser_declaration
 
 
-def parse(arguments: dict[str, Any], *, upload: bool = True, accounts: bool = True) -> Any:
+def parse(
+    arguments: dict[str, Any],
+    *,
+    upload: bool = True,
+    accounts: bool = True,
+    mailbox: bool = True,
+) -> Any:
     """The arguments as the tool receives them, after the declared schema has validated them."""
-    model: type[BaseModel] = browser_declaration(upload=upload, accounts=accounts).input_model
+    declaration = browser_declaration(upload=upload, accounts=accounts, mailbox=mailbox)
+    model: type[BaseModel] = declaration.input_model
     return model.model_validate(arguments)
 
 
-def properties(*, upload: bool, accounts: bool) -> dict[str, Any]:
-    return browser_declaration(upload=upload, accounts=accounts).definition.parameters["properties"]
+def properties(*, upload: bool, accounts: bool, mailbox: bool = False) -> dict[str, Any]:
+    declaration = browser_declaration(upload=upload, accounts=accounts, mailbox=mailbox)
+    return declaration.definition.parameters["properties"]
 
 
 @pytest.mark.parametrize(
@@ -55,6 +63,8 @@ def properties(*, upload: bool, accounts: bool) -> dict[str, Any]:
         ({"action": "login", "email_ref": "e1", "text": "x"}, "does not take text"),
         ({"action": "click", "ref": "e1", "email_ref": "e2"}, "does not take email_ref"),
         ({"action": "snapshot", "password_refs": ["e1"]}, "does not take password_refs"),
+        ({"action": "inbox", "url": "http://a.example/"}, "does not take url"),
+        ({"action": "inbox", "ref": "e1"}, "does not take ref"),
         ({"action": "teleport"}, "Input should be"),
         ({"action": "snapshot", "extra": 1}, "Extra inputs are not permitted"),
     ],
@@ -77,6 +87,10 @@ def test_a_narrower_tool_refuses_what_only_a_wider_one_offers() -> None:
         parse({"action": "login", "email_ref": "e1"}, accounts=False)
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         parse({"action": "click", "ref": "e1", "email_ref": "e2"}, accounts=False)
+    # The mailbox is offered on its own terms: accounts without one have no inbox.
+    assert parse({"action": "login", "email_ref": "e1"}, mailbox=False).action == "login"
+    with pytest.raises(ValidationError, match="Input should be"):
+        parse({"action": "inbox"}, mailbox=False)
 
 
 @pytest.mark.parametrize("upload", [False, True])
@@ -94,6 +108,15 @@ def test_agent_accounts_add_their_actions_and_their_fields_to_the_schema_and_not
         "register (password_refs, email_ref, username_ref)" in accounting["action"]["description"]
     )
     assert "register" not in plain["action"]["description"]
+
+
+def test_an_agent_mailbox_adds_the_inbox_action_and_no_field() -> None:
+    plain, mailing = (properties(upload=True, accounts=True, mailbox=on) for on in (False, True))
+
+    assert set(mailing["action"]["enum"]) - set(plain["action"]["enum"]) == {"inbox"}
+    assert set(mailing) == set(plain)
+    assert "inbox: mail to this session's aliases" in mailing["action"]["description"]
+    assert parse({"action": "inbox"}).action == "inbox"
 
 
 def test_a_registration_names_the_fields_it_fills_and_a_login_may_name_any_of_them() -> None:
@@ -122,7 +145,7 @@ def test_typed_text_keeps_its_spaces_and_can_clear_a_field_while_a_query_is_trim
 
 
 def test_the_description_teaches_the_tiers_and_the_captcha_boundary() -> None:
-    description = browser_declaration(upload=False, accounts=False).description
+    description = browser_declaration(upload=False, accounts=False, mailbox=False).description
 
     assert "rendered=true" in description
     assert "use browser only for interaction" in description
@@ -134,8 +157,8 @@ def test_the_description_teaches_the_tiers_and_the_captcha_boundary() -> None:
 def test_a_run_with_agent_accounts_is_told_whose_identity_it_acts_as_and_who_makes_passwords() -> (
     None
 ):
-    plain = browser_declaration(upload=False, accounts=False).description
-    accounting = browser_declaration(upload=False, accounts=True).description
+    plain = browser_declaration(upload=False, accounts=False, mailbox=False).description
+    accounting = browser_declaration(upload=False, accounts=True, mailbox=True).description
 
     assert accounting.startswith(plain) and len(accounting) > len(plain)
     assert "never type the owner's email address, name, password" in accounting
