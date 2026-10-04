@@ -578,6 +578,12 @@ class StubMailbox:
         return MailListing((), 0, False)
 
 
+async def never_registers(*, owner_id: str) -> bool:
+    """What acceptance asks of a deployment for the Runs it accepts, for a test that accepts Runs
+    and is not about Agent Accounts: no Run of any owner may register."""
+    return False
+
+
 async def _reads_nothing(_request: ResourceReadRequest, _runtime: ToolRuntime) -> ToolResult:
     raise AssertionError("an inert browser host reads nothing")
 
@@ -646,6 +652,7 @@ __all__ = [
     "inert_browser_host",
     "launch_recorder",
     "launched_chromium",
+    "never_registers",
     "run_server",
     "web_proxy",
 ]

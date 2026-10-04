@@ -137,7 +137,6 @@ VALUES ($1, $2)
 ON CONFLICT (owner_id) DO UPDATE
 SET sign_ups_enabled = EXCLUDED.sign_ups_enabled,
     updated_at = NOW()
-RETURNING sign_ups_enabled
 """
 
 _SELECT_SEALED_UNDER = """
@@ -265,11 +264,11 @@ class PGAgentAccountSettingsStore(PostgresOperationRunner):
 
         return await self._run(operation)
 
-    async def set_sign_ups(self, *, owner_id: str, enabled: bool) -> bool:
-        async def operation(conn: Any) -> bool:
-            return bool(await conn.fetchval(_SET_SIGN_UPS, owner_id, enabled))
+    async def set_sign_ups(self, *, owner_id: str, enabled: bool) -> None:
+        async def operation(conn: Any) -> None:
+            await conn.execute(_SET_SIGN_UPS, owner_id, enabled)
 
-        return await self._run(operation)
+        await self._run(operation)
 
 
 __all__ = [

@@ -720,10 +720,10 @@ class AnswerService:
             [ChatModelSelector], ModelInvocationFingerprint
         ],
         child_roster_cursor_secret: bytes,
+        agent_may_register: Callable[..., Awaitable[bool]],
         research_tool_declarations: ResearchToolDeclarations | None = None,
         bind_research: Callable[..., Awaitable[BoundResearchConnections]] | None = None,
         memory_capability: Callable[..., Awaitable[tuple[bool, int]]] | None = None,
-        agent_may_register: Callable[..., Awaitable[bool]] | None = None,
         run_retention_seconds: int = 365 * 24 * 3600,
     ) -> None:
         self._store = store
@@ -852,10 +852,7 @@ class AnswerService:
         if self._memory_capability is not None:
             memory_enabled, memory_epoch = await self._memory_capability(owner_id=owner_id)
         # Read once, like the memory capability: the Run's tools are what it was accepted with.
-        agent_may_register = (
-            self._agent_may_register is not None
-            and await self._agent_may_register(owner_id=owner_id)
-        )
+        agent_may_register = await self._agent_may_register(owner_id=owner_id)
         async with self._prepare_input(
             run_request,
             resources=acceptance_resources or None,
@@ -1773,8 +1770,8 @@ class AnswerService:
         idempotency_fingerprint: str,
         requested_mode: AnswerMode,
         allowed_modes: frozenset[ResolvedMode],
+        agent_may_register: bool,
         memory_enabled: bool = True,
-        agent_may_register: bool = False,
     ) -> AsyncIterator[
         Callable[
             [Sequence[ToolDeclaration]], Awaitable[tuple[AnswerRunInput, frozenset[ResolvedMode]]]
@@ -1834,8 +1831,8 @@ class AnswerService:
         resources: list[ResourceInput] | None,
         requested_mode: AnswerMode,
         allowed_modes: frozenset[ResolvedMode],
+        agent_may_register: bool,
         memory_enabled: bool = True,
-        agent_may_register: bool = False,
         resource_identity: str,
     ) -> AsyncIterator[Callable[[Sequence[ToolDeclaration]], Awaitable[_AcceptanceProjection]]]:
         """Resolve the exact shared-history envelopes without building the run rig."""

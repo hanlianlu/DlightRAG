@@ -245,10 +245,10 @@ async def test_new_sign_ups_are_on_until_the_owner_turns_them_off_and_the_switch
     settings = PGAgentAccountSettingsStore(pool=pool)
 
     assert await settings.sign_ups_enabled(owner_id="alice") is True
-    assert await settings.set_sign_ups(owner_id="alice", enabled=False) is False
+    await settings.set_sign_ups(owner_id="alice", enabled=False)
     assert await settings.sign_ups_enabled(owner_id="alice") is False
     assert await settings.sign_ups_enabled(owner_id="bob") is True
-    assert await settings.set_sign_ups(owner_id="alice", enabled=True) is True
+    await settings.set_sign_ups(owner_id="alice", enabled=True)
     assert await settings.sign_ups_enabled(owner_id="alice") is True
     async with pool.acquire() as conn:
         assert await conn.fetchval("SELECT count(*) FROM dlightrag_agent_account_settings") == 1
