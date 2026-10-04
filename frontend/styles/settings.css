@@ -1,0 +1,43 @@
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
+
+/* === Settings Dialog === */
+
+/* The box itself: a centered modal with a hairline border, and on a phone the whole screen. What
+ * is inside it (navigation, pages, notices) is styled by settings-dialog.module.css. */
+
+.settings-dialog {
+    /* Icon buttons follow the control ladder here: compact beside a pointer, 44px under 1200px. */
+    --control-hit-target: var(--size-button);
+
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-dialog);
+    box-shadow: var(--shadow-overlay);
+    color: var(--color-text-secondary);
+    font-family: var(--font-body);
+
+    /* A fixed height, so no page resizes the dialog under the reader. */
+    height: min(40rem, calc(100dvh - 2 * var(--space-layout)));
+    inset: 0;
+    margin: auto;
+    max-height: none;
+    max-width: none;
+    overflow: hidden;
+    padding: 0;
+    width: min(55rem, calc(100vw - 2 * var(--space-layout)));
+}
+
+.settings-dialog::backdrop {
+    background: var(--color-scrim-strong);
+}
+
+/* The phone layout; lib/breakpoints.ts repeats this query for what only script can decide. */
+@media (width <= 720px), (height <= 480px) {
+    .settings-dialog {
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+        height: 100dvh;
+        width: 100vw;
+    }
+}

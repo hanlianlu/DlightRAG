@@ -1,5 +1,10 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Writer maintenance for Agent Accounts: re-seal their passwords after a key ring rotation.
+"""Agent Accounts above the stores: what an owner manages of them in Settings, and the writer's
+upkeep of their envelopes.
+
+An owner sees the sites the Agent registered on, the identity it registered under, and two
+dates, switches the Agent's new sign-ups on or off, and removes an account (ADR 0034). Nothing
+here reads a password: DlightRAG makes and seals each one, and no view carries it.
 
 A deployment rotates its key ring by adding a key and making it active; every account envelope
 still sealed under an older key is opened with that key and sealed again under the new one
@@ -10,8 +15,12 @@ own, because that loop also refreshes OAuth grants and the two share nothing but
 from __future__ import annotations
 
 import asyncio
+import datetime
 import logging
+from dataclasses import dataclass
+from typing import Protocol
 
+from dlightrag.application.errors import ApplicationNotFoundError
 from dlightrag.engine.answer.agent_browser import AgentAccountStore, reseal_agent_accounts
 from dlightrag.engine.credential_cipher import CredentialCipher
 
@@ -19,6 +28,112 @@ logger = logging.getLogger(__name__)
 
 #: How often a writer looks for envelopes under a retired key, as often as Connections do.
 _MAINTENANCE_SECONDS = 60.0
+
+
+@dataclass(frozen=True, slots=True)
+class AgentAccountSummary:
+    """What Settings shows an owner of one of their accounts: where it is, who it is there, and
+    when it was registered and last signed in. It holds nothing of the password, its envelope,
+    the key that sealed it, or the account's id."""
+
+    site: str
+    email: str | None
+    username: str | None
+    created_at: datetime.datetime
+    """When the owner's account on the site was first registered, which a reset keeps."""
+    last_used_at: datetime.datetime | None
+    """When a login last filled its password, or None before the first one."""
+
+
+class AgentAccountDirectory(Protocol):
+    """An owner's accounts as Settings lists and removes them. The Agent never does either, so
+    the engine's own port for accounts has neither."""
+
+    async def summaries(self, *, owner_id: str) -> tuple[AgentAccountSummary, ...]:
+        """Every account the owner has, in the order of their sites."""
+        ...
+
+    async def delete(self, *, owner_id: str, site: str) -> bool:
+        """Remove the owner's account on ``site``; whether there was one."""
+        ...
+
+
+class AgentAccountSettingsStore(Protocol):
+    """Whether each owner lets the Agent sign up for new accounts; an owner who never chose has
+    them on."""
+
+    async def sign_ups_enabled(self, *, owner_id: str) -> bool: ...
+
+    async def set_sign_ups(self, *, owner_id: str, enabled: bool) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class AgentRegistrationView:
+    """Whether new sign-ups are possible: the deployment allows them, and the owner's switch."""
+
+    allowed: bool
+    enabled: bool
+
+
+@dataclass(frozen=True, slots=True)
+class AgentAccountsView:
+    """An owner's Agent Accounts, the switch for new sign-ups, and whether the deployment has
+    Agent Accounts at all, which it has where an Agent Browser is configured."""
+
+    available: bool
+    registration: AgentRegistrationView
+    accounts: tuple[AgentAccountSummary, ...]
+
+
+class AgentAccounts:
+    """An owner's Agent Accounts in Settings: the list, the switch, and removal.
+
+    An account is removable whether or not the deployment still has Agent Accounts, and the
+    switch is stored whether or not the deployment allows sign-ups: what the Agent may do is the
+    deployment's allowance and the owner's switch together.
+    """
+
+    def __init__(
+        self,
+        *,
+        directory: AgentAccountDirectory,
+        settings_store: AgentAccountSettingsStore,
+        available: bool,
+        registration_allowed: bool,
+    ) -> None:
+        self._directory = directory
+        self._settings = settings_store
+        self._available = available
+        self._registration_allowed = registration_allowed
+
+    async def view(self, *, owner_id: str) -> AgentAccountsView:
+        return AgentAccountsView(
+            available=self._available,
+            registration=AgentRegistrationView(
+                allowed=self._registration_allowed,
+                enabled=await self._settings.sign_ups_enabled(owner_id=owner_id),
+            ),
+            accounts=await self._directory.summaries(owner_id=owner_id),
+        )
+
+    async def may_register(self, *, owner_id: str) -> bool:
+        """Whether a Run accepted for the owner now may register: the deployment allows it and
+        the owner has not turned sign-ups off. The Run keeps this answer, whatever is switched
+        next."""
+        return self._registration_allowed and await self._settings.sign_ups_enabled(
+            owner_id=owner_id
+        )
+
+    async def set_sign_ups(self, *, owner_id: str, enabled: bool) -> AgentAccountsView:
+        await self._settings.set_sign_ups(owner_id=owner_id, enabled=enabled)
+        return await self.view(owner_id=owner_id)
+
+    async def remove(self, *, owner_id: str, site: str) -> AgentAccountsView:
+        """Remove the owner's account on ``site``. A site the owner has no account on is not
+        found, whoever else has one there."""
+        if not await self._directory.delete(owner_id=owner_id, site=site):
+            raise ApplicationNotFoundError("This owner has no Agent Account for that site")
+        return await self.view(owner_id=owner_id)
 
 
 class AgentAccountMaintenance:
@@ -57,4 +172,12 @@ class AgentAccountMaintenance:
             await asyncio.sleep(_MAINTENANCE_SECONDS)
 
 
-__all__ = ["AgentAccountMaintenance"]
+__all__ = [
+    "AgentAccountDirectory",
+    "AgentAccountMaintenance",
+    "AgentAccountSettingsStore",
+    "AgentAccountSummary",
+    "AgentAccounts",
+    "AgentAccountsView",
+    "AgentRegistrationView",
+]

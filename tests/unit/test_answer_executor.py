@@ -101,7 +101,7 @@ from dlightrag.engine.runtime.records import (
     artifact_digest,
 )
 from tests.in_memory_session_repository import MemoryAgentSessionRepository
-from tests.support.agent_browser import FakeProvider, browser_settings
+from tests.support.agent_browser import FakeProvider, browser_settings, idle_accounts_binding
 from tests.support.dns import public_dns
 from tests.unit.conftest import RecordingLangfuse, answer_image_policy
 
@@ -522,7 +522,7 @@ def test_research_declarations_include_every_configured_surface_without_binding(
     monkeypatch.setattr(SkillsBundleFactory, "__call__", forbid_execution_setup)
     monkeypatch.setattr(SkillsBundle, "catalog", forbid_execution_setup)
     declarations = executor.research_tool_declarations(
-        web_search=False, memory=True, model_guidance="", injected=()
+        web_search=False, memory=True, agent_may_register=True, model_guidance="", injected=()
     )
     assert all(type(tool) is ToolDeclaration for tool in declarations)
     names = {tool.name for tool in declarations}
@@ -548,7 +548,7 @@ def test_research_declarations_include_every_configured_surface_without_binding(
         "load_skill",
     } <= names
     without_memory = executor.research_tool_declarations(
-        web_search=False, memory=False, model_guidance="", injected=()
+        web_search=False, memory=False, agent_may_register=True, model_guidance="", injected=()
     )
     assert not {"remember", "forget", "recall_memory"} & {tool.name for tool in without_memory}
 
@@ -569,7 +569,7 @@ def test_a_deployment_offers_a_rendered_read_exactly_when_it_configures_an_agent
     def read_properties(config: Any) -> dict[str, Any]:
         executor = _compose(config).coordinator._executors["answer"]
         declarations = executor.research_tool_declarations(
-            web_search=False, memory=False, model_guidance="", injected=()
+            web_search=False, memory=False, agent_may_register=True, model_guidance="", injected=()
         )
         return {tool.name: tool for tool in declarations}["read"].definition.parameters[
             "properties"
@@ -580,18 +580,19 @@ def test_a_deployment_offers_a_rendered_read_exactly_when_it_configures_an_agent
 
 
 @pytest.mark.parametrize(
-    ("registration", "mailbox", "offered"),
+    ("allowed", "pinned", "mailbox"),
     [
-        (True, False, {"register", "login"}),
-        (True, True, {"register", "login", "inbox"}),
-        # The mailbox delivers an account's mail, so a deployment that turns accounts off has none.
-        (False, True, set()),
-        (False, False, set()),
+        (True, True, False),
+        (True, True, True),
+        (True, False, True),
+        # A deployment that does not allow registration pins every Run to not registering.
+        (False, False, True),
+        (False, False, False),
     ],
-    ids=["accounts", "accounts-and-mailbox", "mailbox-without-accounts", "turned-off"],
+    ids=["registers", "registers-and-mail", "owner-off", "not-allowed", "not-allowed-no-mail"],
 )
-def test_a_deployment_offers_the_account_actions_it_allows_and_the_inbox_it_can_read(
-    test_config: Any, registration: bool, mailbox: bool, offered: set[str]
+def test_a_deployment_with_a_browser_offers_login_and_the_inbox_it_can_read_and_register_as_pinned(
+    test_config: Any, allowed: bool, pinned: bool, mailbox: bool
 ) -> None:
     from dlightrag._compose import _compose
     from dlightrag.application.config import AgentMailboxConfig
@@ -599,7 +600,7 @@ def test_a_deployment_offers_the_account_actions_it_allows_and_the_inbox_it_can_
     pool = AgentBrowserConfig(
         endpoints=("ws://agent-browser-1:3000/",),
         egress_proxy="http://agent-browser-egress:3128",
-        account_registration=registration,
+        account_registration=allowed,
     )
     inbox = AgentMailboxConfig(
         bucket="agent-mail",
@@ -617,26 +618,73 @@ def test_a_deployment_offers_the_account_actions_it_allows_and_the_inbox_it_can_
     def browser_actions(config: Any) -> set[str]:
         executor = _compose(config).coordinator._executors["answer"]
         declarations = executor.research_tool_declarations(
-            web_search=False, memory=False, model_guidance="", injected=()
+            web_search=False,
+            memory=False,
+            agent_may_register=pinned,
+            model_guidance="",
+            injected=(),
         )
         browser = {tool.name: tool for tool in declarations}.get("browser")
         if browser is None:
             return set()
         return set(browser.definition.parameters["properties"]["action"]["enum"])
 
-    assert browser_actions(configured) & {"register", "login", "inbox"} == offered
+    # Login needs only the Run's accounts, which every deployment with a browser composes, and the
+    # inbox only the mailbox: neither depends on whether the Agent may register.
+    assert browser_actions(configured) & {"register", "login", "inbox"} == (
+        {"login"} | ({"register"} if pinned else set()) | ({"inbox"} if mailbox else set())
+    )
     # Health says what was composed, from the configuration alone.
     health = _compose(configured).health.agent_browser
-    assert (health["accounts"], health["mailbox"]) == (registration, registration and mailbox)
+    assert (health["accounts"], health["registration"], health["mailbox"]) == (
+        True,
+        allowed,
+        mailbox,
+    )
     # A deployment with no Agent Browser has no browser tool, and so no account actions.
     assert browser_actions(test_config) == set()
+
+
+@pytest.mark.parametrize(
+    ("browser", "flag", "allowed"),
+    [(False, True, False), (False, False, False), (True, False, False), (True, True, True)],
+    ids=["no-browser", "no-browser-flag-off", "flag-off", "allowed"],
+)
+async def test_a_deployment_allows_registration_only_with_an_agent_browser_and_the_flag_on(
+    test_config: Any, browser: bool, flag: bool, allowed: bool
+) -> None:
+    from dlightrag._compose import _compose
+
+    pool = (
+        AgentBrowserConfig(
+            endpoints=("ws://agent-browser-1:3000/",),
+            egress_proxy="http://agent-browser-egress:3128",
+        )
+        if browser
+        else test_config.answer.agent.browser
+    )
+    agent = test_config.answer.agent.model_copy(
+        update={"browser": pool.model_copy(update={"account_registration": flag})}
+    )
+    configured = test_config.model_copy(
+        update={"answer": test_config.answer.model_copy(update={"agent": agent})}
+    )
+
+    components = _compose(configured)
+
+    assert components.health.agent_browser["registration"] is allowed
+    if not allowed:
+        # Acceptance takes the same answer, so no Run of any owner may register whatever their
+        # switch says, and a deployment that does not allow it never asks the owner's switch.
+        assert await components.agent_accounts.may_register(owner_id="alice") is False
 
 
 async def test_a_research_runs_browser_tool_drives_the_browser_it_was_given(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.engine.answer.agent_browser import BrowserHolder, RunAgentBrowser
+    from dlightrag.engine.answer.agent_browser import BrowserHolder, RunAgentBrowser, RunBrowsing
     from dlightrag.engine.answer.resources.registry import ResourceRegistry
+    from tests.support.agent_browser import idle_accounts
     from tests.support.dns import public_dns
     from tests.tool_helpers import tool_runtime
     from tests.unit.test_child_model_roles import _prepared_executor
@@ -648,7 +696,7 @@ async def test_a_research_runs_browser_tool_drives_the_browser_it_was_given(
 
     async with ResourceRegistry() as registry:
         _, orchestrator, *_ = await _prepared_executor(
-            monkeypatch, registry=registry, agent_browser=run_browser
+            monkeypatch, registry=registry, browsing=RunBrowsing(run_browser, idle_accounts())
         )
         tools = {tool.name: tool for tool in orchestrator.prepare_run("question").tools}
 
@@ -667,28 +715,20 @@ async def test_a_research_runs_browser_tool_drives_the_browser_it_was_given(
 async def test_a_research_runs_browser_tool_acts_on_the_agent_accounts_it_was_given(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.engine.answer.agent_browser import (
-        AgentAccountsBinding,
-        BrowserHolder,
-        RunAgentAccounts,
-        RunAgentBrowser,
-    )
+    from dlightrag.engine.answer.agent_browser import BrowserHolder, RunAgentBrowser, RunBrowsing
     from dlightrag.engine.answer.resources.registry import ResourceRegistry
-    from dlightrag.engine.credential_cipher import CredentialCipher
-    from tests.support.agent_browser import MemoryAccountStore
+    from tests.support.agent_browser import idle_accounts
     from tests.tool_helpers import tool_runtime
     from tests.unit.test_child_model_roles import _prepared_executor
 
     holder = BrowserHolder("owner", "11111111-1111-1111-1111-111111111111", "worker", 1)
     # A deployment whose key ring is missing: the account actions are offered, and refuse.
-    keyless = RunAgentAccounts(
-        owner_id="owner", binding=AgentAccountsBinding(MemoryAccountStore(), CredentialCipher(None))
-    )
+    keyless = idle_accounts()
 
     run_browser = RunAgentBrowser(FakeProvider(), holder, browser_settings())
     async with ResourceRegistry() as registry:
         _, orchestrator, *_ = await _prepared_executor(
-            monkeypatch, registry=registry, agent_browser=run_browser, agent_accounts=keyless
+            monkeypatch, registry=registry, browsing=RunBrowsing(run_browser, keyless)
         )
         tool = {tool.name: tool for tool in orchestrator.prepare_run("question").tools}["browser"]
 
@@ -756,13 +796,16 @@ def test_a_deployment_reports_the_chromium_sandbox_it_configures_for_its_agent_b
         "endpoints": 1,
         "sandbox": sandbox,
         "accounts": True,
+        "registration": True,
         "mailbox": False,
     }
 
 
 async def test_closing_the_executor_closes_the_browser_pool() -> None:
     provider = FakeProvider()
-    executor = _executor(browser=AgentBrowserBinding(provider, browser_settings()))
+    executor = _executor(
+        browser=AgentBrowserBinding(provider, browser_settings(), idle_accounts_binding())
+    )
 
     await executor.aclose()
 
@@ -832,7 +875,7 @@ def test_acceptance_plan_matches_runtime_tool_composition(tmp_path: Path) -> Non
         search_toolchain=SearchToolchain(),
     )
     accepted = executor.research_tool_declarations(
-        web_search=False, memory=True, model_guidance="", injected=()
+        web_search=False, memory=True, agent_may_register=True, model_guidance="", injected=()
     )
 
     async def retrieve(_query: str) -> Any:

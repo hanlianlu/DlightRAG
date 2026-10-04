@@ -134,6 +134,7 @@ class ResearchToolDeclarations(Protocol):
         *,
         web_search: bool,
         memory: bool,
+        agent_may_register: bool,
         model_guidance: str,
         injected: Sequence[ToolDeclaration],
     ) -> tuple[ToolDeclaration, ...]: ...
@@ -144,7 +145,7 @@ def research_tool_declarations(
     web_search: bool = False,
     resource_read: bool = False,
     agent_browser: bool = False,
-    agent_accounts: bool = False,
+    agent_may_register: bool = False,
     agent_mailbox: bool = False,
     resource_view: bool = False,
     environment: bool = False,
@@ -171,7 +172,9 @@ def research_tool_declarations(
         declarations.append(view_declaration())
     if agent_browser:
         declarations.append(
-            browser_declaration(upload=environment, accounts=agent_accounts, mailbox=agent_mailbox)
+            browser_declaration(
+                upload=environment, may_register=agent_may_register, mailbox=agent_mailbox
+            )
         )
     declarations.extend(injected)
     if environment:
@@ -257,7 +260,7 @@ def compose_research_tools(
         web_search=search_web is not None,
         resource_read=resource_reader is not None,
         agent_browser=browser is not None,
-        agent_accounts=accounts is not None,
+        agent_may_register=accounts is not None and accounts.may_register,
         agent_mailbox=has_mailbox(accounts),
         resource_view=resource_viewer is not None,
         environment=environment is not None,

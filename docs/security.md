@@ -22,9 +22,9 @@ is where a deployment of the checked-in `config.yaml` keeps it (see
 | `simple` | One owner's deployment behind a bearer token | The deployment owner |
 | `jwt` | Externally issued, user-scoped signed tokens | One per issuer and subject |
 
-An owner holds Sessions, Runs, Profile Memory, and Personal MCP Connections.
-`none` and `simple` admit every caller as the same deployment owner, so switching
-between them keeps that owner's data. Use `jwt` when several people share a
+An owner holds Sessions, Runs, Profile Memory, Personal MCP Connections, and Agent
+Accounts. `none` and `simple` admit every caller as the same deployment owner, so
+switching between them keeps that owner's data. Use `jwt` when several people share a
 deployment.
 
 A non-loopback REST/MCP listener with `none` is refused unless
@@ -149,6 +149,9 @@ routes also require exact same-origin `Origin` and a double-submit
 `dlightrag_web_csrf` cookie echoed as `X-CSRF-Token`; a refused request gets
 403 in the shared error envelope with `error_kind: "cross_origin_rejected"`. A
 proxy that does not forward the browser's `Host` refuses every write this way.
+With `auth_mode: none` the check covers only the Connections routes
+(`/web/api/connections/mcp`), the Agent Accounts routes (`/web/api/agent-accounts`), and the
+video-playback resolver (`/web/api/video-playback`), and no other Web route.
 
 ### Entra Example
 
@@ -587,7 +590,7 @@ The Agent may register on a third-party site and sign in again later
 ([ADR 0034](adr/0034-agent-accounts-and-the-agent-mailbox.md); the actions are in
 [Retrieval and Answer](retrieval-answer.md#agent-accounts-and-the-agent-mailbox)). What
 makes that safe is that no password is ever anywhere the model, or anything it can steer,
-could read.
+could read, and that the owner and the deployment decide whether it is offered `register`.
 
 - **An identity of its own.** No credential, name, address, or other personal information
   of the owner enters a form, and the tool's description says so. A mailbox alias is 16
@@ -605,6 +608,20 @@ could read.
   ([Secret handling](personal-mcp-connections.md#secret-handling-and-key-ring)). Without a
   ring, register and login fail closed, and an envelope no key opens is unusable until the
   site's password reset replaces it. No route, view, export, or result returns a password.
+  The Settings routes list an owner's accounts by site, identity, and two dates, and return
+  no envelope, key id, or account id either; no route edits an account.
+- **The owner and the deployment bound `register`.** `register` is offered only to a Run
+  whose deployment allows it and whose owner has not turned off the Agent's new sign-ups
+  ([how a Run gets it](retrieval-answer.md#agent-accounts-and-the-agent-mailbox)), and the
+  deployment's setting is a ceiling no switch exceeds. That is the whole of what is enforced:
+  a Run that cannot register is not offered `register`, so DlightRAG makes no password for it.
+  The rest is an instruction: the tool's description tells such a Run not to create an account
+  by filling a sign-up form itself, and nothing in the browser stops a model that disregards
+  it. Turning registration off withdraws no account and no `login`: removing an account is the
+  owner's own act in Settings, which deletes the saved sign-in and the sealed password and
+  leaves the account on the site. Both are owner-scoped Web routes, so another owner's account
+  is as unknown to them as one nobody has, and their writes meet the CSRF check above in every
+  authentication mode.
 - **Filled only into the account's own site.** A password goes only into a password field in
   an `https` frame whose registrable domain, by the pinned Public Suffix List's eTLD+1 with
   its private section, is the account's site, judged by the frame's own address and not the
@@ -631,11 +648,11 @@ could read.
   frame, password fields included, and the frame's visible text, and refuses when one holds a
   filled password or cannot be read, comparing in DlightRAG's process so no password is ever
   sent into a page. A filled form is screenshotted after it is submitted, not before.
-- **Children register for the Run.** A Child keeps `register`, but its account is held in the
-  worker's memory under its Agent Session until the Run settles, with a random mailbox
-  alias, so nothing durable is written for the owner that the parent did not make
-  ([ADR 0025](adr/0025-a-child-inherits-capability-not-authority.md)). A Child may sign in
-  with the owner's accounts, which is capability.
+- **Children register for the Run.** A Child has `register` when its Run may register, but
+  its account is held in the worker's memory under its Agent Session until the Run settles,
+  with a random mailbox alias, so nothing durable is written for the owner that the parent
+  did not make ([ADR 0025](adr/0025-a-child-inherits-capability-not-authority.md)). A Child
+  may sign in with the owner's accounts, which is capability.
 - **Mail is untrusted.** Anyone who learns a mailbox alias can write to it, so mail is
   context and never Evidence, the result says so, and a link in it is opened with `navigate`
   under its first-URL check. DlightRAG reads the bucket and never writes or deletes. The
@@ -644,6 +661,10 @@ could read.
 
 Residual risks, recorded rather than solved:
 
+- The tool's descriptions are instructions, not controls. `type` and `click` act on any form,
+  so a model that disregards them can fill a sign-up form itself, with a password of its own
+  choosing, whether or not its Run may register. That password is in the model's context, and
+  redaction does not find it: it replaces only the passwords DlightRAG filled.
 - A site and its scripts necessarily see the password, and it crosses the pool's internal
   network unencrypted inside the Playwright protocol. One password for each account confines
   a leak to that account.

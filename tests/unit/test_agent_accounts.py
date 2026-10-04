@@ -163,7 +163,11 @@ def accounts(
     store: MemoryAccountStore, *, keyring: str | None = KEYRING, mailbox: StubMailbox | None = None
 ) -> RunAgentAccounts:
     cipher = CredentialCipher(None if keyring is None else SecretStr(keyring))
-    return RunAgentAccounts(owner_id=OWNER, binding=AgentAccountsBinding(store, cipher, mailbox))
+    return RunAgentAccounts(
+        owner_id=OWNER,
+        binding=AgentAccountsBinding(store, cipher, mailbox, registration_allowed=True),
+        may_register=True,
+    )
 
 
 async def register(

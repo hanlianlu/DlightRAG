@@ -598,7 +598,26 @@ Route families cover:
   child observation/control/guidance reply, fork/cancel,
   Artifacts/presentation, and events; and
 - Files/upload and same-origin `/corpus-runs/{run_id}`
-  status/events/cancel/resume, workspaces, images, Memory, and model catalogue.
+  status/events/cancel/resume, workspaces, images, Memory, the owner's Agent Accounts, and
+  model catalogue.
+
+`/agent-accounts` is an owner's Agent Accounts in Settings. It is Web-only, like Connections:
+owner Settings state has no REST counterpart. `GET /web/api/agent-accounts` answers
+`{"available": <bool>, "registration": {"allowed": <bool>, "enabled": <bool>}, "accounts":
+[{"site", "email", "username", "created_at", "last_used_at"}]}`, the accounts in the order of
+their sites. `available` says the deployment composes Agent Accounts, which it does wherever
+an Agent Browser is configured; `registration.allowed` is the deployment's allowance for the
+Agent to register, which holds where an Agent Browser is configured and
+[`account_registration`](configuration.md#agent-browser) is on, and `enabled` the owner's
+switch, and what the Agent may do is both. `email`, `username`, and `last_used_at` may be null,
+and times are UTC ISO 8601 with a `Z`. `PUT /web/api/agent-accounts/settings` takes
+`{"registration_enabled": <bool>}` and is accepted even where the deployment does not allow
+registration.
+`DELETE /web/api/agent-accounts/{site}` removes the owner's account on a site, and answers 404
+where this owner has none there, another owner's account being as unknown as none. Each
+answers 200 with the fresh view, and none takes an `Idempotency-Key`, since both writes are
+idempotent by key. No answer carries a password,
+envelope, key id, or account id ([Security](security.md#agent-accounts)).
 
 An answer that cites a stored image is projected with that image addressed on
 this origin: `<img src>` is rewritten to the run-resource address when the run
@@ -901,13 +920,16 @@ warnings use fixed sanitized text. The four LightRAG storage class names and
 Agent's processes can be confined to on this host, one of `disabled` (no Agent
 environment), `unavailable` (no kernel seam), or `landlock:abiN`. `agent_browser`
 reports `{"state": "configured" | "disabled", "endpoints": <n>, "sandbox": <bool>,
-"accounts": <bool>, "mailbox": <bool>}` from configuration alone: `sandbox` is the
-configured `chromium_sandbox`, whether browsers launch inside Chromium's own sandbox, and
-not whether a host can start it; `accounts` and `mailbox` say whether Agent Accounts and an
-Agent Mailbox are composed, and not whether the bucket answers. It never names an endpoint
-and never reaches the pool or the bucket, so a pool that is down is seen in its containers'
-own health, not here ([Operations](operations.md#agent-browser-pool)), and a mailbox that
-cannot be read is seen as the `inbox` call's reason
+"accounts": <bool>, "registration": <bool>, "mailbox": <bool>}` from configuration alone:
+`sandbox` is the configured `chromium_sandbox`, whether browsers launch inside Chromium's own
+sandbox, and not whether a host can start it; `accounts` and `mailbox` say whether Agent
+Accounts and an Agent Mailbox are composed, which the first is wherever the browser is, and
+not whether the bucket answers; `registration` is the deployment's allowance for the Agent to
+register, the same answer as `registration.allowed` of the
+[Agent Accounts view](#web), which no owner's own switch exceeds. It never
+names an endpoint and never reaches the pool or the bucket, so a pool that is down is seen in
+its containers' own health, not here ([Operations](operations.md#agent-browser-pool)), and a
+mailbox that cannot be read is seen as the `inbox` call's reason
 ([Agent Mailbox](operations.md#agent-mailbox)). Degraded state remains HTTP 200.
 
 `GET /ready` checks only the authority required to durably admit and coordinate

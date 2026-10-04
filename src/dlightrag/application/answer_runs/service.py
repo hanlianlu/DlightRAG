@@ -28,6 +28,7 @@ from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS, ChatModelSelector, ModelSettings
+from dlightrag.engine.answer.agent_browser import MAY_REGISTER_PIN
 from dlightrag.engine.answer.capabilities import AnswerCapabilities, RequestModelContext
 from dlightrag.engine.answer.client_contracts import AnswerEffort, offered_answer_efforts
 from dlightrag.engine.answer.execution import ResolvedAnswerResources
@@ -719,6 +720,7 @@ class AnswerService:
             [ChatModelSelector], ModelInvocationFingerprint
         ],
         child_roster_cursor_secret: bytes,
+        agent_may_register: Callable[..., Awaitable[bool]],
         research_tool_declarations: ResearchToolDeclarations | None = None,
         bind_research: Callable[..., Awaitable[BoundResearchConnections]] | None = None,
         memory_capability: Callable[..., Awaitable[tuple[bool, int]]] | None = None,
@@ -736,6 +738,7 @@ class AnswerService:
         self._research_tool_declarations = research_tool_declarations
         self._bind_research = bind_research
         self._memory_capability = memory_capability
+        self._agent_may_register = agent_may_register
         self._admission = RunAdmission(
             run_kind="answer",
             lane="query",
@@ -848,6 +851,8 @@ class AnswerService:
         memory_enabled, memory_epoch = True, 0
         if self._memory_capability is not None:
             memory_enabled, memory_epoch = await self._memory_capability(owner_id=owner_id)
+        # Read once, like the memory capability: the Run's tools are what it was accepted with.
+        agent_may_register = await self._agent_may_register(owner_id=owner_id)
         async with self._prepare_input(
             run_request,
             resources=acceptance_resources or None,
@@ -855,6 +860,7 @@ class AnswerService:
             requested_mode=requested_mode,
             allowed_modes=allowed_modes,
             memory_enabled=memory_enabled,
+            agent_may_register=agent_may_register,
         ) as prepare:
             for attempt in range(2):
                 bound = (
@@ -869,6 +875,7 @@ class AnswerService:
                 prepared_input = _prepared_input_payload(run_input, requested_mode=requested_mode)
                 prepared_input["profile_memory_enabled"] = memory_enabled
                 prepared_input["profile_memory_epoch"] = memory_epoch
+                prepared_input[MAY_REGISTER_PIN] = agent_may_register
                 try:
                     return await self._admission.admit(
                         partial(
@@ -1763,6 +1770,7 @@ class AnswerService:
         idempotency_fingerprint: str,
         requested_mode: AnswerMode,
         allowed_modes: frozenset[ResolvedMode],
+        agent_may_register: bool,
         memory_enabled: bool = True,
     ) -> AsyncIterator[
         Callable[
@@ -1779,6 +1787,7 @@ class AnswerService:
             requested_mode=requested_mode,
             allowed_modes=allowed_modes,
             memory_enabled=memory_enabled,
+            agent_may_register=agent_may_register,
             resource_identity=resource_identity,
         ) as project:
 
@@ -1822,6 +1831,7 @@ class AnswerService:
         resources: list[ResourceInput] | None,
         requested_mode: AnswerMode,
         allowed_modes: frozenset[ResolvedMode],
+        agent_may_register: bool,
         memory_enabled: bool = True,
         resource_identity: str,
     ) -> AsyncIterator[Callable[[Sequence[ToolDeclaration]], Awaitable[_AcceptanceProjection]]]:
@@ -1871,6 +1881,7 @@ class AnswerService:
                         self._research_tool_declarations(
                             web_search=web_search,
                             memory=memory_enabled,
+                            agent_may_register=agent_may_register,
                             model_guidance=child_model_guidance(pinned_models),
                             injected=connection_tools,
                         )

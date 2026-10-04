@@ -198,11 +198,7 @@ export class DlApp extends LightElement {
       const callbackReturn = new URL(window.location.href);
       if (callbackReturn.searchParams.get('settings') === 'connections') {
         const settings = this.querySelector<DlSettingsDialog>('dl-settings-dialog');
-        if (settings) {
-          settings.showConnections = true;
-          await settings.open(null);
-          settings.expandConnections();
-        }
+        if (settings) await settings.open(null, 'connections');
         callbackReturn.searchParams.delete('settings');
         callbackReturn.searchParams.delete('authorization');
         window.history.replaceState(null, '', callbackReturn);

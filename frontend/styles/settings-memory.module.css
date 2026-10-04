@@ -1,0 +1,136 @@
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
+
+/* Settings → Profile Memory: the stored memories, one row each, and the note shown while it is off. */
+
+@layer features {
+  .info {
+    align-items: flex-start;
+    background: var(--color-bg-hover);
+    border-radius: var(--radius-card);
+    color: var(--color-text-muted);
+    display: flex;
+    font-size: var(--font-size-detail);
+    gap: var(--space-tight);
+    line-height: var(--line-height-control);
+    padding: var(--space-component);
+  }
+
+  /* The icon centers on the first line of text, however many lines the text takes. */
+  .infoIcon {
+    align-items: center;
+    display: flex;
+    flex: none;
+    min-height: calc(var(--font-size-detail) * var(--line-height-control));
+  }
+
+  .listHeader {
+    align-items: center;
+    display: flex;
+    gap: var(--space-tight);
+    padding: var(--space-tight) var(--space-component);
+  }
+
+  .listTitle {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-detail);
+    font-weight: 400;
+    line-height: var(--line-height-control);
+    margin: 0;
+  }
+
+  /* A heading is focused after a change that removes the row the reader was on; it is no control. */
+  .listTitle:focus {
+    outline: none;
+  }
+
+  .badge {
+    background: var(--color-bg-hover);
+    border-radius: var(--radius-pill);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    min-width: 1.25rem;
+    padding-inline: var(--space-tight);
+    text-align: center;
+  }
+
+  /* A row is the kind, the memory, and Forget. The forget button keeps the control ladder's size,
+   * so a short memory still gives it room, and the text pads itself to match. */
+  .memory {
+    align-items: center;
+    display: grid;
+    gap: var(--space-component);
+    grid-template-areas: 'kind body action';
+    grid-template-columns: 4.5rem minmax(0, 1fr) auto;
+    padding: var(--space-inline) var(--space-inline) var(--space-inline) var(--space-component);
+  }
+
+  .kind {
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-pill);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    grid-area: kind;
+    line-height: var(--line-height-control);
+    margin-block-start: var(--space-inline);
+    padding-inline: var(--space-tight);
+    place-self: start;
+    white-space: nowrap;
+  }
+
+  /* The whole memory, as the agent wrote it: its own line breaks stay, and a long word wraps. */
+  .body {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-detail);
+    grid-area: body;
+    line-height: var(--line-height-control);
+    margin: 0;
+    overflow-wrap: anywhere;
+    padding-block: var(--space-inline);
+    white-space: pre-wrap;
+  }
+
+  .forget {
+    grid-area: action;
+  }
+
+  /* A note that is only there to speak: with nothing to say it takes no room, and it stays in
+   * the page so a screen reader hears the change from loading to a list or an error. */
+  .status {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    margin: 0;
+    padding: var(--space-tight) var(--space-component);
+  }
+
+  .status:empty {
+    border: 0;
+    padding: 0;
+  }
+
+  .footer {
+    display: flex;
+    padding: var(--space-tight) var(--space-component);
+  }
+
+  @media (width <= 720px), (height <= 480px) {
+    .memory {
+      align-items: start;
+      gap: var(--space-inline) var(--space-tight);
+      grid-template-areas:
+        'kind action'
+        'body action';
+      grid-template-columns: minmax(0, 1fr) auto;
+      padding: var(--space-component) var(--space-inline) var(--space-component) var(--space-component);
+    }
+
+    .body {
+      padding-block: 0;
+    }
+
+    .kind {
+      margin-block-start: 0;
+    }
+  }
+}

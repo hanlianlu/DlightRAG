@@ -2,6 +2,15 @@
 
 import {expect} from '@esm-bundle/chai';
 import {waitFor} from '../testing/dom.ts';
+import {
+  agentAccountsView,
+  memoryPage,
+  memorySettings,
+  mountSettings,
+  openSettings,
+  wire,
+  wireAccount,
+} from '../testing/settings.ts';
 type AxeNode = {
   target: string[];
   any: {data?: {fgColor?: string; bgColor?: string; contrastRatio?: number} | null}[];
@@ -145,13 +154,11 @@ it('Settings MCP consent and credential forms have no serious accessible-name or
     }], presets: [{preset_id: 'notion', label: 'Notion', endpoint: 'https://mcp.notion.com/mcp', default_authentication: 'oauth'}]})
     : Response.json({enabled: true, active_count: 0});
   try {
-    // Connections renders on the Settings drawer surface, so it is judged there.
+    // Connections renders on the Settings dialog surface, so it is judged there.
     const settings = mountInApp(document.createElement('dl-settings-dialog'));
     await settings.open();
     const feature = settings.querySelector('dl-settings-connections')!;
     await waitFor(() => Boolean(feature.view));
-    await feature.updateComplete;
-    feature.querySelector<HTMLButtonElement>('[data-connections-root]')!.click();
     await feature.updateComplete;
     feature.querySelector<HTMLButtonElement>('[data-card="a"]')!.click();
     await feature.updateComplete;
@@ -161,5 +168,47 @@ it('Settings MCP consent and credential forms have no serious accessible-name or
     await feature.updateComplete;
     const consent = await seriousViolations(feature);
     expect([...credentialForm, ...consent]).to.deep.equal([]);
+  } finally {window.fetch = originalFetch;}
+});
+
+it('every page of the Settings dialog has no serious accessible-name or structure violations', async () => {
+  const originalFetch = window.fetch;
+  window.fetch = wire({
+    'GET /web/api/connections/mcp': () => Response.json({revision: '1', presets: [], connections: [{
+      connection_id: 'a', label: 'Personal tools', endpoint: 'https://fixture.example/mcp',
+      enabled: true, activation_epoch: 1, generation: 1, authentication: 'bearer',
+      status: 'degraded', authorization_status: null,
+    }]}),
+    'GET /web/api/agent-accounts': () => Response.json(agentAccountsView([
+      wireAccount('discourse.org', {last_used_at: '2026-10-04T15:13:01Z'}),
+      wireAccount('ycombinator.com', {email: null, username: null}),
+    ])),
+    'GET /web/api/memory/settings': () => memorySettings(true, 2),
+    'GET /web/api/memory': () => memoryPage([
+      {id: 'one', body: 'Use concise answers'}, {id: 'two', kind: 'fact', body: 'Lives in Sweden'},
+    ]),
+  }).fetch;
+  try {
+    const {settings} = mountSettings();
+    const dialog = await openSettings(settings);
+    for (const section of ['connections', 'agent-accounts', 'memory', 'conversations', 'language']) {
+      const row = settings.querySelector<HTMLButtonElement>(`nav [data-section="${section}"]`)!;
+      row.click();
+      await settings.updateComplete;
+      if (section === 'connections') {
+        const feature = settings.querySelector('dl-settings-connections')!;
+        await waitFor(() => Boolean(feature.view));
+        await feature.updateComplete;
+        feature.querySelector<HTMLButtonElement>('[data-card="a"]')!.click();
+        await feature.updateComplete;
+      } else if (section === 'agent-accounts') {
+        const feature = settings.querySelector('dl-settings-agent-accounts')!;
+        await waitFor(() => Boolean(feature.view));
+        await feature.updateComplete;
+      } else if (section === 'memory') {
+        await waitFor(() => settings.querySelectorAll('dl-settings-memory li').length === 2);
+      }
+      expect(await seriousViolations(dialog), section).to.deep.equal([]);
+    }
   } finally {window.fetch = originalFetch;}
 });

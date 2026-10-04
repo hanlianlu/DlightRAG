@@ -1,11 +1,11 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** Structural lock on the disclosure affordance and the References collapse.
  *
- * The MCP card and group chevrons used to live in a flexible grid track: their
- * box stretched with the panel (605px inside a 720px row), the glyph was drawn at
- * the box's left edge, and rotation pivoted on that box centre, so the icon
- * drifted by half the track whenever the panel resized or the group toggled.
- * Both affordances now pin one fixed glyph column to the row end.
+ * The MCP card chevron used to live in a flexible grid track: its box stretched
+ * with the panel (605px inside a 720px row), the glyph was drawn at the box's
+ * left edge, and rotation pivoted on that box centre, so the icon drifted by half
+ * the track whenever the panel resized. It now pins one fixed glyph column to the
+ * row end.
  *
  * The References list shows five rows, and three on a narrow answer column. The
  * control is the list's next sibling and renders only while the collapsed list
@@ -56,35 +56,31 @@ function block(css: string, header: string): string {
   assert.fail(`${header} block is not closed`);
 }
 
-test('MCP disclosures pin one fixed glyph column to the row end', () => {
+test('the MCP card disclosure pins one fixed glyph column to the row end', () => {
   const css = read('styles/settings-connections.module.css');
-  const disclosure = rule(css, '.groupChevron', '.chevron');
+  const disclosure = rule(css, '.chevron');
   assert.match(disclosure, /flex-shrink: 0/);
   assert.match(disclosure, /margin-inline-start: auto/);
   assert.match(disclosure, /transition: transform var\(--duration-control\)/);
   // A width here is what stretched the box across the row before; the box
   // must stay glyph-sized so rotation pivots on the glyph.
   assert.doesNotMatch(disclosure, /width:/);
-  assert.match(rule(css, '.groupRow'), /display: flex/);
-  assert.doesNotMatch(rule(css, '.groupRow'), /grid-template-columns/);
   assert.match(rule(css, '.cardToggle'), /display: flex/);
   assert.doesNotMatch(rule(css, '.cardToggle'), /grid-template-columns/);
-  assert.match(css, /\.groupRow\[aria-expanded='true'\] \.groupChevron \{/);
   assert.match(css, /\.cardToggle\[aria-expanded='true'\] \.chevron \{/);
 });
 
-test('MCP disclosures use the shared disclosure icon without inline rotation', () => {
+test('the MCP card uses the shared disclosure icon without inline rotation', () => {
   const source = read('ui/settings-connections.ts');
-  assert.equal((source.match(/icon\('disclosure'/g) ?? []).length, 2);
+  assert.equal((source.match(/icon\('disclosure'/g) ?? []).length, 1);
   assert.doesNotMatch(source, /rotate\(/);
 });
 
-test('MCP disclosure rows ring inside their own box on keyboard focus', () => {
+test('the MCP card row rings inside its own box on keyboard focus', () => {
   const css = read('styles/settings-connections.module.css');
   // The radius lets the inset ring follow a rounded row inside the card's clip.
-  assert.match(rule(css, '.groupRow'), /border-radius: var\(--radius-control\)/);
   assert.match(rule(css, '.cardToggle'), /border-radius: var\(--radius-control\)/);
-  const ring = rule(css, '.groupRow:focus-visible', '.cardToggle:focus-visible');
+  const ring = rule(css, '.cardToggle:focus-visible');
   assert.match(ring, /outline: 2px solid var\(--color-control-ring\)/);
   // The card clips overflow, so an outward ring would show clipped segments.
   assert.match(ring, /outline-offset: -2px/);

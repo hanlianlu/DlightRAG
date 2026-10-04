@@ -15,8 +15,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import cast
 
+from dlightrag.engine.answer.agent_browser.accounts import RunAgentAccounts
 from dlightrag.engine.answer.agent_browser.contracts import (
     AgentBrowserError,
     AgentBrowserSettings,
@@ -266,4 +268,14 @@ class RunAgentBrowser:
             await lease.aclose()
 
 
-__all__ = ["RunAgentBrowser"]
+@dataclass(frozen=True, slots=True)
+class RunBrowsing:
+    """What one Research Run browses with: its Agent Browser, and the Agent Accounts it signs in
+    with on the pages of that browser. A deployment that configures a browser composes both, so
+    a Run has both or neither."""
+
+    browser: RunAgentBrowser
+    accounts: RunAgentAccounts
+
+
+__all__ = ["RunAgentBrowser", "RunBrowsing"]

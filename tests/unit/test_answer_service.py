@@ -61,6 +61,7 @@ from dlightrag.engine.runtime.records import (
     RunRecord,
     run_request_fingerprint,
 )
+from tests.support.agent_browser import never_registers
 from tests.unit.conftest import answer_image_policy
 
 _OWNER = "owner-1"
@@ -612,6 +613,8 @@ def _service(
     capability_view: Any = None,
     resources: Any = None,
     memory_capability: Any = None,
+    agent_may_register: Any = never_registers,
+    research_tool_declarations: Any = None,
     bind_research: Any = None,
     models: Any = None,
 ) -> AnswerService:
@@ -631,6 +634,8 @@ def _service(
         resources=resources or _Resources(),
         model_invocation_fingerprint_for_role=_fingerprint,
         memory_capability=memory_capability,
+        agent_may_register=agent_may_register,
+        research_tool_declarations=research_tool_declarations,
         bind_research=bind_research,
         child_roster_cursor_secret=b"answer-service-child-roster-test",
     )

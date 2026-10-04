@@ -230,7 +230,7 @@ def test_chromiums_sandbox_is_on_unless_the_operator_turns_it_off_and_reaches_th
     [(None, True), ("true", True), ("false", False)],
     ids=["by-default", "on", "off"],
 )
-def test_agent_accounts_are_on_unless_the_operator_turns_them_off(
+def test_the_agent_may_register_unless_the_operator_turns_registration_off(
     monkeypatch: pytest.MonkeyPatch, bound: str | None, registers: bool
 ) -> None:
     if bound is not None:

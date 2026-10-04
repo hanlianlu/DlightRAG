@@ -1,0 +1,209 @@
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
+
+/* Inside the Settings dialog (the box itself is settings.css): a navigation column and one page
+ * beside it, and on a phone a section list that opens a page. Docked surfaces (the navigation,
+ * the pages, their cards) sit on hairlines and cast no shadow, because the dialog is the one
+ * overlapping surface; a notice is a toast and floats over it like one. */
+
+@layer features {
+  .frame {
+    --settings-nav-width: 15rem;
+
+    display: grid;
+    grid-template-columns: var(--settings-nav-width) minmax(0, 1fr);
+
+    /* The one row is the dialog's height, never its content's: a long page scrolls in its pane. */
+    grid-template-rows: minmax(0, 1fr);
+    height: 100%;
+    position: relative;
+  }
+
+  /* ── Close ── */
+
+  /* One Close for both levels, pinned to the corner of the frame so scrolling never takes it. */
+  .close {
+    inset-block-start: var(--space-component);
+    inset-inline-end: var(--space-component);
+    position: absolute;
+    z-index: 1;
+  }
+
+  /* ── Navigation ── */
+
+  .nav {
+    border-inline-end: 1px solid var(--color-border-subtle);
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-related);
+    min-height: 0;
+    overflow-y: auto;
+    padding: var(--space-related) var(--space-component);
+  }
+
+  .navTitle {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-subhead);
+    font-weight: 600;
+    line-height: var(--line-height-control);
+    margin: 0;
+    padding-inline: var(--space-tight);
+  }
+
+  .group {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .groupLabel {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    font-weight: 600;
+    padding-block-end: var(--space-inline);
+    padding-inline: var(--space-tight);
+  }
+
+  .groupItems {
+    display: flex;
+    flex-direction: column;
+    gap: calc(var(--space-inline) / 2);
+  }
+
+  /* ── Page ── */
+
+  .pane {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    min-height: 0;
+    min-width: 0;
+    position: relative;
+  }
+
+  /* The title row clears the Close button, which sits over the pane's corner. */
+  .paneHeader {
+    align-items: center;
+    display: flex;
+    gap: var(--space-inline);
+    padding: var(--space-section) var(--space-section) 0;
+    padding-inline-end: calc(var(--control-hit-target) + 2 * var(--space-component));
+  }
+
+  .back {
+    display: none;
+  }
+
+  .paneTitle {
+    color: var(--color-text-primary);
+    flex: 1;
+    font-size: var(--font-size-subhead);
+    font-weight: 600;
+    line-height: var(--line-height-control);
+    margin: 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  /* A heading takes focus when a page opens; it is no control, so it draws no ring. */
+  .paneTitle:focus {
+    outline: none;
+  }
+
+  /* The scroller is also the containing block of what a page positions out of sight (a visually
+   * hidden status), so nothing a page draws can escape it and scroll the dialog around it. */
+  .paneBody {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: var(--space-inline) var(--space-section) var(--space-layout);
+    position: relative;
+    scrollbar-width: thin;
+  }
+
+  .description {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-detail);
+    line-height: var(--line-height-control);
+    margin: 0 0 var(--space-related);
+    padding-inline-end: var(--space-section);
+  }
+
+  /* Pages are elements of their own; the one that is not showing is hidden, never unmounted. */
+  .page {
+    display: block;
+    min-width: 0;
+  }
+
+  .page[hidden] {
+    display: none;
+  }
+
+  /* ── Phone: full screen, a section list, then a page ── */
+
+  @media (width <= 720px), (height <= 480px) {
+    .frame {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    /* Both levels start with a 3.5rem header row; the one Close sits in it. */
+    .close {
+      inset-block-start: calc((3.5rem - var(--control-hit-target)) / 2);
+      inset-inline-end: var(--space-tight);
+    }
+
+    .nav {
+      border-inline-end: 0;
+      gap: var(--space-related);
+      padding: var(--space-inline) var(--space-component) var(--space-layout);
+    }
+
+    .navTitle {
+      align-items: center;
+      display: flex;
+      min-height: calc(3.5rem - var(--space-inline));
+      padding-inline: var(--space-inline);
+    }
+
+    .group {
+      gap: var(--space-tight);
+    }
+
+    .groupLabel {
+      padding-block-end: 0;
+      padding-inline: var(--space-inline);
+    }
+
+    /* A group is one card of rows: the items turn into the list form, and the card clips them. */
+    .groupItems {
+      border: 1px solid var(--color-border-subtle);
+      border-radius: var(--radius-card);
+      gap: 0;
+      overflow: hidden;
+    }
+
+    .paneHeader {
+      border-block-end: 1px solid var(--color-border-subtle);
+      box-sizing: border-box;
+      min-height: 3.5rem;
+      padding: var(--space-inline) var(--space-tight);
+      padding-inline-end: calc(var(--control-hit-target) + var(--space-component));
+    }
+
+    .back {
+      color: var(--color-text-secondary);
+      display: inline-flex;
+    }
+
+    .paneBody {
+      padding: var(--space-related) var(--space-related) var(--space-layout);
+    }
+
+    /* The two levels: the list, or one page. */
+    .frame[data-level='list'] .pane,
+    .frame[data-level='page'] .nav {
+      display: none;
+    }
+
+    .description {
+      padding-inline-end: 0;
+    }
+  }
+}

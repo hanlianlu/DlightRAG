@@ -425,8 +425,9 @@ class AgentBrowserConfig(BaseModel):
     account_registration: bool = Field(
         default=True,
         description=(
-            "Whether the Agent may register on third-party sites and sign in with Agent "
-            "Accounts of its own (ADR 0034). False offers neither register nor login."
+            "Whether the Agent may register new Agent Accounts on third-party sites (ADR 0034). "
+            "False withdraws register alone: the Agent still logs in with the accounts its "
+            "owner has. An owner's own switch can only turn registration off further."
         ),
     )
 

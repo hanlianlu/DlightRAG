@@ -73,6 +73,46 @@ if (host) {
             <button class="dl-switch" type="button" role="switch" aria-checked="false" disabled
                     aria-label="Switch disabled specimen"></button>
             <textarea class="dl-dialog-input" rows="2" placeholder="Text input"></textarea>
+            <nav class="ds-nav" aria-label="Navigation item specimen">
+              <button class="dl-nav-item" type="button" aria-current="page">
+                <span class="dl-nav-item-icon">${icon('connections', {size: 'sm'})}</span>
+                <span class="dl-nav-item-text"><span class="dl-nav-item-label">Selected</span></span>
+                <span class="dl-nav-item-status">1/2</span>
+              </button>
+              <button class="dl-nav-item" type="button">
+                <span class="dl-nav-item-icon">${icon('agent-accounts', {size: 'sm'})}</span>
+                <span class="dl-nav-item-text"><span class="dl-nav-item-label">Idle</span></span>
+                <span class="dl-nav-item-status">3</span>
+              </button>
+            </nav>
+            <nav class="ds-list-card" aria-label="Navigation list form specimen">
+              <button class="dl-nav-item dl-nav-item--list" type="button">
+                <span class="dl-nav-item-icon">${icon('connections', {size: 'sm'})}</span>
+                <span class="dl-nav-item-text">
+                  <span class="dl-nav-item-label">Connections</span>
+                  <span class="dl-nav-item-detail">MCP · 1 of 2 enabled</span>
+                </span>
+                <span class="dl-nav-item-status" aria-hidden="true">1/2</span>
+                <span class="dl-nav-item-disclosure" aria-hidden="true">${icon('disclosure', {size: 'sm'})}</span>
+              </button>
+              <button class="dl-nav-item dl-nav-item--list" type="button">
+                <span class="dl-nav-item-icon">${icon('agent-accounts', {size: 'sm'})}</span>
+                <span class="dl-nav-item-text">
+                  <span class="dl-nav-item-label">Agent Accounts</span>
+                  <span class="dl-nav-item-detail">3 websites</span>
+                </span>
+                <span class="dl-nav-item-status" aria-hidden="true">3</span>
+                <span class="dl-nav-item-disclosure" aria-hidden="true">${icon('disclosure', {size: 'sm'})}</span>
+              </button>
+            </nav>
+            <div class="ds-list-card" role="radiogroup" aria-label="Choice row specimen">
+              <label class="dl-dialog-checkbox dl-dialog-checkbox--row">
+                <input type="radio" name="ds-choice" checked> Automatic
+              </label>
+              <label class="dl-dialog-checkbox dl-dialog-checkbox--row">
+                <input type="radio" name="ds-choice"> English
+              </label>
+            </div>
           </div>
         </section>
         <section class="ds-viewport ds-viewport--1440" aria-label="1440 pixel specimen">
@@ -81,6 +121,10 @@ if (host) {
             <button class="dl-btn" type="button">Standard</button>
             <button class="dl-btn" type="button" disabled>Disabled</button>
             <button class="dl-btn" id="ds-dialog-open" type="button">Open dialog</button>
+            <button class="dl-switch dl-switch--dense" type="button" role="switch" aria-checked="false"
+                    aria-label="Dense switch off specimen"></button>
+            <button class="dl-switch dl-switch--dense" type="button" role="switch" aria-checked="true"
+                    aria-label="Dense switch on specimen"></button>
           </div>
         </section>
       </div>

@@ -37,6 +37,7 @@ from unittest.mock import NonCallableMagicMock, create_autospec
 
 from dlightrag.application import Application
 from dlightrag.application.access import AccessControl, access_control_from_settings
+from dlightrag.application.agent_accounts import AgentAccounts
 from dlightrag.application.answer_runs import AnswerService
 from dlightrag.application.config import DlightragConfig
 from dlightrag.application.connections import Connections
@@ -55,6 +56,7 @@ _ANNOTATED_TYPES: dict[str, Any] = {
     service_type.__name__: service_type
     for service_type in (
         AccessControl,
+        AgentAccounts,
         AnswerService,
         ApplicationHealth,
         Connections,

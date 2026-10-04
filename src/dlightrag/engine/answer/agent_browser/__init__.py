@@ -3,6 +3,7 @@
 
 from dlightrag.engine.answer.agent_browser.accounts import (
     ACCOUNT_LABEL,
+    MAY_REGISTER_PIN,
     MIN_PASSWORD_LENGTH,
     PASSWORD_LENGTH,
     AgentAccount,
@@ -17,6 +18,7 @@ from dlightrag.engine.answer.agent_browser.accounts import (
     has_mailbox,
     owner_alias,
     reseal_agent_accounts,
+    run_agent_accounts,
     run_alias,
 )
 from dlightrag.engine.answer.agent_browser.contracts import (
@@ -61,7 +63,7 @@ from dlightrag.engine.answer.agent_browser.mailbox import (
     summarize_mail,
 )
 from dlightrag.engine.answer.agent_browser.passwords import PASSWORD_MASK, FilledPasswords
-from dlightrag.engine.answer.agent_browser.run import RunAgentBrowser
+from dlightrag.engine.answer.agent_browser.run import RunAgentBrowser, RunBrowsing
 
 __all__ = [
     "ACCOUNT_LABEL",
@@ -69,6 +71,7 @@ __all__ = [
     "INBOX_MESSAGE_BYTES",
     "MAX_DOWNLOADS_PER_CALL",
     "MAX_LISTED",
+    "MAY_REGISTER_PIN",
     "MIN_PASSWORD_LENGTH",
     "PASSWORD_LENGTH",
     "PASSWORD_MASK",
@@ -107,6 +110,7 @@ __all__ = [
     "RenderedPage",
     "RunAgentAccounts",
     "RunAgentBrowser",
+    "RunBrowsing",
     "SessionAccounts",
     "StoredAgentAccount",
     "UploadFile",
@@ -118,6 +122,7 @@ __all__ = [
     "owner_alias",
     "page_failure",
     "reseal_agent_accounts",
+    "run_agent_accounts",
     "run_alias",
     "summarize_mail",
 ]

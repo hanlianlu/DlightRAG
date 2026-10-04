@@ -43,3 +43,88 @@ export class StoreController implements ReactiveController {
         this.#release = [];
     }
 }
+
+/** Re-renders its host when a media query starts or stops matching. */
+export class MediaController implements ReactiveController {
+    readonly #host: ReactiveControllerHost;
+    readonly #query: string;
+    #list: MediaQueryList | null = null;
+
+    constructor(host: ReactiveControllerHost, query: string) {
+        this.#host = host;
+        this.#query = query;
+        host.addController(this);
+    }
+
+    /** Whether the query matches now, before the host connects as well as after. */
+    get matches(): boolean {
+        return (this.#list ?? window.matchMedia(this.#query)).matches;
+    }
+
+    hostConnected(): void {
+        this.#list = window.matchMedia(this.#query);
+        this.#list.addEventListener('change', this.#changed);
+    }
+
+    hostDisconnected(): void {
+        this.#list?.removeEventListener('change', this.#changed);
+        this.#list = null;
+    }
+
+    readonly #changed = (): void => { this.#host.requestUpdate(); };
+}
+
+/**
+ * Re-renders its host when the host becomes narrower or wider than a width: a container query
+ * for what only script can choose, such as which markup to draw. The host measures itself, so a
+ * page in a pane answers for the pane and not for the viewport, and `rem` follows the reader's
+ * text size. The host must be a box with a width (`display: block`). A host that is not showing
+ * has no width to measure and keeps its last answer, which is wide until it has been measured.
+ */
+export class NarrowController implements ReactiveController {
+    readonly #host: ReactiveControllerHost & HTMLElement;
+    readonly #rem: number;
+    #narrow = false;
+    #observer: ResizeObserver | null = null;
+    #frame = 0;
+
+    constructor(host: ReactiveControllerHost & HTMLElement, rem: number) {
+        this.#host = host;
+        this.#rem = rem;
+        host.addController(this);
+    }
+
+    /** Whether the host is narrower than the width it was given, as last measured. */
+    get narrow(): boolean {
+        return this.#narrow;
+    }
+
+    hostConnected(): void {
+        this.#measure();
+        this.#observer = new ResizeObserver(() => {
+            // Drawing the other layout resizes the host in the very frame that reported its width, and
+            // an observer that sees that loops; the next frame is the one to answer in.
+            cancelAnimationFrame(this.#frame);
+            this.#frame = requestAnimationFrame(() => {
+                if (this.#measure()) this.#host.requestUpdate();
+            });
+        });
+        this.#observer.observe(this.#host);
+    }
+
+    hostDisconnected(): void {
+        cancelAnimationFrame(this.#frame);
+        this.#observer?.disconnect();
+        this.#observer = null;
+    }
+
+    /** Take the host's width; whether the answer changed. */
+    #measure(): boolean {
+        const width = this.#host.clientWidth;
+        if (width === 0) return false;
+        const narrow = width < this.#rem * Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
+        const changed = narrow !== this.#narrow;
+        this.#narrow = narrow;
+        return changed;
+    }
+}

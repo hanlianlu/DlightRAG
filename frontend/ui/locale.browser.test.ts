@@ -3,15 +3,14 @@
 import {msg, updateWhenLocaleChanges} from '@lit/localize';
 import {expect} from '@esm-bundle/chai';
 import {LitElement, html} from 'lit';
-import './settings.ts';
-import type {DlSettingsDialog} from './settings.ts';
+import {memorySettings, mountSettings, openSettings, wire} from '../testing/settings.ts';
 import {
   getLocale,
   initializeLanguagePreference,
   setLanguagePreference,
 } from '../i18n/locale.ts';
 import {LANGUAGE_STORAGE_KEY} from '../lib/language.ts';
-import {waitFor} from '../testing/dom.ts';
+import {radioNamed, waitFor} from '../testing/dom.ts';
 
 class LocaleProbe extends LitElement {
   constructor() {
@@ -70,19 +69,27 @@ it('switching back restores source strings and clears the stored preference', as
 });
 
 it('settings language radios apply and persist the preference', async () => {
-  const settings = document.createElement('dl-settings-dialog') as DlSettingsDialog;
-  document.body.appendChild(settings);
-  await settings.updateComplete;
+  const originalFetch = window.fetch;
+  window.fetch = wire({'GET /web/api/memory/settings': () => memorySettings(false)}).fetch;
+  try {
+    const {settings} = mountSettings();
+    await openSettings(settings, 'language');
 
-  const radio = settings.querySelector<HTMLInputElement>(
-    '#language-options input[value="zh"]',
-  )!;
-  radio.checked = true;
-  radio.dispatchEvent(new Event('change'));
-  await waitFor(() => getLocale() === 'zh');
-  await settings.updateComplete;
+    const radio = radioNamed(settings, '中文')!;
+    radio.checked = true;
+    radio.dispatchEvent(new Event('change'));
+    await waitFor(() => getLocale() === 'zh');
+    await settings.updateComplete;
 
-  expect(window.localStorage.getItem(LANGUAGE_STORAGE_KEY)).to.equal('zh');
-  expect(getLocale()).to.equal('zh');
-  expect(document.documentElement.lang).to.equal('zh');
+    expect(window.localStorage.getItem(LANGUAGE_STORAGE_KEY)).to.equal('zh');
+    expect(getLocale()).to.equal('zh');
+    expect(document.documentElement.lang).to.equal('zh');
+    // The dialog speaks the new language at once, and the navigation says which one is chosen.
+    expect(settings.querySelector('#settings-title')!.textContent).to.equal('设置');
+    const language = settings.querySelector('nav [data-section="language"]')!;
+    await waitFor(() => language.textContent!.includes('中文'));
+    expect(language.textContent).to.contain('语言');
+  } finally {
+    window.fetch = originalFetch;
+  }
 });

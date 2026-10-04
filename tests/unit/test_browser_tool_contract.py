@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 from typing import Any
 
 import pytest
@@ -15,17 +17,19 @@ def parse(
     arguments: dict[str, Any],
     *,
     upload: bool = True,
-    accounts: bool = True,
+    may_register: bool = True,
     mailbox: bool = True,
 ) -> Any:
     """The arguments as the tool receives them, after the declared schema has validated them."""
-    declaration = browser_declaration(upload=upload, accounts=accounts, mailbox=mailbox)
+    declaration = browser_declaration(upload=upload, may_register=may_register, mailbox=mailbox)
     model: type[BaseModel] = declaration.input_model
     return model.model_validate(arguments)
 
 
-def properties(*, upload: bool, accounts: bool, mailbox: bool = False) -> dict[str, Any]:
-    declaration = browser_declaration(upload=upload, accounts=accounts, mailbox=mailbox)
+def properties(
+    *, upload: bool = True, may_register: bool = True, mailbox: bool = False
+) -> dict[str, Any]:
+    declaration = browser_declaration(upload=upload, may_register=may_register, mailbox=mailbox)
     return declaration.definition.parameters["properties"]
 
 
@@ -84,24 +88,43 @@ def test_a_narrower_tool_refuses_what_only_a_wider_one_offers() -> None:
 
 
 @pytest.mark.parametrize("upload", [False, True])
-def test_agent_accounts_add_their_fields_and_their_action_lines_to_the_schema(
+def test_the_account_fields_are_every_browsers_and_the_register_line_is_a_registering_runs(
     upload: bool,
 ) -> None:
-    plain, accounting = (properties(upload=upload, accounts=on) for on in (False, True))
+    registering, login_only = (properties(upload=upload, may_register=on) for on in (True, False))
 
-    assert set(accounting) - set(plain) == {"password_refs", "email_ref", "username_ref"}
+    assert {"password_refs", "email_ref", "username_ref"} <= set(login_only) == set(registering)
     assert (
-        "register (password_refs, email_ref, username_ref)" in accounting["action"]["description"]
+        "register (password_refs, email_ref, username_ref)" in registering["action"]["description"]
     )
-    assert "register" not in plain["action"]["description"]
+    assert "register" not in login_only["action"]["description"]
 
 
 def test_an_agent_mailbox_adds_the_inbox_line_and_no_field() -> None:
-    plain, mailing = (properties(upload=True, accounts=True, mailbox=on) for on in (False, True))
+    plain, mailing = (properties(mailbox=on) for on in (False, True))
 
     assert set(mailing) == set(plain)
     assert "inbox: mail to this session's mailbox aliases" in mailing["action"]["description"]
     assert "inbox" not in plain["action"]["description"]
+
+
+def test_a_run_that_cannot_register_is_never_told_of_register() -> None:
+    declaration = browser_declaration(upload=True, may_register=False, mailbox=True)
+    shown = declaration.description + json.dumps(declaration.definition.parameters)
+
+    # Neither the description nor any line of the schema names an action the Run does not have;
+    # the inbox, which a registration would also open, names the login alone.
+    assert re.search(r"register", shown, re.IGNORECASE) is None
+    assert "since its latest login:" in shown
+    assert "login: the ref of the email field." in shown
+    # A call of it anyway is refused as no action of the tool, and login is every Run's.
+    with pytest.raises(ValidationError, match="Input should be"):
+        parse({"action": "register", "password_refs": ["e1"]}, may_register=False)
+    assert parse({"action": "login", "password_refs": ["e1"]}, may_register=False).action == "login"
+    # A Run that may register is told of both, and that its registration lasts only for the Run.
+    allowed = browser_declaration(upload=True, may_register=True, mailbox=True)
+    assert "since its latest register or login:" in json.dumps(allowed.definition.parameters)
+    assert "register fills the Agent's mailbox alias" in json.dumps(allowed.definition.parameters)
 
 
 def test_a_registration_names_the_fields_it_fills_and_a_login_may_name_any_of_them() -> None:
@@ -130,7 +153,7 @@ def test_typed_text_keeps_its_spaces_and_can_clear_a_field_while_a_query_is_trim
 
 
 def test_the_description_teaches_the_tiers_and_the_captcha_boundary() -> None:
-    description = browser_declaration(upload=False, accounts=False, mailbox=False).description
+    description = browser_declaration(upload=False, may_register=False, mailbox=False).description
 
     assert "rendered=true" in description
     assert "use browser only for interaction" in description
@@ -139,15 +162,36 @@ def test_the_description_teaches_the_tiers_and_the_captcha_boundary() -> None:
     assert not any(character.isdigit() for character in description.replace("[ref=eN]", ""))
 
 
-def test_a_run_with_agent_accounts_is_told_whose_identity_it_acts_as_and_who_makes_passwords() -> (
-    None
-):
-    plain = browser_declaration(upload=False, accounts=False, mailbox=False).description
-    accounting = browser_declaration(upload=False, accounts=True, mailbox=True).description
+def test_a_run_is_told_whose_identity_it_acts_as_and_who_makes_passwords() -> None:
+    accounting, login_only = (
+        browser_declaration(upload=False, may_register=may_register, mailbox=True).description
+        for may_register in (True, False)
+    )
 
-    assert accounting.startswith(plain) and len(accounting) > len(plain)
+    assert "register and login act as the Agent's own identity" in accounting
     assert "never type the owner's email address, name, password" in accounting
     assert "you never see or type one" in accounting
     assert "A Child Session's registration lasts only for this Run" in accounting
-    assert "register and login" not in plain
-    assert not any(character.isdigit() for character in accounting.replace("[ref=eN]", ""))
+    # A Run that can only log in is told whose identity that is, and nothing of registering.
+    assert "login acts as the Agent's own identity" in login_only
+    assert "never type the owner's email address, name, password" in login_only
+    assert "you never see or type one" in login_only
+    assert "registration" not in login_only
+    for description in (accounting, login_only):
+        assert not any(character.isdigit() for character in description.replace("[ref=eN]", ""))
+
+
+def test_a_run_that_cannot_register_is_told_not_to_make_an_account_by_hand() -> None:
+    registering, login_only = (
+        browser_declaration(upload=False, may_register=may_register, mailbox=False).description
+        for may_register in (True, False)
+    )
+
+    # Without register the page and its forms are still the model's, so the description says
+    # what the missing action does not: this Run opens no account, by hand either.
+    assert login_only.endswith(
+        "This Run does not open new accounts, so never create an account on any site by filling "
+        "a sign-up form yourself."
+    )
+    # A Run that registers through the tool has no such sentence.
+    assert "sign-up form" not in registering

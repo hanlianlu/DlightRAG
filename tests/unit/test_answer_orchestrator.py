@@ -508,6 +508,29 @@ def test_every_child_of_a_run_with_an_agent_browser_holds_the_browser_tool_unles
     assert _child_tools(orchestrator, tools=["browser"]) == {"browser", "ask_parent"}
 
 
+@pytest.mark.parametrize("registration", [True, False])
+def test_a_child_may_register_exactly_where_its_run_may_and_always_logs_in(
+    tmp_path: Path, registration: bool
+) -> None:
+    """A Child's browser is its Run's, so the switch the Run was accepted with reaches it."""
+    orchestrator = _research_owner_with_subagents(
+        tmp_path, browser=inert_browser_host(may_register=registration)
+    )
+
+    parent, child = (
+        {tool.name: tool for tool in tools}["browser"].definition.parameters["properties"][
+            "action"
+        ]["enum"]
+        for tools in (
+            orchestrator.prepare_run("question").tools,
+            _prepared_child(orchestrator).tools,
+        )
+    )
+
+    assert ("register" in child, "login" in child) == (registration, True)
+    assert set(child) == set(parent)
+
+
 def test_an_explicit_tool_list_narrows_a_child_and_restores_nothing(tmp_path: Path) -> None:
     """`tools` only narrows: a name the Run does not offer or a Child may never hold is left out."""
     from dlightrag.engine.answer.tools.composition import CHILD_FORBIDDEN_TOOLS

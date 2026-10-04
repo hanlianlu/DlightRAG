@@ -1,6 +1,6 @@
 /* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
 
-/* The shared control primitives: buttons, checkboxes, dialogs, drawers.
+/* The shared control primitives: buttons, checkboxes, switches, navigation items, dialogs.
 
  * Every model-visible control ships from this file. Adding a new control
  * without a primitive here (or a variant below) is a bug, not a choice.
@@ -105,8 +105,8 @@ a.dl-btn {
 /* === Switch === */
 
 /* Applied to a native <button role="switch" aria-checked="true|false">. The product owns the
- * state and the accessible name; the primitive owns the track, the thumb, the motion, and the
- * focus ring. Geometry stays symmetric through the two foundation invariants:
+ * state and the accessible name; the primitive owns the track, the thumb, the motion, the hit
+ * area, and the focus ring. Geometry stays symmetric through the two foundation invariants:
  * height = thumb + 2 * inset, and width = thumb + 2 * inset + travel. */
 
 .dl-switch {
@@ -121,9 +121,19 @@ a.dl-btn {
     block-size: var(--size-switch-height);
     inline-size: var(--size-switch-width);
     padding: 0;
+    position: relative;
     transition:
         background var(--duration-control) var(--easing-standard),
         border-color var(--duration-control) var(--easing-standard);
+}
+
+/* The control is as easy to hit as the control ladder says (--control-hit-target) however small the
+ * track is drawn: an invisible extension of the button itself, so a tap beside the track still
+ * turns it. Each side reaches out by half of what the track lacks, and a larger track keeps its own. */
+.dl-switch::before {
+    content: '';
+    inset: min(0px, calc((100% - var(--control-hit-target)) / 2));
+    position: absolute;
 }
 
 /* The 1px border sits outside the padding box, so the thumb inset loses exactly one pixel. */
@@ -163,22 +173,18 @@ a.dl-btn {
     border-color: var(--color-control-border-hover);
 }
 
-/* Compact variant for dense rows: apply it beside the base class (`dl-switch dl-switch--sm`).
- * Same geometry invariants one icon step down, so it only rescales the track and thumb and keeps
- * every state rule identical. */
-.dl-switch--sm {
-    block-size: var(--size-switch-sm-height);
-    inline-size: var(--size-switch-sm-width);
-}
-
-.dl-switch--sm::after {
-    block-size: var(--size-switch-sm-thumb);
-    inline-size: var(--size-switch-sm-thumb);
-    margin-inline-start: calc(var(--size-switch-sm-inset) - 1px);
-}
-
-.dl-switch--sm[aria-checked='true']::after {
-    transform: translateX(var(--size-switch-sm-travel));
+/* Dense variant for rows beside a pointer: `dl-switch dl-switch--dense` is the compact switch, one
+ * icon step down with the same two invariants, and it is the regular switch where a finger is the
+ * pointer (the phone layout). It only rebinds the geometry the base rules already read, so no
+ * state rule is written twice. */
+@media (width > 720px) and (height > 480px) {
+    .dl-switch--dense {
+        --size-switch-height: var(--size-switch-sm-height);
+        --size-switch-inset: var(--size-switch-sm-inset);
+        --size-switch-thumb: var(--size-switch-sm-thumb);
+        --size-switch-travel: var(--size-switch-sm-travel);
+        --size-switch-width: var(--size-switch-sm-width);
+    }
 }
 
 @media (forced-colors: active) {
@@ -200,6 +206,121 @@ a.dl-btn {
     }
 }
 
+
+/* === Navigation item === */
+
+/* A native <button> inside a <nav>: an icon, a label, and a short trailing status. The item whose
+ * page is showing carries aria-current="page" and the selected-row tint. The same row has a list
+ * form (`dl-nav-item dl-nav-item--list`) for a screen that shows the navigation as a page of its
+ * own: the full status line under the label and a disclosure, instead of the short status. The
+ * detail line stays in the tree in both forms, so the row's description never depends on its form. */
+
+.dl-nav-item {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius-control);
+    color: var(--color-text-muted);
+    cursor: pointer;
+    display: flex;
+    font: inherit;
+    font-size: var(--font-size-detail);
+    gap: var(--space-tight);
+    min-height: var(--size-button);
+    padding-block: 0;
+    padding-inline: var(--space-tight);
+    text-align: start;
+    transition:
+        background var(--duration-control) var(--easing-standard),
+        color var(--duration-control) var(--easing-standard);
+    width: 100%;
+}
+
+.dl-nav-item:hover {
+    background: var(--color-bg-hover);
+    color: var(--color-text-primary);
+}
+
+.dl-nav-item[aria-current='page'],
+.dl-nav-item[aria-current='page']:hover {
+    background: var(--color-selected-row);
+    color: var(--color-text-primary);
+}
+
+/* The row ring sits inside the item: the nav column clips what a ring outside it would draw. */
+.dl-nav-item:focus-visible {
+    outline: 2px solid var(--focus-ring-color);
+    outline-offset: -2px;
+}
+
+@media (forced-colors: active) {
+    /* Forced colors drop the tint, so the page that is showing says so with the system highlight. */
+    .dl-nav-item[aria-current='page'] {
+        background: Highlight;
+        color: HighlightText;
+    }
+}
+
+.dl-nav-item-icon {
+    display: flex;
+    flex: none;
+}
+
+.dl-nav-item-text {
+    display: grid;
+    flex: 1;
+    min-width: 0;
+}
+
+.dl-nav-item-label {
+    line-height: var(--line-height-control);
+    overflow-wrap: anywhere;
+}
+
+.dl-nav-item-detail {
+    color: var(--color-text-muted);
+    display: none;
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+}
+
+.dl-nav-item-status {
+    color: var(--color-text-muted);
+    flex: none;
+    font-size: var(--font-size-caption);
+}
+
+.dl-nav-item-disclosure {
+    color: var(--color-text-subtle);
+    display: none;
+    flex: none;
+}
+
+/* The row as an entry of a bordered list: the list owns the outer border and clips its corners, so
+ * the row is square, takes the list's text colour, and sits on a hairline under the row before it. */
+.dl-nav-item--list {
+    border-radius: 0;
+    color: inherit;
+    gap: var(--space-component);
+    padding-block: var(--space-tight);
+    padding-inline: var(--space-component);
+}
+
+.dl-nav-item--list + .dl-nav-item--list {
+    border-block-start: 1px solid var(--color-border-subtle);
+}
+
+.dl-nav-item--list .dl-nav-item-detail {
+    display: block;
+}
+
+.dl-nav-item--list .dl-nav-item-disclosure {
+    display: flex;
+}
+
+.dl-nav-item--list .dl-nav-item-status {
+    display: none;
+}
 
 /* === Confirm Dialog === */
 
@@ -247,6 +368,22 @@ a.dl-btn {
 label.dl-dialog-checkbox:has(input:focus-visible) {
     outline: 2px solid var(--color-control-ring);
     outline-offset: 2px;
+}
+
+/* A choice row inside a bordered card: the card owns the outer spacing and clips to its own
+ * radius, so the row drops the inset margins and rounding, the hover tint runs edge to edge,
+ * and the keyboard ring sits inside the row instead of outside the clip. */
+.dl-dialog-checkbox--row {
+    border-radius: 0;
+    font-size: var(--font-size-detail);
+    gap: var(--space-component);
+    margin: 0;
+    padding-block: var(--space-tight);
+    padding-inline: var(--space-component);
+}
+
+label.dl-dialog-checkbox--row:has(input:focus-visible) {
+    outline-offset: -2px;
 }
 
 

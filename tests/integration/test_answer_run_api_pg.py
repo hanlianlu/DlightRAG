@@ -44,6 +44,7 @@ from dlightrag.engine.ai.settings import (
     ModelSettings,
 )
 from dlightrag.engine.answer.capabilities import AnswerCapabilities, RequestModelContext
+from tests.support.agent_browser import never_registers
 from tests.support.application_double import application_double, delegate
 from tests.support.pg import PG_CONN_KWARGS, drop_database, skip_without_postgres
 
@@ -237,6 +238,7 @@ def _store_backed_application(
         resources=cast(Any, _Resources()),
         model_invocation_fingerprint_for_role=_fingerprint,
         bind_research=bind_research,
+        agent_may_register=never_registers,
         child_roster_cursor_secret=b"answer-run-api-child-roster-test",
     )
     return application

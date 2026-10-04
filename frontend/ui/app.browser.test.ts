@@ -686,13 +686,17 @@ it('signs out the whole page when a Feature request meets a 401, with no failure
   }
 });
 
-it('opens Connections after the fixed OAuth return without starting authorization', async () => {
+it('opens Settings on its Connections page after the fixed OAuth return, without starting authorization', async () => {
   const previous = window.location.href;
   const writes: string[] = [];
   window.history.replaceState(null, '', '?settings=connections&authorization=restart');
   window.fetch = async (input, init) => {
     if (init?.method && init.method !== 'GET') writes.push(String(input));
     if (String(input) === '/web/api/connections/mcp') return response({revision: '0', connections: [], presets: []});
+    if (String(input) === '/web/api/agent-accounts') {
+      return response({available: true, registration: {allowed: true, enabled: true}, accounts: []});
+    }
+    if (String(input) === '/web/api/memory/settings') return response({enabled: false, active_count: null});
     return bootstrapResponse(input);
   };
   try {
@@ -700,11 +704,15 @@ it('opens Connections after the fixed OAuth return without starting authorizatio
     document.body.append(app);
     await app.ready;
     await waitFor(() => Boolean(app.querySelector('dl-settings-connections')));
-    expect(app.querySelector<DlSettingsDialog>('dl-settings-dialog')!.showConnections).to.equal(true);
-    // The return path lands on the Connections surface with the MCP group already open; the
-    // failed grant reports itself inside the affected card, not as a drawer-level banner.
-    const surface = app.querySelector('dl-settings-connections')!;
-    await waitFor(() => surface.querySelector('[data-connections-root]')?.getAttribute('aria-expanded') === 'true');
+    const settings = app.querySelector<DlSettingsDialog>('dl-settings-dialog')!;
+    await waitFor(() => settings.querySelector<HTMLDialogElement>('#settings-dialog')?.open === true);
+
+    // The return path lands on the Connections page itself; a failed grant reports itself inside
+    // the affected card, not as a dialog-level banner, and nothing is written.
+    const current = [...settings.querySelectorAll<HTMLElement>('nav [aria-current="page"]')];
+    expect(current.map((item) => item.dataset.section)).to.deep.equal(['connections']);
+    expect(settings.querySelector<HTMLElement>('dl-settings-connections')!.hidden).to.equal(false);
+    expect(settings.querySelector('[role="region"]')?.textContent).to.contain('External MCP servers');
     expect(writes).to.deep.equal([]);
     expect(window.location.search).not.to.contain('settings=');
     expect(window.location.search).not.to.contain('authorization=');

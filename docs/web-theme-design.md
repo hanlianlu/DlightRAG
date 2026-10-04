@@ -190,6 +190,51 @@ Escape, and focus restoration remain native DlightRAG behavior. At phone widths
 the active panel becomes full bleed. External Drawer and Dialog components remain
 rejected; existing native overlays keep these geometry rules.
 
+## Settings
+
+Settings is one native modal, `<dialog id="settings-dialog">`, owned by `dl-settings-dialog`: a navigation
+column beside the one page it opens. The dialog owns what every page shares (opening and closing, focus,
+which page shows, and the title, description and notices around it); each page is an element of its own
+that owns its data and reports a short summary for its navigation row.
+
+- **Geometry.** Desktop is `min(880px, 100vw - 2 * --space-layout)` wide and
+  `min(640px, 100dvh - 2 * --space-layout)` high. The height is fixed, so no page resizes the dialog.
+  It takes `--radius-dialog`, a hairline `--color-border-subtle` border, `--shadow-overlay`,
+  `--color-bg-surface` and the shared scrim. The navigation column is 15rem (240px) wide, wide enough
+  for "Conversation Sessions" and a count on one line, and a hairline sets it off from the page.
+  Docked surfaces inside the dialog (the navigation, the pages, their cards) cast no shadow: the dialog
+  is the one overlapping surface, and the notice is the one thing that floats over it, as a toast.
+- **Navigation.** `<nav aria-label="Settings">` holds three labelled groups: Agent (Connections, Agent
+  Accounts, Profile Memory), Data (Conversation Sessions), and General (Language). Each item is a native
+  `.dl-nav-item` button with an icon, its label, and a short status (`1/2`, `3`, `5`, `18`; none for
+  Language or for Memory while it is off). The page that is showing has `aria-current="page"` and the
+  `--color-selected-row` tint; a dialog that is closed marks none. ArrowUp, ArrowDown, Home and End move
+  focus among the items through `rovingFocusKeydown`, and Enter or Space opens one. The page pane is a
+  region named by its heading, and a page that is not showing is `hidden`, not unmounted.
+- **Pages.** A page is a column of cards: `--radius-card`, a 1px `--color-border-subtle` border, rows
+  separated by the same hairline. A switch card is its switch's label, so a tap anywhere on it turns the
+  switch. A destructive action is a `.dl-btn.dl-btn-danger-text` button in its own card. A notice is the
+  app's toast (`.toast`, with its shadow and its Undo) in a region the dialog owns, because the shell's
+  region would sit under the scrim. It sits outside the page pane, so a Memory change shows wherever the
+  reader is, including a phone's section list. Agent Accounts is a table of websites where its page is at
+  least 36rem wide and three-line rows (the website, how it signs in, when it last did) where it is
+  narrower; the page measures its own width, so a narrow window and a phone get the same rows.
+- **Text.** Small text is `--color-text-muted` or stronger: `--color-text-subtle` reads at 3.65 to 1 on the
+  dark surface and 3.82 to 1 on the light one, below the 4.5 to 1 that small text needs, so group labels,
+  statuses and column headings keep their rank through size and weight instead. A browser check measures
+  every word of every page against what is painted under it, in both themes.
+- **Controls.** Icon buttons are `dl-icon-button`. Inside the dialog the control ladder sets
+  `--control-hit-target: var(--size-button)`, so they are compact beside a pointer and 44px under 1200px.
+  Switches are `dl-switch--dense`: the compact track on desktop and the regular 40 by 24 on a phone,
+  with a hit area of the same ladder size either way.
+- **Phone.** At `(width <= 720px), (height <= 480px)` the dialog fills the screen with square corners and
+  becomes two levels: a section list (each row shows its icon, name, a status line such as "MCP · 1 of 2
+  enabled", and a disclosure), then one page whose header holds Back, the page title and Close. The list
+  is the first level unless a page is named, and Back returns focus to the row of the page it left. Every
+  control a finger meets is at least 44px.
+- **Focus.** Opening focuses the current navigation item (the first list row on a phone). Closing returns
+  focus to the control that opened Settings. Escape closes, as for any native dialog.
+
 ## Rich Content
 
 ### Pygments

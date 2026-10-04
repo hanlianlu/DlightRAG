@@ -114,6 +114,7 @@ it('assigns geometry by surface role rather than component size', () => {
   expect(radius('panel')).to.equal('0px');
   expect(radius('dl-popover')).to.equal('18px');
   expect(radius('workspace-dialog')).to.equal('22px');
+  expect(radius('settings-dialog')).to.equal('22px');
   expect(radius('composer-form')).to.equal('24px');
   const app = element('app');
   expect(getComputedStyle(app).borderRadius).to.equal('0px');
