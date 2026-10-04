@@ -490,11 +490,14 @@ class AgentMailboxConfig(BaseModel):
         default=None,
         description="The bucket's S3 endpoint. Unset, AWS S3's own endpoint for the region.",
     )
-    region: str = Field(
-        default="auto",
+    region: str | None = Field(
+        default=None,
         min_length=1,
         max_length=64,
-        description="The bucket's region; Cloudflare R2's is auto.",
+        description=(
+            "The bucket's region as its endpoint names it, such as us-east-1 on AWS S3 or auto "
+            "on Cloudflare R2. Unset, the AWS SDK resolves it as it does for any S3 client."
+        ),
     )
     bucket: str | None = Field(
         default=None,
@@ -516,7 +519,13 @@ class AgentMailboxConfig(BaseModel):
     secret_access_key: str | None = Field(default=None, repr=False)
 
     @field_validator(
-        "endpoint", "bucket", "alias_domain", "access_key_id", "secret_access_key", mode="before"
+        "endpoint",
+        "region",
+        "bucket",
+        "alias_domain",
+        "access_key_id",
+        "secret_access_key",
+        mode="before",
     )
     @classmethod
     def _blank_is_unset(cls, value: Any) -> Any:
@@ -528,7 +537,15 @@ class AgentMailboxConfig(BaseModel):
     @model_validator(mode="after")
     def _a_bucket_comes_with_what_reads_it(self) -> Self:
         if self.bucket is None:
-            if any((self.endpoint, self.alias_domain, self.access_key_id, self.secret_access_key)):
+            if any(
+                (
+                    self.endpoint,
+                    self.region,
+                    self.alias_domain,
+                    self.access_key_id,
+                    self.secret_access_key,
+                )
+            ):
                 raise ValueError("answer.agent.mailbox settings require bucket")
         elif not (self.alias_domain and self.access_key_id and self.secret_access_key):
             raise ValueError(

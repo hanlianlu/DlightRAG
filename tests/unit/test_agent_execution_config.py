@@ -252,7 +252,7 @@ _MAILBOX = {
 def test_without_a_bucket_there_is_no_agent_mailbox() -> None:
     mailbox = AgentMailboxConfig()
 
-    assert (mailbox.enabled, mailbox.region, mailbox.prefix) == (False, "auto", "mail")
+    assert (mailbox.enabled, mailbox.region, mailbox.prefix) == (False, None, "mail")
     assert AgentExecutionConfig().mailbox == mailbox
 
 
@@ -271,6 +271,7 @@ def test_a_bucket_comes_with_the_domain_and_the_keys_that_read_it() -> None:
     ("setting", "value"),
     [
         ("endpoint", "https://account.r2.cloudflarestorage.com"),
+        ("region", "us-east-1"),
         ("alias_domain", "orliantra.cc"),
         ("access_key_id", "fixture-key-id"),
         ("secret_access_key", "fixture-secret-key"),
@@ -290,7 +291,7 @@ def test_mailbox_settings_without_a_bucket_are_refused(setting: str, value: str)
         ("alias_domain", "Mail.Example.com"),
         ("prefix", "/mail"),
         ("prefix", "a//b"),
-        ("region", ""),
+        ("region", "r" * 65),
         ("endpoint", "https://user:secret@account.r2.cloudflarestorage.com"),
     ],
 )
@@ -300,12 +301,24 @@ def test_a_mailbox_value_outside_what_it_names_is_refused(setting: str, value: s
 
 
 def test_a_blank_mailbox_variable_is_an_unset_setting(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("ENDPOINT", "BUCKET", "ALIAS_DOMAIN", "ACCESS_KEY_ID", "SECRET_ACCESS_KEY"):
+    for name in (
+        "ENDPOINT",
+        "REGION",
+        "BUCKET",
+        "ALIAS_DOMAIN",
+        "ACCESS_KEY_ID",
+        "SECRET_ACCESS_KEY",
+    ):
         monkeypatch.setenv(f"DLIGHTRAG_ANSWER__AGENT__MAILBOX__{name}", "")
 
     mailbox = DlightragConfig().answer.agent.mailbox  # pyright: ignore[reportCallIssue]
 
-    assert (mailbox.enabled, mailbox.endpoint, mailbox.alias_domain) == (False, None, None)
+    assert (mailbox.enabled, mailbox.endpoint, mailbox.region, mailbox.alias_domain) == (
+        False,
+        None,
+        None,
+        None,
+    )
 
 
 def test_the_agent_mailbox_is_bound_through_the_environment_and_its_keys_never_render(
@@ -323,10 +336,17 @@ def test_the_agent_mailbox_is_bound_through_the_environment_and_its_keys_never_r
     config = DlightragConfig()  # pyright: ignore[reportCallIssue]
     mailbox = config.answer.agent.mailbox
 
-    assert (mailbox.bucket, mailbox.alias_domain, mailbox.endpoint, mailbox.prefix) == (
+    assert (
+        mailbox.bucket,
+        mailbox.alias_domain,
+        mailbox.endpoint,
+        mailbox.region,
+        mailbox.prefix,
+    ) == (
         "agent-mail",
         "orliantra.cc",
         "https://account.r2.cloudflarestorage.com",
+        "auto",
         "inbound",
     )
     rendered = f"{config!r} {config} {config.model_dump()} {mailbox!r}"

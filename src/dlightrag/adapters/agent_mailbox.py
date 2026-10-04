@@ -39,7 +39,7 @@ class S3AgentMailbox:
         bucket: str,
         prefix: str,
         endpoint: str | None,
-        region: str,
+        region: str | None,
         access_key_id: str,
         secret_access_key: str,
     ) -> None:
@@ -49,7 +49,6 @@ class S3AgentMailbox:
         self._session = AioSession()
         self._client_options: dict[str, Any] = {
             "endpoint_url": endpoint,
-            "region_name": region,
             "aws_access_key_id": access_key_id,
             "aws_secret_access_key": secret_access_key,
             "config": Config(
@@ -58,6 +57,9 @@ class S3AgentMailbox:
                 retries={"max_attempts": 2, "mode": "standard"},
             ),
         }
+        # Unset, the SDK resolves the region as it does for any S3 client.
+        if region is not None:
+            self._client_options["region_name"] = region
 
     async def messages(
         self, address: str, *, since: datetime, limit: int, max_bytes: int

@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 from pydantic import SecretStr
@@ -166,13 +169,13 @@ def stored(minutes_ago: float, body: bytes = b"mail") -> StoredObject:
     return StoredObject(body, NOW - timedelta(minutes=minutes_ago))
 
 
-def mailbox(endpoint: str, *, prefix: str = "mail") -> S3AgentMailbox:
+def mailbox(endpoint: str, *, prefix: str = "mail", region: str | None = "auto") -> S3AgentMailbox:
     return S3AgentMailbox(
         alias_domain="orliantra.cc",
         bucket="mailbox",
         prefix=prefix,
         endpoint=endpoint,
-        region="auto",
+        region=region,
         access_key_id="fixture-key",
         secret_access_key="fixture-secret",
     )
@@ -183,7 +186,10 @@ def _no_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
     bypass_proxies(monkeypatch)
 
 
-async def test_an_alias_is_read_from_its_own_prefix_newest_first_since_the_window() -> None:
+@pytest.mark.parametrize("region", ["auto", None])
+async def test_an_alias_is_read_from_its_own_prefix_newest_first_since_the_window(
+    region: str | None,
+) -> None:
     alias, other = "a1@orliantra.cc", "b2@orliantra.cc"
     objects = {
         f"mail/{alias}/old.eml": stored(60, b"too old"),
@@ -193,7 +199,7 @@ async def test_an_alias_is_read_from_its_own_prefix_newest_first_since_the_windo
         f"mail/{other}/other.eml": stored(1, b"someone else's"),
     }
     async with s3_stub(objects) as stub:
-        mail = mailbox(stub.endpoint)
+        mail = mailbox(stub.endpoint, region=region)
 
         listing = await mail.messages(
             alias, since=NOW - timedelta(minutes=20), limit=2, max_bytes=1000
@@ -207,6 +213,32 @@ async def test_an_alias_is_read_from_its_own_prefix_newest_first_since_the_windo
         # It listed one alias's folder, read only what it shows, and touched nothing else.
         assert stub.listed == [f"mail/{alias}/"]
         assert sorted(stub.fetched) == [f"mail/{alias}/second.eml", f"mail/{alias}/third.eml"]
+
+
+async def test_the_client_is_given_a_region_only_when_one_is_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    built: list[dict[str, Any]] = []
+
+    class Client:
+        async def list_objects_v2(self, **_: Any) -> dict[str, Any]:
+            return {}
+
+    class Session:
+        @asynccontextmanager
+        async def create_client(self, service: str, **options: Any) -> AsyncIterator[Client]:
+            built.append({"service": service, **options})
+            yield Client()
+
+    monkeypatch.setattr("dlightrag.adapters.agent_mailbox.AioSession", Session)
+
+    for region in (None, "us-east-1"):
+        await mailbox("http://127.0.0.1:9", region=region).messages(
+            "a1@orliantra.cc", since=NOW, limit=5, max_bytes=1000
+        )
+
+    assert ["region_name" in options for options in built] == [False, True]
+    assert built[1]["region_name"] == "us-east-1"
 
 
 async def test_a_message_over_the_size_asked_is_listed_and_never_fetched() -> None:

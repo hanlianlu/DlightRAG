@@ -967,7 +967,7 @@ answer:
   agent:
     mailbox:
       endpoint: null        # DLIGHTRAG_ANSWER__AGENT__MAILBOX__ENDPOINT; null is AWS S3's own
-      region: auto          # DLIGHTRAG_ANSWER__AGENT__MAILBOX__REGION; Cloudflare R2's is auto
+      region: null          # DLIGHTRAG_ANSWER__AGENT__MAILBOX__REGION; null is the SDK's own resolution
       bucket: null          # DLIGHTRAG_ANSWER__AGENT__MAILBOX__BUCKET
       prefix: mail          # DLIGHTRAG_ANSWER__AGENT__MAILBOX__PREFIX
       alias_domain: null    # DLIGHTRAG_ANSWER__AGENT__MAILBOX__ALIAS_DOMAIN
@@ -987,10 +987,14 @@ Mailbox, and an Agent Mailbox needs [Agent Accounts](#agent-browser) to be on.
   `config.yaml` keeps its endpoint, bucket, and alias domain in `.env` as well, as it keeps its
   access policy.
 - Naming a `bucket` requires `alias_domain` and both keys, and without a bucket none of
-  `endpoint`, `alias_domain`, or the keys may be set; startup refuses either mistake and names
-  the setting. A blank variable in `.env` is an unset setting. `bucket` is a valid S3 bucket
-  name, `prefix` is slash-separated segments of `A-Za-z0-9._-` or empty, and `alias_domain`
-  is a lower-case domain with at least two labels.
+  `endpoint`, `region`, `alias_domain`, or the keys may be set; startup refuses either mistake
+  and names the setting. A blank variable in `.env` is an unset setting. `bucket` is a valid
+  S3 bucket name, `prefix` is slash-separated segments of `A-Za-z0-9._-` or empty, and
+  `alias_domain` is a lower-case domain with at least two labels.
+- `region` is the bucket's region as its endpoint names it, such as `us-east-1` on AWS S3 or
+  `auto` on Cloudflare R2. It has no default: unset, the SDK resolves the region as it does
+  for any S3 client, from its usual environment and profile, and an unset `endpoint` is AWS
+  S3's own.
 - `alias_domain` is the domain the Agent's addresses are minted on, which the deployment's
   mail routing must deliver. An address is the same for one owner and site in every Run.
 - **The bucket's contract is its layout.** Each message is written whole, as one object, under
