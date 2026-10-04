@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Browser coverage for the Settings dialog: its navigation, its phone layout, and Agent Accounts."""
 
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlparse
 
@@ -87,10 +88,12 @@ def _install_memory_routes(
 
 
 def _install_busy_settings_routes(page: Page) -> None:
-    """Connections with presets, and Profile Memory on with a next page, so every page has controls."""
+    """Connections with presets and one that is failing, and Profile Memory on with a next page."""
 
     def connections(route: Route) -> None:
-        def connection(connection_id: str, label: str, authentication: str, enabled: bool) -> Any:
+        def connection(
+            connection_id: str, label: str, authentication: str, enabled: bool, status: str
+        ) -> Any:
             return {
                 "connection_id": connection_id,
                 "label": label,
@@ -100,7 +103,7 @@ def _install_busy_settings_routes(page: Page) -> None:
                 "generation": 1,
                 "authentication": authentication,
                 "authorization_status": None,
-                "status": "ready" if enabled else "disabled",
+                "status": status,
             }
 
         route.fulfill(
@@ -121,8 +124,9 @@ def _install_busy_settings_routes(page: Page) -> None:
                     },
                 ],
                 "connections": [
-                    connection("notion", "Notion", "oauth", True),
-                    connection("wiki", "Team wiki", "none", False),
+                    connection("notion", "Notion", "oauth", True, "ready"),
+                    # Enabled but not answering, so its card opens on the alert that says so.
+                    connection("wiki", "Team wiki", "none", True, "degraded"),
                 ],
             }
         )
@@ -187,6 +191,130 @@ def _assert_fingers_are_served(settings: Locator, where: str) -> None:
     assert not small, f"{where}: " + "; ".join(
         f"{target['name']!r} is {target.get('width')} by {target.get('height')}" for target in small
     )
+
+
+# The text of the dialog that is too faint to read: its colour against what lies under it (every
+# translucent layer between it and the first opaque one, composited), read from what the browser
+# painted. Small text needs 4.5 to 1. A disabled control is exempt, as WCAG has it.
+_FAINT_TEXT = """root => {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 1;
+    const context = canvas.getContext('2d', {willReadFrequently: true});
+    const rgba = color => {
+        context.clearRect(0, 0, 1, 1);
+        context.fillStyle = '#000';
+        context.fillStyle = color;
+        context.fillRect(0, 0, 1, 1);
+        const [r, g, b, a] = context.getImageData(0, 0, 1, 1).data;
+        return [r, g, b, a / 255];
+    };
+    const over = (top, below) => [0, 1, 2].map(i => top[i] * top[3] + below[i] * (1 - top[3])).concat([1]);
+    const luminance = color => {
+        const channel = value => {
+            const unit = value / 255;
+            return unit <= 0.03928 ? unit / 12.92 : ((unit + 0.055) / 1.055) ** 2.4;
+        };
+        return 0.2126 * channel(color[0]) + 0.7152 * channel(color[1]) + 0.0722 * channel(color[2]);
+    };
+    const background = element => {
+        const layers = [];
+        for (let node = element; node; node = node.parentElement) {
+            const color = rgba(getComputedStyle(node).backgroundColor);
+            if (color[3] > 0) layers.push(color);
+            if (color[3] === 1) break;
+        }
+        if (!layers.length || layers.at(-1)[3] !== 1) layers.push([255, 255, 255, 1]);
+        return layers.reverse().reduce((below, layer) => over(layer, below));
+    };
+    const faint = [];
+    for (const element of root.querySelectorAll('*')) {
+        const hasText = [...element.childNodes].some(
+            node => node.nodeType === Node.TEXT_NODE && node.textContent.trim() !== '');
+        if (!hasText || !element.getClientRects().length) continue;
+        if (element.closest('.dl-sr-only, :disabled, [inert], [hidden]')) continue;
+        const style = getComputedStyle(element);
+        if (style.visibility === 'hidden' || Number(style.opacity) < 1) continue;
+        const behind = background(element);
+        const lighter = Math.max(luminance(over(rgba(style.color), behind)), luminance(behind));
+        const darker = Math.min(luminance(over(rgba(style.color), behind)), luminance(behind));
+        const ratio = (lighter + 0.05) / (darker + 0.05);
+        if (ratio < 4.5) {
+            faint.push({text: element.textContent.trim().slice(0, 40), ratio: Math.round(ratio * 100) / 100});
+        }
+    }
+    return faint;
+}"""
+
+
+def _assert_text_reads(settings: Locator, where: str) -> None:
+    """Every word in view reads against its background at 4.5 to 1, or say which do not."""
+    faint = settings.evaluate(_FAINT_TEXT)
+    assert not faint, f"{where}: " + "; ".join(
+        f"{item['text']!r} is {item['ratio']} to 1" for item in faint
+    )
+
+
+def _walk_settings(page: Page, settings: Locator, check: Callable[[str], None]) -> None:
+    """Visit every page of an open Settings in the states that show the most, and hand each to ``check``.
+
+    On a phone a page is reached from the section list and left by Back; beside a pointer the
+    navigation is always in view. The states are the cards of Connections with one open on each
+    authentication, the form that adds one, a Memory list with a next page, and the other pages.
+    """
+    phone = (page.viewport_size or {"width": 0})["width"] <= 720
+    navigation = settings.get_by_role("navigation", name="Settings")
+
+    def visit(name: str) -> Locator:
+        navigation.get_by_role("button", name=name, exact=True).click()
+        return settings.get_by_role("region", name=name)
+
+    def leave() -> None:
+        if phone:
+            settings.get_by_role("button", name="Back").click()
+            expect(navigation).to_be_visible()
+
+    if phone:
+        check("the section list")
+
+    connections = visit("Connections")
+    expect(connections.get_by_role("switch")).to_have_count(2)
+    check("Connections")
+    connections.get_by_role("button", name="Team wiki").click()
+    connections.get_by_role("button", name="Change endpoint").click()
+    check("an open Connection whose endpoint is being changed")
+    connections.get_by_role("button", name="Bearer", exact=True).click()
+    expect(connections.get_by_label("Personal bearer (write-only)")).to_be_visible()
+    check("a Connection on bearer authentication")
+    connections.get_by_role("button", name="OAuth", exact=True).click()
+    connections.get_by_role("button", name="Authorize with OAuth").click()
+    expect(
+        connections.get_by_role("link", name="Continue to provider authorization")
+    ).to_be_visible()
+    check("a Connection on OAuth with its provider's link")
+    connections.get_by_role("button", name="Add MCP connection").click()
+    expect(connections.get_by_role("button", name="Use the Notion preset")).to_be_visible()
+    check("the form that adds a Connection")
+    leave()
+
+    accounts = visit("Agent Accounts")
+    expect(accounts.get_by_role("switch", name="Allow new sign-ups")).to_be_visible()
+    expect(
+        accounts.get_by_role("button", name="Remove the account for discourse.org")
+    ).to_be_visible()
+    check("Agent Accounts")
+    leave()
+
+    memory = visit("Profile Memory")
+    expect(memory.get_by_role("button", name="Load more")).to_be_visible()
+    check("Profile Memory")
+    leave()
+
+    visit("Conversation Sessions")
+    check("Conversation Sessions")
+    leave()
+
+    visit("Language")
+    check("Language")
 
 
 @pytest.mark.e2e
@@ -298,55 +426,27 @@ def test_settings_fills_a_phone_and_every_control_a_finger_meets_is_44px(page: P
     assert settings.evaluate("element => getComputedStyle(element).borderRadius") == "0px"
     _assert_surface_owns_viewport_layer(page, ".settings-dialog")
 
-    navigation = settings.get_by_role("navigation", name="Settings")
-    _assert_fingers_are_served(settings, "the section list")
+    _walk_settings(page, settings, lambda where: _assert_fingers_are_served(settings, where))
 
-    def visit(name: str) -> Locator:
-        navigation.get_by_role("button", name=name, exact=True).click()
-        return settings.get_by_role("region", name=name)
 
-    def leave() -> None:
-        settings.get_by_role("button", name="Back").click()
-        expect(navigation).to_be_visible()
+@pytest.mark.e2e
+@pytest.mark.parametrize("viewport", [(1440, 900), (390, 844)], ids=["desktop", "phone"])
+@pytest.mark.parametrize("color_mode", ["light", "dark"])
+def test_every_word_in_settings_reads_at_4_5_to_1_in_both_themes(
+    page: Page, viewport: tuple[int, int], color_mode: str
+) -> None:
+    _install_conversation_routes(page)
+    _install_agent_accounts_routes(page, _three_accounts())
+    _install_busy_settings_routes(page)
+    page.set_viewport_size({"width": viewport[0], "height": viewport[1]})
+    page.goto("/web/")
+    page.locator("[aria-current='page']").wait_for()
+    page.locator("html").evaluate(
+        "(element, mode) => { element.dataset.colorMode = mode; }", color_mode
+    )
 
-    # Connections, in every state that shows a control: the cards, an open card on each
-    # authentication, the endpoint being changed, and the form that adds one.
-    connections = visit("Connections")
-    expect(connections.get_by_role("switch")).to_have_count(2)
-    _assert_fingers_are_served(settings, "Connections")
-    connections.get_by_role("button", name="Team wiki").click()
-    connections.get_by_role("button", name="Change endpoint").click()
-    _assert_fingers_are_served(settings, "an open Connection whose endpoint is being changed")
-    connections.get_by_role("button", name="Bearer", exact=True).click()
-    expect(connections.get_by_label("Personal bearer (write-only)")).to_be_visible()
-    _assert_fingers_are_served(settings, "a Connection on bearer authentication")
-    connections.get_by_role("button", name="OAuth", exact=True).click()
-    connections.get_by_role("button", name="Authorize with OAuth").click()
-    expect(
-        connections.get_by_role("link", name="Continue to provider authorization")
-    ).to_be_visible()
-    _assert_fingers_are_served(settings, "a Connection on OAuth with its provider's link")
-    connections.get_by_role("button", name="Add MCP connection").click()
-    expect(connections.get_by_role("button", name="Use the Notion preset")).to_be_visible()
-    _assert_fingers_are_served(settings, "the form that adds a Connection")
-    leave()
-
-    accounts = visit("Agent Accounts")
-    expect(accounts.get_by_role("listitem")).to_have_count(3)
-    _assert_fingers_are_served(settings, "Agent Accounts")
-    leave()
-
-    memory = visit("Profile Memory")
-    expect(memory.get_by_role("button", name="Load more")).to_be_visible()
-    _assert_fingers_are_served(settings, "Profile Memory")
-    leave()
-
-    visit("Conversation Sessions")
-    _assert_fingers_are_served(settings, "Conversation Sessions")
-    leave()
-
-    visit("Language")
-    _assert_fingers_are_served(settings, "Language")
+    settings = _open_settings(page)
+    _walk_settings(page, settings, lambda where: _assert_text_reads(settings, where))
 
 
 @pytest.mark.e2e

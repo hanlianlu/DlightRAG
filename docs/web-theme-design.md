@@ -182,6 +182,10 @@ that owns its data and reports a short summary for its navigation row.
   reader is, including a phone's section list. Agent Accounts is a table of websites where its page is at
   least 36rem wide and three-line rows (the website, how it signs in, when it last did) where it is
   narrower; the page measures its own width, so a narrow window and a phone get the same rows.
+- **Text.** Small text is `--color-text-muted` or stronger: `--color-text-subtle` reads at 3.65 to 1 on the
+  dark surface and 3.82 to 1 on the light one, below the 4.5 to 1 that small text needs, so group labels,
+  statuses and column headings keep their rank through size and weight instead. A browser check measures
+  every word of every page against what is painted under it, in both themes.
 - **Controls.** Icon buttons are `dl-icon-button`. Inside the dialog the control ladder sets
   `--control-hit-target: var(--size-button)`, so they are compact beside a pointer and 44px under 1200px.
   Switches are `dl-switch--dense`: the compact track on desktop and the regular 40 by 24 on a phone,

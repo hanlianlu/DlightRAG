@@ -79,8 +79,9 @@
 
   .table thead .cell {
     border-block-end: 1px solid var(--color-border-subtle);
-    color: var(--color-text-subtle);
+    color: var(--color-text-muted);
     font-size: var(--font-size-caption);
+    font-weight: 600;
     line-height: var(--line-height-control);
     padding-block: var(--space-tight);
   }
@@ -165,7 +166,7 @@
   }
 
   .meta {
-    color: var(--color-text-subtle);
+    color: var(--color-text-muted);
     font-size: var(--font-size-caption);
     line-height: var(--line-height-control);
   }

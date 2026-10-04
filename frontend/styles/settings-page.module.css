@@ -87,10 +87,11 @@
     color: var(--color-text-tertiary);
   }
 
+  /* The danger colour leans toward the text colour until it reads at 4.5 to 1 on its own tint. */
   .note {
     background: var(--color-danger-surface);
     border-radius: var(--radius-control);
-    color: var(--color-danger);
+    color: color-mix(in srgb, var(--color-danger) 70%, var(--color-text-primary));
     font-size: var(--font-size-detail);
     line-height: var(--line-height-control);
     padding: var(--space-tight) var(--space-component);

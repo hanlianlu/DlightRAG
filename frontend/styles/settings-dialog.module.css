@@ -56,8 +56,9 @@
   }
 
   .groupLabel {
-    color: var(--color-text-subtle);
+    color: var(--color-text-muted);
     font-size: var(--font-size-caption);
+    font-weight: 600;
     padding-block-end: var(--space-inline);
     padding-inline: var(--space-tight);
   }
