@@ -151,7 +151,7 @@ Live documents to revise when slice 3 lands: [domain language](../domain-languag
 [resource reading](../resource-reading.md) (copying a Resource into the workspace),
 [retrieval and answer](../retrieval-answer.md) (the Research tool list),
 [security](../security.md) (the rooted file tools of the `trust` mode), and
-[architecture](../architecture.md) (Agent Execution).
+[architecture](../architecture.md) (Answer Resources).
 
 Residual risks, recorded rather than solved:
 
