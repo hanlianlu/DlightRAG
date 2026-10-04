@@ -4,11 +4,13 @@ import {expect} from '@esm-bundle/chai';
 import {sendKeys, setViewport} from '@web/test-runner-commands';
 import {linkStyles, waitFor} from '../testing/dom.ts';
 import {
+  agentAccountsView,
   memoryPage,
   memorySettings,
   mountSettings,
   openSettings,
   wire,
+  wireAccount,
 } from '../testing/settings.ts';
 import type {DlSettingsDialog} from './settings.ts';
 
@@ -21,7 +23,7 @@ afterEach(() => {
   document.body.className = '';
 });
 
-/** The reads a fully populated Settings makes: two Connections and five memories. */
+/** The reads a fully populated Settings makes: two Connections, three accounts, five memories. */
 function populated(): ReturnType<typeof wire> {
   return wire({
     'GET /web/api/connections/mcp': () => Response.json({
@@ -34,6 +36,9 @@ function populated(): ReturnType<typeof wire> {
           activation_epoch: 1, generation: 1, authentication: 'none', authorization_status: null, status: 'disabled'},
       ],
     }),
+    'GET /web/api/agent-accounts': () => Response.json(agentAccountsView([
+      wireAccount('discourse.org'), wireAccount('huggingface.co'), wireAccount('ycombinator.com'),
+    ])),
     'GET /web/api/memory/settings': () => memorySettings(true, 5),
     'GET /web/api/memory': () => memoryPage([{id: 'one', body: 'Use concise answers'}]),
   });
@@ -63,6 +68,10 @@ const PAGES = [
   {
     section: 'connections', name: 'Connections', status: '1/2', detail: 'MCP · 1 of 2 enabled',
     description: 'External MCP servers that Research runs can call. Turning the first one on asks you to confirm once.',
+  },
+  {
+    section: 'agent-accounts', name: 'Agent Accounts', status: '3', detail: '3 websites',
+    description: 'Accounts the agent registered on websites. DlightRAG generates and seals each password; nobody can view it.',
   },
   {
     section: 'memory', name: 'Profile Memory', status: '5', detail: 'On · 5 stored',
@@ -106,7 +115,7 @@ it('opens a modal named Settings on Connections, with three labelled groups of p
     pages: [...group.querySelectorAll('.dl-nav-item')].map(nameOf),
   }));
   expect(groups).to.deep.equal([
-    {name: 'Agent', pages: ['Connections', 'Profile Memory']},
+    {name: 'Agent', pages: ['Connections', 'Agent Accounts', 'Profile Memory']},
     {name: 'Data', pages: ['Conversation Sessions']},
     {name: 'General', pages: ['Language']},
   ]);
@@ -218,6 +227,7 @@ it('opens at once, whatever any page is still waiting for', async () => {
   const never = new Promise<Response>(() => {});
   window.fetch = wire({
     'GET /web/api/connections/mcp': () => never,
+    'GET /web/api/agent-accounts': () => never,
     'GET /web/api/memory/settings': () => never,
   }).fetch;
   const {settings} = mountSettings();
@@ -228,6 +238,7 @@ it('opens at once, whatever any page is still waiting for', async () => {
   expect(row(settings, 'connections').getAttribute('aria-current')).to.equal('page');
   // No page paints a state nobody has read.
   expect(settings.textContent).to.contain('Loading Connections');
+  expect(settings.textContent).to.contain('Loading agent accounts');
   expect(settings.textContent).to.contain('Loading memory settings');
   expect(settings.querySelector('#memory-enabled-toggle')).to.equal(null);
 });
@@ -385,6 +396,7 @@ describe('on a phone', () => {
       '../styles/settings-dialog.module.css',
       '../styles/settings-page.module.css',
       '../styles/settings-memory.module.css',
+      '../styles/settings-agent-accounts.module.css',
       '../styles/settings-connections.module.css',
     ].map((href) => new URL(href, import.meta.url).href));
   });

@@ -101,13 +101,16 @@ test('removing an account names its site in the path, sends no body, and answers
 });
 
 test('a refusal answers the general envelope: a 404 is told apart and a 401 signs the page out', async () => {
+  // The envelope the routes answer with: a detail, an error type, and a null error kind.
   globalThis.fetch = async () => Response.json(
-    {detail: 'No account for this website', error_type: 'not_found'},
+    {detail: 'No account for this website', error_type: 'not_found', error_kind: null},
     {status: 404},
   );
   await assert.rejects(removeAgentAccount('gone.example'), (error: unknown) => error instanceof ApiError
     && error.status === 404
-    && error.errorType === 'not_found');
+    && error.errorType === 'not_found'
+    && error.errorKind === null
+    && error.detail === 'No account for this website');
 
   let signedOut = 0;
   const stop = onSignedOut(() => { signedOut += 1; });
@@ -115,4 +118,18 @@ test('a refusal answers the general envelope: a 404 is told apart and a 401 sign
   await assert.rejects(getAgentAccounts(), (error: unknown) => error instanceof ApiError && error.status === 401);
   stop();
   assert.equal(signedOut, 1);
+});
+
+test('a malformed site (422) and a refused CSRF check (403) are refusals of the same kind, never a view', async () => {
+  globalThis.fetch = async () => Response.json(
+    {detail: 'Invalid website', error_type: 'validation', error_kind: null},
+    {status: 422},
+  );
+  await assert.rejects(removeAgentAccount('Not A Host'), (error: unknown) => error instanceof ApiError
+    && error.status === 422
+    && error.errorType === 'validation');
+
+  globalThis.fetch = async () => Response.json({detail: 'CSRF check failed', error_type: 'auth', error_kind: null}, {status: 403});
+  await assert.rejects(setAgentAccountRegistration(false), (error: unknown) => error instanceof ApiError
+    && error.status === 403);
 });

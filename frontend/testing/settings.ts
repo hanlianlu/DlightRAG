@@ -66,6 +66,7 @@ export interface Wire {
 /** The reads every Settings page makes when it opens, so a test only writes the ones it is about. */
 const DEFAULT_ROUTES: Record<string, Handler> = {
   'GET /web/api/connections/mcp': () => Response.json({revision: '0', connections: [], presets: []}),
+  'GET /web/api/agent-accounts': () => Response.json(agentAccountsView()),
 };
 
 /** Answer fetches by `METHOD /path`; a route here replaces the default for the same key. */
@@ -107,4 +108,38 @@ export function memoryPage(
     memories: records.map(({id, kind, body}) => ({memory_id: id, kind: kind ?? 'preference', body})),
     next_cursor: nextCursor,
   });
+}
+
+export interface WireAccount {
+  site: string;
+  email: string | null;
+  username: string | null;
+  created_at: string;
+  last_used_at: string | null;
+}
+
+/** The Agent Accounts view, as the wire sends it; every part can be replaced. */
+export function agentAccountsView(
+  accounts: WireAccount[] = [],
+  registration: {allowed: boolean; enabled: boolean} = {allowed: true, enabled: true},
+  available = true,
+): {available: boolean; registration: {allowed: boolean; enabled: boolean}; accounts: WireAccount[]} {
+  return {available, registration, accounts};
+}
+
+/** An account, with the sign-in the agent minted for it and when it was registered and last used. */
+export function wireAccount(site: string, extra: Partial<WireAccount> = {}): WireAccount {
+  return {
+    site,
+    email: `agent@${site}`,
+    username: `agent-${site.split('.')[0]}`,
+    created_at: '2026-01-02T03:04:05Z',
+    last_used_at: null,
+    ...extra,
+  };
+}
+
+/** The ISO time a number of whole days before now, at the same hour, as the wire writes it. */
+export function daysAgo(days: number): string {
+  return new Date(Date.now() - days * 86_400_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
 }

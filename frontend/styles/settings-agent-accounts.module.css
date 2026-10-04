@@ -1,0 +1,212 @@
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
+
+/* Settings → Agent Accounts: a table of websites on a desktop, three-line rows on a phone. */
+
+@layer features {
+  .empty {
+    display: grid;
+    gap: var(--space-inline);
+    place-items: center;
+    padding: var(--space-layout) var(--space-section);
+    text-align: center;
+  }
+
+  .emptyIcon {
+    align-items: center;
+    background: var(--color-bg-hover);
+    border-radius: var(--radius-circle);
+    color: var(--color-text-muted);
+    display: flex;
+    height: 2.25rem;
+    justify-content: center;
+    margin-block-end: var(--space-inline);
+    width: 2.25rem;
+  }
+
+  .emptyTitle {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-detail);
+    font-weight: 600;
+    line-height: var(--line-height-control);
+  }
+
+  .emptyBody {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    max-width: 24rem;
+  }
+
+  .table {
+    border-collapse: collapse;
+    table-layout: fixed;
+    width: 100%;
+  }
+
+  .cell {
+    font-weight: 400;
+    padding: var(--space-tight) 0 var(--space-tight) var(--space-component);
+    text-align: start;
+    vertical-align: middle;
+  }
+
+  .date {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-detail);
+    white-space: nowrap;
+    width: 5.5rem;
+  }
+
+  /* The remove button's cell is as wide as the control ladder's button and its own margin. */
+  .action {
+    padding-block: var(--space-inline);
+    padding-inline-end: var(--space-inline);
+    text-align: end;
+    width: calc(var(--control-hit-target) + var(--space-component));
+  }
+
+  .table thead .cell {
+    border-block-end: 1px solid var(--color-border-subtle);
+    color: var(--color-text-subtle);
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    padding-block: var(--space-tight);
+  }
+
+  .table tbody tr + tr .cell {
+    border-block-start: 1px solid var(--color-border-subtle);
+  }
+
+  /* Beside a narrow pane the table gives up when an account registered first: the website and how
+   * it signs in matter more than when, and they would otherwise be cut to a few letters. */
+  .tableCard {
+    container-type: inline-size;
+  }
+
+  @container (width < 36rem) {
+    .registered {
+      display: none;
+    }
+  }
+
+  .site {
+    align-items: center;
+    display: flex;
+    gap: var(--space-tight);
+    min-width: 0;
+  }
+
+  /* A monogram, never a favicon: the page makes no request to any website it lists. */
+  .tile {
+    align-items: center;
+    background: var(--color-bg-elevated);
+    border-radius: var(--radius-control);
+    color: var(--color-text-tertiary);
+    display: flex;
+    flex: none;
+    font-size: var(--font-size-detail);
+    font-weight: 600;
+    height: 1.75rem;
+    justify-content: center;
+    width: 1.75rem;
+  }
+
+  .siteName {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-detail);
+    line-height: var(--line-height-control);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .identity {
+    display: grid;
+    min-width: 0;
+  }
+
+  .primary,
+  .secondary {
+    line-height: var(--line-height-control);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .primary {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-detail);
+  }
+
+  .secondary {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+  }
+
+  .remove {
+    color: var(--color-text-muted);
+  }
+
+  .remove:hover {
+    color: var(--color-text-primary);
+  }
+
+  /* ── Phone ── */
+
+  .list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .list > * + * {
+    border-block-start: 1px solid var(--color-border-subtle);
+  }
+
+  .item {
+    align-items: center;
+    display: flex;
+    gap: var(--space-component);
+    padding: var(--space-tight) var(--space-inline) var(--space-tight) var(--space-component);
+  }
+
+  .item .tile {
+    height: 2rem;
+    width: 2rem;
+  }
+
+  .itemText {
+    display: grid;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .meta {
+    color: var(--color-text-subtle);
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+  }
+
+  .failed {
+    align-items: flex-start;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-tight);
+  }
+
+  .failed > p {
+    box-sizing: border-box;
+    width: 100%;
+  }
+
+  @media (width <= 720px), (height <= 480px) {
+    .empty {
+      padding-block: var(--space-section);
+    }
+
+    .emptyIcon {
+      display: none;
+    }
+  }
+}

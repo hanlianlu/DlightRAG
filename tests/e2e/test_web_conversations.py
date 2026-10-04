@@ -21,6 +21,48 @@ class ConversationRouteState:
     delete_status: int = 204
 
 
+@dataclass
+class AgentAccountsRouteState:
+    """What the mocked Agent Accounts routes answer, and what the page asked of them."""
+
+    accounts: list[dict[str, Any]] = field(default_factory=list)
+    registration: dict[str, bool] = field(
+        default_factory=lambda: {"allowed": True, "enabled": True}
+    )
+    available: bool = True
+    read_status: int = 200
+    # (method, path, JSON body) of every request that reached the routes, in order.
+    requests: list[tuple[str, str, Any]] = field(default_factory=list)
+
+    def view(self) -> dict[str, Any]:
+        return {
+            "available": self.available,
+            "registration": self.registration,
+            "accounts": self.accounts,
+        }
+
+
+def _iso(days_ago: float) -> str:
+    return (datetime.now(UTC) - timedelta(days=days_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _agent_account(
+    site: str,
+    *,
+    email: str | None = None,
+    username: str | None = None,
+    registered_days_ago: float = 10,
+    last_used_days_ago: float | None = None,
+) -> dict[str, Any]:
+    return {
+        "site": site,
+        "email": email,
+        "username": username,
+        "created_at": _iso(registered_days_ago),
+        "last_used_at": None if last_used_days_ago is None else _iso(last_used_days_ago),
+    }
+
+
 def _wait_for_shell_settled(page: Page) -> None:
     """Wait until the shell grid geometry stops changing.
 
@@ -169,7 +211,45 @@ def _install_conversation_routes(page: Page) -> ConversationRouteState:
         route.abort()
 
     page.route("**/web/api/conversations**", handle)
+    _install_agent_accounts_routes(page, AgentAccountsRouteState())
     _install_quiet_settings_routes(page)
+    return state
+
+
+def _install_agent_accounts_routes(
+    page: Page, state: AgentAccountsRouteState
+) -> AgentAccountsRouteState:
+    """Answer the Agent Accounts routes from ``state``; a later install replaces an earlier one."""
+
+    def handle(route: Route) -> None:
+        request = route.request
+        path = urlparse(request.url).path
+        method = request.method
+        state.requests.append((method, path, request.post_data_json if request.post_data else None))
+        if method == "GET" and path == "/web/api/agent-accounts":
+            if state.read_status != 200:
+                route.fulfill(status=state.read_status, json={"detail": "unavailable"})
+                return
+            route.fulfill(json=state.view())
+        elif method == "PUT" and path == "/web/api/agent-accounts/settings":
+            state.registration["enabled"] = bool(
+                (request.post_data_json or {})["registration_enabled"]
+            )
+            route.fulfill(json=state.view())
+        elif method == "DELETE" and path.startswith("/web/api/agent-accounts/"):
+            site = path.rsplit("/", 1)[1]
+            if not any(account["site"] == site for account in state.accounts):
+                route.fulfill(
+                    status=404,
+                    json={"detail": "No account", "error_type": "not_found", "error_kind": None},
+                )
+                return
+            state.accounts = [account for account in state.accounts if account["site"] != site]
+            route.fulfill(json=state.view())
+        else:
+            route.abort()
+
+    page.route("**/web/api/agent-accounts**", handle)
     return state
 
 

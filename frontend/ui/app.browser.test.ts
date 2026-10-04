@@ -693,6 +693,9 @@ it('opens Settings on its Connections page after the fixed OAuth return, without
   window.fetch = async (input, init) => {
     if (init?.method && init.method !== 'GET') writes.push(String(input));
     if (String(input) === '/web/api/connections/mcp') return response({revision: '0', connections: [], presets: []});
+    if (String(input) === '/web/api/agent-accounts') {
+      return response({available: true, registration: {allowed: true, enabled: true}, accounts: []});
+    }
     if (String(input) === '/web/api/memory/settings') return response({enabled: false, active_count: null});
     return bootstrapResponse(input);
   };

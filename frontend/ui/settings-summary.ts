@@ -10,12 +10,14 @@ import type {LanguagePreference} from '../lib/language.ts';
 
 export type SettingsSection =
   | 'connections'
+  | 'agent-accounts'
   | 'memory'
   | 'conversations'
   | 'language';
 
 export type SettingsSummary =
   | {section: 'connections'; enabled: number; total: number}
+  | {section: 'agent-accounts'; count: number}
   /** `enabled` is null while the switch is unread, and `count` is null while Memory is off. */
   | {section: 'memory'; enabled: boolean | null; count: number | null}
   | {section: 'conversations'; count: number}

@@ -3,11 +3,13 @@
 import {expect} from '@esm-bundle/chai';
 import {waitFor} from '../testing/dom.ts';
 import {
+  agentAccountsView,
   memoryPage,
   memorySettings,
   mountSettings,
   openSettings,
   wire,
+  wireAccount,
 } from '../testing/settings.ts';
 type Axe = {
   run: (
@@ -130,6 +132,10 @@ it('every page of the Settings dialog has no serious accessible-name or structur
       enabled: true, activation_epoch: 1, generation: 1, authentication: 'bearer',
       status: 'degraded', authorization_status: null,
     }]}),
+    'GET /web/api/agent-accounts': () => Response.json(agentAccountsView([
+      wireAccount('discourse.org', {last_used_at: '2026-10-04T15:13:01Z'}),
+      wireAccount('ycombinator.com', {email: null, username: null}),
+    ])),
     'GET /web/api/memory/settings': () => memorySettings(true, 2),
     'GET /web/api/memory': () => memoryPage([
       {id: 'one', body: 'Use concise answers'}, {id: 'two', kind: 'fact', body: 'Lives in Sweden'},
@@ -138,7 +144,7 @@ it('every page of the Settings dialog has no serious accessible-name or structur
   try {
     const {settings} = mountSettings();
     const dialog = await openSettings(settings);
-    for (const section of ['connections', 'memory', 'conversations', 'language']) {
+    for (const section of ['connections', 'agent-accounts', 'memory', 'conversations', 'language']) {
       const row = settings.querySelector<HTMLButtonElement>(`nav [data-section="${section}"]`)!;
       row.click();
       await settings.updateComplete;
@@ -147,6 +153,10 @@ it('every page of the Settings dialog has no serious accessible-name or structur
         await waitFor(() => Boolean(feature.view));
         await feature.updateComplete;
         feature.querySelector<HTMLButtonElement>('[data-card="a"]')!.click();
+        await feature.updateComplete;
+      } else if (section === 'agent-accounts') {
+        const feature = settings.querySelector('dl-settings-agent-accounts')!;
+        await waitFor(() => Boolean(feature.view));
         await feature.updateComplete;
       } else if (section === 'memory') {
         await waitFor(() => settings.querySelectorAll('dl-settings-memory li').length === 2);

@@ -20,6 +20,7 @@ import {LightElement, MediaController} from '../lib/lit-host.ts';
 import {type AppHandles, productionHandles} from '../stores/app-handles.ts';
 import styles from '../styles/settings-dialog.module.css';
 import {publishModalState, showOwnedModal} from './modal.ts';
+import './settings-agent-accounts.ts';
 import './settings-connections.ts';
 import './settings-conversations.ts';
 import './settings-language.ts';
@@ -48,6 +49,16 @@ const SECTIONS: readonly SectionDefinition[] = [
     description: () => msg(
       'External MCP servers that Research runs can call. Turning the first one on asks you to confirm once.',
       {id: 'settings.connectionsDescription'},
+    ),
+  },
+  {
+    section: 'agent-accounts',
+    group: 'agent',
+    icon: 'agent-accounts',
+    label: () => msg('Agent Accounts', {id: 'settings.agentAccounts'}),
+    description: () => msg(
+      'Accounts the agent registered on websites. DlightRAG generates and seals each password; nobody can view it.',
+      {id: 'settings.agentAccountsDescription'},
     ),
   },
   {
@@ -94,6 +105,15 @@ function statusOf(summary: SettingsSummary | undefined): {short: string; detail:
           short: `${summary.enabled}/${summary.total}`,
           detail: msg(str`MCP · ${summary.enabled} of ${summary.total} enabled`, {id: 'settings.status.connections'}),
         };
+    case 'agent-accounts':
+      return {
+        short: String(summary.count),
+        detail: summary.count === 0
+          ? msg('None yet', {id: 'settings.status.accountsNone'})
+          : summary.count === 1
+            ? msg('1 website', {id: 'settings.status.accountsOne'})
+            : msg(str`${summary.count} websites`, {id: 'settings.status.accounts'}),
+      };
     case 'memory':
       if (summary.enabled === null) return none;
       if (!summary.enabled) return {short: '', detail: msg('Off', {id: 'settings.status.memoryOff'})};
@@ -238,7 +258,8 @@ export class DlSettingsDialog extends LightElement {
             <div class=${styles.paneBody} data-page-body>
               <p class=${styles.description}>${definition.description()}</p>
               ${this.mounted ? html`
-                <dl-settings-connections ?hidden=${!isPage('connections')}></dl-settings-connections>` : nothing}
+                <dl-settings-connections ?hidden=${!isPage('connections')}></dl-settings-connections>
+                <dl-settings-agent-accounts ?hidden=${!isPage('agent-accounts')}></dl-settings-agent-accounts>` : nothing}
               <dl-settings-memory .active=${this.mounted} .current=${isPage('memory')}
                 ?hidden=${!isPage('memory')}></dl-settings-memory>
               ${this.mounted ? html`
