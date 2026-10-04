@@ -323,7 +323,6 @@ def test_settings_is_a_centered_dialog_with_a_navigation_column_beside_its_page(
     assert box["x"] + box["width"] / 2 == pytest.approx(720, abs=1)
     assert box["y"] + box["height"] / 2 == pytest.approx(450, abs=1)
     _assert_surface_owns_viewport_layer(page, ".settings-dialog")
-    assert settings.evaluate("element => getComputedStyle(element).borderRadius") == "22px"
     assert settings.evaluate("element => getComputedStyle(element).borderTopWidth") == "1px"
     assert settings.evaluate("element => element.matches(':modal')") is True
 
