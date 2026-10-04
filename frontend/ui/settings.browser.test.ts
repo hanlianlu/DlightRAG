@@ -479,6 +479,16 @@ describe('on a phone', () => {
     expect(small(named('Back'))).to.equal(false);
     expect(small(named('Close settings'))).to.equal(false);
   });
+
+  it('gives a finger the regular switch', async () => {
+    window.fetch = populated().fetch;
+    const {settings} = mountSettings();
+    await openSettings(settings, 'memory');
+    await waitFor(() => Boolean(settings.querySelector('#memory-enabled-toggle')));
+
+    const box = settings.querySelector('#memory-enabled-toggle')!.getBoundingClientRect();
+    expect([box.width, box.height]).to.deep.equal([40, 24]);
+  });
 });
 
 describe('on a desktop', () => {
@@ -544,5 +554,15 @@ describe('on a desktop', () => {
     await settings.updateComplete;
 
     expect(body.scrollTop).to.equal(0);
+  });
+
+  it('keeps the compact switch beside a pointer', async () => {
+    window.fetch = populated().fetch;
+    const {settings} = mountSettings();
+    await openSettings(settings, 'memory');
+    await waitFor(() => Boolean(settings.querySelector('#memory-enabled-toggle')));
+
+    const box = settings.querySelector('#memory-enabled-toggle')!.getBoundingClientRect();
+    expect([box.width, box.height]).to.deep.equal([28, 16]);
   });
 });
