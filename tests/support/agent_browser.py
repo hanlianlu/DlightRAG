@@ -582,29 +582,47 @@ async def _reads_nothing(_request: ResourceReadRequest, _runtime: ToolRuntime) -
     raise AssertionError("an inert browser host reads nothing")
 
 
+def idle_accounts_binding(
+    *, registration_allowed: bool = True, mailbox: AgentMailbox | None = None
+) -> AgentAccountsBinding:
+    """What a deployment composes for Agent Accounts, for a test that composes or drives the
+    browser and not its accounts: a store in memory that holds none, and no key ring."""
+    return AgentAccountsBinding(
+        MemoryAccountStore(),
+        CredentialCipher(None),
+        mailbox,
+        registration_allowed=registration_allowed,
+    )
+
+
+def idle_accounts(
+    *, registration: bool = True, mailbox: AgentMailbox | None = None
+) -> RunAgentAccounts:
+    """The Agent Accounts of a Run that signs in to nothing, for a test that drives or composes
+    the browser and not its accounts. The Run may register unless ``registration`` is off, and
+    ``mailbox`` delivers its mail when it has one."""
+    return RunAgentAccounts(
+        owner_id="owner",
+        binding=idle_accounts_binding(mailbox=mailbox),
+        registration=registration,
+    )
+
+
 def inert_browser_host(
-    *, accounts: bool = False, registration: bool = True, mailbox: AgentMailbox | None = None
+    *, registration: bool = True, mailbox: AgentMailbox | None = None
 ) -> BrowserToolHost:
     """The browser tool's host for a test that needs the tool composed and offered, not driven.
 
-    Its browser leases nothing until a page is opened, and its reader is never called. With
-    ``accounts`` the Run has Agent Accounts, which nothing registers or reads, delivered by
-    ``mailbox`` when it has one, and which it may register unless ``registration`` is off.
+    Its browser leases nothing until a page is opened, and its reader is never called. Its Run
+    has Agent Accounts, which nothing registers or reads, delivered by ``mailbox`` when it has
+    one, and which it may register unless ``registration`` is off.
     """
     holder = BrowserHolder("owner", "11111111-1111-1111-1111-111111111111", "worker", 1)
     return BrowserToolHost(
         RunAgentBrowser(FakeProvider(), holder, browser_settings()),
         ResourceRegistry(),
         _reads_nothing,
-        RunAgentAccounts(
-            owner_id="owner",
-            binding=AgentAccountsBinding(
-                MemoryAccountStore(), CredentialCipher(None), mailbox, registration_allowed=True
-            ),
-            registration=registration,
-        )
-        if accounts
-        else None,
+        idle_accounts(registration=registration, mailbox=mailbox),
     )
 
 
@@ -623,6 +641,8 @@ __all__ = [
     "StubMailbox",
     "WebProxy",
     "browser_settings",
+    "idle_accounts",
+    "idle_accounts_binding",
     "inert_browser_host",
     "launch_recorder",
     "launched_chromium",

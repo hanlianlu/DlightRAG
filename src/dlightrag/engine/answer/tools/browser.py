@@ -86,7 +86,6 @@ from dlightrag.engine.answer.agent_browser import (
     generate_password,
     has_mailbox,
     inbox_text,
-    may_register,
 )
 from dlightrag.engine.answer.resources.models import ResourceRegistryError
 from dlightrag.engine.answer.resources.registry import (
@@ -385,24 +384,21 @@ def _field_arguments(name: str, arguments: dict[str, Any], *, registration: bool
     return arguments
 
 
-def browser_declaration(
-    *, upload: bool, accounts: bool, registration: bool, mailbox: bool
-) -> ToolDeclaration:
+def browser_declaration(*, upload: bool, registration: bool, mailbox: bool) -> ToolDeclaration:
     """The tool a Run offers. ``upload`` needs an Agent Workspace, so only ``trust`` has it,
-    ``login`` needs Agent Accounts, ``register`` needs them too and a Run that may register, which
-    is the deployment's allowance and the owner's switch together, and ``inbox`` needs an Agent
-    Mailbox. A Run has a mailbox only with accounts.
+    ``register`` needs a Run that may register, which is the deployment's allowance and the
+    owner's switch together, and ``inbox`` needs an Agent Mailbox. ``login`` is every Run's, since
+    a Run with a browser has Agent Accounts.
 
     No configured value appears in the description or the schema, so changing a timeout or
     the depth never changes the plan a Run is pinned to.
     """
-    registering = accounts and registration
-    offered = {"upload": upload, "register": registering, "login": accounts, "inbox": mailbox}
+    offered = {"upload": upload, "register": registration, "inbox": mailbox}
     actions = tuple(action for action in BROWSER_ACTIONS if offered.get(action, True))
-    accounts_fact = _ACCOUNTS_FACT if registering else _LOGIN_ONLY_FACT
+    accounts_fact = _ACCOUNTS_FACT if registration else _LOGIN_ONLY_FACT
     return ToolDeclaration(
         name="browser",
-        description=f"{_DESCRIPTION} {accounts_fact}" if accounts else _DESCRIPTION,
+        description=f"{_DESCRIPTION} {accounts_fact}",
         input_model=browser_input_model(actions),
         replay_policy="never",
         read_only=False,
@@ -463,9 +459,8 @@ class BrowserToolHost:
     registry: ResourceRegistry
     read_resource: ResourceReader
     """The Run's own reader, which a capture is read through as ``read`` would read it."""
-    accounts: RunAgentAccounts | None = None
-    """The Run's Agent Accounts, which login and, where the Run may register, register act on;
-    None where a deployment composed none."""
+    accounts: RunAgentAccounts
+    """The Run's Agent Accounts, which login and, where the Run may register, register act on."""
 
 
 NEW_PAGE = "A new tab opened and is now the active page."
@@ -606,12 +601,10 @@ def browser_tool(
         )
         return await call.run()
 
-    accounts = host.accounts
     return browser_declaration(
         upload=environment is not None,
-        accounts=accounts is not None,
-        registration=may_register(accounts),
-        mailbox=has_mailbox(accounts),
+        registration=host.accounts.registration,
+        mailbox=has_mailbox(host.accounts),
     ).bind(execute)
 
 
@@ -836,14 +829,13 @@ class _Call:
 
     def _session_accounts(self) -> SessionAccounts:
         """The Agent Accounts of the Session this call runs in."""
-        accounts = cast(RunAgentAccounts, self._host.accounts)
-        return accounts.session(self._scope, child=self._child)
+        return self._host.accounts.session(self._scope, child=self._child)
 
     async def _with_accounts(
         self, act: Callable[[AgentPage, SessionAccounts, str], Awaitable[ToolResult]]
     ) -> ToolResult:
         """Run register or login on the page the Session's earlier calls opened."""
-        if not cast(RunAgentAccounts, self._host.accounts).available():
+        if not self._host.accounts.available():
             return ToolResult.text(NO_KEY_RING, is_error=True)
         accounts = self._session_accounts()
 
@@ -939,7 +931,7 @@ class _Call:
         account = await accounts.login_target(site)
         if account is None:
             return ToolResult.text(
-                NO_ACCOUNT[may_register(self._host.accounts)].format(site=site), is_error=True
+                NO_ACCOUNT[self._host.accounts.registration].format(site=site), is_error=True
             )
         fills: list[CredentialFill] = []
         filled: list[str] = []
@@ -960,7 +952,7 @@ class _Call:
                 password = accounts.password(account)
             except UnreadableEnvelope:
                 return ToolResult.text(
-                    UNREADABLE[may_register(self._host.accounts)].format(site=site), is_error=True
+                    UNREADABLE[self._host.accounts.registration].format(site=site), is_error=True
                 )
             fills.extend(CredentialFill(ref, "password", password) for ref in request.password_refs)
             filled.append(f"{len(request.password_refs)} password field(s)")
@@ -987,7 +979,7 @@ class _Call:
         """
         window = self._session_accounts().inbox_window()
         if window is None:
-            return ToolResult.text(NO_WINDOW[may_register(self._host.accounts)], is_error=True)
+            return ToolResult.text(NO_WINDOW[self._host.accounts.registration], is_error=True)
         if not window.aliases:
             return ToolResult.text(NO_ALIAS, is_error=True)
         listings: list[tuple[str, MailListing]] = []

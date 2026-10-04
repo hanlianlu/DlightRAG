@@ -667,13 +667,8 @@ async def test_acceptance_pins_disabled_profile_memory_without_reserving_its_cap
 async def test_acceptance_pins_whether_the_run_may_register_and_plans_its_browser_to_match(
     registers: bool,
 ) -> None:
-    from dlightrag.engine.answer.agent_browser import (
-        REGISTRATION_PIN,
-        AgentAccountsBinding,
-        AgentBrowserBinding,
-    )
-    from dlightrag.engine.credential_cipher import CredentialCipher
-    from tests.support.agent_browser import FakeProvider, MemoryAccountStore, browser_settings
+    from dlightrag.engine.answer.agent_browser import REGISTRATION_PIN, AgentBrowserBinding
+    from tests.support.agent_browser import FakeProvider, browser_settings, idle_accounts_binding
     from tests.unit.test_answer_executor import _executor
 
     asked: list[dict[str, Any]] = []
@@ -683,10 +678,9 @@ async def test_acceptance_pins_whether_the_run_may_register_and_plans_its_browse
         return registers
 
     store = _Store()
-    accounts = AgentAccountsBinding(
-        MemoryAccountStore(), CredentialCipher(None), registration_allowed=True
+    executor = _executor(
+        browser=AgentBrowserBinding(FakeProvider(), browser_settings(), idle_accounts_binding())
     )
-    executor = _executor(browser=AgentBrowserBinding(FakeProvider(), browser_settings(), accounts))
     service = _service(
         store=store,
         agent_registration=registration,

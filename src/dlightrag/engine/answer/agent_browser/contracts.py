@@ -460,7 +460,7 @@ class AgentBrowserBinding:
 
     provider: BrowserProvider
     settings: AgentBrowserSettings
-    accounts: AgentAccountsBinding | None = None
+    accounts: AgentAccountsBinding
 
 
 __all__ = [

@@ -83,14 +83,13 @@ async def test_binding_preserves_the_plan_and_adds_real_execution() -> None:
     ],
 )
 @pytest.mark.parametrize(
-    ("agent_browser", "agent_accounts", "agent_registration", "agent_mailbox"),
+    ("agent_browser", "agent_registration", "agent_mailbox"),
     [
-        (False, False, False, False),
-        (True, False, False, False),
-        (True, True, False, False),
-        (True, True, True, False),
-        (True, True, False, True),
-        (True, True, True, True),
+        (False, False, False),
+        (True, False, False),
+        (True, True, False),
+        (True, False, True),
+        (True, True, True),
     ],
 )
 def test_research_acceptance_and_execution_use_identical_declarations(
@@ -102,7 +101,6 @@ def test_research_acceptance_and_execution_use_identical_declarations(
     child: bool,
     narrow: tuple[str, ...] | None,
     agent_browser: bool,
-    agent_accounts: bool,
     agent_registration: bool,
     agent_mailbox: bool,
 ) -> None:
@@ -113,7 +111,6 @@ def test_research_acceptance_and_execution_use_identical_declarations(
         web_search=web,
         resource_read=True,
         agent_browser=agent_browser,
-        agent_accounts=agent_accounts,
         agent_registration=agent_registration,
         agent_mailbox=agent_mailbox,
         resource_view=True,
@@ -138,9 +135,7 @@ def test_research_acceptance_and_execution_use_identical_declarations(
         register_web_source=None,
         resource_reader=AsyncMock(),
         browser=inert_browser_host(
-            accounts=agent_accounts,
-            registration=agent_registration,
-            mailbox=StubMailbox() if agent_mailbox else None,
+            registration=agent_registration, mailbox=StubMailbox() if agent_mailbox else None
         )
         if agent_browser
         else None,
@@ -174,12 +169,9 @@ def test_research_acceptance_and_execution_use_identical_declarations(
     for browser in browsers:
         actions = browser.definition.parameters["properties"]["action"]["enum"]
         assert ("upload" in actions) == paths
-        # login is offered exactly where the Run has Agent Accounts, register where it may also
-        # register, and inbox where it also has an Agent Mailbox.
-        assert ("register" in actions, "login" in actions) == (
-            agent_accounts and agent_registration,
-            agent_accounts,
-        )
+        # login is every browser's, since a Run with one has Agent Accounts, register is offered
+        # where the Run may register, and inbox where it has an Agent Mailbox.
+        assert ("register" in actions, "login" in actions) == (agent_registration, True)
         assert ("inbox" in actions) == agent_mailbox
 
 

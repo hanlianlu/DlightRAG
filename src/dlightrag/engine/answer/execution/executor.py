@@ -99,8 +99,8 @@ from dlightrag.engine.ai.telemetry import (
 from dlightrag.engine.answer.agent_browser import (
     AgentBrowserBinding,
     BrowserHolder,
-    RunAgentAccounts,
     RunAgentBrowser,
+    RunBrowsing,
     has_mailbox,
     run_agent_accounts,
 )
@@ -519,7 +519,6 @@ class AnswerExecutor:
             web_search=web_search,
             resource_read=True,
             agent_browser=self._browser is not None,
-            agent_accounts=accounts is not None,
             agent_registration=agent_registration,
             agent_mailbox=has_mailbox(accounts),
             resource_view=True,
@@ -1283,8 +1282,8 @@ class AnswerExecutor:
                 ),
             )
 
-        agent_browser = self._run_agent_browser(session, resolved_mode)
-        agent_accounts = self._run_agent_accounts(session, agent_browser)
+        browsing = self._run_browsing(session, resolved_mode)
+        agent_browser = None if browsing is None else browsing.browser
         try:
             run = await self.prepare_orchestrated_run(
                 query=request.query,
@@ -1308,8 +1307,7 @@ class AnswerExecutor:
                     if self._skills_bundle_factory is not None
                     else None
                 ),
-                agent_browser=agent_browser,
-                agent_accounts=agent_accounts,
+                browsing=browsing,
             )
         except BaseException:
             if agent_browser is not None:
@@ -2118,38 +2116,31 @@ class AnswerExecutor:
                     logger.exception("Failed to settle local Child Session tasks")
             await _close_execution_resources(stream, run.registry, agent_browser)
 
-    def _run_agent_browser(
-        self, session: RunSession, resolved_mode: ResolvedMode
-    ) -> RunAgentBrowser | None:
-        """The browser this Research Run leases from the pool on first need, if there is one.
-
-        Fast has no tools and gains no hidden rendering (ADR 0020), so it gets none.
+    def _run_browsing(self, session: RunSession, resolved_mode: ResolvedMode) -> RunBrowsing | None:
+        """What this Research Run browses with, if the deployment has an Agent Browser: the
+        browser it leases from the pool on first need, and the Agent Accounts it logs in with,
+        and registers with when it may. Fast has no tools and gains no hidden rendering
+        (ADR 0020), so it gets none. The Run's Child-scoped accounts live in this object, so they
+        go with the Run, and only its browser has anything to close.
         """
         if resolved_mode != "research" or self._browser is None:
             return None
-        return RunAgentBrowser(
-            self._browser.provider,
-            BrowserHolder(
-                owner_id=session.owner_id,
-                run_id=session.run_id,
-                worker_id=session.worker_id,
-                fencing_epoch=session.fencing_epoch,
+        return RunBrowsing(
+            RunAgentBrowser(
+                self._browser.provider,
+                BrowserHolder(
+                    owner_id=session.owner_id,
+                    run_id=session.run_id,
+                    worker_id=session.worker_id,
+                    fencing_epoch=session.fencing_epoch,
+                ),
+                self._browser.settings,
             ),
-            self._browser.settings,
-        )
-
-    def _run_agent_accounts(
-        self, session: RunSession, agent_browser: RunAgentBrowser | None
-    ) -> RunAgentAccounts | None:
-        """The Agent Accounts this Research Run logs in with, and registers with when it may, if
-        it has a browser and the deployment composed them. Their Child-scoped accounts live in
-        this object, so they go with the Run and there is nothing to close."""
-        if agent_browser is None or self._browser is None or self._browser.accounts is None:
-            return None
-        return run_agent_accounts(
-            self._browser.accounts,
-            owner_id=session.owner_id,
-            prepared_input=session.prepared_input or {},
+            run_agent_accounts(
+                self._browser.accounts,
+                owner_id=session.owner_id,
+                prepared_input=session.prepared_input or {},
+            ),
         )
 
     async def prepare_orchestrated_run(
@@ -2175,8 +2166,7 @@ class AnswerExecutor:
         agent_effort: ReasoningLevel | None = None,
         connection_tools: tuple[AgentTool, ...] = (),
         lineage_loader: LineageResourceLoader | None = None,
-        agent_browser: RunAgentBrowser | None = None,
-        agent_accounts: RunAgentAccounts | None = None,
+        browsing: RunBrowsing | None = None,
     ) -> OrchestratorRun:
         pinned_model_selectors(pinned_models)
         child_pins = {pin.role: pin for pin in pinned_models}
@@ -2193,7 +2183,7 @@ class AnswerExecutor:
             fetched_bytes_sink=fetched_bytes_sink,
             resolved_mode=resolved_mode,
             resource_identity=resource_identity,
-            page_renderer=agent_browser.render if agent_browser is not None else None,
+            page_renderer=browsing.browser.render if browsing is not None else None,
         )
         try:
             models = resolved.models
@@ -2266,9 +2256,9 @@ class AnswerExecutor:
                 admitted_bytes_reader = make_admitted_bytes_reader(
                     resolved.registry, lineage=lineage_loader
                 )
-                if agent_browser is not None:
+                if browsing is not None:
                     browser = BrowserToolHost(
-                        agent_browser, resolved.registry, resource_reader, agent_accounts
+                        browsing.browser, resolved.registry, resource_reader, browsing.accounts
                     )
             orchestrator = AnswerOrchestrator(
                 synthesizer=self._models.answer_synthesizer(query_profile),

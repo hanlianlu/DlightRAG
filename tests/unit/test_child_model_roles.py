@@ -28,7 +28,7 @@ from dlightrag.engine.ai.settings import (
     ModelSettings,
 )
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
-from dlightrag.engine.answer.agent_browser import RunAgentAccounts, RunAgentBrowser
+from dlightrag.engine.answer.agent_browser import RunBrowsing
 from dlightrag.engine.answer.capabilities import RequestModelContext
 from dlightrag.engine.answer.execution.input import (
     PinnedModelProfile,
@@ -146,8 +146,7 @@ async def _prepared_executor(
     agent_effort: ReasoningLevel | None = None,
     *,
     registry: ResourceRegistry | None = None,
-    agent_browser: RunAgentBrowser | None = None,
-    agent_accounts: RunAgentAccounts | None = None,
+    browsing: RunBrowsing | None = None,
 ):
     roles = _roles()
     pins = _pins(roles)
@@ -194,8 +193,7 @@ async def _prepared_executor(
         resource_identity=new_resource_identity(),
         pinned_models=pins,
         agent_effort=agent_effort,
-        agent_browser=agent_browser,
-        agent_accounts=agent_accounts,
+        browsing=browsing,
     )
     return executor, run.orchestrator, provider, pins
 

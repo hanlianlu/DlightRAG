@@ -65,7 +65,7 @@ from dlightrag.engine.answer.agent_browser.mailbox import (
     summarize_mail,
 )
 from dlightrag.engine.answer.agent_browser.passwords import PASSWORD_MASK, FilledPasswords
-from dlightrag.engine.answer.agent_browser.run import RunAgentBrowser
+from dlightrag.engine.answer.agent_browser.run import RunAgentBrowser, RunBrowsing
 
 __all__ = [
     "ACCOUNT_LABEL",
@@ -113,6 +113,7 @@ __all__ = [
     "RenderedPage",
     "RunAgentAccounts",
     "RunAgentBrowser",
+    "RunBrowsing",
     "SessionAccounts",
     "StoredAgentAccount",
     "UploadFile",

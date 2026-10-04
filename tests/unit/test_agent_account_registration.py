@@ -6,10 +6,9 @@ from typing import Any
 
 import pytest
 
-from dlightrag.engine.answer.agent_browser import AgentAccountsBinding, AgentBrowserBinding
+from dlightrag.engine.answer.agent_browser import AgentBrowserBinding
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
-from dlightrag.engine.credential_cipher import CredentialCipher
-from tests.support.agent_browser import FakeProvider, MemoryAccountStore, browser_settings
+from tests.support.agent_browser import FakeProvider, browser_settings, idle_accounts_binding
 from tests.support.research_run import research_rig
 from tests.unit.test_answer_executor import _executor
 from tests.unit.test_answer_service import _fingerprint, _request, _Retrieval, _service, _Store
@@ -27,11 +26,7 @@ async def test_a_research_run_executes_with_the_browser_it_was_accepted_with(
             **rig.collaborators,
             model_invocation_fingerprint_for_role=_fingerprint,
             browser=AgentBrowserBinding(
-                FakeProvider(),
-                browser_settings(),
-                AgentAccountsBinding(
-                    MemoryAccountStore(), CredentialCipher(None), registration_allowed=True
-                ),
+                FakeProvider(), browser_settings(), idle_accounts_binding()
             ),
         )
 

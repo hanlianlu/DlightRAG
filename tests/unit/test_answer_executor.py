@@ -101,7 +101,7 @@ from dlightrag.engine.runtime.records import (
     artifact_digest,
 )
 from tests.in_memory_session_repository import MemoryAgentSessionRepository
-from tests.support.agent_browser import FakeProvider, browser_settings
+from tests.support.agent_browser import FakeProvider, browser_settings, idle_accounts_binding
 from tests.support.dns import public_dns
 from tests.unit.conftest import RecordingLangfuse, answer_image_policy
 
@@ -649,8 +649,9 @@ def test_a_deployment_with_a_browser_offers_login_and_the_inbox_it_can_read_and_
 async def test_a_research_runs_browser_tool_drives_the_browser_it_was_given(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.engine.answer.agent_browser import BrowserHolder, RunAgentBrowser
+    from dlightrag.engine.answer.agent_browser import BrowserHolder, RunAgentBrowser, RunBrowsing
     from dlightrag.engine.answer.resources.registry import ResourceRegistry
+    from tests.support.agent_browser import idle_accounts
     from tests.support.dns import public_dns
     from tests.tool_helpers import tool_runtime
     from tests.unit.test_child_model_roles import _prepared_executor
@@ -662,7 +663,7 @@ async def test_a_research_runs_browser_tool_drives_the_browser_it_was_given(
 
     async with ResourceRegistry() as registry:
         _, orchestrator, *_ = await _prepared_executor(
-            monkeypatch, registry=registry, agent_browser=run_browser
+            monkeypatch, registry=registry, browsing=RunBrowsing(run_browser, idle_accounts())
         )
         tools = {tool.name: tool for tool in orchestrator.prepare_run("question").tools}
 
@@ -681,32 +682,20 @@ async def test_a_research_runs_browser_tool_drives_the_browser_it_was_given(
 async def test_a_research_runs_browser_tool_acts_on_the_agent_accounts_it_was_given(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.engine.answer.agent_browser import (
-        AgentAccountsBinding,
-        BrowserHolder,
-        RunAgentAccounts,
-        RunAgentBrowser,
-    )
+    from dlightrag.engine.answer.agent_browser import BrowserHolder, RunAgentBrowser, RunBrowsing
     from dlightrag.engine.answer.resources.registry import ResourceRegistry
-    from dlightrag.engine.credential_cipher import CredentialCipher
-    from tests.support.agent_browser import MemoryAccountStore
+    from tests.support.agent_browser import idle_accounts
     from tests.tool_helpers import tool_runtime
     from tests.unit.test_child_model_roles import _prepared_executor
 
     holder = BrowserHolder("owner", "11111111-1111-1111-1111-111111111111", "worker", 1)
     # A deployment whose key ring is missing: the account actions are offered, and refuse.
-    keyless = RunAgentAccounts(
-        owner_id="owner",
-        binding=AgentAccountsBinding(
-            MemoryAccountStore(), CredentialCipher(None), registration_allowed=True
-        ),
-        registration=True,
-    )
+    keyless = idle_accounts()
 
     run_browser = RunAgentBrowser(FakeProvider(), holder, browser_settings())
     async with ResourceRegistry() as registry:
         _, orchestrator, *_ = await _prepared_executor(
-            monkeypatch, registry=registry, agent_browser=run_browser, agent_accounts=keyless
+            monkeypatch, registry=registry, browsing=RunBrowsing(run_browser, keyless)
         )
         tool = {tool.name: tool for tool in orchestrator.prepare_run("question").tools}["browser"]
 
@@ -781,7 +770,9 @@ def test_a_deployment_reports_the_chromium_sandbox_it_configures_for_its_agent_b
 
 async def test_closing_the_executor_closes_the_browser_pool() -> None:
     provider = FakeProvider()
-    executor = _executor(browser=AgentBrowserBinding(provider, browser_settings()))
+    executor = _executor(
+        browser=AgentBrowserBinding(provider, browser_settings(), idle_accounts_binding())
+    )
 
     await executor.aclose()
 

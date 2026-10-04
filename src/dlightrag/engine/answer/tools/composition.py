@@ -145,7 +145,6 @@ def research_tool_declarations(
     web_search: bool = False,
     resource_read: bool = False,
     agent_browser: bool = False,
-    agent_accounts: bool = False,
     agent_registration: bool = False,
     agent_mailbox: bool = False,
     resource_view: bool = False,
@@ -174,10 +173,7 @@ def research_tool_declarations(
     if agent_browser:
         declarations.append(
             browser_declaration(
-                upload=environment,
-                accounts=agent_accounts,
-                registration=agent_registration,
-                mailbox=agent_mailbox,
+                upload=environment, registration=agent_registration, mailbox=agent_mailbox
             )
         )
     declarations.extend(injected)
@@ -264,7 +260,6 @@ def compose_research_tools(
         web_search=search_web is not None,
         resource_read=resource_reader is not None,
         agent_browser=browser is not None,
-        agent_accounts=accounts is not None,
         agent_registration=may_register(accounts),
         agent_mailbox=has_mailbox(accounts),
         resource_view=resource_viewer is not None,
