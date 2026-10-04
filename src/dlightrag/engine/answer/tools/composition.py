@@ -177,7 +177,13 @@ def research_tool_declarations(
                 _stating(bash_declaration(), _WORKSPACE_FACT),
                 edit_declaration(),
                 write_declaration(),
-                _stating(materialize_declaration(), _MATERIALIZE_FACT),
+            )
+        )
+        if resource_read:
+            # Only a Run that can read Resources has any to copy.
+            declarations.append(_stating(materialize_declaration(), _MATERIALIZE_FACT))
+        declarations.extend(
+            (
                 grep_declaration(),
                 find_declaration(),
                 _stating(ls_declaration(), _WORKSPACE_FACT),

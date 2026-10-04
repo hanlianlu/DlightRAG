@@ -279,6 +279,14 @@ def test_materialize_states_what_copies_and_that_the_copy_is_not_the_source() ->
     assert "Agent Browser" not in materialize_declaration().description
 
 
+def test_a_workspace_with_no_resource_reading_has_nothing_to_copy() -> None:
+    """A copy takes the bytes of a Resource, and a Run that cannot read Resources holds none."""
+    declared = {tool.name for tool in research_tool_declarations(environment=True)}
+
+    assert {"read", "bash", "write"} <= declared
+    assert "materialize" not in declared
+
+
 def test_read_states_what_a_url_and_an_earlier_artifact_return() -> None:
     publishing = {
         tool.name: tool
