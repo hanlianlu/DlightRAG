@@ -108,24 +108,6 @@ def test_an_agent_mailbox_adds_the_inbox_line_and_no_field() -> None:
     assert "inbox" not in plain["action"]["description"]
 
 
-@pytest.mark.parametrize(
-    ("may_register", "offered"),
-    [(True, {"register", "login"}), (False, {"login"})],
-    ids=["registers", "login-only"],
-)
-def test_login_is_every_browsers_and_register_only_a_run_that_may_register(
-    may_register: bool, offered: set[str]
-) -> None:
-    # A Run with a browser has Agent Accounts, and only the deployment's allowance and the
-    # owner's switch together make it able to register with them.
-    actions = properties(may_register=may_register)["action"]["enum"]
-
-    assert set(actions) & {"register", "login"} == offered
-    if "register" not in offered:
-        with pytest.raises(ValidationError, match="Input should be"):
-            parse({"action": "register", "password_refs": ["e1"]}, may_register=may_register)
-
-
 def test_a_run_that_cannot_register_is_never_told_of_register() -> None:
     declaration = browser_declaration(upload=True, may_register=False, mailbox=True)
     shown = declaration.description + json.dumps(declaration.definition.parameters)
@@ -135,6 +117,10 @@ def test_a_run_that_cannot_register_is_never_told_of_register() -> None:
     assert re.search(r"register", shown, re.IGNORECASE) is None
     assert "since its latest login:" in shown
     assert "login: the ref of the email field." in shown
+    # A call of it anyway is refused as no action of the tool, and login is every Run's.
+    with pytest.raises(ValidationError, match="Input should be"):
+        parse({"action": "register", "password_refs": ["e1"]}, may_register=False)
+    assert parse({"action": "login", "password_refs": ["e1"]}, may_register=False).action == "login"
     # A Run that may register is told of both, and that its registration lasts only for the Run.
     allowed = browser_declaration(upload=True, may_register=True, mailbox=True)
     assert "since its latest register or login:" in json.dumps(allowed.definition.parameters)
