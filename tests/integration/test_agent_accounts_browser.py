@@ -2,9 +2,9 @@
 """Agent Accounts driven through the ``browser`` tool in a real Chromium (ADR 0034).
 
 What stands in for the public Web is a loopback proxy that terminates TLS, so a test drives
-``https://*.example`` pages and observes the requests the browser sends, the rows the tool stores,
-and what the tool answers. No database is needed: accounts go to a store held in memory, and the
-Resources the tool admits go to a recording sink.
+``https`` pages of ``example.com`` and ``example.org`` and observes the requests the browser
+sends, the rows the tool stores, and what the tool answers. No database is needed: accounts go to
+a store held in memory, and the Resources the tool admits go to a recording sink.
 
 A generated password is compared in code and never put into an assertion, a message or a log: a
 test counts where it appears and asserts the count, so a failure reports a number.
@@ -69,8 +69,8 @@ pytestmark = pytest.mark.asyncio
 
 OWNER = "owner"
 HOLDER = BrowserHolder(OWNER, "11111111-1111-1111-1111-111111111111", "worker", 1)
-SHOP = "https://shop.example"
-SITE = "shop.example"
+SHOP = "https://example.com"
+SITE = "example.com"
 KEYRING = '{"active": "test", "keys": {"test": "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE="}}'
 OTHER_KEYRING = (
     '{"active": "next", "keys": {"next": "YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI="}}'
@@ -133,8 +133,8 @@ EMBED = page(
     """<input aria-label="Handle" name="handle">
 <input aria-label="Email" type="email">
 <input aria-label="Password" type="password">
-<iframe src="https://pay.other.example/card"></iframe>
-<iframe src="https://accounts.shop.example/card"></iframe>""",
+<iframe src="https://pay.example.org/card"></iframe>
+<iframe src="https://accounts.example.com/card"></iframe>""",
 )
 PAGES = {
     f"{SHOP}/signup": signup(),
@@ -153,13 +153,13 @@ PAGES = {
     f"{SHOP}/join": page("Welcome", "<p>Thanks for joining</p>"),
     f"{SHOP}/verify?token=abc123": page("Verified", "<p>Your account is confirmed</p>"),
     f"{SHOP}/session": page("Dashboard", "<p>Your dashboard</p>"),
-    "https://pay.other.example/card": page(
+    "https://pay.example.org/card": page(
         "Card", '<input aria-label="Other secret" type="password">'
     ),
-    "https://accounts.shop.example/card": page(
+    "https://accounts.example.com/card": page(
         "Account", '<input aria-label="Same-site secret" type="password">'
     ),
-    "http://shop.example/signup": signup(),
+    "http://example.com/signup": signup(),
 }
 
 
@@ -515,7 +515,7 @@ async def test_a_password_fills_only_password_fields_of_the_pages_site(tmp_path:
         # The stored password goes into a frame of the same site, and into no other site's.
         stolen = await web.call(action="login", password_refs=[other])
         accepted = await web.call(action="login", password_refs=[same])
-        assert stolen.is_error and "is not on an https page of shop.example" in stolen.text_content
+        assert stolen.is_error and "is not on an https page of example.com" in stolen.text_content
         assert not accepted.is_error, accepted.text_content
         lines = {
             label: ln
@@ -527,11 +527,11 @@ async def test_a_password_fills_only_password_fields_of_the_pages_site(tmp_path:
         assert lines["Other secret"].endswith(f"[ref={other}]")
 
         # A page that is not https has no site to hold an account.
-        form = await web.form("http://shop.example/signup")
+        form = await web.form("http://example.com/signup")
         plain = await web.register(form)
         assert plain.is_error and plain.text_content == (
             "register and login need an https page with a registrable domain; this page is "
-            "shop.example/signup."
+            "example.com/signup."
         )
         assert len(web.rows) == 1
 
@@ -739,7 +739,7 @@ async def test_login_says_what_the_account_lacks_and_what_the_deployment_cannot_
         signin = await web.form(f"{SHOP}/signin")
         nothing = await web.call(action="login", email_ref=signin["email"])
         assert nothing.is_error and nothing.text_content == (
-            'No Agent Account exists for shop.example. Register one with browser(action="register", ...).'
+            'No Agent Account exists for example.com. Register one with browser(action="register", ...).'
         )
 
         # An account of a username alone has no address to fill.
@@ -753,7 +753,7 @@ async def test_login_says_what_the_account_lacks_and_what_the_deployment_cannot_
         signin = await web.form(f"{SHOP}/signin")
         no_email = await web.call(action="login", email_ref=signin["email"])
         assert no_email.text_content == (
-            "The Agent Account for shop.example has no email address; use username_ref instead."
+            "The Agent Account for example.com has no email address; use username_ref instead."
         )
         store = web.store
 
@@ -761,7 +761,7 @@ async def test_login_says_what_the_account_lacks_and_what_the_deployment_cannot_
         signin = await lost.form(f"{SHOP}/signin")
         unreadable = await lost.call(action="login", password_refs=[signin["password"]])
         assert unreadable.is_error and unreadable.text_content == (
-            "The stored password for shop.example can no longer be opened. Recover the account "
+            "The stored password for example.com can no longer be opened. Recover the account "
             f"with the site's password reset: request the reset mail for {HANDLE}, open its link "
             "with navigate, and call register on the reset form."
         )
@@ -865,7 +865,7 @@ async def test_screenshots_stop_when_a_password_shows(tmp_path: Path) -> None:
 
 
 def mail(body: str, *, subject: str = "Confirm your account") -> bytes:
-    headers = f"From: Shop <noreply@shop.example>\r\nSubject: {subject}\r\n"
+    headers = f"From: Shop <noreply@example.com>\r\nSubject: {subject}\r\n"
     return f"{headers}Content-Type: text/plain; charset=utf-8\r\n\r\n{body}".encode()
 
 
@@ -939,7 +939,7 @@ async def test_inbox_reads_only_this_sessions_aliases_since_its_window(
             )
             assert re.fullmatch(
                 rf"1\. \d{{4}}-\d\d-\d\dT\d\d:\d\d:\d\dZ \u00b7 to {re.escape(alias)} \u00b7 "
-                r"from Shop <noreply@shop.example>",
+                r"from Shop <noreply@example.com>",
                 lines[2],
             )
             assert lines[3:] == [

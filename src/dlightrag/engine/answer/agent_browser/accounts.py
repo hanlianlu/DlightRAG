@@ -9,7 +9,6 @@ accounts persist for its owner; a Child's last for its Run and live only in this
 from __future__ import annotations
 
 import base64
-import functools
 import hashlib
 import ipaddress
 import secrets
@@ -21,7 +20,7 @@ from datetime import UTC, datetime
 from typing import Protocol, cast
 from urllib.parse import urlsplit
 
-from publicsuffixlist import PublicSuffixList
+import tldextract
 from pydantic import SecretStr
 
 from dlightrag.engine.answer.agent_browser.mailbox import AgentMailbox
@@ -37,10 +36,12 @@ _SYMBOLS = "*-._"
 _ALPHABET = string.ascii_letters + string.digits + _SYMBOLS
 
 
-@functools.cache
-def _public_suffixes() -> PublicSuffixList:
-    """The Public Suffix List pinned in the wheel, which nothing here ever fetches."""
-    return PublicSuffixList()
+#: The Public Suffix List snapshot the package bundles, private section included. It is read
+#: from the package and never fetched or cached, so the list a deployment runs is the one its
+#: pin ships, whatever the environment says.
+_PUBLIC_SUFFIXES = tldextract.TLDExtract(
+    suffix_list_urls=(), cache_dir=None, include_psl_private_domains=True
+)
 
 
 def account_site(url: str) -> str | None:
@@ -48,7 +49,7 @@ def account_site(url: str) -> str | None:
 
     That is the Public Suffix List's eTLD+1, private section included, so ``alice.github.io``
     and ``bob.github.io`` are different sites. A URL of another scheme, of an IP address, or of
-    a host with no registrable part has none.
+    a host with no registrable part, such as a bare public suffix, has none.
     """
     parts = urlsplit(url)
     host = parts.hostname
@@ -57,7 +58,7 @@ def account_site(url: str) -> str | None:
     try:
         ipaddress.ip_address(host)
     except ValueError:
-        return _public_suffixes().privatesuffix(host)
+        return _PUBLIC_SUFFIXES.extract_str(host).top_domain_under_public_suffix or None
     return None
 
 

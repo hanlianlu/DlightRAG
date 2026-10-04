@@ -9,7 +9,11 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
+import sys
+import sysconfig
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from pydantic import SecretStr
@@ -34,18 +38,31 @@ OTHER_KEYRING = json.dumps(
     {"active": "next", "keys": {"next": "YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI="}}
 )
 OWNER = "owner"
-SITE = "shop.example"
+SITE = "example.com"
+_ROOT = Path(__file__).resolve().parents[2]
+_IMPORT_PATHS = [
+    str(_ROOT / "src"),
+    str(_ROOT / "packages/memory/src"),
+    sysconfig.get_path("purelib"),
+]
 
 
 @pytest.mark.parametrize(
     ("url", "site"),
     [
         ("https://www.example.co.uk/signup", "example.co.uk"),
-        ("https://accounts.shop.example/login?next=/", "shop.example"),
+        ("https://accounts.example.com/login?next=/", "example.com"),
+        ("https://www.example.com.:8443/", "example.com"),
+        ("https://www.xn--bcher-kva.com/", "xn--bcher-kva.com"),
+        # The private section of the list: a host of the platform is its own site.
         ("https://alice.github.io/", "alice.github.io"),
-        ("https://www.xn--bcher-kva.example/", "xn--bcher-kva.example"),
+        ("https://bob.github.io/", "bob.github.io"),
         ("https://github.io/", None),
-        ("http://shop.example/", None),
+        ("https://co.uk/", None),
+        # A name under no public suffix has no registrable domain.
+        ("https://shop.example/", None),
+        ("https://localhost/", None),
+        ("http://example.com/", None),
         ("https://127.0.0.1/", None),
         ("https://[::1]/", None),
         ("about:blank", None),
@@ -56,6 +73,47 @@ def test_an_account_is_keyed_by_the_registrable_domain_of_an_https_page(
     url: str, site: str | None
 ) -> None:
     assert account_site(url) == site
+
+
+def test_a_site_is_read_from_the_bundled_list_with_no_socket_and_no_cache_file(
+    tmp_path: Path,
+) -> None:
+    # A fresh interpreter, since the list is read at the first lookup and kept after it. The
+    # environment names a list to fetch and a directory to cache it in, and the lookup uses neither.
+    cache = tmp_path / "cache"
+    script = f"""
+import json, sys
+sys.path[:0] = {_IMPORT_PATHS!r}
+from dlightrag.engine.answer.agent_browser import account_site
+
+sockets = []
+def refuse(event, args):
+    if event.startswith("socket."):
+        sockets.append(event)
+        raise AssertionError(event)
+sys.addaudithook(refuse)
+sites = [account_site(url) for url in ("https://alice.github.io/", "https://www.example.co.uk/")]
+print(json.dumps([sites, sockets]))
+"""
+
+    result = subprocess.run(
+        [sys.executable, "-I", "-S", "-B", "-c", script],
+        cwd=tmp_path,
+        env={
+            "HOME": str(tmp_path),
+            "PYTHON_DOTENV_DISABLED": "1",
+            "TLDEXTRACT_CACHE": str(cache),
+            "TLDEXTRACT_PUBLIC_SUFFIX_LIST_URLS": "https://psl.invalid/public_suffix_list.dat",
+        },
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == [["alice.github.io", "example.co.uk"], []]
+    assert not cache.exists()
 
 
 def well_formed(password: str, length: int) -> bool:

@@ -601,8 +601,9 @@ could read.
   an `https` frame whose registrable domain, by the pinned Public Suffix List's eTLD+1 with
   its private section, is the account's site, judged by the frame's own address and not the
   page's, so an iframe of another site is refused and a stored password cannot be sent to a
-  site it does not belong to. The list ships in the wheel and is never fetched. A page that
-  is not `https`, or has an IP address or a bare public suffix for a host, has no site and
+  site it does not belong to. The list is the snapshot the pinned `tldextract` package
+  bundles, and it is never fetched or cached. A page that is not `https`, or has an IP
+  address, a bare public suffix, or a name under no public suffix for a host, has no site and
   fills nothing. Every ref is checked before any field is filled.
 - **Redacted from every text a page returns.** The driver prints a filled value wherever it
   describes the page: the accessibility snapshot prints a password input's value in clear,
@@ -650,10 +651,10 @@ Residual risks, recorded rather than solved:
 - Redaction finds a password by its exact spelling, so one that a site or the browser spells
   differently is not found: Chromium replaces the `*` of a downloaded file's suggested name,
   and a server may percent-encode it in a link of a mail.
-- Backups hold envelopes a retained copy of their key can still open, as for Connections, a
-  pinned Public Suffix List ages and may split or share an account wrongly, and whether a
-  site's terms allow an automated sign-up is the site's to say: DlightRAG does not read them,
-  as `read` does not read `robots.txt`.
+- Backups hold envelopes a retained copy of their key can still open, as for Connections, the
+  Public Suffix List snapshot is as old as the pinned `tldextract` release and may split or
+  share an account wrongly, and whether a site's terms allow an automated sign-up is the
+  site's to say: DlightRAG does not read them, as `read` does not read `robots.txt`.
 
 ## Answer Artifact Browser Boundary
 
