@@ -10,6 +10,7 @@ from dlightrag.engine.answer.prompts.answer import (
     EVIDENCE_USE_GUIDANCE,
     PRESENTATION_GUIDANCE,
 )
+from dlightrag.engine.answer.prompts.identity import CORE_STANCE, core_identity
 
 
 def test_both_paths_share_the_citation_evidence_and_link_rules() -> None:
@@ -19,6 +20,17 @@ def test_both_paths_share_the_citation_evidence_and_link_rules() -> None:
     for shared in (CITATION_GUIDANCE, EVIDENCE_USE_GUIDANCE, PRESENTATION_GUIDANCE):
         assert shared in fast
         assert shared in research
+
+
+def test_both_paths_open_with_the_identity_and_the_one_stance() -> None:
+    """Research's Child Sessions compose the same prompt, so they carry the stance too."""
+    fast = answer_core()
+    research = agent_control_prompt()
+
+    assert fast.startswith(f"{core_identity(environment_clock=False)}\n\n{CORE_STANCE}\n\n")
+    assert research.startswith(f"{core_identity(environment_clock=True)}\n\n{CORE_STANCE}\n\n")
+    # The realist foundation is the base the rest of the stance builds on.
+    assert CORE_STANCE.startswith("Foundation.")
 
 
 def test_research_agent_is_told_the_citation_contract() -> None:
@@ -38,10 +50,10 @@ def test_research_agent_is_told_the_citation_contract() -> None:
 def test_research_grounding_is_written_for_an_agent_that_searches() -> None:
     """Fast answers from the excerpts it was handed; Research looks for its own.
 
-    Fast's abstention sends the user off to upload material, and its no-evidence rule
-    promises a label that only Fast's synthesizer adds. An agent that can search again
-    reports a gap as what is missing and what it tried, and labels general knowledge
-    itself because nothing labels a Research answer for it.
+    Fast's no-evidence rule promises a label that only Fast's synthesizer adds, and its
+    gap rule guards the user's own documents from a general-knowledge guess. An agent
+    that can search again reports a gap as what is missing and what it tried, and labels
+    general knowledge itself because nothing labels a Research answer for it.
     """
     research = " ".join(agent_control_prompt().split())
     fast = " ".join(answer_core().split())
@@ -51,9 +63,9 @@ def test_research_grounding_is_written_for_an_agent_that_searches() -> None:
     assert "When you answer from general knowledge rather than evidence, say so" in research
     for fast_only in (
         "provided document excerpts",
-        "output only this abstention message",
-        "upload material",
-        "the application labels that answer as ungrounded",
+        "never fill the gap from general knowledge",
+        "do not borrow from unrelated excerpts",
+        "application labels an answer ungrounded when no evidence is provided at all",
     ):
         assert fast_only in fast
         assert fast_only not in research

@@ -79,7 +79,7 @@
 }
 
 .answer-evidence h3 {
-    color: var(--color-text-subtle);
+    color: var(--color-text-muted);
     font-size: var(--font-size-caption);
     margin: var(--space-related) 0 0;
     text-transform: uppercase;

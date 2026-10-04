@@ -197,7 +197,7 @@
 .upload-folder-action {
     background: transparent;
     border: 0;
-    color: var(--color-text-subtle);
+    color: var(--color-text-muted);
     font-family: inherit;
     font-size: var(--font-size-caption);
     cursor: pointer;

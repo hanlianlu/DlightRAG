@@ -290,7 +290,7 @@ body.files-panel-open #files-btn {
 
 .welcome-sub {
     font-size: var(--font-size-body);
-    color: var(--color-text-subtle);
+    color: var(--color-text-muted);
 }
 
 .app.has-messages .welcome { display: none; }
