@@ -250,8 +250,9 @@ state-changing action the tool returns a bounded accessibility snapshot,
 `aria_snapshot(mode="ai")` at the configured depth, through the preview-or-spill
 rule of 51,200 bytes or 2,000 lines. The wiring is explicit, because composition
 wraps only injected Connection tools in that rule. With execution `disabled` there
-is no Agent Workspace to spill to, and an oversized snapshot reports its full output
-as unavailable, as a Connection result does. `find` searches the page for a targeted
+is no Agent Workspace to spill to. The action has completed, so the result of an
+oversized snapshot is not an error: it says the full snapshot is unavailable and shows
+its head, which carries refs to act on. `find` searches the page for a targeted
 element instead of returning the tree. A snapshot is untrusted model context, never
 Evidence, like Bash output: a page becomes citable only through a Rendered Read or
 `capture`. Screenshots come only from the `screenshot` action, as image attachments

@@ -929,21 +929,22 @@ and Research has no `browser` tool.
   ([troubleshooting](operations.md#agent-browser-pool)) or this is `false`. `false` launches
   Chromium with `--no-sandbox`, leaving the container and its network as the only
   isolation ([Security](security.md#agent-browser-boundary)).
-- `lease_wait_seconds` is how long a render, or the first `navigate` of an Agent
-  Session's page, waits for a free browser before it reports the pool busy.
+- `lease_wait_seconds` is how long a render, or the first `navigate` of an Agent Page,
+  waits for a free browser before it reports the pool busy.
   `connect_timeout_seconds` bounds connecting to one browser.
-- `navigation_timeout_seconds` is how long a page may take to load, and how long one
-  downloaded file may take to arrive. `settle_timeout_seconds` is how long a loaded page
-  may take to go quiet before it is read as it stands.
+- `navigation_timeout_seconds` is how long a page may take to load. It also bounds the
+  `browser` tool's `wait` for text, `screenshot`, and `capture`, and the save of one
+  downloaded file. `settle_timeout_seconds` is how long a loaded page may take to go quiet
+  before it is read as it stands.
 - `action_timeout_seconds` is how long one element action, one snapshot, or one `find` may
   take on a page the `browser` tool drives. `snapshot_depth` is how many levels of the
   page its accessibility snapshot shows; deeper elements keep their refs, and `find`
   locates them. A file a page downloads is bounded by `answer.generation.max_attachment_bytes`
   ([Answer Generation And Attachments](#answer-generation-and-attachments)).
-- `idle_release_seconds`: a Run leases a browser at its first render or first page and
-  gives it back once it has gone this long with no page open and no render in flight, so
-  a Run that rendered once does not hold a pool member for its whole duration. A page that
-  stays open keeps the browser leased
+- `idle_release_seconds`: a Run leases a browser at its first render or Agent Page and
+  gives it back once it has gone this long with no Agent Page open and no render in
+  flight, so a Run that rendered once does not hold a pool member for its whole duration.
+  An Agent Page that stays open keeps the browser leased
   ([when](architecture.md#agent-browser)). The next render or page leases again, and `0`
   gives it back as soon as nothing is open. Settlement releases whatever is held either
   way.

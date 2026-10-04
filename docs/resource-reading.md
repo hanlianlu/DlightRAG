@@ -152,9 +152,10 @@ itself.
   refused on one, which has no URL of its own to render.
 - **Bytes, not a fetch.** The bytes are inline: a read converts or decodes them and never
   fetches, extracts, or renders. A capture is the page's serialized DOM, UTF-8 whatever
-  its own `<meta charset>` says. It is stored as `<last path segment>.html`, or
-  `<host>.html` when the path has none, or `capture.html` when it has no public URL, so the
-  `.html` suffix routes it to the HTML converter whatever its URL's path ends in, and its
+  its own `<meta charset>` says. It is stored under its URL's last path segment with the
+  extension replaced by `.html` (`report.pdf` becomes `report.html`), as `<host>.html`
+  when the path has none, and as `capture.html` when it has no public URL, so the `.html`
+  suffix routes it to the HTML converter whatever its URL's path ends in, and its
   text view and conversion snapshot are the ones direct HTML has. The call returns the
   Resource's handle and its first window as `read` returns it. A page with no text reads
   `no_extracted_text`, admits no Evidence, and still settles its bytes.
@@ -168,8 +169,9 @@ itself.
 - **Size.** `answer.generation.max_attachment_bytes` bounds a capture and a download, and
   it stops a download's transfer. An oversized capture is refused as
   `the captured page exceeds <n> bytes`. A download that is refused, for its size, for a
-  transfer that did not finish within `navigation_timeout_seconds`, or for being a fifth
-  in one call, is named in the result and never fails the call, and no copy of it survives.
+  transfer that failed or did not finish within `navigation_timeout_seconds`, or for being
+  a fifth in one call, is named in the result and never fails the call, and no copy of it
+  survives.
 - **Downloads.** A download is typed by its filename, then by a PDF signature, and is
   otherwise opaque. It becomes Evidence when `read` or `view` reads it, as any Resource
   does, not when it is admitted.

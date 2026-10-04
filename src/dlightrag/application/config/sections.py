@@ -384,7 +384,10 @@ class AgentBrowserConfig(BaseModel):
         default=30.0,
         gt=0,
         le=300,
-        description="How long a page may take to load.",
+        description=(
+            "How long a page may take to load, and how long a wait for text, a screenshot, "
+            "a capture, or the save of one downloaded file may take."
+        ),
     )
     settle_timeout_seconds: float = Field(
         default=5.0,

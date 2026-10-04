@@ -412,8 +412,12 @@ The adapter behind exactly two modes: `disabled` and `trust`. Trust runs the Age
 _Avoid_: implicit downgrade, permission catalog, approval prompt, shell-command filtering as a security boundary
 
 **Agent Browser**:
-The Run-scoped browser capability: one browser per Research Run, leased from a pool the deployment runs, with a short-lived anonymous context for each Rendered Read and one for each Agent Session (the parent's and every Child's) that opens a page. It is a deployment capability reached through tools, never a Connection or a process of the Agent, and the deployment's network, not DlightRAG, confines what it reaches. Fast never has one.
+The Run-scoped browser capability: one browser per Research Run, leased from a pool the deployment runs, with a short-lived anonymous context for each Rendered Read and an Agent Page for each Agent Session that opens one. It is a deployment capability reached through tools, never a Connection or a process of the Agent, and the deployment's network, not DlightRAG, confines what it reaches. Fast never has one.
 _Avoid_: Connection, Chromium in the answering container, browsing session, browser profile
+
+**Agent Page**:
+An Agent Session's anonymous context in its Run's leased Agent Browser, which the model drives as one active page; a popup or new tab becomes the active page. It ends with its Agent Session or Run.
+_Avoid_: browser session, browsing session, context (in prose)
 
 **BrowserProvider**:
 The port that leases a Run's browser endpoint. It is an ordinary adapter boundary with one implementation, a pool of Playwright run-servers; see [Architecture](architecture.md#agent-browser) for when a lease is live.

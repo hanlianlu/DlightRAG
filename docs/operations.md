@@ -183,16 +183,15 @@ docker compose logs agent-browser-egress
   names a Run holds its member only while that Run's lease is live
   ([when](architecture.md#agent-browser)), whatever the row still says. The proxy logs
   every request to its stdout; a destination it refuses is `TCP_DENIED`.
-- **Size.** A Run holds a member while it renders or has a page open, and for
+- **Size.** A Run holds a member while it renders or has an Agent Page open, and for
   `idle_release_seconds` after the last of them ends, so the pool's size bounds how many
-  Runs use a browser at the same moment across every process that runs Query workers. A
-  page the `browser` tool opened stays open until its Session ends, a Child's when its
-  drive ends and the parent's when the Run settles, so `idle_release_seconds` frees a
-  member only for a Run whose pages have all closed. When every member is held, a render
-  or a first `navigate` waits up to `lease_wait_seconds` and then fails as `busy`; the
-  model reads that and works from the direct read. Add members when that is frequent.
-  Each member is capped at `COMPOSE_AGENT_BROWSER_MEM_LIMIT` (default `2g`) and 1024
-  processes.
+  Runs use a browser at the same moment across every process that runs Query workers. An
+  Agent Page stays open until its Session ends
+  ([when](architecture.md#agent-browser)), so `idle_release_seconds` frees a member only
+  for a Run whose Agent Pages have all closed. When every member is held, a render or a
+  first `navigate` waits up to `lease_wait_seconds` and then fails as `busy`; the model
+  reads that and works from the direct read. Add members when that is frequent. Each
+  member is capped at `COMPOSE_AGENT_BROWSER_MEM_LIMIT` (default `2g`) and 1024 processes.
 - **Adding a member.** Add its service (`<<: *agent-browser`) on a network of its own,
   declare that network `internal: true`, add the network to `agent-browser-egress` and
   to `dlightrag-api`, `dlightrag-mcp`, and `dlightrag-reader`, and add the member's

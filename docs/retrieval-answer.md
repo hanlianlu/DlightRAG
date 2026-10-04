@@ -361,15 +361,13 @@ returned a JavaScript shell, and use `browser` only for a search form, a filter,
 pagination behind a button, or a file behind a download control. Fast has no tools, so
 it has no browser.
 
-- **One page per Agent Session.** An Agent Session's first `navigate` leases the Run's
-  browser, if the Run holds none, and opens that Session's anonymous page, a context of
-  its own. Any other first action answers that no page is open and leases nothing. A
-  Child Session holds the tool by default ([ADR 0025](adr/0025-a-child-inherits-capability-not-authority.md))
-  and browses in a context of its own in the same browser, so two Children never see
-  each other's cookies or pages. A Child's page closes when its drive ends, so a Child
-  that is continued starts without one, and the Parent's closes at settlement. The Run
-  keeps its browser while any Session has a page
-  ([when a lease is live](architecture.md#agent-browser)).
+- **An Agent Page for each Agent Session.** An Agent Session's first `navigate` leases the
+  Run's browser, if the Run holds none, and opens that Session's Agent Page. Any other
+  first action answers that no page is open and leases nothing. A Child Session holds the
+  tool by default ([ADR 0025](adr/0025-a-child-inherits-capability-not-authority.md)) and
+  has an Agent Page of its own in the same browser, so two Children never see each other's
+  cookies or pages. When a page closes, and how long the Run holds its browser, is in
+  [Architecture](architecture.md#agent-browser).
 - **Actions.** `navigate`, `snapshot`, `find`, `back`, and `wait` (for text, for text to
   go, or for seconds); `click`, `type` (optionally pressing Enter), `select`, `press`,
   and `scroll`; `screenshot` and `capture`; and `upload`, which is offered only where the
@@ -389,8 +387,10 @@ it has no browser.
   full snapshot is unavailable and does not fail, because its action completed and a
   failure would invite a repeat.
 - **Popups, dialogs, downloads.** A popup or a new tab becomes the active page once the
-  call that opened it has acted, and the result says so. A page that closes itself
-  returns the previous page, or leaves none until the next `navigate`. `alert`,
+  call that opened it has acted and the page it acted on has settled, and the result says
+  so. One that opens later becomes the active page when the next call that names no ref
+  begins, and a call that names a ref acts on the page its ref came from. A page that
+  closes itself returns the previous page, or leaves none until the next `navigate`. `alert`,
   `confirm`, and `beforeunload` dialogs are accepted, a `prompt` is dismissed, and each
   is reported with its message, because refusing one would undo what the call set in
   motion. A file a page downloads is admitted and named in the result
@@ -411,10 +411,9 @@ it has no browser.
   model stops that path and reports it; the tool's description says so
   ([Security](security.md#agent-browser-boundary)).
 - **Recovery.** A recovered Run starts with no page and leases a fresh browser at its next
-  `navigate`; a call that was pending settles its outcome as unknown and nothing
-  navigates again on the model's behalf, so the next call that is not a `navigate` says
-  that a Run that resumed after an interruption starts with no open page. Captures and
-  downloads that settled are restored without a browser.
+  `navigate`, so the next call that is not a `navigate` says that a Run that resumed after
+  an interruption starts with no open page. Captures and downloads that settled are
+  restored without a browser.
 
 ## Context And Model Budgets
 

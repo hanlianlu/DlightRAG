@@ -184,23 +184,25 @@ and the Landlock allow-list is unchanged.
 read(rendered=true), the Extract chain's browser step, or a browser(...) call
   -> ResourceRegistry's PageRenderer, or the browser tool's BrowserToolHost
   -> RunAgentBrowser leases on first need (PostgreSQL row bound to the Run lease)
-  -> Playwright run-server: one Chromium per connection, one context per render or Agent Session
+  -> Playwright run-server: one Chromium per connection, a context per render and per Agent Page
   -> Squid egress proxy -> public Web
 ```
 
 - **One browser per Run.** `RunAgentBrowser` belongs to one Research Run. It leases a
-  browser the first time a render or an Agent Session's page needs one, and shares it
-  between the Run's Agent Sessions. The browser is in use while any Agent Session has a
-  page open or a render is in flight; the Run gives it back `idle_release_seconds` after
-  the last of them ends, and closes it at settlement, before the coordinator's terminal
-  write. A Run that browses therefore holds its pool member for as long as a page stays
-  open, up to the end of the Run. Fast gets none.
-- **A context for each render and each Agent Session.** A render uses a temporary
-  context that ends with it. The `browser` tool's first `navigate` opens a context for
-  the calling Agent Session, keyed by its execution scope: the parent's, and each Child's,
-  so no two Sessions share cookies, storage, or a page. A Child's context closes when its
-  drive ends, however it ends, which is why a continued Child starts without a page; the
-  rest close with the browser. Every context is made by one function in the adapter.
+  browser the first time a render or an Agent Page needs one, and shares it between the
+  Run's Agent Sessions. The browser is in use while any Agent Page is open or a render is
+  in flight; the Run gives it back `idle_release_seconds` after the last of them ends, and
+  closes it at settlement, before the coordinator's terminal write. A Run that browses
+  therefore holds its pool member for as long as an Agent Page stays open, up to the end
+  of the Run. Fast gets none.
+- **An Agent Page for each Agent Session.** A render uses a temporary context that ends
+  with it. The `browser` tool's first `navigate` opens the calling Agent Session's Agent
+  Page, keyed by its execution scope: the parent's, and each Child's, so no two Sessions
+  share cookies, storage, or a page. A Child's Agent Page closes when its drive ends,
+  however it ends, which is why a continued Child starts without one; every other closes
+  with the browser at settlement. A browser that does not answer a request to open one
+  within ten seconds is given up as disconnected, as one that does not close a context is,
+  so a wedged browser never holds the Run's other pages or its settlement.
 - **The lease is the Run's lease.** The pool's leases are PostgreSQL rows that count as
   live exactly while the holder's Run lease does: the same worker and fencing epoch on
   a running Run whose lease has not expired. The Run's own heartbeat therefore renews
@@ -215,11 +217,9 @@ read(rendered=true), the Extract chain's browser step, or a browser(...) call
   `PageRenderer` and the tool a `BrowserToolHost`, never a driver; composition
   (`_compose`) builds the provider only when `answer.agent.browser` names endpoints.
 - **The tool is composed beside `read`.** `browser` is one tool with an `action`, declared
-  when the Run has a browser, with `upload` only where it has an Agent Workspace. It is not
-  read-only and never replays, so a call runs alone and one pending at a crash settles its
-  outcome as unknown; the recovered Run's browser has no page, and the next call that needs
-  one says so. A capture and a file a page downloads are admitted through the
-  ResourceRegistry as Resources of the call that made them
+  when the Run has a browser, with `upload` only where it has an Agent Workspace
+  ([contract](retrieval-answer.md#agent-browser)). A capture and a file a page downloads
+  are admitted through the ResourceRegistry as Resources of the call that made them
   ([Resource reading](resource-reading.md#browser-captures-and-downloads)).
 - **Fails closed, and the Run goes on.** A busy or unreachable pool, a page that fails,
   or a lost browser is a model-visible reason on that `read` or `browser` call, not a Run
