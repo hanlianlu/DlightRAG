@@ -160,9 +160,8 @@ that its workspace Python can build a requested Word, Excel or PowerPoint file,
 `charts`, and `skill-creator`), the global root (default `~/.dlightrag/skills`),
 and the owner's own published Skills (default `~/.dlightrag/owner_skills`), in
 that precedence. Research parents may publish and delete their owner's Skills;
-built-in and global Skills are read-only. The image carries the renderer `charts`
-drives: `echarts-render` draws an Apache ECharts option on the image's node and
-rasterizes it with resvg ([Operations](operations.md#agent-chart-rendering)).
+built-in and global Skills are read-only. The image ships the renderer `charts`
+calls, `echarts-render` ([Operations](operations.md#agent-chart-rendering)).
 Outside tools come only from the owner's enabled Personal MCP Connections,
 pinned per Run; Fast has no external tools
 ([ADR 0012](adr/0012-personal-connections-and-hot-plug.md)).

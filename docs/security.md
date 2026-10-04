@@ -441,13 +441,12 @@ Execution modes:
   user's network authority, which is the deployment's to enforce with a network
   policy rather than a path list.
 
-The image's chart renderer (`echarts-render`, `resvg`, `node` and a font;
-[Operations](operations.md#agent-chart-rendering)) sits under `/usr`, which the
-allow-list already grants read-only. It runs inside the same confinement, needs
-no declared layer, reaches nothing the Agent could not already, and writes only
-where the Agent points it in its workspace. The HTML it can write is an Artifact
-like any other: active HTML, inert until the reader activates it under the
-[browser boundary](#answer-artifact-browser-boundary).
+The chart renderer the image ships
+([Operations](operations.md#agent-chart-rendering)) sits under `/usr`, which the
+allow-list already grants read-only, so its executables run inside the same
+confinement, declare no layer, and reach nothing new. The HTML it can write is an
+Artifact like any other: active HTML, inert until the reader activates it under
+the [browser boundary](#answer-artifact-browser-boundary).
 
 Root checks are not a shell sandbox. Research reaches outside tools only through
 its owner's Personal MCP Connections, pinned per Run and gated per effect, with
