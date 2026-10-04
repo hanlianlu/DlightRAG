@@ -179,3 +179,19 @@ def test_a_run_is_told_whose_identity_it_acts_as_and_who_makes_passwords() -> No
     assert "registration" not in login_only
     for description in (accounting, login_only):
         assert not any(character.isdigit() for character in description.replace("[ref=eN]", ""))
+
+
+def test_a_run_that_cannot_register_is_told_not_to_make_an_account_by_hand() -> None:
+    registering, login_only = (
+        browser_declaration(upload=False, may_register=may_register, mailbox=False).description
+        for may_register in (True, False)
+    )
+
+    # Without register the page and its forms are still the model's, so the description says
+    # what the missing action does not: this Run opens no account, by hand either.
+    assert login_only.endswith(
+        "This Run does not open new accounts, so never create an account on any site by filling "
+        "a sign-up form yourself."
+    )
+    # A Run that registers through the tool has no such sentence.
+    assert "sign-up form" not in registering
