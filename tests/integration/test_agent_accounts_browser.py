@@ -705,6 +705,16 @@ async def test_a_password_that_cannot_be_stored_is_cleared_from_the_form(
             "Field {email} holds no email address to record; type the address first.",
         ),
         (
+            {"handle": HANDLE, "email": "@ab"},
+            ("email",),
+            "Field {email} holds no email address to record; type the address first.",
+        ),
+        (
+            {"handle": HANDLE, "email": "ab@"},
+            ("email",),
+            "Field {email} holds no email address to record; type the address first.",
+        ),
+        (
             {"email": EMAIL},
             ("email", "handle"),
             "Field {handle} holds no username to record; type it first.",

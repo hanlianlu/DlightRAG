@@ -437,11 +437,11 @@ withdraws both actions together, and a Run accepted with them is pinned to them.
   password fields state, and refuses below 12 characters. The address is the one the account
   already has, which is filled again; else, with a mailbox, the owner's alias for the site (a
   Child gets a random alias of its own), which is filled; else the address the Agent typed,
-  which must hold one `@` and no whitespace. The username is the one typed, 1 to 128
-  characters with no control character. A new account needs at least one of them. It then
-  generates the password, fills it, and records the account before the site has accepted the
-  form, because DlightRAG cannot see the site's verdict. A refused sign-up leaves the record
-  that `login` will fail with, and so does a password the site rejected.
+  which must hold one `@` with text on each side of it and no whitespace. The username is the
+  one typed, 1 to 128 characters with no control character. A new account needs at least one
+  of them. It then generates the password, fills it, and records the account before the site
+  has accepted the form, because DlightRAG cannot see the site's verdict. A refused sign-up
+  leaves the record that `login` will fail with, and so does a password the site rejected.
 - **A password reset is a registration.** `register` on a form of a site whose account
   exists gives the account a new password, keeps its account id and address, and replaces its
   envelope. That is also how an account recovers when no key opens its envelope: `login` with
