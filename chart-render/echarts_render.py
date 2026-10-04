@@ -142,8 +142,11 @@ def _draw(option: dict[str, Any], width: int, height: int) -> str:
         "width": width,
         "height": height,
     }
-    drawn = subprocess.run(
-        ["node", str(_HERE / "ssr.cjs")], input=json.dumps(request), capture_output=True, text=True
+    drawn = subprocess.run(  # noqa: S603 - argv list, no shell, a fixed executable
+        ["node", str(_HERE / "ssr.cjs")],  # noqa: S607 - node is on the image's PATH
+        input=json.dumps(request),
+        capture_output=True,
+        text=True,
     )
     if drawn.returncode or not drawn.stdout.startswith("<svg"):
         _fail(f"ECharts could not draw this option: {drawn.stderr.strip()[:300] or 'no output'}")
@@ -158,7 +161,9 @@ def _rasterize(svg: str, out: Path, scale: float) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     # Resources resolve beside the PNG, which is what stops resvg warning that stdin has no directory.
     command = ["resvg", *flags, "--zoom", str(scale), "--resources-dir", str(out.parent), "-", "-c"]
-    png = subprocess.run(command, input=svg.encode(), capture_output=True)
+    png = subprocess.run(  # noqa: S603 - argv list, no shell, resvg is on the image's PATH
+        command, input=svg.encode(), capture_output=True
+    )
     warnings = png.stderr.decode(errors="replace")
     # With the font in place resvg warns of nothing, and "No match for" means text was dropped.
     if png.returncode or not png.stdout.startswith(b"\x89PNG") or "No match for" in warnings:
