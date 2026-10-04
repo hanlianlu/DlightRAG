@@ -207,9 +207,11 @@ a.dl-btn {
 
 /* === Navigation item === */
 
-/* A native <button> inside a <nav>: an icon, a label, and an optional trailing status. The item
- * whose page is showing carries aria-current="page" and the selected-row tint. A feature that
- * lays the same items out as a list adds its own parts; the primitive owns the row. */
+/* A native <button> inside a <nav>: an icon, a label, and a short trailing status. The item whose
+ * page is showing carries aria-current="page" and the selected-row tint. The same row has a list
+ * form (`dl-nav-item dl-nav-item--list`) for a screen that shows the navigation as a page of its
+ * own: the full status line under the label and a disclosure, instead of the short status. The
+ * detail line stays in the tree in both forms, so the row's description never depends on its form. */
 
 .dl-nav-item {
     align-items: center;
@@ -275,14 +277,47 @@ a.dl-btn {
 
 .dl-nav-item-detail {
     color: var(--color-text-muted);
+    display: none;
     font-size: var(--font-size-caption);
     line-height: var(--line-height-control);
 }
 
 .dl-nav-item-status {
-    color: var(--color-text-subtle);
+    color: var(--color-text-muted);
     flex: none;
     font-size: var(--font-size-caption);
+}
+
+.dl-nav-item-disclosure {
+    color: var(--color-text-dim);
+    display: none;
+    flex: none;
+}
+
+/* The row as an entry of a bordered list: the list owns the outer border and clips its corners, so
+ * the row is square, takes the list's text colour, and sits on a hairline under the row before it. */
+.dl-nav-item--list {
+    border-radius: 0;
+    color: inherit;
+    gap: var(--space-component);
+    padding-block: var(--space-tight);
+    padding-inline: var(--space-component);
+}
+
+.dl-nav-item--list + .dl-nav-item--list {
+    border-block-start: 1px solid var(--color-border-subtle);
+}
+
+.dl-nav-item--list .dl-nav-item-detail {
+    display: block;
+}
+
+.dl-nav-item--list .dl-nav-item-disclosure {
+    display: flex;
+}
+
+.dl-nav-item--list .dl-nav-item-status {
+    display: none;
 }
 
 /* === Confirm Dialog === */

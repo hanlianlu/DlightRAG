@@ -189,6 +189,28 @@ it('a switch is as easy to hit as the control ladder says, however small its tra
   await atViewport(PHONE, check);
 });
 
+it('a navigation row shows its short status, and in the list form its full line and a disclosure instead', () => {
+  const row = (form: string): string => `
+    <button class="dl-nav-item ${form}" type="button">
+      <span class="dl-nav-item-text">
+        <span class="dl-nav-item-label">Connections</span>
+        <span class="dl-nav-item-detail">MCP · 1 of 2 enabled</span>
+      </span>
+      <span class="dl-nav-item-status">1/2</span>
+      <span class="dl-nav-item-disclosure">&gt;</span>
+    </button>`;
+  const nav = fixture('', `<nav>${row('')}${row('dl-nav-item--list')}</nav>`);
+  const [plain, list] = [...nav.querySelectorAll<HTMLElement>('.dl-nav-item')];
+  const shown = (item: HTMLElement): string[] => ['status', 'detail', 'disclosure']
+    .filter((part) => item.querySelector(`.dl-nav-item-${part}`)!.getClientRects().length > 0);
+
+  expect(shown(plain!)).to.deep.equal(['status']);
+  expect(shown(list!)).to.deep.equal(['detail', 'disclosure']);
+  // The list form is an entry of a list that clips it, so its corners are the list's.
+  expect(getComputedStyle(list!).borderTopLeftRadius).to.equal('0px');
+  expect(getComputedStyle(plain!).borderTopLeftRadius).not.to.equal('0px');
+});
+
 it('a switch thumb sits at the same inset inside its track in both states', () => {
   const control = (checked: boolean): HTMLButtonElement => {
     const button = document.createElement('button');

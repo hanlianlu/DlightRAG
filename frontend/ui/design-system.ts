@@ -85,7 +85,27 @@ if (host) {
                 <span class="dl-nav-item-status">3</span>
               </button>
             </nav>
-            <div class="ds-choice-card" role="radiogroup" aria-label="Choice row specimen">
+            <nav class="ds-list-card" aria-label="Navigation list form specimen">
+              <button class="dl-nav-item dl-nav-item--list" type="button">
+                <span class="dl-nav-item-icon">${icon('connections', {size: 'sm'})}</span>
+                <span class="dl-nav-item-text">
+                  <span class="dl-nav-item-label">Connections</span>
+                  <span class="dl-nav-item-detail">MCP · 1 of 2 enabled</span>
+                </span>
+                <span class="dl-nav-item-status" aria-hidden="true">1/2</span>
+                <span class="dl-nav-item-disclosure" aria-hidden="true">${icon('disclosure', {size: 'sm'})}</span>
+              </button>
+              <button class="dl-nav-item dl-nav-item--list" type="button">
+                <span class="dl-nav-item-icon">${icon('agent-accounts', {size: 'sm'})}</span>
+                <span class="dl-nav-item-text">
+                  <span class="dl-nav-item-label">Agent Accounts</span>
+                  <span class="dl-nav-item-detail">3 websites</span>
+                </span>
+                <span class="dl-nav-item-status" aria-hidden="true">3</span>
+                <span class="dl-nav-item-disclosure" aria-hidden="true">${icon('disclosure', {size: 'sm'})}</span>
+              </button>
+            </nav>
+            <div class="ds-list-card" role="radiogroup" aria-label="Choice row specimen">
               <label class="dl-dialog-checkbox dl-dialog-checkbox--row">
                 <input type="radio" name="ds-choice" checked> Automatic
               </label>

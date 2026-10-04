@@ -275,7 +275,7 @@ export class DlSettingsDialog extends LightElement {
     `;
   }
 
-  /** One row of the navigation: a desktop shows its short status, a phone's list its full line. */
+  /** One row of the navigation: beside a pointer it shows its short status, on a phone's list its full line. */
   #navItem(item: SectionDefinition, phone: boolean): TemplateResult {
     const status = statusOf(this.summaries[item.section]);
     const label = `settings-nav-${item.section}-label`;
@@ -283,17 +283,17 @@ export class DlSettingsDialog extends LightElement {
     // Only a dialog that is showing has a current page, and a phone's list shows no page at all.
     const current = this.mounted && this.page === item.section && (!phone || this.level === 'page');
     return html`
-      <button class="dl-nav-item" type="button" data-section=${item.section}
+      <button class="dl-nav-item ${phone ? 'dl-nav-item--list' : ''}" type="button" data-section=${item.section}
         aria-current=${current ? 'page' : nothing}
         aria-labelledby=${label} aria-describedby=${status.detail ? detail : nothing}
         @click=${() => { void this.#select(item.section); }}>
         <span class="dl-nav-item-icon">${icon(item.icon, {size: 'sm'})}</span>
         <span class="dl-nav-item-text">
           <span id=${label} class="dl-nav-item-label">${item.label()}</span>
-          <span id=${detail} class="dl-nav-item-detail ${styles.statusDetail}">${status.detail}</span>
+          <span id=${detail} class="dl-nav-item-detail">${status.detail}</span>
         </span>
-        <span class="dl-nav-item-status ${styles.statusShort}" aria-hidden="true">${status.short}</span>
-        <span class=${styles.chevron} aria-hidden="true">${icon('disclosure', {size: 'sm'})}</span>
+        <span class="dl-nav-item-status" aria-hidden="true">${status.short}</span>
+        <span class="dl-nav-item-disclosure" aria-hidden="true">${icon('disclosure', {size: 'sm'})}</span>
       </button>`;
   }
 
