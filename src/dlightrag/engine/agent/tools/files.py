@@ -679,13 +679,16 @@ def materialize_tool(
 
     async def execute(args: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = cast(MaterializeArgs, args)
-        # A refusal here loads and adopts nothing.
+        # A refusal of the workspace or of the destination loads and adopts nothing.
         if blocked := workspace_integrity_refusal(environment):
             return blocked
         try:
             path = environment.resolve(args.path)
         except PathRejected as exc:
             return ToolResult.text(str(exc), is_error=True)
+        if environment.stat_kind(path) == "directory":
+            # The write refuses this too, but only once the bytes are loaded.
+            return ToolResult.text("cannot overwrite a directory", is_error=True)
         destination = _escape_path(_workspace_relative_path(environment.root, path))
         await runtime.emit_update(ToolResult.text("", subject=destination))
         admitted = await admitted_bytes_reader(args.resource_id, runtime)

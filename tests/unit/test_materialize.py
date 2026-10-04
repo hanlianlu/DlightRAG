@@ -255,6 +255,11 @@ def fill(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(local, "WORKSPACE_MAX_BYTES", 8)
 
 
+def occupy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A directory where the file is to go."""
+    (tmp_path / DESTINATION).mkdir(parents=True)
+
+
 def entries(root: Path) -> list[str]:
     """Everything a workspace holds, as a refused call must leave it."""
     return sorted(path.relative_to(root).as_posix() for path in root.rglob("*"))
@@ -266,6 +271,7 @@ def entries(root: Path) -> list[str]:
         pytest.param(latch, DESTINATION, {}, "workspace integrity latched", 0, id="latched"),
         pytest.param(fill, DESTINATION, {}, "workspace quota exceeded", 1, id="full"),
         pytest.param(sound, "../x", {}, "path must not escape the workspace", 0, id="escaping"),
+        pytest.param(occupy, DESTINATION, {}, "cannot overwrite a directory", 0, id="directory"),
         pytest.param(
             sound,
             DESTINATION,
