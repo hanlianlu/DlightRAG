@@ -137,24 +137,29 @@ text are still text and take Muted, a clear step fainter than the Primary text a
 person types. A mark that shows a state, such as an idle status light, a
 disclosure chevron, or an unchecked switch thumb, takes Subtle.
 
-Accent text (`--color-accent-text`) is the gold for small text, such as an
-answer's links, Load older in the conversation list, the All workspaces row, the
-ingest target pill, and the Mine badge in the skill menu. Small text often sits
-on a tint, a hovered row or a pill's accent fill, so the role clears 4.5:1 on
-every surface and under every tint in both modes: gold-200 in dark, the Primary
-accent itself (5.73:1 at worst), and gold-500 in Mineral Light, one step darker
-(4.84:1 at worst). `frontend/ui/geometry.browser.test.ts` enforces that floor.
-One step quieter, gold-300 read 4.26:1 under the ingest pill's hover tint in
-dark, and in Mineral Light gold-400 reads only 3.45:1 on an elevated surface.
+Accent text (`--color-accent-text`) is the gold for text, such as Fork under an
+answer, the reference ids, Load older in the conversation list, the All
+workspaces row, the ingest target pill, and the Mine badge in the skill menu. On
+a plain surface it reaches AAA's 7:1 in dark (7.66:1 on an elevated surface) and
+on the Mineral Light page (8.34:1); a Mineral Light panel holds it at 6.94:1,
+and 7:1 on every panel would take a gold darker than the Body text. Small text
+often sits on a tint, a hovered row or a pill's accent fill, so the role clears
+4.5:1 on every surface and under every tint in both modes: gold-200 in dark, the
+Primary accent itself (5.73:1 at worst), and gold-500 in Mineral Light, one step
+darker (4.84:1 at worst). `frontend/ui/geometry.browser.test.ts` enforces that
+floor. One step quieter, gold-300 read 4.26:1 under the ingest pill's hover tint
+in dark, and in Mineral Light gold-400 reads only 3.45:1 on an elevated surface.
 The composer's attach glyph and the create-workspace glyph take it too, well
 above the 3:1 a mark needs.
 
 In Mineral Light the Primary accent (`--color-accent-action`) reads 4.92:1 on
 the page background but 4.09:1 on a panel and 3.45:1 on an elevated surface, so
-it colours text only on the page, such as the Fork action under an answer and
-Retry under a history image. Everywhere else it colours marks held to 3:1, such
-as the answer's status dot, checked radios, the theme menu's check, and the
-ingest target's dot.
+it colours no text. It colours marks held to 3:1 on every surface, such as the
+underline under an answer's link, the answer's status dot, checked radios, the
+theme menu's check, and the ingest target's dot. Fork and Retry under a history
+image sit only on the page, where Accent text reads 8.34:1 against the Primary
+accent's 4.92:1. Mineral Light has no darker gold for their hover, so they
+underline under the pointer.
 
 The focus ring (`--color-control-ring`, aliased as `--focus-ring-color`) is a
 2px outline drawn 2px outside its control, so it reads against the surface or
@@ -272,11 +277,16 @@ Lightbox scrims remain dark in both modes because their purpose is image isolati
 
 ### Links
 
-An answer's links, in chat and in a Markdown Artifact, take Accent text and are
-underlined at rest; the underline thickens under the pointer. No colour reads
-4.5:1 on the page and 3:1 from the Body text around it at once, so colour alone
-cannot mark a link, and an underline shown only on hover still fails WCAG 1.4.1
-(F73).
+An answer's links, in chat and in a Markdown Artifact, keep the colour of the
+text they sit in and carry a 1px underline in the Primary accent at rest, 2px
+under the pointer. No colour reads 4.5:1 on the page and 3:1 from the Body text
+around it at once: a colour 3:1 from the Body text reads at most 4.42:1 on the
+dark page and 3.28:1 on the light one. So colour alone cannot mark a link, and
+an underline shown only on hover still fails WCAG 1.4.1 (F73). In its text's
+colour a link reads at that text's contrast, AAA for Body text wherever an
+answer places it (7.45:1 at worst, on a tinted table row in the Canvas) and AA
+in a quote, which is Muted. The underline holds 3:1 on every surface (3.45:1 on
+a Mineral Light table header).
 
 ## Failure Handling
 

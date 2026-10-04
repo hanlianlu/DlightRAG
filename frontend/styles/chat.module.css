@@ -85,15 +85,18 @@
 .runActions button {
   background: transparent;
   border: 0;
-  color: var(--color-accent-action);
+  color: var(--color-accent-text);
   cursor: pointer;
   font: inherit;
   font-size: var(--font-size-caption);
   padding: 0;
 }
 
+/* Mineral Light has no gold darker than Accent text, so hover also underlines. */
 .runActions button:hover {
   color: var(--color-accent-emphasis);
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
 }
 
 
@@ -383,7 +386,7 @@
 .historyImageRetry {
   background: transparent;
   border: 0;
-  color: var(--color-accent-action);
+  color: var(--color-accent-text);
   cursor: pointer;
   font: inherit;
   font-size: var(--font-size-caption);
@@ -398,6 +401,8 @@
 
 .historyImageRetry:hover {
   color: var(--color-accent-emphasis);
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
 }
 
 /* === Text Error === */
@@ -605,10 +610,15 @@
 }
 
 /* No colour reads 4.5:1 on the page and 3:1 from the text around it at once, so
-   the underline, not the gold, is what marks a link. */
+   an underline at rest marks a link; one shown only under the pointer is colour
+   alone (WCAG 1.4.1, F73). The link keeps the colour of the text it sits in and
+   reads at that text's contrast. The underline is a mark, so it takes the
+   Primary accent, which holds 3:1 on every surface. */
 .markdownContent a:not(:where([data-answer-typed] *)) {
-  color: var(--color-accent-text);
-  text-decoration: underline;
+  color: inherit;
+  text-decoration-color: var(--color-accent-action);
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
   text-underline-offset: 0.2em;
 }
 
