@@ -614,9 +614,9 @@ and times are UTC ISO 8601 with a `Z`. `PUT /web/api/agent-accounts/settings` ta
 `{"registration_enabled": <bool>}` and is accepted even where the deployment does not allow
 registration.
 `DELETE /web/api/agent-accounts/{site}` removes the owner's account on a site, and answers 404
-where this owner has none there, another owner's account being as unknown as none, and 422
-where `site` is not a lowercase hostname. Each answers 200 with the fresh view, and none takes
-an `Idempotency-Key`, since both writes are idempotent by key. No answer carries a password,
+where this owner has none there, another owner's account being as unknown as none. Each
+answers 200 with the fresh view, and none takes an `Idempotency-Key`, since both writes are
+idempotent by key. No answer carries a password,
 envelope, key id, or account id ([Security](security.md#agent-accounts)).
 
 An answer that cites a stored image is projected with that image addressed on

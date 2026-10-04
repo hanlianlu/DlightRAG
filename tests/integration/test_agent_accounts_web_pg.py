@@ -291,22 +291,6 @@ async def test_another_owners_account_is_as_unknown_as_one_nobody_has() -> None:
         assert await web.accounts.account(owner_id=web.owner("a"), site="shop.example") is not None
 
 
-@pytest.mark.parametrize("mode", MODES)
-@pytest.mark.parametrize(
-    "site",
-    ["Shop.Example", "shop..example", ".example", "shop.example.", "a%20b", "sh%C3%B6p.example"],
-)
-async def test_a_site_that_is_not_a_lowercase_hostname_is_refused(mode: str, site: str) -> None:
-    async with deployed(mode) as web, web.browser("a") as client:
-        await web.seed(web.owner("a"), "shop.example")
-        await client.get("/web/api/agent-accounts")
-
-        refused = await client.delete(f"/web/api/agent-accounts/{site}", headers=writing(client))
-
-        assert refused.status_code == 422
-        assert await web.accounts.account(owner_id=web.owner("a"), site="shop.example") is not None
-
-
 def delete_shop(client: AsyncClient, headers: dict[str, str]) -> Any:
     return client.delete("/web/api/agent-accounts/shop.example", headers=headers)
 

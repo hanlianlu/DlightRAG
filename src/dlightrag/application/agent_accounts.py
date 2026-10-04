@@ -17,11 +17,10 @@ from __future__ import annotations
 import asyncio
 import datetime
 import logging
-import re
 from dataclasses import dataclass
 from typing import Protocol
 
-from dlightrag.application.errors import ApplicationInputError, ApplicationNotFoundError
+from dlightrag.application.errors import ApplicationNotFoundError
 from dlightrag.engine.answer.agent_browser import AgentAccountStore, reseal_agent_accounts
 from dlightrag.engine.credential_cipher import CredentialCipher
 
@@ -29,10 +28,6 @@ logger = logging.getLogger(__name__)
 
 #: How often a writer looks for envelopes under a retired key, as often as Connections do.
 _MAINTENANCE_SECONDS = 60.0
-
-#: What names an account: the registrable domain of its site, in lowercase.
-_SITE = re.compile(r"[a-z0-9_-]{1,63}(\.[a-z0-9_-]{1,63})*")
-_SITE_MAX_CHARS = 253
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,10 +156,8 @@ class AgentAccounts:
         return await self.view(owner_id=owner_id)
 
     async def remove(self, *, owner_id: str, site: str) -> AgentAccountsView:
-        """Remove the owner's account on ``site``. Another owner's account there is not theirs
-        to remove, so it is as unknown as one nobody has."""
-        if len(site) > _SITE_MAX_CHARS or _SITE.fullmatch(site) is None:
-            raise ApplicationInputError("site must be a lowercase hostname")
+        """Remove the owner's account on ``site``. A site the owner has no account on is not
+        found, whoever else has one there."""
         if not await self._directory.delete(owner_id=owner_id, site=site):
             raise ApplicationNotFoundError("This owner has no Agent Account for that site")
         return await self.view(owner_id=owner_id)
