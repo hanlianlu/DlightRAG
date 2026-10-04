@@ -67,9 +67,12 @@ async def test_a_research_run_is_offered_register_exactly_as_it_was_accepted_abl
         await rig.run(deployment, await _accepted(deployment, registers=registers))
 
     assert len(rig.offered) == 1, "the Run never reached its model"
-    actions = set(rig.offered[0]["browser"].parameters["properties"]["action"]["enum"])
+    browser = rig.offered[0]["browser"]
+    actions = set(browser.parameters["properties"]["action"]["enum"])
     # Login is every Run's, and register only the Run that was accepted able to.
     assert ("register" in actions, "login" in actions) == (registers, True)
+    # A Run that cannot register is told, in what the model is sent, not to sign up by hand.
+    assert ("sign-up form" in browser.description) == (not registers)
 
 
 async def test_a_run_stored_with_no_pin_cannot_register_so_one_planned_to_is_refused(

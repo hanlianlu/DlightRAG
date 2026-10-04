@@ -235,7 +235,8 @@ _LOGIN_ONLY = AccountWording(
     fact=(
         "login acts as the Agent's own identity: never type the owner's email address, name, "
         "password, or other personal information into a form. DlightRAG fills every stored "
-        "password by ref, so you never see or type one."
+        "password by ref, so you never see or type one. This Run does not open new accounts, so "
+        "never create an account on any site by filling a sign-up form yourself."
     ),
     inbox=_inbox_line("login"),
     arguments=(

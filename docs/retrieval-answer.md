@@ -444,7 +444,9 @@ and refused as incompatible, like any Run whose tools changed. A Child's tools f
 parent's, and a Child's registration still lasts for the Run alone. A Run that cannot register
 is told of no `register`: the tool's description, its action lines and argument descriptions,
 and the sentence of a refusal name only the actions the Run has, and an `inbox` window opens
-at a `login`.
+at a `login`. Its description also says that the Run does not open new accounts, so the Agent
+must not create one on any site by filling a sign-up form itself; that is an instruction and
+not a control ([Security](security.md#agent-accounts)).
 
 - **`register`** acts on the page `navigate` opened and leases nothing. It takes
   `password_refs` (one or two, such as a password and its confirmation), and optionally

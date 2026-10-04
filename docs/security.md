@@ -583,8 +583,7 @@ The Agent may register on a third-party site and sign in again later
 ([ADR 0034](adr/0034-agent-accounts-and-the-agent-mailbox.md); the actions are in
 [Retrieval and Answer](retrieval-answer.md#agent-accounts-and-the-agent-mailbox)). What
 makes that safe is that no password is ever anywhere the model, or anything it can steer,
-could read, and that the owner and the deployment decide whether it may open new accounts
-at all.
+could read, and that the owner and the deployment decide whether it is offered `register`.
 
 - **An identity of its own.** No credential, name, address, or other personal information
   of the owner enters a form, and the tool's description says so. A mailbox alias is 16
@@ -604,15 +603,18 @@ at all.
   site's password reset replaces it. No route, view, export, or result returns a password.
   The Settings routes list an owner's accounts by site, identity, and two dates, and return
   no envelope, key id, or account id either; no route edits an account.
-- **The owner and the deployment bound registration.** `register` is offered only to a Run
+- **The owner and the deployment bound `register`.** `register` is offered only to a Run
   whose deployment allows it and whose owner has not turned off the Agent's new sign-ups
-  ([how a Run gets it](retrieval-answer.md#agent-accounts-and-the-agent-mailbox)), so an owner
-  who does not want the Agent to open accounts in their name turns that off, and the
-  deployment's setting is a ceiling no switch exceeds. Turning registration off withdraws no
-  account and no `login`: removing an account is the owner's own act in Settings, which
-  deletes the saved sign-in and the sealed password and leaves the account on the site. Both
-  are owner-scoped Web routes, so another owner's account is as unknown to them as one nobody
-  has, and their writes meet the CSRF check above in every authentication mode.
+  ([how a Run gets it](retrieval-answer.md#agent-accounts-and-the-agent-mailbox)), and the
+  deployment's setting is a ceiling no switch exceeds. That is the whole of what is enforced:
+  a Run that cannot register is not offered `register`, so DlightRAG makes no password for it.
+  The rest is an instruction: the tool's description tells such a Run not to create an account
+  by filling a sign-up form itself, and nothing in the browser stops a model that disregards
+  it. Turning registration off withdraws no account and no `login`: removing an account is the
+  owner's own act in Settings, which deletes the saved sign-in and the sealed password and
+  leaves the account on the site. Both are owner-scoped Web routes, so another owner's account
+  is as unknown to them as one nobody has, and their writes meet the CSRF check above in every
+  authentication mode.
 - **Filled only into the account's own site.** A password goes only into a password field in
   an `https` frame whose registrable domain, by the pinned Public Suffix List's eTLD+1 with
   its private section, is the account's site, judged by the frame's own address and not the
@@ -652,6 +654,10 @@ at all.
 
 Residual risks, recorded rather than solved:
 
+- The tool's descriptions are instructions, not controls. `type` and `click` act on any form,
+  so a model that disregards them can fill a sign-up form itself, with a password of its own
+  choosing, whether or not its Run may register. That password is in the model's context, and
+  redaction does not find it: it replaces only the passwords DlightRAG filled.
 - A site and its scripts necessarily see the password, and it crosses the pool's internal
   network unencrypted inside the Playwright protocol. One password for each account confines
   a leak to that account.
