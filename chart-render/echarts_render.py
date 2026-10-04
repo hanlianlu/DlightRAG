@@ -9,6 +9,7 @@ the chart with ECharts' server-side SVG renderer (``ssr.cjs``) and the resvg CLI
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import re
 import subprocess
@@ -185,8 +186,12 @@ def _presentation_attributes(svg: str) -> str:
     """
 
     def attributes(match: re.Match[str]) -> str:
-        declarations = (d.split(":", 1) for d in match[1].split(";") if ":" in d)
-        return " ".join(f'{name.strip()}="{value.strip()}"' for name, value in declarations)
+        # Decode the attribute text before splitting at ";", which an entity ends in, and escape
+        # each value again for the attribute it moves to.
+        declarations = (d.split(":", 1) for d in html.unescape(match[1]).split(";") if ":" in d)
+        return " ".join(
+            f'{name.strip()}="{html.escape(value.strip())}"' for name, value in declarations
+        )
 
     return re.sub(r'style="([^"]*)"', attributes, svg)
 
