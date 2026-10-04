@@ -166,6 +166,12 @@ Residual risks, recorded rather than solved:
   for any write.
 - An adoption made in order to copy an earlier turn's Resource spends this Run's
   attachment allowance, as one made to read it does.
+- With `materialize`, an Agent steered by injected content can move an upload's whole
+  bytes out in one step, through Bash's network access or the Agent Browser's `upload`,
+  where before it had only `read`'s text windows to retype. This amplifies capabilities
+  already accepted (Bash keeps network access,
+  [security](../security.md#answer-resources-and-execution)), and the mitigations are
+  the same.
 - The word is overloaded. `ResourceRegistry.materialize` loads a Resource's bytes
   into the registry, and ADR 0013 calls adoption materialization; the glossary term
   Resource Materialization names only the copy into the Agent Workspace.
