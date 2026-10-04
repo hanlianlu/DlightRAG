@@ -241,7 +241,9 @@ credentials, endpoint URIs, or inherited environment values.
 
 REST and Web share the API process (default port 8100); MCP uses a separate
 listener (8101). A browser proxy may front only `/web` and the `/static` assets
-it loads, while direct REST/MCP clients supply their bearer tokens. A proxy that
+it loads, while direct REST/MCP clients supply their bearer tokens. The Web's
+documents are served only under `/web` and refuse framing
+(`frame-ancestors 'none'`); `/static` serves no HTML. A proxy that
 terminates TLS must be trusted for `X-Forwarded-Proto` (uvicorn's
 `FORWARDED_ALLOW_IPS`): otherwise the API sees `http`, the Web's exact
 same-origin checks refuse every browser write, and the OAuth callback is

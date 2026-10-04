@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from starlette.exceptions import HTTPException
 from starlette.responses import Response
 from starlette.staticfiles import StaticFiles
 
@@ -13,6 +14,9 @@ class WebStaticFiles(StaticFiles):
     """Cache hashed Vite assets forever and keep mutable support files fresh."""
 
     async def get_response(self, path: str, scope) -> Response:  # type: ignore[override]
+        # The Web's documents are served only by the /web routes, which authenticate them.
+        if path.lower().endswith(".html"):
+            raise HTTPException(status_code=404)
         response = await super().get_response(path, scope)
         if response.status_code >= 400:
             return response

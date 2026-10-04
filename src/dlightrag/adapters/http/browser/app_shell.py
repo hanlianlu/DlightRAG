@@ -10,6 +10,8 @@ _INDEX_HEADERS = {
     "Cache-Control": "no-cache, no-store, must-revalidate",
     "Pragma": "no-cache",
     "Expires": "0",
+    # Nothing frames the Web; its Artifact and PDF frames are children of the page.
+    "Content-Security-Policy": "frame-ancestors 'none'",
 }
 
 

@@ -541,6 +541,7 @@ class TestWebAuth:
 
         assert response.status_code == 200
         assert response.headers["cache-control"] == "no-cache, no-store, must-revalidate"
+        assert response.headers["content-security-policy"] == "frame-ancestors 'none'"
         assert 'action="/web/login"' in response.text
         assert "/static/app/assets/login-" in response.text
         assert "secret-token" not in response.text
@@ -724,6 +725,30 @@ class TestWebIndex:
         assert "<dl-app>" in response.text
         assert "/static/app/assets/app-" in response.text
         assert "__THEME_INIT__" not in response.text
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/web/",
+            f"/web/conversations/{CONVERSATION_ID}",
+            "/web/design-system",
+            "/web/product-showcase",
+        ],
+    )
+    async def test_every_web_document_refuses_to_be_framed(
+        self, client: AsyncClient, path: str
+    ) -> None:
+        response = await client.get(path)
+
+        assert response.status_code == 200
+        assert response.headers["content-security-policy"] == "frame-ancestors 'none'"
+
+    async def test_the_static_mount_serves_no_document_of_the_web(
+        self, client: AsyncClient
+    ) -> None:
+        # An unauthenticated, unprotected twin of the application document would be framable.
+        for entry in ("index", "login", "design-system", "product-showcase"):
+            assert (await client.get(f"/static/app/{entry}.html")).status_code == 404
 
     async def test_explicit_conversation_route_serves_the_same_application_document(
         self, client: AsyncClient
