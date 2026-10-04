@@ -5,14 +5,12 @@ Settings is the only surface for an owner's Agent Accounts, so these are Web rou
 REST counterpart. Every answer is the owner's whole view, which the page shows as it is.
 """
 
-from dataclasses import asdict
-from typing import Any
-
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, ConfigDict, StrictBool
 
 from dlightrag.adapters.http.browser.deps import get_application
 from dlightrag.application.access import owner_id_from_user
+from dlightrag.application.agent_accounts import AgentAccountsView
 
 router = APIRouter(prefix="/agent-accounts")
 
@@ -27,24 +25,21 @@ def _owner(request: Request) -> str:
     return owner_id_from_user(request.state.user_context)
 
 
-@router.get("")
-async def read_agent_accounts(request: Request) -> dict[str, Any]:
-    return asdict(await get_application(request).agent_accounts.view(owner_id=_owner(request)))
+@router.get("", response_model=AgentAccountsView)
+async def read_agent_accounts(request: Request) -> AgentAccountsView:
+    return await get_application(request).agent_accounts.view(owner_id=_owner(request))
 
 
-@router.put("/settings")
-async def update_agent_account_settings(request: Request, body: SettingsInput) -> dict[str, Any]:
-    view = await get_application(request).agent_accounts.set_sign_ups(
+@router.put("/settings", response_model=AgentAccountsView)
+async def update_agent_account_settings(request: Request, body: SettingsInput) -> AgentAccountsView:
+    return await get_application(request).agent_accounts.set_sign_ups(
         owner_id=_owner(request), enabled=body.registration_enabled
     )
-    return asdict(view)
 
 
-@router.delete("/{site}")
-async def remove_agent_account(site: str, request: Request) -> dict[str, Any]:
-    return asdict(
-        await get_application(request).agent_accounts.remove(owner_id=_owner(request), site=site)
-    )
+@router.delete("/{site}", response_model=AgentAccountsView)
+async def remove_agent_account(site: str, request: Request) -> AgentAccountsView:
+    return await get_application(request).agent_accounts.remove(owner_id=_owner(request), site=site)
 
 
 __all__ = ["router"]

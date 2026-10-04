@@ -76,38 +76,13 @@ class AgentRegistrationView:
 
 
 @dataclass(frozen=True, slots=True)
-class AgentAccountView:
-    """One account as its owner sees it, with its times in UTC."""
-
-    site: str
-    email: str | None
-    username: str | None
-    created_at: str
-    last_used_at: str | None
-
-
-@dataclass(frozen=True, slots=True)
 class AgentAccountsView:
     """An owner's Agent Accounts, the switch for new sign-ups, and whether the deployment has
     Agent Accounts at all, which it has where an Agent Browser is configured."""
 
     available: bool
     registration: AgentRegistrationView
-    accounts: tuple[AgentAccountView, ...]
-
-
-def _utc(moment: datetime.datetime) -> str:
-    return moment.astimezone(datetime.UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
-
-
-def _view_of(summary: AgentAccountSummary) -> AgentAccountView:
-    return AgentAccountView(
-        site=summary.site,
-        email=summary.email,
-        username=summary.username,
-        created_at=_utc(summary.created_at),
-        last_used_at=None if summary.last_used_at is None else _utc(summary.last_used_at),
-    )
+    accounts: tuple[AgentAccountSummary, ...]
 
 
 class AgentAccounts:
@@ -138,9 +113,7 @@ class AgentAccounts:
                 allowed=self._registration_allowed,
                 enabled=await self._settings.sign_ups_enabled(owner_id=owner_id),
             ),
-            accounts=tuple(
-                _view_of(summary) for summary in await self._directory.summaries(owner_id=owner_id)
-            ),
+            accounts=await self._directory.summaries(owner_id=owner_id),
         )
 
     async def may_register(self, *, owner_id: str) -> bool:
@@ -204,7 +177,6 @@ __all__ = [
     "AgentAccountMaintenance",
     "AgentAccountSettingsStore",
     "AgentAccountSummary",
-    "AgentAccountView",
     "AgentAccounts",
     "AgentAccountsView",
     "AgentRegistrationView",

@@ -172,7 +172,8 @@ async def test_an_owner_is_shown_their_accounts_and_never_a_secret(mode: str) ->
             "agent-77",
         )
         assert by_site["shop.example"]["email"] == "agent@alias.example"
-        stamp = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
+        # UTC ISO 8601 with a Z, as every Web view of a time has it.
+        stamp = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z")
         assert all(stamp.fullmatch(account["created_at"]) for account in accounts)
         assert by_site["alpha.example"]["last_used_at"] is None
         assert stamp.fullmatch(by_site["shop.example"]["last_used_at"])
