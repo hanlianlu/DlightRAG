@@ -115,6 +115,7 @@ can be read rather than measured.
 | Subtle marks | `#78716c` stone-500 | `#78716c` stone-500 |
 | Dim, disabled only | `#57534e` stone-600 | `#a8a29e` stone-400 |
 | Primary accent | `#d2b661` gold-200 | `#7e6c37` gold-400 |
+| Accent text | `#a7904c` gold-300 | `#574a24` gold-500 |
 | Focus ring | gold-200 at 64% | gold-500 at 80% |
 | Danger | `#f87171` | `#b91c1c` |
 
@@ -133,6 +134,14 @@ the Send button's glyph while there is nothing to send. Placeholder and ghost
 text are still text and take Muted, a clear step fainter than the Primary text a
 person types. A mark that shows a state, such as an idle status light, a
 disclosure chevron, or an unchecked switch thumb, takes Subtle.
+
+Accent text (`--color-accent-text`) is the gold for small text, such as the Mine
+badge in the skill menu and the Load more and Try again buttons in
+failed-document recovery. It clears 4.5:1 on every surface in both modes:
+gold-300 in dark, one step quieter than the Primary accent (4.87:1 at worst),
+and gold-500 in Mineral Light, one step darker, because gold-400 reads only
+3.45:1 on an elevated surface where gold-500 reads 5.85:1. The composer's attach
+glyph takes it too, well above the 3:1 a mark needs.
 
 The focus ring (`--color-control-ring`, aliased as `--focus-ring-color`) is a
 2px outline drawn 2px outside its control, so it reads against the surface or

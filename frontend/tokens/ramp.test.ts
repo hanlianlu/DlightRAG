@@ -64,12 +64,15 @@ for (const [theme, direction] of [['dark', 1], ['light', -1]] as const) {
 // Muted is the faintest role that clears AA for small text on every surface, so
 // a caption that takes it reads anywhere. Subtle, one step below, is held only to
 // the non-text floor: small labels had drifted onto it and read at 3.65:1 on a
-// panel.
+// panel. Accent text is the gold for small text, so it takes the text floor too:
+// in Mineral Light it had been gold-400 at 85% and read 2.78:1 on an elevated
+// surface.
 const contrastFloors = [
     ['color-text-primary', 4.5],
     ['color-text-secondary', 4.5],
     ['color-text-tertiary', 4.5],
     ['color-text-muted', 4.5],
+    ['color-accent-text', 4.5],
     ['color-text-subtle', 3],
 ] as const;
 
