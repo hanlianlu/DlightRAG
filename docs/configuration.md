@@ -931,11 +931,10 @@ step.
   back after every render. Settlement releases whatever is held either way.
 
 The pool's size is the deployment's limit on Runs rendering at the same moment
-([sizing](operations.md#agent-browser-pool)). `GET /health` reports whether the
-Agent Browser is `configured` and how many endpoints it has, from configuration alone;
-it never reaches the pool ([Interfaces](interfaces.md#health-and-errors)). A Research
-Run that leased a browser records on its trace whether Chromium ran inside its own
-sandbox ([Interfaces](interfaces.md#run-lifecycle-and-answer-endpoints)).
+([sizing](operations.md#agent-browser-pool)). What `GET /health` says of the Agent
+Browser is in [Interfaces](interfaces.md#health-and-errors). A Research Run that leased
+a browser records on its trace whether Chromium ran inside its own sandbox
+([Interfaces](interfaces.md#run-lifecycle-and-answer-endpoints)).
 
 ## Public Web Sources
 

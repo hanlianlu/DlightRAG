@@ -412,7 +412,7 @@ The Run-scoped browser capability: one browser per Research Run, leased from a p
 _Avoid_: Connection, Chromium in the answering container, browsing session, browser profile
 
 **BrowserProvider**:
-The port that leases a Run's browser endpoint. It is an ordinary adapter boundary with one implementation, a Compose pool of Playwright run-servers whose leases live in PostgreSQL and end with the holder's Run lease.
+The port that leases a Run's browser endpoint. It is an ordinary adapter boundary with one implementation, a pool of Playwright run-servers; see [Architecture](architecture.md#agent-browser) for when a lease is live.
 _Avoid_: Connection provider, browser service, MCP server
 
 **Agent Skill**:

@@ -480,9 +480,8 @@ accepts back.
   `dlightrag-reader`. Members are kept apart because the server runs with `--unsafe`,
   which lets any client that can connect choose a browser's launch arguments and
   executable: only DlightRAG's processes may reach a member, and a compromised member
-  must not be able to drive another. Adding a member means its service, its own
-  internal network, that network on the proxy and on those three services, and its
-  endpoint ([Operations](operations.md#agent-browser-pool)).
+  must not be able to drive another. How to add a member without breaking that is in
+  [Operations](operations.md#agent-browser-pool).
 - **Egress.** Every browser launch carries the proxy, a Squid container
   (`agent-browser/egress/squid.conf`) that admits public destinations only: it denies
   loopback, RFC 1918, link-local (where cloud metadata lives), CGNAT, multicast,
@@ -506,7 +505,10 @@ accepts back.
   rather than failing the Run: one WARNING per endpoint and process, no silent
   downgrade, and `trace.agent_browser_sandbox` on the Run says `unavailable`
   ([ADR 0024](adr/0024-the-agent-sees-only-its-workspace.md) degrades Landlock the same
-  way). In either case the container and its network are the isolation boundary.
+  way). A sandboxed connect that fails with Playwright's `TimeoutError`, because
+  nobody answered the WebSocket upgrade in time, says nothing about the sandbox and is
+  not retried without it: it fails like any connect that gets no answer. In either case
+  the container and its network are the isolation boundary.
 - **Evidence.** Rendered text is the browser's assertion. DlightRAG attests the binding
   between the returned page, the Resource Handle, and the URL; it does not attest that
   an anonymous GET serves the same page, and a site may serve a browser what it does

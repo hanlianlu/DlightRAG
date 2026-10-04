@@ -151,7 +151,8 @@ a browser renders it. The Fast path never does.
   `view` and earlier citations keep reading what they read, and it has no handle of
   its own: results print the Resource's handle, a header
   `[resource: <id> | rendered | lines <a>-<b> | …]` says the text is the rendering,
-  and its note names the final URL when the page ended somewhere else. It is not in
+  and its note, `Rendered view from the Agent Browser (browser_render)`, adds
+  `; the page ended at <final URL>` when the page ended somewhere else. It is not in
   the manifest and takes no attachment slot. Its evidence cites the Resource's URL
   with the acquisition `browser_render`. What the browser returned is the browser's
   assertion, not an attestation that an anonymous GET serves the same page.
@@ -179,10 +180,11 @@ a browser renders it. The Fast path never does.
   read of the Run, Child Sessions included, and concurrent reads share one render. A
   render that fails, or yields no text, pins nothing, so a later read tries again.
 - **Bounds.** Each render uses a temporary context that holds no cookies, storage, or
-  service workers, accepts no downloads, and closes when the render ends; a Run's
-  browser serves at most four at once. The page loads within
-  `navigation_timeout_seconds`, then settles for at most `settle_timeout_seconds` and
-  is read as it stands if it never goes quiet
+  service workers, accepts no downloads, and closes when the render ends; a browser
+  that does not close it within ten seconds is wedged, so the render fails as
+  `disconnected` and the Run leases another. A Run's browser serves at most four at
+  once. The page loads within `navigation_timeout_seconds`, then settles for at most
+  `settle_timeout_seconds` and is read as it stands if it never goes quiet
   ([Agent Browser](configuration.md#agent-browser)). The serialized page may not
   exceed `answer.generation.max_attachment_bytes`.
 - **Where the check ends.** DlightRAG checks the first URL as a direct read does

@@ -168,10 +168,12 @@ deployment's Agent Browser is not one of them.
 ### Agent Browser
 
 Research renders a page as a browser would when `read` asks for it with
-`rendered=true`, or when the Extract chain's last step does
-([ADR 0032](adr/0032-the-agent-browser.md)). The browser is a deployment capability
-in containers of its own, so the Agent's processes gain nothing and the Landlock
-allow-list is unchanged.
+`rendered=true`, or when the Extract chain reaches its browser step
+([ADR 0032](adr/0032-the-agent-browser.md)): a configured browser joins the automatic
+chain at its end unless `extract_providers` names it elsewhere
+([Public Web Sources](configuration.md#public-web-sources)). The browser is a
+deployment capability in containers of its own, so the Agent's processes gain nothing
+and the Landlock allow-list is unchanged.
 
 ```text
 read(rendered=true) or the Extract chain's browser step

@@ -175,14 +175,14 @@ docker compose ps
 docker compose logs agent-browser-egress
 ```
 
-- **Check.** `GET /health` shows `agent_browser` as `configured` with the endpoint
-  count, from configuration alone, so it does not say the pool is up. A member is
-  healthy when `docker compose ps` says so; its check asks the run-server for `/json`.
-  Which Run holds which member is the `dlightrag_agent_browser_leases` table:
-  `SELECT endpoint, run_id, updated_at FROM dlightrag_agent_browser_leases`. A row is
-  free when it names no Run, or when its Run no longer holds its lease (not `running`,
-  another lease owner or fencing epoch, or expired), whatever the row still says. The
-  proxy logs every request to its stdout; a destination it refuses is `TCP_DENIED`.
+- **Check.** `GET /health` is no check of the pool
+  ([what it reports](interfaces.md#health-and-errors)), so look at the members: one is
+  healthy when `docker compose ps` says so, and its check asks the run-server for
+  `/json`. Which Run holds which member is the `dlightrag_agent_browser_leases` table:
+  `SELECT endpoint, run_id, updated_at FROM dlightrag_agent_browser_leases`. A row that
+  names a Run holds its member only while that Run's lease is live
+  ([when](architecture.md#agent-browser)), whatever the row still says. The proxy logs
+  every request to its stdout; a destination it refuses is `TCP_DENIED`.
 - **Size.** A Run holds a member only while it renders and for
   `idle_release_seconds` after, so the pool's size bounds how many Runs render at the
   same moment across every process that runs Query workers. When every member is held,
@@ -193,10 +193,9 @@ docker compose logs agent-browser-egress
 - **Adding a member.** Add its service (`<<: *agent-browser`) on a network of its own,
   declare that network `internal: true`, add the network to `agent-browser-egress` and
   to `dlightrag-api`, `dlightrag-mcp`, and `dlightrag-reader`, and add the member's
-  `ws://` URL to the `endpoints` binding. Never put two members on one network:
-  `--unsafe` lets a client that reaches a member choose its browser's launch arguments.
-  Every process must be restarted with the same endpoint URLs, spelled identically,
-  because the lease table is keyed by the URL.
+  `ws://` URL to the `endpoints` binding. Never put two members on one network
+  ([why](security.md#agent-browser-boundary)). Every process must be restarted with the
+  same endpoint URLs, spelled identically, because the lease table is keyed by the URL.
 - **Upgrading.** The Python `playwright` package and the pool image are one version,
   and the server refuses a client of another major or minor version with HTTP 428.
   Bump every pin together: `pyproject.toml` (`playwright==X`), `uv.lock`, the
@@ -208,7 +207,9 @@ docker compose logs agent-browser-egress
 - **Troubleshooting.** The application logs `Agent Browser connect failed` at ERROR with
   the endpoint and the error type, never a page URL.
   - `unreachable`: the member is down, the endpoint is misspelled, the application
-    service is not on the member's network, or the versions differ (HTTP 428).
+    service is not on the member's network, or the versions differ (HTTP 428). The
+    lease store, PostgreSQL, can also be the one that cannot be reached; the
+    application then logs `Agent Browser lease store failed` with the error type.
   - `busy`: every member's row names a Run that holds its lease. Wait for one to
     finish rendering, or for the lease of a Run whose worker died to expire (about a
     minute).
