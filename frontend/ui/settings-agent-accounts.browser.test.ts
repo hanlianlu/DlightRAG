@@ -164,7 +164,8 @@ it('turns from a table to three-line rows as its pane narrows past 36rem, and ba
 it('shows when an account registered even where it never signed in and there is no room for a table', async () => {
   const {feature} = await shown(listing(), NARROW);
 
-  const never = [...feature.querySelectorAll('li')].find((row) => row.textContent!.includes('ycombinator.com'))!;
+  const never = [...feature.querySelectorAll('li')]
+    .find((row) => row.querySelector('[title]')?.getAttribute('title') === 'ycombinator.com')!;
   expect(never.textContent).to.contain('Registered Mar 6, 2025, not signed in since');
 });
 

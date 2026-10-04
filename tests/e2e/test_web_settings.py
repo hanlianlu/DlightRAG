@@ -443,7 +443,8 @@ def test_profile_memory_shows_the_whole_text_of_a_memory(page: Page) -> None:
         })"""
     )
     assert shape["clipped"] is False
-    assert shape["lines"] >= 3.5
+    # More than the two lines of the old clamp, whatever the fonts make of the wrapped paragraph.
+    assert shape["lines"] > 2.5
 
 
 @pytest.mark.e2e
