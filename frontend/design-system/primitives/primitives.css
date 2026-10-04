@@ -63,11 +63,13 @@
     transition: background 150ms, border-color 150ms, color 150ms;
 }
 
-/* Links have no native control centering; flex supplies it. */
+/* A link wears the button face: flex supplies the centering a native control
+ * has, and the link underline never shows. */
 a.dl-btn {
     align-items: center;
     display: inline-flex;
     justify-content: center;
+    text-decoration: none;
 }
 
 /* Destructive text affordance on the shared button geometry. */
