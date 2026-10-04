@@ -87,14 +87,17 @@ const productStylesPlugin = {
   },
 };
 
+// The page leaves out the optional <head> tag. WTR injects its own module
+// scripts right after a literal <head>, and Firefox ignores an import map that
+// follows a module script, so its components would carry class names the
+// shipped stylesheet does not hold. Without the tag, WTR injects after <body>,
+// behind the import map.
 function productStylesPage(testFramework) {
   const importMap = JSON.stringify({imports: {'/styles/': `${productStylesPath}styles/`}});
   return `<!DOCTYPE html>
 <html lang="en" data-color-mode="dark">
-  <head>
-    <script type="importmap">${importMap}</script>
-    <link rel="stylesheet" href="${productStylesPath}style.css">
-  </head>
+  <script type="importmap">${importMap}</script>
+  <link rel="stylesheet" href="${productStylesPath}style.css">
   <body><script type="module" src="${testFramework}"></script></body>
 </html>`;
 }
