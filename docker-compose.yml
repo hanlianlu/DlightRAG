@@ -26,9 +26,9 @@ x-local-proxies: &local-proxies "127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.
 # --unsafe lets a connecting client choose its browser's launch arguments. The proxy and
 # the application services join every member network.
 #
-# The pool's size is the members=N below, and the three agent-browser-pool blocks are
-# written from it: resize the pool with
-#   uv run python scripts/agent_browser_pool.py --members N
+# The pool's size is the members=N below. After changing it, run
+#   uv run python scripts/agent_browser_pool.py
+# which writes the three agent-browser-pool blocks for it.
 # >>> agent-browser-pool:anchors members=2
 x-agent-browser-networks: &agent-browser-networks
   agent-browser-1:

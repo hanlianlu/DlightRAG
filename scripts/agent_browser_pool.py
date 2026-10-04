@@ -1,30 +1,26 @@
 #!/usr/bin/env python3
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Write docker-compose.yml's Agent Browser pool from the one number that sizes it.
+"""Write docker-compose.yml's Agent Browser pool for the size it declares.
 
 Each member of the pool is a Playwright run-server on an internal network of its own, which
 the egress proxy and the application services join, and whose endpoint is bound into those
 services (ADR 0032). Compose has no loop, so the three blocks marked ``agent-browser-pool``
-are written from the ``members=N`` on the first one:
+are written from the ``members=N`` on the first one. After changing that number, run:
 
-    uv run python scripts/agent_browser_pool.py --members 3   # resize the pool
-    uv run python scripts/agent_browser_pool.py               # rewrite for the declared size
-    uv run python scripts/agent_browser_pool.py --check       # fail if the blocks disagree
+    uv run python scripts/agent_browser_pool.py
 """
 
 from __future__ import annotations
 
-import argparse
 import re
-import sys
 from pathlib import Path
 
 COMPOSE = Path(__file__).resolve().parents[1] / "docker-compose.yml"
 
 _BLOCK = re.compile(
-    r"^(?P<indent> *)# >>> agent-browser-pool:(?P<name>\w+).*\n"
+    r"^(?P<head>(?P<indent> *)# >>> agent-browser-pool:(?P<name>\w+)[^\n]*\n)"
     r".*?"
-    r"^(?P=indent)# <<< agent-browser-pool:(?P=name)\n",
+    r"^(?P<tail>(?P=indent)# <<< agent-browser-pool:(?P=name)\n)",
     re.M | re.S,
 )
 _MEMBERS = re.compile(r"^# >>> agent-browser-pool:anchors members=(\d+)$", re.M)
@@ -70,23 +66,16 @@ def _networks(members: int) -> str:
 _BODIES = {"anchors": _anchors, "services": _services, "networks": _networks}
 
 
-def render(text: str, members: int | None = None) -> str:
-    """The compose text with its pool blocks written for ``members``, by default the number
-    it declares."""
-    count = declared_members(text) if members is None else members
-    if count < 1:
+def render(text: str) -> str:
+    """The compose text with its pool blocks written for the size it declares."""
+    members = declared_members(text)
+    if members < 1:
         raise ValueError("the pool needs at least one member")
     found: set[str] = set()
 
     def block(match: re.Match[str]) -> str:
-        name, indent = match["name"], match["indent"]
-        found.add(name)
-        size = f" members={count}" if name == "anchors" else ""
-        return (
-            f"{indent}# >>> agent-browser-pool:{name}{size}\n"
-            + _BODIES[name](count)
-            + f"{indent}# <<< agent-browser-pool:{name}\n"
-        )
+        found.add(match["name"])
+        return match["head"] + _BODIES[match["name"]](members) + match["tail"]
 
     rendered = _BLOCK.sub(block, text)
     if missing := sorted(set(_BODIES) - found):
@@ -95,25 +84,9 @@ def render(text: str, members: int | None = None) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
-    mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--members", type=int, help="the pool size to write")
-    mode.add_argument("--check", action="store_true", help="fail if the blocks disagree")
-    args = parser.parse_args()
-
     text = COMPOSE.read_text(encoding="utf-8")
-    rendered = render(text, args.members)
-    if args.check:
-        if rendered != text:
-            sys.exit(
-                "docker-compose.yml's agent-browser-pool blocks disagree with its members=N; "
-                "run scripts/agent_browser_pool.py"
-            )
-        return
-    COMPOSE.write_text(rendered, encoding="utf-8")
-    print(f"agent-browser pool: {declared_members(rendered)} member(s)")
+    COMPOSE.write_text(render(text), encoding="utf-8")
+    print(f"agent-browser pool: {declared_members(text)} member(s)")
 
 
 if __name__ == "__main__":

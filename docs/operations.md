@@ -230,8 +230,8 @@ docker compose logs agent-browser-egress
   first `navigate` waits up to `lease_wait_seconds` and then fails as `busy`; the model
   reads that and works from the direct read. Add members when that is frequent. Each
   member is capped at `COMPOSE_AGENT_BROWSER_MEM_LIMIT` (default `2g`) and 1024 processes.
-- **Resizing.** The pool's size is the `members=N` in `docker-compose.yml`. Change it with
-  `uv run python scripts/agent_browser_pool.py --members N`, which writes the three
+- **Resizing.** The pool's size is the `members=N` in `docker-compose.yml`. After changing
+  it, run `uv run python scripts/agent_browser_pool.py`, which writes the three
   `agent-browser-pool` blocks from it: each member's service on an internal network of its
   own, the networks that `agent-browser-egress`, `dlightrag-api`, `dlightrag-mcp`, and
   `dlightrag-reader` join, and the `endpoints` binding. Two members never share a network
