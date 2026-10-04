@@ -73,6 +73,12 @@ dependencies = [
     "cryptography>=46.0.0",
     "jsonschema>=4.26.0",
     "httpx2>=2.13.1",
+    # The Agent Browser's Playwright client (ADR 0032). The pool image pins the same
+    # version; scripts/verify_release_contract.py holds every pin together.
+    "playwright==1.63.0",
+    # The Public Suffix List behind an Agent Account's site (ADR 0034). Its snapshot ships in
+    # the wheel and is never fetched or refreshed, so this pin is the list a deployment runs.
+    "tldextract==5.4.0",
 ]
 
 [project.optional-dependencies]
@@ -343,3 +349,13 @@ name = "Tools are composed per run, never by importing the orchestrator"
 type = "forbidden"
 source_modules = ["dlightrag.engine.answer.tools"]
 forbidden_modules = ["dlightrag.engine.answer.orchestration", "dlightrag.engine.answer.execution", "dlightrag.engine.answer.runs"]
+
+[[tool.importlinter.contracts]]
+id = "playwright-adapter-only"
+name = "Only the Agent Browser adapter imports Playwright"
+type = "forbidden"
+source_modules = ["dlightrag.engine", "dlightrag.application", "dlightrag.adapters.http", "dlightrag.adapters.mcp", "dlightrag.adapters.postgres"]
+forbidden_modules = ["playwright"]
+# The transports reach composition through the package root, and composition is the one
+# place that names the adapter.
+ignore_imports = ["dlightrag._compose -> dlightrag.adapters.agent_browser"]

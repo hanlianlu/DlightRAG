@@ -92,6 +92,18 @@ class ResourceAttachmentBytes:
     source: VisualSource | None = None
     """Another durable handle these bytes are already known by, when one exists."""
     aliases: tuple[str, ...] = ()
+    attributes: tuple[tuple[str, str], ...] = ()
+    """Facts the Resource's row records beside its kind, such as how the bytes were acquired."""
+
+
+@dataclass(frozen=True, slots=True)
+class AdmittedBytes:
+    """The bytes a Host's Resource admitted, as materialize copies them."""
+
+    resource_id: str
+    """The canonical handle: after an adoption, this Run's own."""
+    media_type: str
+    content: bytes
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,6 +224,9 @@ class ToolRuntime:
 
 type ToolExecute = Callable[[BaseModel, ToolRuntime], Awaitable["ToolResult"]]
 
+type AdmittedBytesReader = Callable[[str, ToolRuntime], Awaitable[AdmittedBytes | ToolResult]]
+"""A Host's way to the bytes of one resource_id; a ToolResult it returns is its refusal."""
+
 
 def _without_titles(node: Any) -> Any:
     """Drop every ``title`` annotation. A field named ``title`` maps to an object, not a string."""
@@ -309,6 +324,8 @@ class ExecutedTurn:
 
 
 __all__ = [
+    "AdmittedBytes",
+    "AdmittedBytesReader",
     "AgentTool",
     "CommittedOutput",
     "EvidenceSourceFact",

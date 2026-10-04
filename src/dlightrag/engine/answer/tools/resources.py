@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Answer-owned text and located-pixel callbacks for Agent read/view tools."""
+"""Answer-owned text, pixel, and byte callbacks for Agent read, view, and materialize tools."""
 
 from __future__ import annotations
 
@@ -17,6 +17,8 @@ from dlightrag.engine.agent.tool_content import (
     VisualSource,
 )
 from dlightrag.engine.agent.tools import (
+    AdmittedBytes,
+    AdmittedBytesReader,
     EvidenceSourceFact,
     ResourceAttachmentBytes,
     ToolEffects,
@@ -24,6 +26,7 @@ from dlightrag.engine.agent.tools import (
     ToolRuntime,
 )
 from dlightrag.engine.agent.tools.files import ImagePreparer, ResourceReadRequest, ViewArgs
+from dlightrag.engine.answer.agent_browser import AgentBrowserError
 from dlightrag.engine.answer.resources.converters import (
     ConversionLimitError,
     UnsafeArchiveError,
@@ -40,6 +43,7 @@ from dlightrag.engine.answer.resources.lineage import (
     adopt_lineage_resource,
 )
 from dlightrag.engine.answer.resources.models import (
+    RenderedReadTargetError,
     ResourceAdmissionError,
     ResourceCursorError,
     ResourceNotConvertedError,
@@ -66,7 +70,7 @@ def _run_scoped_handle_refusal(exc: ResourceNotFoundError) -> str:
     """
     return (
         f"{exc}. This run neither holds that handle nor can adopt it from an earlier "
-        "turn of this conversation, so it cannot be read or viewed here. Re-attach the "
+        "turn of this conversation, so it cannot be read, viewed, or copied here. Re-attach the "
         "document, or work from the images already replayed in this context."
     )
 
@@ -95,8 +99,8 @@ def _unconverted_refusal(filename: str, media_type: str | None) -> str:
     )
 
 
-async def _adopt_earlier_then_retry(
-    retry: Callable[[], Awaitable[ToolResult]],
+async def _adopt_earlier_then_retry[T](
+    retry: Callable[[], Awaitable[T]],
     *,
     resource_id: str | None,
     lineage: LineageResourceLoader | None,
@@ -104,14 +108,15 @@ async def _adopt_earlier_then_retry(
     refusal: str,
     runtime: ToolRuntime,
     needs_text: bool = False,
-) -> ToolResult:
+) -> T | ToolResult:
     """Give one earlier Run's handle the chance to become this Run's Resource.
 
     The loader owns the lineage rule, so a handle it will not admit keeps the ordinary
     refusal. The adoption is recorded under this Run's fence before the handle
     resolves, so it holds whatever the retried call does next, and that call's own
     result carries nothing on its behalf. It spends this Run's attachment allowance,
-    so it waits for the calls before it in the batch.
+    so it waits for the calls before it in the batch. What the retried call returns
+    comes back as it is, and every refusal is a ToolResult.
 
     A read of a *convertible* resource requires a stored view, the earlier Run's or one
     this Run already holds for the same bytes, because converting it here would record
@@ -170,6 +175,35 @@ async def _adopt_earlier_then_retry(
         return ToolResult.text(str(exc), is_error=True)
 
 
+async def _call_adopting_earlier[T](
+    call: Callable[[], Awaitable[T]],
+    *,
+    resource_id: str | None,
+    lineage: LineageResourceLoader | None,
+    registry: ResourceRegistry,
+    runtime: ToolRuntime,
+    needs_text: bool = False,
+) -> T | ToolResult:
+    """Make one call on a handle, adopting it from an earlier turn when this Run does not hold it.
+
+    ``read``, ``view``, and ``materialize`` treat an unknown handle alike, so a handle nothing
+    admits gets one refusal whichever of them asks. They differ only in ``needs_text``: a read
+    needs a stored conversion view, while a view or a copy needs only the bytes.
+    """
+    try:
+        return await call()
+    except ResourceNotFoundError as exc:
+        return await _adopt_earlier_then_retry(
+            call,
+            resource_id=resource_id,
+            lineage=lineage,
+            registry=registry,
+            refusal=_run_scoped_handle_refusal(exc),
+            runtime=runtime,
+            needs_text=needs_text,
+        )
+
+
 def make_resource_reader(
     registry: ResourceRegistry,
     max_window_tokens: int,
@@ -195,23 +229,35 @@ def make_resource_reader(
                 max_window_tokens=max_window_tokens,
                 focus=request.focus,
                 cursor=request.cursor,
+                rendered=request.rendered,
                 effect_owner=_effect_owner(runtime),
             )
         except UnsafeArchiveError, ConversionLimitError, ResourceAdmissionError, MemoryError:
             return ToolResult.text(
                 "extraction_status=safety_refused; no evidence admitted. Do not retry another parser or renderer around the restriction.",
                 is_error=True,
-                effects=ToolEffects(attached_resources=registry.conversion_effects(resource_id)),
+                effects=ToolEffects(
+                    attached_resources=(
+                        *registry.conversion_effects(resource_id),
+                        *registry.rendered_effects(resource_id),
+                    )
+                ),
             )
         effects = (
             _evidence_effects(
-                result.resource_id, registry.evidence_source(result.resource_id, text=True)
+                result.resource_id,
+                registry.evidence_source(result.resource_id, text=True, rendered=result.rendered),
             )
             if result.evidence_available
             else ToolEffects()
         )
+        # A rendering settles with the read that returned it, so recovery restores it.
         effects = replace(
-            effects, attached_resources=registry.conversion_effects(result.resource_id)
+            effects,
+            attached_resources=(
+                *registry.conversion_effects(result.resource_id),
+                *(registry.rendered_effects(result.resource_id) if result.rendered else ()),
+            ),
         )
         return ToolResult.text(
             format_resource_read(result),
@@ -221,14 +267,11 @@ def make_resource_reader(
 
     async def read(request: ResourceReadRequest, runtime: ToolRuntime) -> ToolResult:
         try:
-            return await read_registered(request, runtime)
-        except ResourceNotFoundError as exc:
-            return await _adopt_earlier_then_retry(
+            return await _call_adopting_earlier(
                 partial(read_registered, request, runtime),
                 resource_id=request.resource_id,
                 lineage=lineage,
                 registry=registry,
-                refusal=_run_scoped_handle_refusal(exc),
                 runtime=runtime,
                 needs_text=True,
             )
@@ -238,6 +281,11 @@ def make_resource_reader(
             return ToolResult.text(
                 _unconverted_refusal(exc.filename, exc.media_type), is_error=True
             )
+        except RenderedReadTargetError as exc:
+            return ToolResult.text(str(exc), is_error=True)
+        except AgentBrowserError as exc:
+            # A render the browser could not give leaves nothing admitted.
+            return ToolResult.text(exc.public_message, is_error=True)
 
     return read
 
@@ -262,9 +310,21 @@ def make_resource_viewer(
         elif registry.loads_on_read(resource_id):
             await runtime.in_source_order()
         owner = _effect_owner(runtime)
-        target = await registry.visual_target(resource_id, effect_owner=owner)
-        resource_id = target.resource_id
-        provenance = registry.evidence_source(resource_id)
+        held = (
+            registry.held_visual_asset(resource_id, args.locator)
+            if args.locator is not None and args.locator.startswith("vis-")
+            else None
+        )
+        if held is None:
+            target = await registry.visual_target(resource_id, effect_owner=owner)
+            resource_id = target.resource_id
+            held_rendering = False
+        else:
+            # The Run already holds this image, possibly from a rendering it never fetched.
+            target = None
+            resource_id = registry.canonical_resource_id(resource_id)
+            held_rendering = held[1]
+        provenance = registry.evidence_source(resource_id, rendered=held_rendering)
         # Each label names the document too: a later turn, or a Fast follow-up that
         # sees the image without this call, has no manifest that maps the id to it.
         name = provenance["title"]
@@ -309,11 +369,24 @@ def make_resource_viewer(
             )
             return True
 
-        if target.kind == "image":
+        if held is not None:
+            asset = held[0]
+            await attach(
+                asset.data,
+                VisualSource(
+                    resource_id,
+                    "embedded_image",
+                    handle_id=asset.handle_id,
+                    anchor=asset.anchor,
+                    origin_part=asset.origin_part,
+                ),
+                f"{name}, {asset.handle_id}" + (f" @ {asset.anchor}" if asset.anchor else ""),
+            )
+        elif target is not None and target.kind == "image":
             if args.locator is not None or args.cursor is not None:
                 raise ResourceViewError("source image does not accept locator or cursor")
             await attach(target.content, VisualSource(resource_id, "image"), name)
-        elif target.kind == "pdf":
+        elif target is not None and target.kind == "pdf":
             count = await asyncio.to_thread(pdf_page_count, target.content)
             if args.locator is not None:
                 if not args.locator.isascii() or not args.locator.isdigit():
@@ -356,7 +429,8 @@ def make_resource_viewer(
                     ),
                 )
         elif (
-            target.kind == "document"
+            target is not None
+            and target.kind == "document"
             and args.locator is not None
             and args.locator.startswith("vis-")
         ):
@@ -388,20 +462,22 @@ def make_resource_viewer(
             parts=tuple(parts),
             protected_text=continuation,
             effects=replace(
-                evidence, attached_resources=(*registry.conversion_effects(resource_id), *attached)
+                evidence,
+                attached_resources=(
+                    *registry.conversion_effects(resource_id),
+                    *(registry.rendered_effects(resource_id) if held_rendering else ()),
+                    *attached,
+                ),
             ),
         )
 
     async def view(args: ViewArgs, runtime: ToolRuntime, prepare: ImagePreparer) -> ToolResult:
         try:
-            return await view_registered(args, runtime, prepare)
-        except ResourceNotFoundError as exc:
-            return await _adopt_earlier_then_retry(
+            return await _call_adopting_earlier(
                 partial(view_registered, args, runtime, prepare),
                 resource_id=args.resource_id,
                 lineage=lineage,
                 registry=registry,
-                refusal=_run_scoped_handle_refusal(exc),
                 runtime=runtime,
             )
         except ResourceCursorError as exc:
@@ -414,6 +490,34 @@ def make_resource_viewer(
             return ToolResult.text(str(exc), is_error=True)
 
     return view
+
+
+def make_admitted_bytes_reader(
+    registry: ResourceRegistry, *, lineage: LineageResourceLoader | None = None
+) -> AdmittedBytesReader:
+    """The Host's way to the bytes ``materialize`` copies.
+
+    An earlier turn's handle is adopted first, as ``view`` adopts one: a copy needs only the
+    bytes, so no stored conversion view is required.
+    """
+
+    async def admitted(resource_id: str, runtime: ToolRuntime) -> AdmittedBytes:
+        return await registry.admitted_bytes(resource_id, effect_owner=_effect_owner(runtime))
+
+    async def reader(resource_id: str, runtime: ToolRuntime) -> AdmittedBytes | ToolResult:
+        try:
+            return await _call_adopting_earlier(
+                partial(admitted, resource_id, runtime),
+                resource_id=resource_id,
+                lineage=lineage,
+                registry=registry,
+                runtime=runtime,
+            )
+        except ResourceRegistryError as exc:
+            # A Web Resource with no bytes yet, or a lazy upload past the request total.
+            return ToolResult.text(str(exc), is_error=True)
+
+    return reader
 
 
 def _evidence_effects(resource_id: str, source: dict[str, str]) -> ToolEffects:
@@ -438,4 +542,4 @@ def _effect_owner(runtime: ToolRuntime) -> ResourceEffectOwner:
     return ResourceEffectOwner(execution_scope=runtime.execution_scope, intent_id=runtime.intent_id)
 
 
-__all__ = ["make_resource_reader", "make_resource_viewer"]
+__all__ = ["make_admitted_bytes_reader", "make_resource_reader", "make_resource_viewer"]

@@ -85,9 +85,17 @@ those two members are allowed, duplicate JSON keys are rejected, key IDs match
 `active` names a listed key. An invalid ring stops startup, and validation
 errors never echo a value. Only `CredentialCipher` reads the keys.
 
+The ring has two consumers. `CredentialCipher` lives in `dlightrag.engine.credential_cipher`,
+which Connections and [Agent Accounts](security.md#agent-accounts) both import, and each
+consumer seals under a label of its own, so an envelope of one never opens as the other's.
+Connections' label is `dlightrag-connection-v1`, bound to the owner, Connection, and Grant
+or OAuth flow, and Connections see the cipher through `GrantCipher`, which keeps their
+errors. Agent Accounts' label is `dlightrag-agent-account-v1`, bound to the owner, the site,
+and the account, so one owner's account never opens for another's.
+
 Encryption is AES-256-GCM from `cryptography`, with a fresh 12-byte nonce and
-associated data that binds the owner, Connection, and Grant or OAuth flow. The
-stored envelope is `{"version":1,"key_id":…,"nonce":…,"ciphertext":…}`.
+associated data that binds the label and what the consumer binds the envelope to.
+The stored envelope is `{"version":1,"key_id":…,"nonce":…,"ciphertext":…}`.
 Envelopes hold bearer tokens, OAuth tokens and client information with the
 authorization-server metadata that refresh needs, and the in-flight callback
 result and credentials of an OAuth flow.
@@ -104,8 +112,7 @@ result and credentials of an OAuth flow.
   erase backups a retained key can still decrypt; backup and key retention stay
   operator responsibilities.
 
-To rotate keys, follow the
-[key ring rotation runbook](operations.md#connection-key-ring-rotation).
+To rotate keys, follow the [key ring rotation runbook](operations.md#key-ring-rotation).
 
 ## Publication and discovery
 

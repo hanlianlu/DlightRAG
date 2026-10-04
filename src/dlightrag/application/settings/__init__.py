@@ -3,6 +3,7 @@
 
 from .projections import (
     access_settings,
+    agent_browser_settings,
     agent_skills_root,
     answer_capability_settings,
     answer_executor_settings,
@@ -23,6 +24,7 @@ from .projections import (
 
 __all__ = [
     "access_settings",
+    "agent_browser_settings",
     "agent_skills_root",
     "owner_skills_root",
     "answer_capability_settings",

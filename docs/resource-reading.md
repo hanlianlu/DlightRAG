@@ -1,20 +1,24 @@
-# Answer Resource Reading and Viewing
+# Answer Resource Reading, Viewing, and Copying
 
-This document owns how an Answer Run reads and views its Resources: the `read`
-and `view` tools, extraction status and visual discovery, conversion routes,
-conversion snapshots, and adoption of an earlier Run's Resources. Public URL
-admission follows [ADR 0005](adr/0005-public-web-resource-acquisition.md),
-stored bytes share one read surface under
-[ADR 0016](adr/0016-one-run-resource-read-surface.md), and adoption follows
+This document owns how an Answer Run reads, views, and copies its Resources: the
+`read`, `view`, and `materialize` tools, extraction status and visual discovery,
+conversion routes, conversion snapshots, and adoption of an earlier Run's Resources.
+Public URL admission follows [ADR 0005](adr/0005-public-web-resource-acquisition.md),
+a page read as a browser renders it follows
+[ADR 0032](adr/0032-the-agent-browser.md), a copy into the Agent Workspace follows
+[ADR 0033](adr/0033-resource-materialization.md), stored bytes share one read surface
+under [ADR 0016](adr/0016-one-run-resource-read-surface.md), and adoption follows
 [ADR 0013](adr/0013-lineage-adoption-of-earlier-run-resources.md).
-[Domain Language](domain-language.md) defines Resource Handle, Web Resource, and
-Blob.
+[Domain Language](domain-language.md) defines Resource Handle, Web Resource,
+Rendered Read, Browser Capture, Resource Materialization, and Blob.
 
 ## Scope
 
 - A Resource belongs to one Answer Run: an accepted upload, an earlier upload
   re-registered for a follow-up or fork, a caller link, a search result link, a
-  public URL the Agent chose, or an earlier Run's Resource adopted by this Run.
+  public URL the Agent chose, a page the Agent Browser captured or a file it
+  downloaded ([Browser captures and downloads](#browser-captures-and-downloads)),
+  or an earlier Run's Resource adopted by this Run.
 - Corpus ingestion is separate: Answer Resources never invoke MinerU or Docling
   and never become corpus documents, chunks, vectors, BM25 rows, or graph data.
   Workspace files are not converted; `read(path)` decodes UTF-8 or BOM-tagged
@@ -35,6 +39,9 @@ Blob.
   returns. Optional `http.user_agent`, `http.accept`, and `http.accept_language`
   apply only to the first direct acquisition of a URL; passing them once the URL
   was fetched or has a text view is refused.
+- A deployment with an Agent Browser also declares `rendered`, which reads a `url`
+  or a Web Resource as a browser renders it ([Rendered reads](#rendered-reads)). It
+  is refused with a `path` or `http` options, and it is not declared otherwise.
 - Returns bounded text only. A Resource page starts with
   `[resource: <id> | lines <a>-<b> | extraction_status=<status>]`, holds one
   text window sized so that the page and the label the runtime puts before it fit
@@ -80,6 +87,50 @@ Blob.
   runs out, and a view that can attach nothing fails without pixels. A model
   without image support cannot view.
 
+### `materialize`
+
+- Takes a `resource_id` and a workspace `path`, and writes the bytes the Resource
+  admitted to that path, byte for byte, so a process the Agent runs can open the file
+  itself: `read` returns a text view, which for a CSV collapses a line break inside a
+  cell, and `bash` cannot reach a Resource at all. It is declared only with execution
+  `trust`, beside `write`, and every Child holds it by default
+  ([ADR 0033](adr/0033-resource-materialization.md)). Nothing copies a Resource unless
+  the Agent asks.
+- What copies: an upload, a lazily held one loading as its first read would and
+  spending what that read spends; a Web Resource's snapshot, which is the hosted Extract
+  text when the fetch failed and that text became the snapshot; a browser download; a
+  capture's HTML ([Browser captures and downloads](#browser-captures-and-downloads));
+  and an adopted Resource. Conversion state does not matter: bytes whose conversion
+  failed or was refused for safety copy as any others do, because a copy converts
+  nothing.
+- It never fetches, renders, or converts. A Web Resource that holds no snapshot, such as
+  a search link or a URL nothing has read, is refused, and the refusal names the `read`
+  that acquires it. One that holds only a rendering is refused too, and the refusal
+  names the `browser` call that captures the page: a rendering is a representation
+  appended to the Resource ([Rendered reads](#rendered-reads)), not bytes the Resource
+  admitted, and a capture is how a rendered page becomes a Resource with bytes of its
+  own. A Resource that holds a snapshot and a rendering copies the snapshot.
+- A handle resolves as it does for `read` and `view`, aliases included, and an earlier
+  turn's handle is adopted first as `view` adopts one ([Earlier Runs](#earlier-runs)): a
+  copy needs only the bytes, so no stored conversion view is required, and the adoption
+  spends this Run's attachment allowance. An unknown handle gets the one refusal `read`
+  and `view` give.
+- It is accounted as `write` is. The path is rooted in the workspace and never reaches
+  through a symbolic link, the workspace integrity latch refuses it, it holds its path
+  through the same access scheduler, the workspace quota refuses what does not fit, and
+  it replaces a file already there. The settlement carries the Workspace Inventory fact
+  for the path, with its size, mode, and the SHA-256 of what is on disk, and a copy under
+  `notes/` is a Session Note within that plane's budget. A refusal of the latch, of the
+  path, or of a directory at the path loads and adopts nothing.
+- The copy is work, not a source. The bytes pass through the application process and
+  never enter model context, and the copy admits no Evidence and has no provenance of
+  its own: a citation names the Resource, never the file, and a file the Agent builds
+  from the copy and attaches is a new product with its own provenance.
+- The result is `materialized <resource_id> to <path> (<media type>, <n> bytes)`, naming
+  the Resource's canonical handle. The tool is not read-only, so each call runs alone,
+  and its replay policy is `never`: a call pending at a crash settles its outcome as
+  unknown, and copying again replaces the file.
+
 ## Registration and acquisition
 
 - Resource handles (`res-…`, and `vis-…` for an embedded image) are opaque and
@@ -112,16 +163,165 @@ Blob.
   Fetched bytes are persisted before the tool result settles and are never
   fetched again during recovery.
 - Direct anonymous HTTP runs first. When it fails or yields no text for a
-  textual resource, the configured Extract chain supplies text once. A URL the
-  local policy rejects never reaches an external provider.
+  textual resource, the configured Extract chain supplies text once. Its steps run
+  in order and the first usable result wins: the hosted providers (Exa, Tavily),
+  then the Agent Browser, which a Research Run with a browser appends unless the
+  configuration places it elsewhere
+  ([Public Web Sources](configuration.md#public-web-sources)). A URL the local
+  policy rejects never reaches an external provider or the browser.
 - Extract text becomes the snapshot only when the fetch failed. When the fetch
   succeeded but its bytes hold no text, the bytes stay the snapshot and the
   Extract text is their text view, recorded and restored with them, so `view`
-  and `read` of the same URL agree in any order.
+  and `read` of the same URL agree in any order. The Agent Browser's rendering is
+  not Extract text: it is a second representation of the Resource
+  ([Rendered reads](#rendered-reads)).
 - The model sees an inventory of registered Resources with a kind for each:
   `image; view`, `PDF; read text or view physical pages`,
   `DOCX|PPTX|XLSX; read extracted text and embedded-image inventory`, the MIME
   type, or `resource; type verified on acquisition` when none is declared.
+
+## Browser captures and downloads
+
+The `browser` tool ([Agent Browser](retrieval-answer.md#agent-browser)) turns two
+things its page yields into Resources: the page as it stands, and a file the page
+downloads. Both are Web Resources with admission origin `agent` and acquisition
+`browser_capture` or `browser_download`, admitted by
+[ADR 0032](adr/0032-the-agent-browser.md). Neither lands in the Agent Workspace by
+itself.
+
+- **A Resource of its own.** Each capture and each download is a new Resource. It never
+  enters the URL dedup map, so what a page showed after interaction cannot rebind the
+  snapshot its URL serves: capturing a page and then reading its URL are two Resources,
+  and two captures of one URL are two. A capture takes no attachment slot and no share of
+  `max_total_attachment_bytes`, as a fetched URL takes none, and `rendered=true` is
+  refused on one, which has no URL of its own to render.
+- **Bytes, not a fetch.** The bytes are inline: a read converts or decodes them and never
+  fetches, extracts, or renders. A capture is the page's serialized DOM, UTF-8 whatever
+  its own `<meta charset>` says. It is stored under its URL's last path segment with the
+  extension replaced by `.html` (`report.pdf` becomes `report.html`), as `<host>.html`
+  when the path has none, and as `capture.html` when it has no public URL, so the `.html`
+  suffix routes it to the HTML converter whatever its URL's path ends in, and its
+  text view and conversion snapshot are the ones direct HTML has. The call returns the
+  Resource's handle and its first window as `read` returns it. A page with no text reads
+  `no_extracted_text`, admits no Evidence, and still settles its bytes.
+- **Citation identity.** A capture is cited by the URL its page ended at, and a download by
+  the URL it came from, normalized as every Web identity is. A URL that carries a credential
+  or signature parameter, and one that is not an HTTP(S) URL of a public host (`blob:`,
+  `data:`, `about:`), follows ADR 0005's signed-URL rule: the full URL is never stored, the
+  durable locator is the Resource Handle, and the Resource is cited by its handle (a source
+  of type `web_attachment` rather than `web_search`). A file a script generates has no
+  public URL of its own, so it is cited by its handle.
+- **Size.** `answer.generation.max_attachment_bytes` bounds a capture and a download, and
+  it stops a download's transfer. An oversized capture is refused as
+  `the captured page exceeds <n> bytes`. A download that is refused, for its size, for a
+  transfer that failed or did not finish within `navigation_timeout_seconds`, or for being
+  a fifth in one call, is named in the result and never fails the call, and no copy of it
+  survives.
+- **Downloads.** A download is typed by its filename, then by a PDF signature, and is
+  otherwise opaque. It becomes Evidence when `read` or `view` reads it, as any Resource
+  does, not when it is admitted. With `trust`, a process that needs the file itself, a CSV
+  to compute over, takes it with [`materialize`](#materialize).
+- **Handles and settlement.** A handle is minted from the Agent Session, the call, and the
+  file's place in the call, so a recovered Run mints the handles it already printed. The
+  bytes settle with the call that produced them, in the same transaction as its result:
+  a `web` row whose locator is the citable URL or the handle and whose `intent_id` is that
+  call's, and beside a capture its conversion snapshot. A call pending at a crash settles
+  its outcome as unknown, and bytes buffered for it die with the process.
+- **Recovery.** A resumed Run restores a settled capture or download under its handle, and
+  reads it identically, without a browser and without converting it again. It refuses a row
+  that the Agent did not admit, or that names a locator ADR 0005 keeps private, which
+  admission never stores.
+- **Adoption.** A later turn of the Session adopts a capture or a download as it adopts any
+  Web row, by its handle ([Earlier Runs](#earlier-runs)).
+
+## Rendered reads
+
+A page whose content a script builds reaches `read` as a shell: the fetch succeeds
+and the text is a loading or enable-JavaScript notice. A Research Run in a deployment
+with an [Agent Browser](security.md#agent-browser-boundary) can read such a page as
+a browser renders it. The Fast path never does.
+
+- **Asking.** `read(url=…, rendered=true)` and `read(resource_id=…, rendered=true)`
+  render the page in the Run's browser, serialize the DOM after its scripts ran, and
+  convert that HTML by the route direct HTML takes, so both text views come from one
+  converter. `rendered` applies only to a URL or a Web Resource. A workspace `path`,
+  `http` options, a spill handle, and a Resource that is not a Web Resource (an
+  upload, for one) are refused, never silently ignored.
+- **A second representation.** The rendering is appended to the same Web Resource
+  with acquisition `browser_render`. It never replaces the admitted snapshot, so
+  `view` and earlier citations keep reading what they read, and it has no handle of
+  its own: results print the Resource's handle, a header
+  `[resource: <id> | rendered | lines <a>-<b> | …]` says the text is the rendering,
+  and its note, `Rendered view from the Agent Browser (browser_render)`, adds
+  `; the page ended at <final URL>` when the page ended somewhere else. It is not in
+  the manifest and takes no attachment slot. Its evidence cites the Resource's URL
+  with the acquisition `browser_render`. What the browser returned is the browser's
+  assertion, not an attestation that an anonymous GET serves the same page.
+- **Cursors.** A cursor names the representation it pages. A rendered continuation
+  starts with `r.` and a rendered visual inventory with `rvisual.`; a cursor alone
+  selects its representation, flagged or not. `rendered=true` with a cursor of the
+  direct text is refused, as is a rendered cursor on any other Resource.
+- **Images.** The HTML route lists only the rendering's embedded data-URI images, as
+  `vis-…` handles. Viewing one makes no fetch and no render.
+- **A plain read.** Without `rendered` and without a cursor, `read` of a Web Resource
+  returns the first of these, which depend only on what the Run holds and so are the
+  same after recovery:
+  1. the Resource's own text view, from its fetch or from hosted Extract text;
+  2. its rendering, when the Run holds one and the Resource has no bytes of its own
+     or its bytes held no text, without a fetch and without walking the chain;
+  3. otherwise the acquisition of any URL: a direct fetch, then the Extract chain
+     when the fetch failed or yielded no text.
+- **The chain.** When the chain reaches the browser, the render is automatic. For a
+  fetch that failed, the rendering is the Resource's only representation. For a
+  fetch that succeeded with bytes holding no text, the bytes stay the snapshot and
+  settle beside the rendering, which a plain read then returns. An automatic render
+  never raises: its failure is folded into the `unavailable` note as
+  `Agent Browser: <reason sentence>`.
+- **Once per Run.** The first successful rendering of a Resource serves every later
+  read of the Run, Child Sessions included, and concurrent reads share one render. A
+  render that fails, or yields no text, pins nothing, so a later read tries again.
+- **Bounds.** Each render uses a temporary context that holds no cookies, storage, or
+  service workers, accepts no downloads, and closes when the render ends; a browser
+  that does not close it within ten seconds is wedged, so the render fails as
+  `disconnected` and the Run leases another. A Run's browser serves at most four at
+  once. The page loads within `navigation_timeout_seconds`, then settles for at most
+  `settle_timeout_seconds` and is read as it stands if it never goes quiet
+  ([Agent Browser](configuration.md#agent-browser)). The serialized page may not
+  exceed `answer.generation.max_attachment_bytes`.
+- **Where the check ends.** DlightRAG checks the first URL as a direct read does
+  (scheme, no embedded credentials or credential query parameters, a host that
+  resolves to public addresses only) and the form of the final URL the page ended at.
+  Everything the page loads in between, redirects and subresources included, is
+  confined by the deployment's network, not by this check
+  ([Agent Browser Boundary](security.md#agent-browser-boundary)).
+
+An explicit rendered read that fails is a tool error with no effects, and the
+sentence it carries is fixed per reason: page URLs and driver error text never enter
+it.
+
+| Reason | What the model reads |
+|---|---|
+| `not_configured` | The Agent Browser is not available in this Run. |
+| `busy` | Every Agent Browser is in use by other Runs; try again later or work from the direct read |
+| `unreachable` | The Agent Browser is unreachable, so this page was not rendered |
+| `disconnected` | The browser disconnected while rendering; the next rendered read starts a fresh one |
+| `timeout` | The page did not finish loading within the configured seconds |
+| `navigation_failed` | The browser could not load the page, with its network error token when it has one |
+| `http_status` | The page answered HTTP 4xx or 5xx to the browser |
+| `download` | The URL starts a download, not a page |
+| `too_large` | The rendered page exceeds the byte limit |
+| `no_text` | The rendered page produced no text |
+| `final_url_refused` | The page ended at a URL this deployment does not admit; nothing was admitted |
+
+A rendering settles with the read that produced it, and recovery restores it without
+a browser. The settlement is one `web_render` row, the rendered HTML with its URL,
+final URL, and admission origin, plus the conversion snapshot of its text and images
+that every converted Resource settles
+([Conversion snapshots](#conversion-snapshots-and-recovery)). A resumed Run restores
+the rendering under the Resource's handle, re-registering a search or agent Resource
+that the Run knew only by its rendering, and then reads it with zero renders. A later
+turn's lineage adoption does not carry a rendering: it adopts the Resource's
+admitted bytes, if there are any, and renders the page again if it needs to.
 
 ## Extraction status and discovery
 
@@ -173,7 +373,9 @@ textual URL then falls back to the Extract chain.
   installed version is a configuration error, not a fallback. It runs offline on
   admitted bytes with OCR rejected. MarkItDown runs with plugins disabled on
   admitted bytes and an explicit stream type, never fetches, and uses a fresh
-  converter per call.
+  converter per call. A charset the declared media type names, when Python knows it,
+  decodes the bytes ahead of any `<meta charset>` the markup carries, as the HTML
+  specification orders; a rendered page is UTF-8 whatever its own meta says.
 - OOXML archives (DOCX, PPTX, XLSX) pass a central-directory preflight before
   any converter opens them: no duplicate or encrypted entries, at most 10,000
   entries, 100 MiB per entry, 512 MiB uncompressed in total, and a 100×
@@ -265,15 +467,16 @@ completeness for arbitrary documents.
   its model must accept images, and each inherited image is charged once to the
   Run's image budget.
 - Earlier uploads re-registered for a follow-up or fork load their bytes only
-  when read or viewed. A follow-up or fork through the Run API re-registers its
+  when read, viewed, or copied. A follow-up or fork through the Run API re-registers its
   parent Run's uploads and links. A Web follow-up re-registers the uploads of
   the conversation's succeeded turns, newest turn first, up to the attachment
   allowance its own uploads leave.
 - Lineage adoption is on by default (`answer.generation.lineage_adoption`). When
-  `read` or `view` names an unknown handle, the loader looks in the same owner
-  and Agent Session for a retained row with that handle and an adoptable kind: a
-  fetched Web body, a tool attachment, a Published Artifact, or a Resource an
-  earlier turn adopted. Its Blob digest must match.
+  `read`, `view`, or `materialize` names an unknown handle, the loader looks in the
+  same owner and Agent Session for a retained row with that handle and an adoptable
+  kind: a fetched Web body, a tool attachment, a Published Artifact, or a Resource an
+  earlier turn adopted. Its Blob digest must match. A rendering is not an adoptable
+  kind ([Rendered reads](#rendered-reads)).
 - A stored conversion view is checked before anything is registered: it must
   decode, name the same handle, and match the input digest of the bytes. A view
   that fails any check refuses the adoption ("the document was not converted
@@ -321,9 +524,9 @@ completeness for arbitrary documents.
   view refuses without adopting it, and names the remedy: re-read it from its
   URL or a fresh attachment, or, for a PDF only (by file name or declared type),
   view its pages as pixels. `view` can still adopt such a document for pixels
-  that need no conversion, such as PDF pages, but a later `read` through the
-  earlier handle or this Run's handle refuses the same way, and recovery keeps
-  it so.
+  that need no conversion, such as PDF pages, and `materialize` for its bytes, but a
+  later `read` through the earlier handle or this Run's handle refuses the same way,
+  and recovery keeps it so.
 - Publication stores that view for a convertible Published Artifact. The
   publishing Run converts the product with the converters and limits a read
   uses, mints its image handles as a read would, and records the snapshot and

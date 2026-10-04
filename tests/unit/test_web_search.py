@@ -464,7 +464,9 @@ async def test_search_and_extract_fail_over_in_independent_orders() -> None:
     )
 
     searched = await service.search(WebSearchRequest("q"))
-    extracted = await service.extract("https://a.example", effort="fast")
+    extracted = await service.extract(
+        "https://a.example", effort="fast", providers=("exa", "tavily")
+    )
 
     assert searched.provider == "tavily"
     assert searched.degradation == "Provider fallback: exa (timeout); used tavily."
@@ -472,6 +474,27 @@ async def test_search_and_extract_fail_over_in_independent_orders() -> None:
     assert extracted.degradation == "Provider fallback: tavily (timeout); used exa."
     assert (exa.search_calls, tavily.search_calls) == (1, 1)
     assert (tavily.extract_calls, exa.extract_calls) == (1, 1)
+
+
+async def test_extract_asks_only_the_providers_it_is_given() -> None:
+    """The Extract chain splits around the Agent Browser, so each run of hosted providers is its own call."""
+
+    def provider(name: str) -> _StubProvider:
+        return _StubProvider(
+            name,
+            search=WebSourceUnavailable(name, "search", "unused"),
+            extract=WebExtractResult(
+                "https://a.example/final", f"{name} text", provider=name, acquisition="exa_extract"
+            ),
+        )
+
+    exa, tavily = provider("exa"), provider("tavily")
+    service = WebSourceService(extract_providers=(exa, tavily))
+
+    extracted = await service.extract("https://a.example", providers=("tavily",))
+
+    assert extracted.provider == "tavily"
+    assert (exa.extract_calls, tavily.extract_calls) == (0, 1)
 
 
 async def test_empty_search_is_success_not_quality_based_fallback() -> None:

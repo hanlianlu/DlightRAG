@@ -19,6 +19,7 @@ import pytest
 from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 
+from dlightrag.adapters.http.artifact_delivery import INERT_SVG_CSP
 from dlightrag.adapters.http.browser.answer_events import browser_frame, render_done_event
 from dlightrag.adapters.http.browser.conversations import project_conversation_turn
 from dlightrag.adapters.http.browser.routes import chat as chat_routes
@@ -34,6 +35,7 @@ from dlightrag.application.answer_runs import (
     ChildRosterCursorCodec,
     ChildRosterPage,
     ChildRosterPageRequest,
+    RunResourceDescriptor,
 )
 from dlightrag.application.config import DlightragConfig
 from dlightrag.application.runs import (
@@ -1278,6 +1280,26 @@ async def test_browser_svg_artifact_is_inline_only_under_an_inert_document_polic
         "sandbox; default-src 'none'; img-src data:"
     )
     assert response.headers["x-content-type-options"] == "nosniff"
+
+
+@pytest.mark.parametrize(
+    ("mime_type", "inert"),
+    [("image/svg+xml", True), ("image/svg+xml; charset=utf-8", True), ("image/png", False)],
+    ids=["svg", "svg-with-parameters", "raster"],
+)
+async def test_a_run_resource_image_is_inline_and_an_svg_only_under_an_inert_policy(
+    client: AsyncClient, service: Any, mime_type: str, inert: bool
+) -> None:
+    service.run_resource.return_value = (
+        RunResourceDescriptor("res-1", "resource", None, 0, "drawing", mime_type, "digest"),
+        b"<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>",
+    )
+
+    response = await client.get(f"/web/api/runs/{RUN_ID}/resources/res-1")
+
+    assert response.status_code == 200
+    assert "content-disposition" not in response.headers
+    assert response.headers.get("content-security-policy") == (INERT_SVG_CSP if inert else None)
 
 
 async def test_general_artifact_presentation_is_404_without_a_descriptor(

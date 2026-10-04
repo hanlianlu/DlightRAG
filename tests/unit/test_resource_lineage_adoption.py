@@ -13,9 +13,15 @@ import pytest
 from PIL import Image
 
 from dlightrag.engine.agent.environment.access import AccessScheduler
+from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
 from dlightrag.engine.agent.tool_content import decode_tool_content, encode_tool_content
 from dlightrag.engine.agent.tools import ResourceAttachmentBytes, ToolResult
-from dlightrag.engine.agent.tools.files import PreparedImageAttachment, read_tool, view_tool
+from dlightrag.engine.agent.tools.files import (
+    PreparedImageAttachment,
+    materialize_tool,
+    read_tool,
+    view_tool,
+)
 from dlightrag.engine.ai.media import decode_image_base64
 from dlightrag.engine.answer.research.context import _resource_manifest_context
 from dlightrag.engine.answer.resources.converters import ConvertedResource, ExtractedVisual
@@ -34,7 +40,11 @@ from dlightrag.engine.answer.resources.models import (
 )
 from dlightrag.engine.answer.resources.registry import ResourceEffectOwner, ResourceRegistry
 from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
-from dlightrag.engine.answer.tools.resources import make_resource_reader, make_resource_viewer
+from dlightrag.engine.answer.tools.resources import (
+    make_admitted_bytes_reader,
+    make_resource_reader,
+    make_resource_viewer,
+)
 from dlightrag.engine.runtime.coordinator import LeaseLostError
 from dlightrag.engine.runtime.records import RunFetchedResource
 from tests.support.resources import printed_handle
@@ -116,6 +126,14 @@ def tools(registry, *, lineage):
             resource_viewer=make_resource_viewer(registry, lineage=lineage),
             image_preparer=preparer(),
         ),
+    )
+
+
+def materializing(registry, workspace, *, lineage):
+    return materialize_tool(
+        LocalExecutionEnvironment(workspace),
+        AccessScheduler(),
+        admitted_bytes_reader=make_admitted_bytes_reader(registry, lineage=lineage),
     )
 
 
@@ -370,26 +388,59 @@ async def test_reading_a_document_the_earlier_run_never_converted_refuses(monkey
 
 
 @pytest.mark.parametrize("with_lineage", [True, False], ids=["lineage-refuses", "no-lineage"])
-async def test_an_unauthorized_handle_keeps_the_typed_refusal(with_lineage: bool) -> None:
+async def test_an_unauthorized_handle_keeps_the_typed_refusal(tmp_path, with_lineage: bool) -> None:
     """A handle this Run neither holds nor may adopt is refused, with the way forward.
 
     Whether or not lineage is configured, the refusal names the handle and the rule,
     so the model re-attaches the document instead of retrying an unknown failure.
+    Reading, viewing, and copying a handle are one rule, so they refuse in one voice.
     """
     lineage = Loader(None) if with_lineage else None
     async with ResourceRegistry() as registry:
         read, view = tools(registry, lineage=lineage)
+        copy = materializing(registry, tmp_path, lineage=lineage)
         for result in (
             await call(read, resource_id="res-foreign"),
             await call(view, resource_id="res-foreign"),
+            await call(copy, resource_id="res-foreign", path="tmp/foreign"),
         ):
             assert result.is_error is True
             assert "res-foreign" in result.text_content
             assert "neither holds that handle nor can adopt it" in result.text_content
+            assert "cannot be read, viewed, or copied here" in result.text_content
             assert "Re-attach the document" in result.text_content
+    assert not (tmp_path / "tmp").exists()
     if lineage is not None:
-        assert lineage.reads == 2
+        assert lineage.reads == 3
         assert lineage.recorded == []
+
+
+async def test_materialize_adopts_an_earlier_document_without_a_stored_view(tmp_path) -> None:
+    """A copy needs only the bytes, so a view the earlier Run never built is no obstacle."""
+    document = adopted_document(with_snapshot=False)
+    lineage = Loader(document)
+    async with ResourceRegistry() as registry:
+        read, _ = tools(registry, lineage=lineage)
+        copy = materializing(registry, tmp_path, lineage=lineage)
+
+        result = await call(copy, resource_id=EARLIER_HANDLE, path="tmp/earlier.pdf")
+
+        canonical = registry.canonical_resource_id(EARLIER_HANDLE)
+        assert canonical != EARLIER_HANDLE
+        assert result.is_error is False, result.text_content
+        assert result.text_content == (
+            f"materialized {canonical} to tmp/earlier.pdf "
+            f"(application/pdf, {len(document.content)} bytes)"
+        )
+        assert (tmp_path / "tmp/earlier.pdf").read_bytes() == document.content
+        (recorded,) = lineage.recorded
+        assert [effect.resource_kind for effect in recorded] == [LINEAGE_ADOPTION_KIND]
+
+        # Adopting for a copy builds no text view either: a read still refuses.
+        refused = await call(read, resource_id=EARLIER_HANDLE)
+        assert refused.is_error is True
+        assert "never extracted text" in refused.text_content
+        assert len(lineage.recorded) == 1
 
 
 def _stored_view(loaded: LineageResourceBytes, **changes) -> bytes:

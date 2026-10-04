@@ -32,12 +32,13 @@ from dlightrag.engine.answer.tools.composition import _resource_rows
 from dlightrag.engine.answer.workspace import RunWorkspace
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
 from dlightrag.engine.runtime.workspace import CommittedSpillRecord
+from tests.support.agent_browser import inert_browser_host
 from tests.support.workspace_store import InMemoryWorkspaceStore
 from tests.tool_helpers import tool_runtime
 from tests.unit.conftest import answer_image_policy, answer_model_profile
 
 
-def _orchestrator(*, mode: str, model=None, retrieve=None, synthesizer=None):
+def _orchestrator(*, mode: str, model=None, retrieve=None, synthesizer=None, **options):
 
     profile = answer_model_profile()
 
@@ -53,6 +54,7 @@ def _orchestrator(*, mode: str, model=None, retrieve=None, synthesizer=None):
         telemetry=NOOP_TELEMETRY,
         resolved_mode=mode,  # type: ignore[arg-type]
         search_toolchain=SearchToolchain(),
+        **options,
     )
 
 
@@ -299,6 +301,34 @@ async def test_e2_a_continuation_carries_the_note_the_parent_compacted(
     )
 
 
+def test_a_child_can_read_rendered_exactly_when_its_run_has_a_browser() -> None:
+    from dlightrag.engine.answer.tools.subagents import ChildContextSnapshot, ChildRequest
+
+    async def model(**_kwargs):
+        return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
+
+    def read_properties(*, browser: bool) -> dict[str, Any]:
+        orchestrator = _orchestrator(
+            mode="research",
+            model=model,
+            resource_reader=AsyncMock(),
+            browser=inert_browser_host() if browser else None,
+        )
+        child = orchestrator.prepare_child_session(
+            ChildRequest(objective="investigate"),
+            context_snapshot=ChildContextSnapshot.from_values(
+                parent_session_id=SessionId.new(),
+                parent_entry_id=EntryId.new(),
+                depth=0,
+                messages=[],
+            ),
+        )
+        return {tool.name: tool for tool in child.tools}["read"].definition.parameters["properties"]
+
+    assert "rendered" in read_properties(browser=True)
+    assert "rendered" not in read_properties(browser=False)
+
+
 def test_child_preparation_excludes_every_parent_subagent_control() -> None:
     from dlightrag.engine.agent.session.ids import EntryId, SessionId
     from dlightrag.engine.answer.tools.subagents import (
@@ -403,14 +433,14 @@ async def test_a_child_states_its_objective_once_and_a_steer_keeps_the_last_word
     assert all(objective not in str(message["content"]) for message in messages[steer_at:])
 
 
-def _research_owner_with_subagents(tmp_path: Path):
+def _research_owner_with_subagents(tmp_path: Path, **options):
     """A parent that can compose path tools, so capability and authority both exist."""
     from dlightrag.engine.answer.tools.subagents import SubagentHost
 
     async def model(**_kwargs):
         return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
 
-    orchestrator = _orchestrator(mode="research", model=model)
+    orchestrator = _orchestrator(mode="research", model=model, **options)
     orchestrator.bind_workspace(
         RunWorkspace(
             epoch=1,
@@ -456,7 +486,7 @@ def test_a_childs_default_is_its_parents_capability_minus_authority(tmp_path: Pa
     parent_names = {tool.name for tool in orchestrator.prepare_run("question").tools}
     child_names = _child_tools(orchestrator)
 
-    assert {"bash", "write", "edit"} <= child_names
+    assert {"bash", "write", "edit", "materialize"} <= child_names
     assert child_names & CHILD_FORBIDDEN_TOOLS == set()
     # Everything the parent holds that a Child does not is in the table, and the
     # Child's own guidance channel is the one addition for being a Child.
@@ -464,6 +494,18 @@ def test_a_childs_default_is_its_parents_capability_minus_authority(tmp_path: Pa
     assert child_names - parent_names == {"ask_parent"}
     for authority in ("remember", "forget", "attach_artifact", "spawn_agent"):
         assert authority not in child_names
+
+
+def test_every_child_of_a_run_with_an_agent_browser_holds_the_browser_tool_unless_narrowed(
+    tmp_path: Path,
+) -> None:
+    """The browser is capability: the table withholds nothing of it, and `tools` only narrows."""
+    orchestrator = _research_owner_with_subagents(tmp_path, browser=inert_browser_host())
+    parent = {tool.name for tool in orchestrator.prepare_run("question").tools}
+    child = {tool.name for tool in _prepared_child(orchestrator).tools}
+
+    assert "browser" in parent and "browser" in child
+    assert _child_tools(orchestrator, tools=["browser"]) == {"browser", "ask_parent"}
 
 
 def test_an_explicit_tool_list_narrows_a_child_and_restores_nothing(tmp_path: Path) -> None:
@@ -839,6 +881,32 @@ async def test_reading_a_spill_admits_no_evidence_and_mints_no_citation(tmp_path
     assert result.effects.evidence_sources == ()
     # Exactly the predicate the ledger-backed wrapper admits rows on.
     assert _resource_rows("read", result) == []
+
+
+@pytest.mark.asyncio
+async def test_a_spill_handle_is_not_a_web_resource_to_read_rendered(tmp_path: Path) -> None:
+    spill_dir = tmp_path / "spills"
+    spill_dir.mkdir()
+    (spill_dir / "spill_read_ab12.txt").write_text("line one\n", encoding="utf-8")
+    orchestrator = _orchestrator(mode="research")
+    orchestrator.bind_workspace(
+        RunWorkspace(epoch=1, workspace=tmp_path, spill_dir=spill_dir, environment=MagicMock()),
+        _RecordingWorkspaceStore(),
+    )
+
+    reader = orchestrator._resource_reader_for_run()
+    assert reader is not None
+    result = await reader(
+        ResourceReadRequest(
+            resource_id="spill_read_ab12", url=None, focus=None, cursor=None, rendered=True
+        ),
+        MagicMock(),
+    )
+
+    assert result.is_error is True
+    assert result.text_content == (
+        "rendered=true reads a URL or a Web Resource; spill_read_ab12 is not a Web Resource"
+    )
 
 
 def _spill_record(resource_id: str) -> CommittedSpillRecord:

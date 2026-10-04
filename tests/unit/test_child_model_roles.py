@@ -28,6 +28,7 @@ from dlightrag.engine.ai.settings import (
     ModelSettings,
 )
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
+from dlightrag.engine.answer.agent_browser import RunAgentAccounts, RunAgentBrowser
 from dlightrag.engine.answer.capabilities import RequestModelContext
 from dlightrag.engine.answer.execution.input import (
     PinnedModelProfile,
@@ -36,6 +37,7 @@ from dlightrag.engine.answer.execution.input import (
     new_resource_identity,
 )
 from dlightrag.engine.answer.research.runtime import FetchedResourceBuffer, run_child_session
+from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.answer.tools.subagents import (
     ChildRequest,
     SpawnAgentInput,
@@ -139,7 +141,14 @@ def test_spawn_guidance_uses_serialized_effective_profiles_not_tier_guarantees()
     assert "model=visual; images=False" in child_model_guidance(narrowed)
 
 
-async def _prepared_executor(monkeypatch, agent_effort: ReasoningLevel | None = None):
+async def _prepared_executor(
+    monkeypatch,
+    agent_effort: ReasoningLevel | None = None,
+    *,
+    registry: ResourceRegistry | None = None,
+    agent_browser: RunAgentBrowser | None = None,
+    agent_accounts: RunAgentAccounts | None = None,
+):
     roles = _roles()
     pins = _pins(roles)
     profiles = {cast(Any, pin.role): pin.profile for pin in pins}
@@ -166,7 +175,7 @@ async def _prepared_executor(monkeypatch, agent_effort: ReasoningLevel | None = 
             injected_tools=[],
             resource_manifest=(),
             web_sources=None,
-            registry=None,
+            registry=registry,
             image_budget=None,
             query_images=None,
             current_image_count=0,
@@ -185,6 +194,8 @@ async def _prepared_executor(monkeypatch, agent_effort: ReasoningLevel | None = 
         resource_identity=new_resource_identity(),
         pinned_models=pins,
         agent_effort=agent_effort,
+        agent_browser=agent_browser,
+        agent_accounts=agent_accounts,
     )
     return executor, run.orchestrator, provider, pins
 

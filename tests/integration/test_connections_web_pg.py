@@ -11,7 +11,7 @@ from dlightrag.adapters.http.browser.routes.connections import router
 from dlightrag.adapters.postgres.connections import PGConnectionsStore
 from dlightrag.application.config import DlightragConfig
 from dlightrag.application.connections import Connections
-from dlightrag.application.connections.credentials import CredentialCipher
+from dlightrag.engine.credential_cipher import CredentialCipher
 from tests.integration.run_runtime_pg_harness import isolated_run_runtime
 from tests.integration.test_connections_pg import FakeMcp
 from tests.support.application_double import application_double

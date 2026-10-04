@@ -14,7 +14,13 @@ from dlightrag.engine.agent.environment.errors import FullOutputUnavailable
 from dlightrag.engine.agent.environment.execution import ExecutionEnvironment
 from dlightrag.engine.agent.environment.toolchain import SearchToolchain
 from dlightrag.engine.agent.tool_content import ToolTextPart, tool_content_attachments
-from dlightrag.engine.agent.tools import AgentTool, ToolDeclaration, ToolResult, ToolRuntime
+from dlightrag.engine.agent.tools import (
+    AdmittedBytesReader,
+    AgentTool,
+    ToolDeclaration,
+    ToolResult,
+    ToolRuntime,
+)
 from dlightrag.engine.agent.tools.files import (
     ImagePreparer,
     ResourceViewer,
@@ -29,15 +35,19 @@ from dlightrag.engine.agent.tools.files import (
     grep_tool,
     ls_declaration,
     ls_tool,
+    materialize_declaration,
+    materialize_tool,
     preview_or_spill,
     read_declaration,
     read_tool,
+    spill_continuation,
     view_declaration,
     view_tool,
     write_declaration,
     write_tool,
 )
 from dlightrag.engine.agent.tools.registry import DuplicateToolError, ToolRegistry
+from dlightrag.engine.answer.agent_browser import has_mailbox
 from dlightrag.engine.answer.citations.utils import ATTACHMENT_WORKSPACE, WEB_SEARCH_WORKSPACE
 from dlightrag.engine.answer.continuation_handles import SESSION_NOTE_DIRECTORY
 from dlightrag.engine.answer.errors import (
@@ -49,6 +59,11 @@ from dlightrag.engine.answer.resources.models import PUBLISHED_ARTIFACT_HANDLE_P
 from dlightrag.engine.answer.tools.artifacts import (
     attach_artifact_declaration,
     attach_artifact_tool,
+)
+from dlightrag.engine.answer.tools.browser import (
+    BrowserToolHost,
+    browser_declaration,
+    browser_tool,
 )
 from dlightrag.engine.answer.tools.memory import (
     MemoryHost,
@@ -77,12 +92,21 @@ from dlightrag.engine.answer.tools.subagents import (
 )
 
 #: What a Run's workspace holds, stated once on the shell and once on the listing tool.
-#: The Session's notes are the one plane a Run is handed (ADR 0022); an earlier Run's
-#: Artifact and a knowledge-base document are reached by handle or by search instead.
+#: The Session's notes are the one plane a Run is handed (ADR 0022); a Resource becomes a
+#: file only when the Agent asks for a copy (ADR 0033), and a knowledge-base document is
+#: reached by search instead.
 _WORKSPACE_FACT = (
     f"Each Run's workspace starts with only `{SESSION_NOTE_DIRECTORY}/` from earlier Runs "
-    "of this conversation, and `tmp/` is scratch for this Run alone; earlier Artifacts "
-    "and knowledge-base documents are never files in it."
+    "of this conversation, and `tmp/` is scratch for this Run alone. Knowledge-base documents "
+    "are never files in it; a Resource becomes one only when materialize copies its resource_id."
+)
+
+#: What materialize copies and what the copy is; the tool itself stays product-neutral. The
+#: shell and the listing tool say only that a copy is the way in, so this is the one list.
+_MATERIALIZE_FACT = (
+    "Uploads, fetched pages and files, Agent Browser downloads and captures, and an earlier "
+    "turn's Resources and Artifacts all copy. The Resource stays the source: cite what read "
+    "returns from it, never the copy."
 )
 
 #: A later Run of the Session adopts a published Artifact by the handle its link carries.
@@ -119,6 +143,9 @@ def research_tool_declarations(
     *,
     web_search: bool = False,
     resource_read: bool = False,
+    agent_browser: bool = False,
+    agent_accounts: bool = False,
+    agent_mailbox: bool = False,
     resource_view: bool = False,
     environment: bool = False,
     artifact_publication: bool = False,
@@ -135,10 +162,17 @@ def research_tool_declarations(
         declarations.append(web_search_declaration())
     if resource_read:
         declarations.append(
-            _reading(read_declaration(public_url=True), earlier_artifacts=artifact_publication)
+            _reading(
+                read_declaration(public_url=True, rendered=agent_browser),
+                earlier_artifacts=artifact_publication,
+            )
         )
     if resource_view or environment:
         declarations.append(view_declaration())
+    if agent_browser:
+        declarations.append(
+            browser_declaration(upload=environment, accounts=agent_accounts, mailbox=agent_mailbox)
+        )
     declarations.extend(injected)
     if environment:
         if not resource_read:
@@ -148,6 +182,13 @@ def research_tool_declarations(
                 _stating(bash_declaration(), _WORKSPACE_FACT),
                 edit_declaration(),
                 write_declaration(),
+            )
+        )
+        if resource_read:
+            # Only a Run that can read Resources has any to copy.
+            declarations.append(_stating(materialize_declaration(), _MATERIALIZE_FACT))
+        declarations.extend(
+            (
                 grep_declaration(),
                 find_declaration(),
                 _stating(ls_declaration(), _WORKSPACE_FACT),
@@ -185,7 +226,9 @@ def compose_research_tools(
     injected_tools: list[AgentTool],
     register_web_source: RegisterWebSource | None,
     resource_reader: Any | None = None,
+    browser: BrowserToolHost | None = None,
     resource_viewer: ResourceViewer | None = None,
+    admitted_bytes_reader: AdmittedBytesReader | None = None,
     environment: ExecutionEnvironment | None = None,
     scheduler: AccessScheduler | None = None,
     spill: Any | None = None,
@@ -209,9 +252,13 @@ def compose_research_tools(
             if child
             else subagent_declarations(model_guidance=subagent_host.model_guidance)
         )
+    accounts = None if browser is None else browser.accounts
     declarations = research_tool_declarations(
         web_search=search_web is not None,
         resource_read=resource_reader is not None,
+        agent_browser=browser is not None,
+        agent_accounts=accounts is not None,
+        agent_mailbox=has_mailbox(accounts),
         resource_view=resource_viewer is not None,
         environment=environment is not None,
         artifact_publication=artifacts_root is not None,
@@ -239,6 +286,7 @@ def compose_research_tools(
                     access,
                     resource_reader=resource_reader,
                     spill=spill,
+                    rendered=browser is not None,
                 ),
                 earlier_artifacts=resource_reader is not None and artifacts_root is not None,
             ),
@@ -253,6 +301,17 @@ def compose_research_tools(
             ),
             evidence,
         ),
+        "browser": lambda: _ledger_backed(
+            browser_tool(
+                cast(BrowserToolHost, browser),
+                environment=environment,
+                scheduler=access,
+                spill=spill,
+                image_preparer=image_preparer,
+                child=child,
+            ),
+            evidence,
+        ),
         "bash": lambda: _stating(
             bash_tool(
                 cast(ExecutionEnvironment, environment),
@@ -263,6 +322,14 @@ def compose_research_tools(
         ),
         "edit": lambda: edit_tool(cast(ExecutionEnvironment, environment), access, spill=spill),
         "write": lambda: write_tool(cast(ExecutionEnvironment, environment), access),
+        "materialize": lambda: _stating(
+            materialize_tool(
+                cast(ExecutionEnvironment, environment),
+                access,
+                admitted_bytes_reader=cast(AdmittedBytesReader, admitted_bytes_reader),
+            ),
+            _MATERIALIZE_FACT,
+        ),
         "grep": lambda: grep_tool(
             cast(ExecutionEnvironment, environment),
             access,
@@ -326,7 +393,7 @@ def _bounded_injected_result(tool: AgentTool, spill: SpillWriter | None) -> Agen
         return replace(
             result,
             parts=(ToolTextPart(text), *tool_content_attachments(result.parts)),
-            protected_text=f"Full output: read(resource_id={receipt.resource_id!r}, cursor=...)",
+            protected_text=spill_continuation(receipt.resource_id),
             effects=replace(
                 result.effects, committed_outputs=(*result.effects.committed_outputs, receipt)
             ),

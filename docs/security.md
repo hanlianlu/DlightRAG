@@ -6,8 +6,9 @@ defaults live in [Configuration](configuration.md); public payloads in
 [Interfaces](interfaces.md).
 
 DlightRAG verifies credentials and maps claims to workspace/actions. It does
-not issue OAuth tokens, manage users/passwords, or provide an identity-provider
-login system.
+not issue OAuth tokens, manage users or passwords of its own, or provide an
+identity-provider login system. The passwords it does hold are the Agent's, on
+third-party sites ([Agent Accounts](#agent-accounts), ADR 0034).
 
 Examples below are YAML. Each setting is also `DLIGHTRAG_ACCESS__<FIELD>`, which
 is where a deployment of the checked-in `config.yaml` keeps it (see
@@ -399,7 +400,11 @@ redirects. The shared egress boundary repeats scheme/host/DNS/SSRF checks at
 every redirect, pins the validated address for each connection, and never permits
 HTTPS to downgrade to HTTP. Agent reads can vary only `User-Agent`, `Accept`, and
 `Accept-Language`; cookies, authorization, arbitrary headers, and browser sessions
-are unavailable. A successful acquisition becomes one immutable run snapshot.
+are unavailable to `read`. The Agent's only sessions are the Run-scoped Agent
+Browser's, whose pages are anonymous contexts that may sign in with the Agent's own
+accounts, never the owner's ([Agent Browser Boundary](#agent-browser-boundary),
+[Agent Accounts](#agent-accounts)). A successful acquisition becomes one immutable run
+snapshot.
 
 MarkItDown runs without plugins/network. OOXML files pass central-directory
 zip-bomb checks before conversion. Full bytes never enter model context—only
@@ -439,19 +444,219 @@ Execution modes:
   project tree, and other Runs' workspaces stay outside that view
   ([ADR 0024](adr/0024-the-agent-sees-only-its-workspace.md)). Bash keeps the service
   user's network authority, which is the deployment's to enforce with a network
-  policy rather than a path list.
+  policy rather than a path list. [`materialize`](resource-reading.md#materialize) copies
+  a Resource's admitted bytes into the Agent Workspace through the application process, so
+  the shell gains no credential and no route to the Blob plane. The copy is untrusted
+  content, like any file Bash fetches.
 
 Root checks are not a shell sandbox. Research reaches outside tools only through
 its owner's Personal MCP Connections, pinned per Run and gated per effect, with
 in-flight writes cancelled best-effort and never replayed
-([contract](personal-mcp-connections.md)). Network policy can deny access but
-cannot grant external account authority. Public Web Search and Extract exist only
-for explicitly configured Exa/Tavily provider chains; provider failures may fail
-over, while successful empty results do not.
+([contract](personal-mcp-connections.md)), and through the deployment's Agent Browser
+([boundary](#agent-browser-boundary)). Network policy can deny access but
+cannot grant external account authority. Public Web Search exists only for
+configured Exa/Tavily provider chains, and Extract for those chains and the
+deployment's Agent Browser, which no owner authorizes and the Agent reaches through
+`read` and the `browser` tool; provider failures may fail over, while successful empty
+results do not.
 
 All Agent/child/Fast mutations are fenced by owner, run lease, epoch, and
 register sequence. A completed child outcome is persisted so replay cannot
 re-enter it. A staged Fast result replays without another model call.
+
+## Agent Browser Boundary
+
+The Agent Browser ([ADR 0032](adr/0032-the-agent-browser.md)) renders a public page for
+a Research `read` and lets the `browser` tool drive one, in a Chromium that runs in a
+pool container, outside the answering process. The Agent gains no process, path, socket,
+or binary from it, and an owner authorizes nothing: it is a deployment capability, not a
+Connection. Fast never reaches it. What the browser loads is untrusted, so the boundary
+is the deployment's network, which fails closed, and DlightRAG checks only the URLs it
+hands over and accepts back.
+
+- **URLs.** The first URL passes the direct read's rules before the browser sees it:
+  an HTTP(S) scheme, no embedded credentials or credential query parameters, and a host
+  that resolves only to public unicast addresses. The URL the page ends at is checked for
+  the same form, without a lookup, and a page that ends at one the rules refuse fails as
+  `final_url_refused` with nothing admitted. Everything between, redirects,
+  subresources, a script's requests, and a page's own navigations, is confined by the
+  network below, not by DlightRAG. The `browser` tool's `navigate` checks the scheme,
+  embedded credentials, and public resolution, before any browser is leased, and a URL
+  they refuse ends the call with the reason. It leaves out the credential-parameter rule,
+  which guards what becomes an Agent Resource, not where a page may go: a verification link
+  from a mailbox often carries such a parameter.
+- **Topology.** Each pool member sits alone on an `internal: true` network that has no
+  route out and none to any other member. The egress proxy is on the default network
+  and on every member network, and so are `dlightrag-api`, `dlightrag-mcp`, and
+  `dlightrag-reader`. Members are kept apart because the server runs with `--unsafe`,
+  which lets any client that can connect choose a browser's launch arguments and
+  executable: only DlightRAG's processes may reach a member, and a compromised member
+  must not be able to drive another. How to add a member without breaking that is in
+  [Operations](operations.md#agent-browser-pool).
+- **Egress.** Every browser launch carries the proxy, a Squid container
+  (`agent-browser/egress/squid.conf`) that admits public destinations only: it denies
+  loopback, RFC 1918, link-local (where cloud metadata lives), CGNAT, multicast,
+  reserved, and documentation ranges and their IPv6 equivalents, the same set as
+  `network_admission`, and admits ports 80 and 443 with `CONNECT` only to 443. The
+  launch carries no bypass list, so loopback requests go through it too, and the
+  connection never uses Playwright's `expose_network`, which would route browser
+  traffic back through the application's own network. Every context, a render's and an
+  Agent Page's alike, is made by one function in the adapter that passes no proxy
+  option of its own, so each inherits the launch proxy. A missing or wrong proxy setting
+  therefore reaches nothing beyond the member's network. Denials appear as `TCP_DENIED`
+  in the proxy's log.
+- **Sessions.** Every render uses a temporary anonymous context with no cookies,
+  storage, or service workers, and downloads off. Each Agent Page is an anonymous context
+  of its own in the Run's browser, empty at the start and with service workers blocked,
+  with downloads on only so the tool can read them. Cookies and storage never outlive the
+  Run, and two Agent Pages never share any
+  ([when one closes](architecture.md#agent-browser)). The browser is launched for one
+  connection and closed with it, and the lease gives a pool container to one Run at a
+  time. The browser holds no credential of the owner.
+- **Downloads.** A download is copied over the Playwright protocol into a temporary
+  directory made for that file alone, under a fixed name that neither the page nor the model
+  supplies, and read from it. The pool's copy is cancelled and deleted whatever the
+  outcome, and the directory is removed when the copy ends. What a call admits, and the
+  caps on a download's size, time, and number, are in
+  [Resource reading](resource-reading.md#browser-captures-and-downloads).
+- **Upload.** `upload` exists only where the Run has an Agent Workspace (`trust`). It reads
+  regular files the workspace tools could read, through the same path rules and the same
+  integrity latch, checked again once it holds the file, and hands them to a file input, at
+  most 50 MiB in a call, measured before any file is read: it sends workspace files to
+  whatever page asks for them, so it is as much authority as the page can borrow from the
+  model's judgment. A Child holds it as its parent does.
+- **Chromium's sandbox.** The container runs as the unprivileged `pwuser` under
+  Playwright's recommended seccomp profile, with an init process and memory and process
+  limits. `answer.agent.browser.chromium_sandbox` (default `true`) is whether each launch
+  asks for Chromium's own sandbox, which the server honors only because it runs with
+  `--unsafe`; without that flag, or with the setting `false`, Chromium runs with
+  `--no-sandbox`. Whether a host can start the sandbox depends on its user namespaces and
+  the seccomp profile; the operator states it, and DlightRAG does not probe for it. A host
+  that cannot start it fails every launch and the pool is unreachable until the host is
+  relaxed or the setting is `false` ([Operations](operations.md#agent-browser-pool));
+  nothing runs unsandboxed on a guess. With `false` the container and its network are the
+  isolation boundary. `GET /health` reports the setting.
+- **Evidence.** Rendered and captured text is the browser's assertion. DlightRAG attests
+  the binding between the returned page, the Resource Handle, and the URL; it does not
+  attest that an anonymous GET serves the same page, and a site may serve a browser what it
+  does not serve a client. The acquisition `browser_render`, `browser_capture`, or
+  `browser_download` on every row says which tier produced it. Page text, snapshots, dialog
+  messages, and screenshots are untrusted model context, never Evidence, like any fetched
+  page: only `capture` and a downloaded file become Resources, and a download is Evidence
+  only once it is read. How a Resource is cited, and the rule that keeps a signed or
+  script-made URL private, are in
+  [Resource reading](resource-reading.md#browser-captures-and-downloads).
+- **Verification walls.** A CAPTCHA or any other human-verification check surfaces as an
+  HTTP error or as page text. The `browser` tool's description tells the model to stop that
+  path and report it, and a sign-up behind one is no exception. DlightRAG never solves,
+  bypasses, or outsources one and holds no solver integration; this is a rule the model
+  follows, not a mechanism, because nothing detects a CAPTCHA, and a vision model could read
+  one from a screenshot.
+
+Residual risks, recorded rather than solved:
+
+- A page can try to steer the Agent through what it says, and the browser gives it forms
+  as well as URLs to act through. As with Bash, the boundary is the deployment's egress,
+  not a filter.
+- A frame names the full URL of the page, so a token-bearing verification link appears in
+  the result the model reads and in the Run's record of it.
+- The application services share each member network with it, so a compromised pool
+  container can reach their listeners. With the development default
+  `access.auth_mode: none` those listeners are unauthenticated; a deployment that renders
+  pages for untrusted callers sets access ([Authentication Modes](#authentication-modes)).
+- UDP, WebRTC included, is not proxied. The member networks give it no route out.
+- Squid resolves and checks a destination itself, unlike the direct read, which pins
+  the validated address for its connection. The window between Squid's check and its
+  connection is small but not zero.
+- A pool container serves one Run at a time by lease, not one Run in its lifetime: a
+  renderer compromise that outlives its browser can meet the next Run that leases the
+  container. The server limits no clients, so a connection of a holder whose lease has
+  expired, a worker that stalled rather than died, may still be open when the next Run
+  leases the container, and the two browsers then share it until that connection ends.
+
+### Agent Accounts
+
+The Agent may register on a third-party site and sign in again later
+([ADR 0034](adr/0034-agent-accounts-and-the-agent-mailbox.md); the actions are in
+[Retrieval and Answer](retrieval-answer.md#agent-accounts-and-the-agent-mailbox)). What
+makes that safe is that no password is ever anywhere the model, or anything it can steer,
+could read.
+
+- **An identity of its own.** No credential, name, address, or other personal information
+  of the owner enters a form, and the tool's description says so. A mailbox alias is 16
+  characters of an unkeyed hash of the owner and the site and carries nothing of the owner.
+  The browser holds no credential of the owner either.
+- **DlightRAG makes the password and never shows it.** It generates 20 characters with
+  `secrets`, shorter only to fit a field's `maxlength` and never below 12, from letters,
+  digits, and `-._`, which HTML, JSON, form, and percent-encoding leave as they are, and it
+  begins and ends with a letter or a digit, because Chromium trims a dot from either end of a
+  downloaded file's name. So a password has exactly one spelling to look for. The model
+  names fields by ref and never types or sees a password. No tool argument, result, Session
+  Entry, event, trace, log, or error carries one.
+- **Sealed under the key ring.** A parent's account is stored per owner, sealed under the
+  deployment key ring with a label and a binding of its own
+  ([Secret handling](personal-mcp-connections.md#secret-handling-and-key-ring)). Without a
+  ring, register and login fail closed, and an envelope no key opens is unusable until the
+  site's password reset replaces it. No route, view, export, or result returns a password.
+- **Filled only into the account's own site.** A password goes only into a password field in
+  an `https` frame whose registrable domain, by the pinned Public Suffix List's eTLD+1 with
+  its private section, is the account's site, judged by the frame's own address and not the
+  page's, so an iframe of another site is refused and a stored password cannot be sent to a
+  site it does not belong to. The list is the snapshot the pinned `tldextract` package
+  bundles, and it is never fetched or cached. A page that is not `https`, or has an IP
+  address, a bare public suffix, or a name under no public suffix for a host, has no site and
+  fills nothing. Every ref is checked before any field is filled.
+- **Redacted from every text a page returns.** The driver prints a filled value wherever it
+  describes the page: the accessibility snapshot prints a password input's value in clear,
+  the serialized HTML carries it once the page mirrors it into the input's `value` attribute,
+  a form that submits with GET puts it into the page's URL, and the error of a failed fill
+  quotes it in its call log. So every filled password is replaced by `********` in the
+  page's URL and title, the snapshot (before `find` filters its lines, so no query can probe
+  a value), dialog messages, the names, URLs, and bytes of downloads, the text a field reads
+  back, the first line of a driver error, and the serialized HTML of a capture, always before
+  a text is cut. A failed fill's error is decided outside the handler that caught it and never
+  kept, chained, or logged, and a failed or changed fill empties the fields it filled. The set
+  of filled passwords belongs to the Agent Session and the Run, outlives its page, and also
+  redacts the mail it reads.
+- **No screenshot of a filled password.** A browser draws a password field as dots, but that
+  is its own decision and the page's to change, and a script can turn the field into a text
+  field. With any password filled, a screenshot first reads every input and textarea of each
+  frame, password fields included, and the frame's visible text, and refuses when one holds a
+  filled password or cannot be read, comparing in DlightRAG's process so no password is ever
+  sent into a page. A filled form is screenshotted after it is submitted, not before.
+- **Children register for the Run.** A Child keeps `register`, but its account is held in the
+  worker's memory under its Agent Session until the Run settles, with a random mailbox
+  alias, so nothing durable is written for the owner that the parent did not make
+  ([ADR 0025](adr/0025-a-child-inherits-capability-not-authority.md)). A Child may sign in
+  with the owner's accounts, which is capability.
+- **Mail is untrusted.** Anyone who learns a mailbox alias can write to it, so mail is
+  context and never Evidence, the result says so, and a link in it is opened with `navigate`
+  under its first-URL check. DlightRAG reads the bucket and never writes or deletes. The
+  bucket's keys are `.env` secrets that live only in DlightRAG's processes: an Agent's own
+  processes get no `DLIGHTRAG_*` variable.
+
+Residual risks, recorded rather than solved:
+
+- A site and its scripts necessarily see the password, and it crosses the pool's internal
+  network unencrypted inside the Playwright protocol. One password for each account confines
+  a leak to that account.
+- A downloaded file has the password masked by its exact bytes, so one a site compresses or
+  encodes into the file, in an archive, a PDF stream, or base64, is admitted with it. A
+  password a page prints as text can be confirmed by `wait(text=…)`, and one a page draws on
+  a canvas, generates with CSS (`content: attr(...)`), or shows inside shadow DOM, which the
+  locators do not pierce, escapes the screenshot check.
+- Registrations of one owner on one site that run at once leave the last envelope. A Child's
+  account stays on the site after its Run, under a mailbox alias nothing reads again.
+- A mailbox alias anyone can write to can be flooded until a listing no longer reaches its
+  newest mail, and retention is the deployment's
+  ([bucket contract](configuration.md#agent-mailbox)).
+- Redaction finds a password by its exact spelling. A generated password has no spelling that
+  a browser or an encoder changes, but a page that rewrites a value on purpose, by encoding,
+  splitting, or reordering it, is not found.
+- Backups hold envelopes a retained copy of their key can still open, as for Connections, the
+  Public Suffix List snapshot is as old as the pinned `tldextract` release and may split or
+  share an account wrongly, and whether a site's terms allow an automated sign-up is the
+  site's to say: DlightRAG does not read them, as `read` does not read `robots.txt`.
 
 ## Answer Artifact Browser Boundary
 
@@ -461,8 +666,9 @@ blob bytes or Agent Workspace paths. Authenticated data/Markdown uses
 `nosniff`.
 
 Published SVG is sanitized of scripts, handlers, external loads, and nested SVG
-data URLs, then served under CSP sandbox. PDF preview is sandboxed without
-same-origin capability.
+data URLs, then served under CSP sandbox. A Run's stored SVG Resource, such as a file a
+page downloaded, is served inline only under the same sandbox policy. PDF preview is
+sandboxed without same-origin capability.
 
 HTML never executes as a same-origin document. After explicit consent, the
 browser inserts authenticated inert bytes into one `srcdoc` iframe with

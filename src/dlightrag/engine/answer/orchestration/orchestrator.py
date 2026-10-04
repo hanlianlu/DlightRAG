@@ -46,6 +46,7 @@ from dlightrag.engine.agent.session.runtime import (
 )
 from dlightrag.engine.agent.skills import SkillsBundle
 from dlightrag.engine.agent.tools import (
+    AdmittedBytesReader,
     AgentTool,
     ExecutedTurn,
     ToolResult,
@@ -99,11 +100,15 @@ from dlightrag.engine.answer.research.persistence import (
     SteerChild,
     WaitChildGuidance,
 )
-from dlightrag.engine.answer.resources.models import ResourceManifestEntry
+from dlightrag.engine.answer.resources.models import (
+    RenderedReadTargetError,
+    ResourceManifestEntry,
+)
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.answer.session_notes import SESSION_NOTES_DEGRADED_KEY
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 from dlightrag.engine.answer.tools import KnowledgeRetrieval, WebSearch, compose_research_tools
+from dlightrag.engine.answer.tools.browser import BrowserToolHost
 from dlightrag.engine.answer.tools.memory import MemoryHost
 from dlightrag.engine.answer.tools.subagents import (
     ChildContextSnapshot,
@@ -202,7 +207,9 @@ class AnswerOrchestrator:
         telemetry: Telemetry,
         search_toolchain: SearchToolchain,
         resource_reader: ResourceReader | None = None,
+        browser: BrowserToolHost | None = None,
         resource_viewer: ResourceViewer | None = None,
+        admitted_bytes_reader: AdmittedBytesReader | None = None,
         resolved_mode: ResolvedMode,
         subagent_host: SubagentHost | None = None,
         memory_host: MemoryHost | None = None,
@@ -228,7 +235,9 @@ class AnswerOrchestrator:
         self._telemetry = telemetry
         self._search_toolchain = search_toolchain
         self._resource_reader = resource_reader
+        self._browser = browser
         self._resource_viewer = resource_viewer
+        self._admitted_bytes_reader = admitted_bytes_reader
         self._workspace: RunWorkspace | None = None
         #: The Run's durable spill rows, read when a summary must name the handles
         #: the covered prefix is about to take with it.
@@ -948,7 +957,9 @@ class AnswerOrchestrator:
             injected_tools=self._injected_tools,
             register_web_source=self._register_web_source,
             resource_reader=self._resource_reader_for_run(),
+            browser=self._browser,
             resource_viewer=self._resource_viewer,
+            admitted_bytes_reader=self._admitted_bytes_reader,
             environment=None if self._workspace is None else self._workspace.environment,
             scheduler=self._access,
             search_toolchain=self._search_toolchain,
@@ -1006,6 +1017,8 @@ class AnswerOrchestrator:
             workspace = self._workspace
             resource_id = request.resource_id or ""
             if workspace is not None and resource_id.startswith("spill_"):
+                if request.rendered:
+                    return ToolResult.text(str(RenderedReadTargetError(resource_id)), is_error=True)
                 return _read_committed_spill(workspace.spill_dir, resource_id, request.cursor)
             if base_reader is None:
                 return ToolResult.text("resource read is not available", is_error=True)

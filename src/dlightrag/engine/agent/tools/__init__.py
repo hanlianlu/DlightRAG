@@ -3,6 +3,8 @@
 
 from dlightrag.engine.agent.tools.capacity import fit_tool_result
 from dlightrag.engine.agent.tools.contracts import (
+    AdmittedBytes,
+    AdmittedBytesReader,
     AgentTool,
     EvidenceSourceFact,
     ExecutedTurn,
@@ -17,6 +19,8 @@ from dlightrag.engine.agent.tools.contracts import (
 from dlightrag.engine.agent.tools.registry import DuplicateToolError, ToolRegistry
 
 __all__ = [
+    "AdmittedBytes",
+    "AdmittedBytesReader",
     "AgentTool",
     "DuplicateToolError",
     "EvidenceSourceFact",

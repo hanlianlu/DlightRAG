@@ -11,7 +11,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from dlightrag.adapters.http.application import get_application
 from dlightrag.application.config import ServiceRole
@@ -57,11 +57,27 @@ type AgentShellConfinementState = Annotated[
 ]
 
 
+class AgentBrowserHealthResponse(_StatusModel):
+    """The Agent Browser as configured; it never names the pool's endpoints.
+
+    ``sandbox`` is the configured ``chromium_sandbox``, not a probe of what a host can start.
+    ``accounts`` and ``mailbox`` say whether Agent Accounts and an Agent Mailbox are composed,
+    not whether the bucket answers.
+    """
+
+    state: Literal["configured", "disabled"]
+    endpoints: int = Field(ge=0)
+    sandbox: bool
+    accounts: bool
+    mailbox: bool
+
+
 class HealthResponse(_StatusModel):
     status: Literal["healthy", "degraded"]
     rag_initialized: bool
     service_role: ServiceRole
     agent_shell_confinement: AgentShellConfinementState
+    agent_browser: AgentBrowserHealthResponse
     crafted_by: str
     maintained_by: str
     storage: HealthStorageResponse
@@ -102,6 +118,7 @@ async def health(request: Request) -> dict[str, object]:
         "rag_initialized": application_health.is_ready,
         "service_role": config.deployment.service_role,
         "agent_shell_confinement": application_health.agent_shell_confinement,
+        "agent_browser": application_health.agent_browser,
         "crafted_by": "hllyu",
         "maintained_by": "HanlianLyu",
         "storage": {

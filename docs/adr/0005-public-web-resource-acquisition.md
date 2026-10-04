@@ -6,6 +6,8 @@ Research admits a known public HTTP(S) URL through `read`, not through a separat
 
 Accepted and implemented. Current-state architecture, security, retrieval, and configuration documentation describe the landed vertical slice.
 
+Amended by [ADR 0032](0032-the-agent-browser.md): the acquisition set gains `browser_render`, the representation a Rendered Read appends to a Web Resource, and reading a page as a browser renders it is no longer outside this decision. Capture, download, and interaction arrive with that decision's later slices.
+
 ## Read/view refinement
 
 The approved [Resource Reading contract](../resource-reading.md) adds `view(url)`
@@ -31,7 +33,7 @@ Browser automation is a different capability. It owns rendered state and interac
 
 ### Web Resource and `read(url)`
 
-A **Web Resource** is a run-scoped public HTTP(S) source represented by a Resource Handle. Its resource kind is Web; its admission origin (`caller`, `search`, or `agent`) and acquisition method (`direct_http`, `exa_extract`, or `tavily_extract`) are independent provenance facts. Web Search discovers Web Resources but is not the direct reading of one.
+A **Web Resource** is a run-scoped public HTTP(S) source represented by a Resource Handle. Its resource kind is Web; its admission origin (`caller`, `search`, or `agent`) and acquisition method (`direct_http`, `exa_extract`, `tavily_extract`, or `browser_render`) are independent provenance facts. Web Search discovers Web Resources but is not the direct reading of one.
 
 Extend the existing `read` tool with a URL input. One call validates, acquires, admits, and returns the first bounded view plus its Resource Handle; no separate `open_url` or `register_url` step exists. Existing path and handle inputs remain mutually exclusive with URL input. Generic Agent Core owns only the optional multi-target `read` contract and delegates resource-id or URL targets through a Host callback; it never fetches a URL or imports Answer. A Host without URL-reading capability does not advertise that input branch. Answer owns URL admission rather than registering a second tool named `read`.
 

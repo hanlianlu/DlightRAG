@@ -46,8 +46,9 @@ delegates to the other.
 
 - Start a writer before readers: the writer creates the schema, and readers
   only validate it. Workers sharing a database must run the same model roles,
-  Agent execution mode, Answer policy, and `answer.agent.connections` policy;
-  each owner enables their own Connections.
+  Agent execution mode, Answer policy, `answer.agent.connections` policy, and
+  `answer.agent.browser` endpoints (the pool's leases are shared); each owner
+  enables their own Connections.
 - Shared mounts, worker capacity, and recovery after a crash or shutdown are in
   [Workers And Scaling](run-runtime.md#workers-and-scaling). Monitor
   `dlightrag_runs`, `dlightrag_run_events`, `dlightrag_blobs`, and
@@ -156,6 +157,88 @@ and resumes its cohort the same way. The Run's ten dependency deferrals bound
 this, because a document that crashes or exhausts the parser service (an
 out-of-memory kill, for example) looks like an outage on every attempt: the
 eleventh fails the Run as `dependency_unavailable`.
+
+## Agent Browser Pool
+
+The Agent Browser ([ADR 0032](adr/0032-the-agent-browser.md)) is a pool of Playwright
+containers plus one Squid proxy. The bundled Compose stack runs two members
+(`agent-browser-1`, `agent-browser-2`) and `agent-browser-egress`, and binds their
+addresses into `dlightrag-api`, `dlightrag-mcp`, and `dlightrag-reader`
+([fields](configuration.md#agent-browser); the boundary is in
+[Security](security.md#agent-browser-boundary)). No service waits for them: a render or a
+page's first `navigate` with no browser up fails as `unreachable` and the Run goes on.
+
+```bash
+# From the repository root, so the seccomp profile path in docker-compose.yml resolves.
+docker compose up -d --build agent-browser-1 agent-browser-2 agent-browser-egress
+docker compose ps
+docker compose logs agent-browser-egress
+```
+
+- **Check.** `GET /health` is no check of the pool
+  ([what it reports](interfaces.md#health-and-errors)), so look at the members: one is
+  healthy when `docker compose ps` says so, and its check asks the run-server for
+  `/json`. Which Run holds which member is the `dlightrag_agent_browser_leases` table:
+  `SELECT endpoint, run_id, updated_at FROM dlightrag_agent_browser_leases`. A row that
+  names a Run holds its member only while that Run's lease is live
+  ([when](architecture.md#agent-browser)), whatever the row still says. The proxy logs
+  every request to its stdout; a destination it refuses is `TCP_DENIED`.
+- **Size.** A Run holds a member while it renders or has an Agent Page open, and for
+  `idle_release_seconds` after the last of them ends, so the pool's size bounds how many
+  Runs use a browser at the same moment across every process that runs Query workers. An
+  Agent Page stays open until its Session ends
+  ([when](architecture.md#agent-browser)), so `idle_release_seconds` frees a member only
+  for a Run whose Agent Pages have all closed. When every member is held, a render or a
+  first `navigate` waits up to `lease_wait_seconds` and then fails as `busy`; the model
+  reads that and works from the direct read. Add members when that is frequent. Each
+  member is capped at `COMPOSE_AGENT_BROWSER_MEM_LIMIT` (default `2g`) and 1024 processes.
+- **Adding a member.** Add its service (`<<: *agent-browser`) on a network of its own,
+  declare that network `internal: true`, add the network to `agent-browser-egress` and
+  to `dlightrag-api`, `dlightrag-mcp`, and `dlightrag-reader`, and add the member's
+  `ws://` URL to the `endpoints` binding. Never put two members on one network
+  ([why](security.md#agent-browser-boundary)). Every process must be restarted with the
+  same endpoint URLs, spelled identically, because the lease table is keyed by the URL.
+- **Upgrading.** The Python `playwright` package and the pool image are one version,
+  and the server refuses a client of another major or minor version with HTTP 428.
+  Bump every pin together: `pyproject.toml` (`playwright==X`), `uv.lock`, the
+  `PLAYWRIGHT_VERSION` argument of `agent-browser/browser/Dockerfile`, and the
+  `package.json` and `package-lock.json` beside it, plus the image tag in
+  `docker-compose.yml`. `make release-check` (`scripts/verify_release_contract.py`)
+  fails unless they agree. Rebuild the pool image and restart the pool with the
+  application.
+- **Troubleshooting.** The application logs `Agent Browser connect failed` at ERROR with
+  the endpoint and the error type, never a page URL.
+  - `unreachable`: the member is down, the endpoint is misspelled, the application
+    service is not on the member's network, or the versions differ (HTTP 428). The
+    lease store, PostgreSQL, can also be the one that cannot be reached; the
+    application then logs `Agent Browser lease store failed` with the error type.
+  - `busy`: every member's row names a Run that holds its lease. Wait for one to
+    finish rendering or browsing, or for the lease of a Run whose worker died to expire
+    (about a minute).
+  - A page that never loads: look for `TCP_DENIED` in the proxy's log. A private
+    destination or a port other than 80 and 443 is refused by design.
+  - `unreachable` for every member while the members are healthy, with
+    `Agent Browser connect failed` logged for each, typically as `TargetClosedError`:
+    Chromium exited as it launched. The usual cause is its sandbox, which Playwright words
+    as `Chromium sandboxing failed` in the error it returns; the application logs only the
+    error's type. The host restricts unprivileged user namespaces (Ubuntu 24.04 sets
+    `kernel.apparmor_restrict_unprivileged_userns=1`) or its container runtime ignores the
+    seccomp profile, and `chromium_sandbox` (default `true`) makes every launch ask for the
+    sandbox. Nothing falls back to running without it. Either relax the host (CI lifts the
+    restriction with `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`) or set
+    `answer.agent.browser.chromium_sandbox: false` and restart the processes that run Query
+    workers. With `false` the container and its network are the only isolation
+    ([why](security.md#agent-browser-boundary)).
+  - A member refuses to start: the seccomp path did not resolve because Compose ran
+    outside the repository root.
+- **Development.** `tests/integration/test_agent_browser_pg.py` runs a real
+  `playwright run-server` with Chromium, launched inside its sandbox.
+  `tests/integration/test_agent_browser_tool.py` drives the `browser` tool in that browser
+  without a database, and `tests/integration/test_agent_browser_tool_pg.py` runs a Research
+  Run through settlement, Child Sessions, and recovery. Install the browser
+  once with `uv run playwright install chromium` (on Linux, `--with-deps`); on a host that
+  restricts unprivileged user namespaces, also lift the restriction CI lifts
+  (`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`).
 
 ## Product Document Finalization And Failed Ingestion Cleanup
 
@@ -323,11 +406,11 @@ Before destructive production rebuilds, back up PostgreSQL and use the service's
 own `.env`, `config.yaml`, workspace, and model. Inspect any nonzero exit before
 restart.
 
-## Connection Key Ring Rotation
+## Key Ring Rotation
 
-Personal Connection credentials are sealed under
-`<deployment.working_dir>/connection-keyring.json`, which the first writer
-creates ([format](personal-mcp-connections.md#secret-handling-and-key-ring)).
+The deployment key ring is `<deployment.working_dir>/connection-keyring.json`, which the
+first writer creates ([format and consumers](personal-mcp-connections.md#secret-handling-and-key-ring)).
+Rotating it moves what each consumer sealed to the new key.
 
 1. Add a fresh 32-byte base64url key under a new ID, keeping the old IDs:
 
@@ -337,10 +420,12 @@ creates ([format](personal-mcp-connections.md#secret-handling-and-key-ring)).
 
 2. Point `active` at the new ID and restart **all** workers, so none still
    encrypts with the old key. Writer maintenance then re-encrypts live Grants
-   ([Operational lifecycle](personal-mcp-connections.md#operational-lifecycle)).
-3. Wait until the old key's Grant and OAuth inbox counts reach zero. Inbox flows
-   expire within `oauth_timeout` (at most 600 seconds) and are then collected.
-   On the deployment database, count envelopes; never select or export them:
+   ([Operational lifecycle](personal-mcp-connections.md#operational-lifecycle)) and
+   re-seals Agent Account envelopes, in a loop of its own that passes at startup and
+   then once a minute, over every account still under an old key.
+3. Wait until the old key's Grant, OAuth inbox, and Agent Account counts reach
+   zero. Inbox flows expire within `oauth_timeout` (at most 600 seconds) and are then
+   collected. On the deployment database, count envelopes; never select or export them:
 
    ```sql
    SELECT key_id, count(*) FROM dlightrag_connection_grants
@@ -349,10 +434,86 @@ creates ([format](personal-mcp-connections.md#secret-handling-and-key-ring)).
    FROM dlightrag_connection_oauth_flows f
    CROSS JOIN LATERAL (VALUES (f.encrypted_result), (f.encrypted_credentials)) v(envelope)
    WHERE envelope IS NOT NULL GROUP BY 1;
+   SELECT key_id, count(*) FROM dlightrag_agent_accounts GROUP BY key_id;
    ```
 
 4. Remove the old key from the ring. A Grant it still sealed would need
-   authorization again, and backups stay readable to any retained copy of it.
+   authorization again, an Agent Account it still sealed is unusable until the
+   site's password reset replaces it, and backups stay readable to any retained copy
+   of it.
+
+## Agent Mailbox
+
+The Agent Mailbox ([ADR 0034](adr/0034-agent-accounts-and-the-agent-mailbox.md)) is
+optional, and the repository holds no vendor code for it.
+[Configuration](configuration.md#agent-mailbox) has the fields and the bucket's contract.
+How mail reaches the bucket, and how long it stays, are the deployment's. The steps
+below are one deployment's, a catch-all on its own domain through Cloudflare Email
+Routing and an Email Worker to R2; the Worker is an example for that deployment, not
+product code, and another one could use SES receipt rules that write to S3.
+
+- **A catch-all needs the apex.** Cloudflare allows catch-all rules only on a zone's
+  apex domain, and a subdomain gets literal rules only. The Agent mints a different
+  address for every owner and site, so literal rules cannot work, and the catch-all and
+  `alias_domain` are the apex. It then takes every address of that domain that has no
+  literal rule, and writes it all to the bucket for the Agent to read. To keep the
+  domain's own mail, give those addresses literal rules, which take precedence, or use a
+  domain of its own for the Agent.
+- **Check the domain's mail first.** `dig +short MX <domain>` and
+  `dig +short TXT <domain>`, and look at its DNS in the dashboard. Enabling Email
+  Routing replaces its MX records with Cloudflare's, so a domain that already receives mail
+  stops receiving it: use another domain.
+- **The bucket.** Create an R2 bucket (for example `dlightrag-agent-mail`; lower-case
+  letters, digits, `-`, and `.`) in the default location. A jurisdiction changes the
+  endpoint to `https://<account-id>.<jurisdiction>.r2.cloudflarestorage.com`.
+- **The Worker.** Cloudflare accepts mail up to 25 MiB and gives the Worker the envelope
+  recipient as `message.to`. Bind the bucket as `MAIL` and set `PREFIX` to the same value as
+  `answer.agent.mailbox.prefix`, `mail` by default:
+
+  ```js
+  // One deployment's example: write every incoming message to R2 as it arrived.
+  // key = <PREFIX>/<envelope recipient, lower case>/<ISO time>-<uuid>.eml
+  export default {
+    async email(message, env, ctx) {
+      const recipient = message.to.toLowerCase();   // the envelope RCPT TO, not the To: header
+      const prefix = env.PREFIX ? `${env.PREFIX}/` : "";
+      const key = `${prefix}${recipient}/${new Date().toISOString()}-${crypto.randomUUID()}.eml`;
+      const raw = await new Response(message.raw).arrayBuffer();   // the whole message
+      await env.MAIL.put(key, raw, { httpMetadata: { contentType: "message/rfc822" } });
+    },
+  };
+  ```
+- **Routing.** Enable Email Routing for the zone, which adds Cloudflare's MX and SPF
+  records. The wizard may ask for a destination address to verify; it is not used, and the
+  Agent never uses any address of the owner's. Set the catch-all to **Send to a Worker**,
+  choose the Worker, and check it is **Active**. Leave subaddressing off.
+- **Retention is the deployment's, and DlightRAG never deletes.** Add an R2 lifecycle rule
+  that deletes objects under the prefix after 30 days, so a mailbox alias stays within what a
+  listing reads ([the bucket's contract](configuration.md#agent-mailbox)).
+- **The key.** Create an R2 account API token with **Object Read only**, scoped to the
+  bucket. DlightRAG only lists and gets. Note its Access Key ID and Secret Access Key when
+  it is created; the Secret is shown once. The endpoint is
+  `https://<account-id>.r2.cloudflarestorage.com`. Revoke and recreate the token, and update
+  `.env`, if either key may have leaked.
+- **Turning it on.** Put the settings in `.env`
+  ([names and rules](configuration.md#agent-mailbox)) and restart `dlightrag-api`,
+  `dlightrag-mcp`, and `dlightrag-reader`. `GET /health` then shows `"accounts": true` and
+  `"mailbox": true` under `agent_browser` ([what it reports](interfaces.md#health-and-errors)).
+  A wrong key or bucket answers at a Run's `inbox` as
+  `The Agent Mailbox could not be read (AccessDenied)`, naming only the error code.
+- **Test a message.** Send mail from any address to `probe-<anything>@<domain>`. An object
+  named `<prefix>/probe-<anything>@<domain>/<time>-<id>.eml` appears in the bucket. If it does
+  not, look at the Worker's logs and Email Routing's activity log.
+- **Never log what the browser or the client sees.** Do not set `DEBUG=pw:*` for the pool
+  or the application: Playwright's debug log prints each call's arguments, a filled password
+  among them. Keep production at `log_level: info`, since the S3 client's debug log names the
+  endpoint and the access key id. Neither the key nor an endpoint reaches an error or a log
+  line DlightRAG writes.
+- **Development.** `tests/integration/test_agent_accounts_browser.py` drives `register`,
+  `login`, and `inbox` in a real Chromium over a proxy that terminates TLS, against a
+  loopback S3 double, with no database, and `tests/integration/test_agent_accounts_pg.py`
+  runs the account store, its re-sealing, and a later Run's login against PostgreSQL. Both
+  need the browser installed as for the [pool's tests](#agent-browser-pool).
 
 ## Local Langfuse Observability
 

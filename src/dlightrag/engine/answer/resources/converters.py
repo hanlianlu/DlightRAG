@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import codecs
 import io
 import time
 import zipfile
@@ -37,6 +38,7 @@ from dlightrag.engine.answer.resources.docx_assets import (
     docx_asset_occurrences,
 )
 from dlightrag.engine.answer.resources.models import ResourceRegistryError
+from dlightrag.engine.answer.resources.text import declared_charset
 
 # Physical archive-safety limits. These are internal decompression bounds, not
 # the public attachment-size quotas, so an OOXML file that is admissible by byte
@@ -185,7 +187,8 @@ async def convert_resource(
     budget = _ConversionBudget(
         budget_end if deadline is None else min(budget_end, deadline), Event()
     )
-    work = asyncio.create_task(asyncio.to_thread(_convert_sync, content, route, budget))
+    charset = _known_charset(declared_mime)
+    work = asyncio.create_task(asyncio.to_thread(_convert_sync, content, route, budget, charset))
     try:
         return await asyncio.shield(work)
     except asyncio.CancelledError:
@@ -206,15 +209,34 @@ async def convert_resource(
         return work.result()
 
 
-def _convert_sync(content: bytes, route: _Route, budget: _ConversionBudget) -> ConvertedResource:
+def _known_charset(declared_mime: str | None) -> str | None:
+    """The charset a declared media type names, when Python can decode with it.
+
+    The HTML specification gives the transport's charset precedence over a document's own
+    ``<meta charset>``, and the serialized DOM of a rendered page is UTF-8 whatever its
+    meta says. A name no codec knows, such as ``binary`` on a PDF, is no charset at all.
+    """
+    name = declared_charset(declared_mime)
+    if name is None:
+        return None
+    try:
+        codecs.lookup(name)
+    except LookupError:
+        return None
+    return name
+
+
+def _convert_sync(
+    content: bytes, route: _Route, budget: _ConversionBudget, charset: str | None
+) -> ConvertedResource:
     budget.check()
     if route.is_ooxml:
         _preflight_ooxml(content)
     budget.check()
     if route.extension in {".docx", ".pdf", ".xlsx"}:
-        return _convert_anydoc(content, route, budget)
+        return _convert_anydoc(content, route, budget, charset)
     budget.check()
-    result = _convert_markitdown(content, route)
+    result = _convert_markitdown(content, route, charset)
     budget.check()
     return result
 
@@ -232,7 +254,9 @@ def _load_anydoc() -> ModuleType:
     return anydoc
 
 
-def _convert_anydoc(content: bytes, route: _Route, budget: _ConversionBudget) -> ConvertedResource:
+def _convert_anydoc(
+    content: bytes, route: _Route, budget: _ConversionBudget, charset: str | None
+) -> ConvertedResource:
     engine = "firecrawl-anydoc"
     budget.check(converter=engine)
     reason: str | None = None
@@ -326,7 +350,7 @@ def _convert_anydoc(content: bytes, route: _Route, budget: _ConversionBudget) ->
     # reverse loop, speculative parse or renewed time allowance.
     budget.check(converter=engine)
     try:
-        result = _convert_markitdown(content, route)
+        result = _convert_markitdown(content, route, charset)
     except ResourceConversionError as exc:
         exc.fallback_reason = reason
         raise
@@ -334,14 +358,18 @@ def _convert_anydoc(content: bytes, route: _Route, budget: _ConversionBudget) ->
     return replace(result, fallback_reason=reason)
 
 
-def _convert_markitdown(content: bytes, route: _Route) -> ConvertedResource:
+def _convert_markitdown(
+    content: bytes, route: _Route, charset: str | None = None
+) -> ConvertedResource:
     # One converter per call: registered converters and detector are never shared
     # across threads, so concurrent conversions cannot cross-contaminate.
     try:
         converter = MarkItDown(enable_plugins=False)
         result = converter.convert_stream(
             io.BytesIO(content),
-            stream_info=StreamInfo(mimetype=route.mimetype, extension=route.extension),
+            stream_info=StreamInfo(
+                mimetype=route.mimetype, extension=route.extension, charset=charset
+            ),
             keep_data_uris=True,
         )
     except MemoryError:
