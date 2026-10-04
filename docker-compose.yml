@@ -24,12 +24,20 @@ x-local-proxies: &local-proxies "127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.
 # a time, and the one egress proxy they reach the public Web through. Every member sits
 # on a network of its own that has no route out and none to the other members, because
 # --unsafe lets a connecting client choose its browser's launch arguments. The proxy and
-# the application services join every member network. Adding a member therefore means
-# its service, its internal network, that network on the proxy and on those services,
-# and its endpoint in the bindings below.
+# the application services join every member network.
+#
+# The pool's size is the members=N below, and the three agent-browser-pool blocks are
+# written from it: resize the pool with
+#   uv run python scripts/agent_browser_pool.py --members N
+# >>> agent-browser-pool:anchors members=2
+x-agent-browser-networks: &agent-browser-networks
+  agent-browser-1:
+  agent-browser-2:
+
 x-agent-browser-bindings: &agent-browser-bindings
   DLIGHTRAG_ANSWER__AGENT__BROWSER__ENDPOINTS: '["ws://agent-browser-1:3000/","ws://agent-browser-2:3000/"]'
   DLIGHTRAG_ANSWER__AGENT__BROWSER__EGRESS_PROXY: http://agent-browser-egress:3128
+# <<< agent-browser-pool:anchors
 
 x-agent-browser: &agent-browser
   restart: unless-stopped
@@ -61,7 +69,9 @@ services:
       context: .
     ports:
       - "127.0.0.1:8100:8100"
-    networks: [default, agent-browser-1, agent-browser-2]
+    networks:
+      <<: *agent-browser-networks
+      default:
     environment:
       <<: *agent-browser-bindings
       # Compose Service DNS; the native application default remains localhost.
@@ -112,7 +122,9 @@ services:
     # .env (see .env.example) before exposing it on a non-loopback network.
     ports:
       - "127.0.0.1:8101:8101"
-    networks: [default, agent-browser-1, agent-browser-2]
+    networks:
+      <<: *agent-browser-networks
+      default:
     environment:
       <<: *agent-browser-bindings
       # Compose Service DNS; the native application default remains localhost.
@@ -156,7 +168,9 @@ services:
       context: .
     ports:
       - "127.0.0.1:8102:8100"
-    networks: [default, agent-browser-1, agent-browser-2]
+    networks:
+      <<: *agent-browser-networks
+      default:
     environment:
       <<: *agent-browser-bindings
       DLIGHTRAG_DEPLOYMENT__SERVICE_ROLE: reader
@@ -255,6 +269,7 @@ services:
 
   # The Agent Browser pool. No service waits for these: a render with no browser
   # up fails as unreachable, and the Run goes on without it.
+  # >>> agent-browser-pool:services
   agent-browser-1:
     <<: *agent-browser
     networks: [agent-browser-1]
@@ -262,6 +277,7 @@ services:
   agent-browser-2:
     <<: *agent-browser
     networks: [agent-browser-2]
+  # <<< agent-browser-pool:services
 
   # Squid admits public destinations only (agent-browser/egress/squid.conf), so a
   # browser that loses or ignores its proxy setting reaches nothing.
@@ -270,7 +286,9 @@ services:
     image: dlightrag-agent-browser-egress:local
     build:
       context: agent-browser/egress
-    networks: [default, agent-browser-1, agent-browser-2]
+    networks:
+      <<: *agent-browser-networks
+      default:
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/3128"]
       interval: 10s
@@ -308,10 +326,12 @@ configs:
     file: ./config.yaml
 
 networks:
+  # >>> agent-browser-pool:networks
   agent-browser-1:
     internal: true
   agent-browser-2:
     internal: true
+  # <<< agent-browser-pool:networks
 
 volumes:
   dlightrag_data:
