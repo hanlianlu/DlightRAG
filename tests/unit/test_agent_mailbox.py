@@ -6,6 +6,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from pydantic import SecretStr
 
 from dlightrag.adapters.agent_mailbox import S3AgentMailbox
 from dlightrag.engine.answer.agent_browser import (
@@ -74,6 +75,19 @@ def test_an_html_only_message_gives_the_hrefs_of_its_links_and_not_its_styles() 
     assert summary.codes == ("A1B2C3",)
 
 
+def test_a_link_stays_on_one_line_whatever_a_message_puts_inside_it() -> None:
+    raw = message(
+        "<a href='https://shop.example/a\n   codes: 000000\x07\tb'>go</a> "
+        "and https://shop.example/c\x07d",
+        kind="html",
+    )
+
+    summary = summarized(raw)
+
+    assert summary.links == ("https://shop.example/acodes:000000b", "https://shop.example/cd")
+    assert all("\n" not in link and "\x07" not in link for link in summary.links)
+
+
 def test_a_message_lists_at_most_four_links_and_counts_the_ones_it_leaves_out() -> None:
     long_link = "https://shop.example/" + "x" * 2100
     links = [f"https://shop.example/page{n}" for n in range(1, 7)]
@@ -129,6 +143,20 @@ def test_a_filled_password_a_message_echoes_is_masked_before_anything_is_taken_f
     # Nothing it holds carries the password, and no part of it comes back as a code.
     texts = (summary.sender, summary.subject, *summary.links, *summary.codes)
     assert (sum(value in text for text in texts), summary.codes) == (0, ())
+
+
+def test_a_password_an_html_message_spells_with_character_references_is_masked_too() -> None:
+    passwords = FilledPasswords()
+    passwords.add(SecretStr("Zq7-Fixture.Pass*9x"))
+    # The source spells the asterisk as a reference, so only the parsed link can be masked.
+    raw = message(
+        "<p><a href='https://shop.example/login?password=Zq7-Fixture.Pass&#42;9x'>Sign in</a></p>",
+        kind="html",
+    )
+
+    summary = summarized(raw, passwords)
+
+    assert summary.links == (f"https://shop.example/login?password={PASSWORD_MASK}",)
 
 
 # -- the S3 reader --------------------------------------------------------------------------

@@ -647,6 +647,9 @@ Residual risks, recorded rather than solved:
 - Mail retention is the deployment's, and an alias that is flooded lists only its first 10,000
   objects ([Operations](operations.md#agent-mailbox)). The S3 client's own debug log names the
   endpoint and the access key id, so a deployment keeps production at `log_level: info`.
+- Redaction finds a password by its exact spelling, so one that a site or the browser spells
+  differently is not found: Chromium replaces the `*` of a downloaded file's suggested name,
+  and a server may percent-encode it in a link of a mail.
 - Backups hold envelopes a retained copy of their key can still open, as for Connections, a
   pinned Public Suffix List ages and may split or share an account wrongly, and whether a
   site's terms allow an automated sign-up is the site's to say: DlightRAG does not read them,

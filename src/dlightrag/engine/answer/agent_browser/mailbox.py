@@ -105,7 +105,9 @@ def summarize_mail(raw: bytes, passwords: FilledPasswords) -> MailSummary:
             collector = _HtmlCollector()
             collector.feed(content)
             collector.close()
-            found, text = collector.links, " ".join(collector.text)
+            # Parsing decodes character references, which can spell a password the source did not.
+            found = [passwords.redact(link) for link in collector.links]
+            text = passwords.redact(" ".join(collector.text))
         else:
             found, text = _text_links(content), content
     except Exception:
@@ -135,7 +137,13 @@ def _header(value: object, passwords: FilledPasswords) -> str:
 
 
 def _text_links(text: str) -> list[str]:
-    return [link.rstrip(_LINK_END) for link in _LINK.findall(text)]
+    return [_link(link.rstrip(_LINK_END)) for link in _LINK.findall(text)]
+
+
+def _link(url: str) -> str:
+    """A link on one line: a browser drops whitespace and control characters from a URL, and a
+    message must not use them to start a line of its own in what the model reads."""
+    return "".join(c for c in url if not c.isspace() and unicodedata.category(c) != "Cc")
 
 
 def _codes(text: str) -> tuple[str, ...]:
@@ -160,7 +168,7 @@ class _HtmlCollector(HTMLParser):
         if tag in {"script", "style"}:
             self._hidden += 1
         elif tag == "a":
-            href = (dict(attrs).get("href") or "").strip()
+            href = _link(dict(attrs).get("href") or "")
             if href.lower().startswith(("http://", "https://")):
                 self.links.append(href)
 

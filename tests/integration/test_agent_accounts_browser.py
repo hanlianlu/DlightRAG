@@ -83,7 +83,7 @@ def page(title: str, body: str) -> Served:
     return Served(f"<html><head><title>{title}</title></head><body>{body}</body></html>")
 
 
-def signup(*, password: str = 'type="password"', confirm: bool = True, extra: str = "") -> Served:
+def signup(*, password: str = 'type="password"', confirm: bool = True) -> Served:
     """A sign-up form posting to /join. ``password`` is the attributes of its password field."""
     return page(
         "Join",
@@ -92,7 +92,7 @@ def signup(*, password: str = 'type="password"', confirm: bool = True, extra: st
 <input aria-label="Email" name="email" type="email">
 <input aria-label="Password" name="password" {password}>
 {'<input aria-label="Confirmation" name="confirm" type="password">' if confirm else ""}
-<button type="submit">Join</button></form>{extra}""",
+<button type="submit">Join</button></form>""",
     )
 
 
@@ -663,6 +663,11 @@ async def test_a_password_that_cannot_be_stored_is_cleared_from_the_form(
         ),
         (
             {"handle": HANDLE, "email": "not an address"},
+            ("email",),
+            "Field {email} holds no email address to record; type the address first.",
+        ),
+        (
+            {"handle": HANDLE, "email": "shopper\x07@example.com"},
             ("email",),
             "Field {email} holds no email address to record; type the address first.",
         ),

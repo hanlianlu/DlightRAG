@@ -1157,11 +1157,12 @@ def _mail_lines(
 
 
 def _typed_email(text: str) -> str | None:
-    """The address a field holds, when it can be one: one ``@``, no whitespace, a sane length."""
+    """The address a field holds, when it can be one: one ``@``, no whitespace or control
+    character, a sane length."""
     address = text.strip()
     if (
         address.count("@") == 1
-        and not any(c.isspace() for c in address)
+        and not any(c.isspace() or unicodedata.category(c) == "Cc" for c in address)
         and 3 <= len(address) <= _MAX_EMAIL_CHARS
     ):
         return address
