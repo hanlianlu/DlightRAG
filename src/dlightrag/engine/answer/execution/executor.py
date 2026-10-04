@@ -101,6 +101,7 @@ from dlightrag.engine.answer.agent_browser import (
     BrowserHolder,
     RunAgentAccounts,
     RunAgentBrowser,
+    has_mailbox,
 )
 from dlightrag.engine.answer.attachment_replay import AttachmentReplaySelection
 from dlightrag.engine.answer.capabilities import AnswerCapabilityCoordinator
@@ -513,7 +514,7 @@ class AnswerExecutor:
             resource_read=True,
             agent_browser=self._browser is not None,
             agent_accounts=accounts is not None,
-            agent_mailbox=accounts is not None and accounts.mailbox is not None,
+            agent_mailbox=has_mailbox(accounts),
             resource_view=True,
             environment=self._execution_adapter is not None,
             artifact_publication=self._execution_adapter is not None,

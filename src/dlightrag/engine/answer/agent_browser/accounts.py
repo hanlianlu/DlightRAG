@@ -168,6 +168,17 @@ class AgentAccountsBinding:
     mailbox: AgentMailbox | None = None
 
 
+class _Mailboxed(Protocol):
+    @property
+    def mailbox(self) -> AgentMailbox | None: ...
+
+
+def has_mailbox(accounts: _Mailboxed | None) -> bool:
+    """Whether a deployment or a Run composed Agent Accounts with an Agent Mailbox that delivers
+    their mail. A mailbox belongs to the accounts: there is none without them."""
+    return accounts is not None and accounts.mailbox is not None
+
+
 class SessionAccounts:
     """The Agent Accounts one parent Agent Session acts on: the owner's, sealed under the key ring.
 
@@ -362,6 +373,7 @@ __all__ = [
     "StoredAgentAccount",
     "account_site",
     "generate_password",
+    "has_mailbox",
     "owner_alias",
     "reseal_agent_accounts",
     "run_alias",

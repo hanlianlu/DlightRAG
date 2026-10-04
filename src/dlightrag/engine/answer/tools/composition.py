@@ -47,6 +47,7 @@ from dlightrag.engine.agent.tools.files import (
     write_tool,
 )
 from dlightrag.engine.agent.tools.registry import DuplicateToolError, ToolRegistry
+from dlightrag.engine.answer.agent_browser import has_mailbox
 from dlightrag.engine.answer.citations.utils import ATTACHMENT_WORKSPACE, WEB_SEARCH_WORKSPACE
 from dlightrag.engine.answer.continuation_handles import SESSION_NOTE_DIRECTORY
 from dlightrag.engine.answer.errors import (
@@ -251,16 +252,13 @@ def compose_research_tools(
             if child
             else subagent_declarations(model_guidance=subagent_host.model_guidance)
         )
-    # A Run has a mailbox only through its accounts: its aliases belong to them.
     accounts = None if browser is None else browser.accounts
-    agent_accounts = accounts is not None
-    agent_mailbox = accounts is not None and accounts.mailbox is not None
     declarations = research_tool_declarations(
         web_search=search_web is not None,
         resource_read=resource_reader is not None,
         agent_browser=browser is not None,
-        agent_accounts=agent_accounts,
-        agent_mailbox=agent_mailbox,
+        agent_accounts=accounts is not None,
+        agent_mailbox=has_mailbox(accounts),
         resource_view=resource_viewer is not None,
         environment=environment is not None,
         artifact_publication=artifacts_root is not None,

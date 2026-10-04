@@ -84,6 +84,7 @@ from dlightrag.engine.answer.agent_browser import (
     UploadFile,
     account_site,
     generate_password,
+    has_mailbox,
     inbox_text,
 )
 from dlightrag.engine.answer.resources.models import ResourceRegistryError
@@ -553,9 +554,7 @@ def browser_tool(
 
     accounts = host.accounts
     return browser_declaration(
-        upload=environment is not None,
-        accounts=accounts is not None,
-        mailbox=accounts is not None and accounts.mailbox is not None,
+        upload=environment is not None, accounts=accounts is not None, mailbox=has_mailbox(accounts)
     ).bind(execute)
 
 

@@ -183,7 +183,11 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     )
     from dlightrag.engine.ai.telemetry import safe_log_text
     from dlightrag.engine.ai.vision import ModelImageCapabilities
-    from dlightrag.engine.answer.agent_browser import AgentAccountsBinding, AgentBrowserBinding
+    from dlightrag.engine.answer.agent_browser import (
+        AgentAccountsBinding,
+        AgentBrowserBinding,
+        has_mailbox,
+    )
     from dlightrag.engine.answer.capabilities import (
         AnswerCapabilityCoordinator,
         AnswerCapabilityView,
@@ -447,7 +451,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         endpoints=len(config.answer.agent.browser.endpoints),
         sandbox=config.answer.agent.browser.chromium_sandbox,
         accounts=accounts is not None,
-        mailbox=accounts is not None and accounts.mailbox is not None,
+        mailbox=has_mailbox(accounts),
     )
 
     answer_executor = AnswerExecutor(
