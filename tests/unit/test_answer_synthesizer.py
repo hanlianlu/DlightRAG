@@ -803,7 +803,7 @@ class TestAnswerSynthesizerCapacity:
     def test_pinned_history_is_not_locally_trimmed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import dlightrag.engine.answer.synthesizer as answer_module
 
-        monkeypatch.setattr(answer_module, "answer_core", lambda: "SYS")
+        monkeypatch.setattr(answer_module, "fast_answer_prompt", lambda: "SYS")
 
         contexts: RetrievalContexts = {
             "chunks": [

@@ -3,7 +3,7 @@
 
 import itertools
 
-from dlightrag.engine.answer.prompts import agent_control_prompt, answer_core
+from dlightrag.engine.answer.prompts import agent_control_prompt, fast_answer_prompt
 from dlightrag.engine.answer.prompts.agent import _CONNECTION_GUIDANCE
 from dlightrag.engine.answer.prompts.answer import (
     CITATION_GUIDANCE,
@@ -14,7 +14,7 @@ from dlightrag.engine.answer.prompts.identity import CORE_STANCE, core_identity
 
 
 def test_both_paths_share_the_citation_evidence_and_link_rules() -> None:
-    fast = answer_core()
+    fast = fast_answer_prompt()
     research = agent_control_prompt()
 
     for shared in (CITATION_GUIDANCE, EVIDENCE_USE_GUIDANCE, PRESENTATION_GUIDANCE):
@@ -24,7 +24,7 @@ def test_both_paths_share_the_citation_evidence_and_link_rules() -> None:
 
 def test_both_paths_open_with_the_identity_and_the_one_stance() -> None:
     """Research's Child Sessions compose the same prompt, so they carry the stance too."""
-    fast = answer_core()
+    fast = fast_answer_prompt()
     research = agent_control_prompt()
 
     assert fast.startswith(f"{core_identity(environment_clock=False)}\n\n{CORE_STANCE}\n\n")
@@ -43,7 +43,7 @@ def test_research_agent_is_told_the_citation_contract() -> None:
     assert 'Do not add a "References", "Sources", or bibliography section' in prompt
     # A model that cannot create an Artifact is not told about them.
     assert "Artifact" not in prompt
-    assert "Artifact" not in answer_core()
+    assert "Artifact" not in fast_answer_prompt()
     assert "as a video they can play in the answer" in normalized
 
 
@@ -56,7 +56,7 @@ def test_research_grounding_is_written_for_an_agent_that_searches() -> None:
     general knowledge itself because nothing labels a Research answer for it.
     """
     research = " ".join(agent_control_prompt().split())
-    fast = " ".join(answer_core().split())
+    fast = " ".join(fast_answer_prompt().split())
 
     assert "Ground the answer in what your tools return" in research
     assert "say what is missing and what you tried" in research

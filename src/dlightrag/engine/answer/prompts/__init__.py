@@ -7,7 +7,7 @@ rules Research takes from Fast. This facade exports the complete prompts.
 """
 
 from .agent import agent_control_prompt
-from .answer import answer_core
+from .answer import fast_answer_prompt
 from .highlight import HIGHLIGHT_BATCH_USER_PROMPT, HIGHLIGHT_SYSTEM_PROMPT
 from .identity import clock_line
 
@@ -16,5 +16,5 @@ __all__ = [
     "HIGHLIGHT_BATCH_USER_PROMPT",
     "HIGHLIGHT_SYSTEM_PROMPT",
     "agent_control_prompt",
-    "answer_core",
+    "fast_answer_prompt",
 ]

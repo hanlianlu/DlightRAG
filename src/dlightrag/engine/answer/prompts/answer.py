@@ -55,8 +55,8 @@ Every citation marker is defined where its evidence appears, and nowhere else:
 """
 
 
-def answer_core() -> str:
-    """The answer system prompt: byte-stable for every call.
+def fast_answer_prompt() -> str:
+    """Fast's system prompt: byte-stable for every call.
 
     Every byte before the messages is provider prefix-cache input, so this text never
     carries a clock. Fast has no tools, so its own request states the time and this
@@ -77,5 +77,5 @@ __all__ = [
     "ANSWER_CONTEXT_GUIDANCE",
     "EVIDENCE_USE_GUIDANCE",
     "PRESENTATION_GUIDANCE",
-    "answer_core",
+    "fast_answer_prompt",
 ]
