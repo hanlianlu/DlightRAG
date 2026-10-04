@@ -198,8 +198,9 @@ eleventh fails the Run as `dependency_unavailable`.
 ## Agent Browser Pool
 
 The Agent Browser ([ADR 0032](adr/0032-the-agent-browser.md)) is a pool of Playwright
-containers plus one Squid proxy. The bundled Compose stack runs two members
-(`agent-browser-1`, `agent-browser-2`) and `agent-browser-egress`, and binds their
+containers plus one Squid proxy. The bundled Compose stack runs the members its
+`members=N` declares, two by default (`agent-browser-1`, `agent-browser-2`; see
+Resizing below), and `agent-browser-egress`, and binds their
 addresses into `dlightrag-api`, `dlightrag-mcp`, and `dlightrag-reader`
 ([fields](configuration.md#agent-browser); the boundary is in
 [Security](security.md#agent-browser-boundary)). No service waits for them: a render or a
@@ -207,7 +208,7 @@ page's first `navigate` with no browser up fails as `unreachable` and the Run go
 
 ```bash
 # From the repository root, so the seccomp profile path in docker-compose.yml resolves.
-docker compose up -d --build agent-browser-1 agent-browser-2 agent-browser-egress
+docker compose up -d --build $(docker compose config --services | grep '^agent-browser-')
 docker compose ps
 docker compose logs agent-browser-egress
 ```
@@ -229,12 +230,18 @@ docker compose logs agent-browser-egress
   first `navigate` waits up to `lease_wait_seconds` and then fails as `busy`; the model
   reads that and works from the direct read. Add members when that is frequent. Each
   member is capped at `COMPOSE_AGENT_BROWSER_MEM_LIMIT` (default `2g`) and 1024 processes.
-- **Adding a member.** Add its service (`<<: *agent-browser`) on a network of its own,
-  declare that network `internal: true`, add the network to `agent-browser-egress` and
-  to `dlightrag-api`, `dlightrag-mcp`, and `dlightrag-reader`, and add the member's
-  `ws://` URL to the `endpoints` binding. Never put two members on one network
-  ([why](security.md#agent-browser-boundary)). Every process must be restarted with the
-  same endpoint URLs, spelled identically, because the lease table is keyed by the URL.
+- **Resizing.** The pool's size is the `members=N` in `docker-compose.yml`. After changing
+  it, run `uv run python scripts/agent_browser_pool.py`, which writes the three
+  `agent-browser-pool` blocks from it: each member's service on an internal network of its
+  own, the networks that `agent-browser-egress`, `dlightrag-api`, `dlightrag-mcp`, and
+  `dlightrag-reader` join, and the `endpoints` binding. Two members never share a network
+  ([why](security.md#agent-browser-boundary)). Then apply it with
+  `docker compose up -d --remove-orphans` plus the `--profile` flags the deployment runs
+  with, such as `--profile reader`, since a service whose profile is left out keeps its old
+  endpoints. Every process then restarts with the same endpoint URLs, which the lease table
+  is keyed by, and a member the pool no longer has is removed rather than left running.
+  `tests/unit/test_compose_agent_browser_pool.py` fails when the blocks disagree with
+  `members=N`.
 - **Upgrading.** The Python `playwright` package and the pool image are one version,
   and the server refuses a client of another major or minor version with HTTP 428.
   Bump every pin together: `pyproject.toml` (`playwright==X`), `uv.lock`, the
