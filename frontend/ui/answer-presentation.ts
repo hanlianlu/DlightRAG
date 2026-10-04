@@ -253,7 +253,9 @@ export class AnswerPresentationElement extends LightElement {
       // The browser owns decoding, so the Artifact URL is the player's source:
       // a range-capable same-origin request streams and seeks without inlining
       // the bytes. The caption keeps an escape hatch for a container this
-      // browser cannot decode, which leaves the element itself empty.
+      // browser cannot decode, which leaves the element itself empty. Both
+      // caption links wear the shared button face, so neither relies on colour
+      // to read as a link and both keep text contrast on every surface.
       const source = safeSameOriginHref(artifact.dataUrl || '');
       if (source) {
         return html`
@@ -261,7 +263,7 @@ export class AnswerPresentationElement extends LightElement {
             <video data-answer-video controls preload="metadata" playsinline src=${source}></video>
             <figcaption>
               <span>${artifact.label}</span>
-              <a href=${source} target="_blank" rel="noopener noreferrer">${msg('Open in a new tab', {id: 'answerPresentation.openVideo'})}</a>
+              <a class="dl-btn" href=${source} target="_blank" rel="noopener noreferrer">${msg('Open in a new tab', {id: 'answerPresentation.openVideo'})}</a>
               ${artifactDownloadLink(
                 artifact.downloadUrl,
                 msg('Download', {id: 'answerPresentation.downloadVideo'}),

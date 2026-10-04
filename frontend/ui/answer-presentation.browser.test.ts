@@ -216,6 +216,8 @@ it('plays an inline video Artifact and keeps the card for a non-inline placement
   const captionLinks = Array.from(element.querySelectorAll<HTMLAnchorElement>('figcaption a'));
   expect(captionLinks.map((link) => link.textContent?.trim()))
     .to.deep.equal(['Open in a new tab', 'Download']);
+  // Both wear the shared button face, so neither reads as a link by colour alone.
+  expect(captionLinks.every((link) => link.classList.contains('dl-btn'))).to.equal(true);
   expect(captionLinks[0]?.href).to.equal(player?.src);
   expect(captionLinks[1]?.getAttribute('href')).to.equal(
     new URL('/web/api/answer/run-1/artifacts/artifact-video?download=1', window.location.origin).href,

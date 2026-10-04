@@ -280,6 +280,22 @@ it('anchors a surface to its trigger wrapper along the writing direction', () =>
   }
 });
 
+it('gives a link the button face, never the link underline', () => {
+  const row = document.createElement('div');
+  row.innerHTML = '<button class="dl-btn" type="button">Retry</button>'
+    + '<a class="dl-btn" href="/download">Download</a>';
+  document.body.append(row);
+  const face = (element: Element): string[] => {
+    const style = getComputedStyle(element);
+    return ['text-decoration-line', 'color', 'border-top-width', 'border-top-style', 'border-top-color',
+      'height', 'font-size', 'cursor'].map((property) => style.getPropertyValue(property));
+  };
+  const link = row.querySelector('a')!;
+
+  expect(face(link)).to.deep.equal(face(row.querySelector('button')!));
+  expect(getComputedStyle(link).textDecorationLine).to.equal('none');
+});
+
 it('opens menus from their button with one key map', () => {
   const focus = (key: string) => menuButtonFocus(new KeyboardEvent('keydown', {key}));
   expect(['ArrowDown', 'Enter', ' ', 'ArrowUp', 'Escape', 'a'].map(focus))
