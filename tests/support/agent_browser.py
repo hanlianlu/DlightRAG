@@ -25,7 +25,7 @@ import sys
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from playwright.async_api import Browser, async_playwright
@@ -35,6 +35,7 @@ from dlightrag.engine.agent.tools import ToolResult, ToolRuntime
 from dlightrag.engine.agent.tools.files import ResourceReadRequest
 from dlightrag.engine.answer.agent_browser import (
     AgentAccountsBinding,
+    AgentAccountSummary,
     AgentBrowserError,
     AgentBrowserSettings,
     AgentMailbox,
@@ -507,16 +508,45 @@ class FakeProvider:
 
 
 class MemoryAccountStore:
-    """An ``AgentAccountStore`` that keeps its rows in memory, one per owner and site."""
+    """An ``AgentAccountStore`` that keeps its rows in memory, one per owner and site.
+
+    ``created`` holds the time each row was first saved, and ``last_used`` the time a login last
+    marked it used, which a row has only once one did.
+    """
 
     def __init__(self) -> None:
         self.rows: dict[tuple[str, str], StoredAgentAccount] = {}
+        self.created: dict[tuple[str, str], datetime] = {}
+        self.last_used: dict[tuple[str, str], datetime] = {}
 
     async def account(self, *, owner_id: str, site: str) -> StoredAgentAccount | None:
         return self.rows.get((owner_id, site))
 
     async def save(self, account: StoredAgentAccount) -> None:
-        self.rows[(account.owner_id, account.site)] = account
+        key = (account.owner_id, account.site)
+        self.rows[key] = account
+        self.created.setdefault(key, datetime.now(UTC))
+
+    async def summaries(self, *, owner_id: str) -> tuple[AgentAccountSummary, ...]:
+        return tuple(
+            AgentAccountSummary(
+                row.site, row.email, row.username, self.created[key], self.last_used.get(key)
+            )
+            for key, row in sorted(self.rows.items())
+            if row.owner_id == owner_id
+        )
+
+    async def delete(self, *, owner_id: str, site: str) -> bool:
+        key = (owner_id, site)
+        self.created.pop(key, None)
+        self.last_used.pop(key, None)
+        return self.rows.pop(key, None) is not None
+
+    async def mark_used(self, account: StoredAgentAccount) -> None:
+        key = (account.owner_id, account.site)
+        row = self.rows.get(key)
+        if row is not None and row.account_id == account.account_id:
+            self.last_used[key] = datetime.now(UTC)
 
     async def sealed_under(
         self, *, key_ids: Sequence[str], after: tuple[str, str] = ("", ""), limit: int

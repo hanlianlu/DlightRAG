@@ -746,12 +746,17 @@ async def test_login_fills_the_stored_account_in_a_fresh_session(tmp_path: Path)
     async with browsing(tmp_path, store=store) as later:
         later.watch(password)
         form = await later.form(f"{SHOP}/signin")
+        assert [row.last_used_at for row in await store.summaries(owner_id=OWNER)] == [None]
 
         filled = await later.call(
             action="login", email_ref=form["email"], password_refs=[form["password"]]
         )
 
         assert not filled.is_error, filled.text_content
+        # The owner's Settings show the day this login filled the account.
+        assert [row.last_used_at is not None for row in await store.summaries(owner_id=OWNER)] == [
+            True
+        ]
         text = filled.text_content
         assert (
             f"Filled the Agent Account {EMAIL} for {SITE} into email, 1 password field(s). "
@@ -762,6 +767,29 @@ async def test_login_fills_the_stored_account_in_a_fresh_session(tmp_path: Path)
         fields = posted(later.proxy, "/session")
         assert fields["email"] == [EMAIL]
         assert_sent(fields, password, "password")
+
+
+async def test_a_login_whose_last_use_cannot_be_recorded_still_fills_the_form(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    class Down(MemoryAccountStore):
+        async def mark_used(self, account: StoredAgentAccount) -> None:
+            raise ConnectionError("the database is down")
+
+    caplog.set_level(logging.WARNING)
+    async with browsing(tmp_path, store=Down()) as web:
+        await web.register(await web.form(f"{SHOP}/signup"))
+        password = web.stored_password()
+        form = await web.form(f"{SHOP}/signin")
+
+        filled = await web.call(
+            action="login", email_ref=form["email"], password_refs=[form["password"]]
+        )
+
+        assert not filled.is_error, filled.text_content
+        assert shows_mask(filled.text_content, "Password", form["password"])
+        assert "An Agent Account's last use could not be recorded (ConnectionError)" in caplog.text
+        assert_hidden(password, caplog.text)
 
 
 async def test_login_says_what_the_account_lacks_and_that_a_deployment_without_a_ring_has_none(
@@ -836,6 +864,7 @@ async def test_a_childs_registration_is_run_scoped(tmp_path: Path) -> None:
         web.watch(SecretStr(join["password"][0]))
 
         # Its login fills its own account, and another Child's falls back to the owner's.
+        last_used = []
         for scope in ("child-a", "child-b"):
             signin = await web.form(f"{SHOP}/signin", scope, child=True)
             await web.call(
@@ -846,6 +875,12 @@ async def test_a_childs_registration_is_run_scoped(tmp_path: Path) -> None:
                 password_refs=[signin["password"]],
             )
             await web.call(scope, child=True, action="click", ref=signin["button"])
+            last_used.append(
+                [row.last_used_at is not None for row in await web.store.summaries(owner_id=OWNER)]
+            )
+        # A login with a Child's own account writes nothing, and one with the owner's account
+        # records its use, which adds the Child no authority.
+        assert last_used == [[False], [True]]
 
         own, fallback = posts(web.proxy, "/session")
         assert own["email"] == [alias]

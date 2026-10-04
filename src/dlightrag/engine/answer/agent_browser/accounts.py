@@ -137,6 +137,21 @@ class ChildAccount:
 type AgentAccount = StoredAgentAccount | ChildAccount
 
 
+@dataclass(frozen=True, slots=True)
+class AgentAccountSummary:
+    """What Settings shows an owner of one of their accounts: where it is, who it is there, and
+    when it was registered and last signed in. It holds nothing of the password, its envelope,
+    the key that sealed it, or the account's id."""
+
+    site: str
+    email: str | None
+    username: str | None
+    created_at: datetime
+    """When the owner's account on the site was first registered, which a reset keeps."""
+    last_used_at: datetime | None
+    """When a login last filled its stored credentials, or None before the first one."""
+
+
 class AgentAccountStore(Protocol):
     """The owner-scoped durable record of Agent Accounts."""
 
@@ -144,6 +159,19 @@ class AgentAccountStore(Protocol):
 
     async def save(self, account: StoredAgentAccount) -> None:
         """Insert the account, or replace the owner's account on that site."""
+        ...
+
+    async def summaries(self, *, owner_id: str) -> tuple[AgentAccountSummary, ...]:
+        """Every account the owner has, in the order of their sites."""
+        ...
+
+    async def delete(self, *, owner_id: str, site: str) -> bool:
+        """Remove the owner's account on ``site``; whether there was one."""
+        ...
+
+    async def mark_used(self, account: StoredAgentAccount) -> None:
+        """Note that a login filled ``account`` just now, unless it was replaced or removed
+        since it was read."""
         ...
 
     async def sealed_under(
@@ -254,6 +282,13 @@ class SessionAccounts:
             return account.email
         minted = owner_alias(account.owner_id, account.site, self._mailbox.alias_domain)
         return account.email if account.email == minted else None
+
+    async def mark_used(self, account: AgentAccount) -> None:
+        """A login filled ``account`` now: the owner's Settings show the day it last did. That is
+        no authority, so a Child's login with the owner's account marks it too; a Child's own
+        account lives in this process and has no day to keep."""
+        if isinstance(account, StoredAgentAccount):
+            await self._store.mark_used(account)
 
     def signed_in(self, account: AgentAccount) -> None:
         """The Session registered or logged in with ``account`` now: its inbox window opens here,
@@ -367,6 +402,7 @@ __all__ = [
     "PASSWORD_LENGTH",
     "AgentAccount",
     "AgentAccountStore",
+    "AgentAccountSummary",
     "AgentAccountsBinding",
     "ChildAccount",
     "RunAgentAccounts",

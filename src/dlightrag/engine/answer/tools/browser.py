@@ -902,6 +902,13 @@ class _Call:
             filled.append(f"{len(request.password_refs)} password field(s)")
         observation = await page.fill_credentials(tuple(fills), site=site)
         accounts.signed_in(account)
+        try:
+            await accounts.mark_used(account)
+        except Exception as exc:
+            # The form is filled, and the day Settings shows is not worth failing the login for.
+            logger.warning(
+                "An Agent Account's last use could not be recorded (%s)", type(exc).__name__
+            )
         note = FILLED.format(
             identity=account.email or account.username, site=site, fields=", ".join(filled)
         )

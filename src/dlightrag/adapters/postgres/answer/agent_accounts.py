@@ -8,8 +8,10 @@ from typing import Any
 
 from dlightrag.adapters.postgres.core._migrations import TableRequirement
 from dlightrag.adapters.postgres.core._operations import ConnectionPool, PostgresOperationRunner
-from dlightrag.engine.answer.agent_browser import StoredAgentAccount
+from dlightrag.engine.answer.agent_browser import AgentAccountSummary, StoredAgentAccount
 
+# ``updated_at`` is the last time the owner's credentials changed, ``created_at`` the first
+# registration, which a reset keeps, and ``last_used_at`` the last login that filled them.
 _CREATE_AGENT_ACCOUNTS = """
 CREATE TABLE IF NOT EXISTS dlightrag_agent_accounts (
     owner_id           TEXT        NOT NULL,
@@ -19,7 +21,9 @@ CREATE TABLE IF NOT EXISTS dlightrag_agent_accounts (
     username           TEXT,
     key_id             TEXT        NOT NULL,
     encrypted_envelope TEXT        NOT NULL,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_used_at       TIMESTAMPTZ,
     PRIMARY KEY (owner_id, site),
     CONSTRAINT dlightrag_agent_accounts_identity_check
         CHECK (email IS NOT NULL OR username IS NOT NULL)
@@ -38,7 +42,9 @@ AGENT_ACCOUNTS_SCHEMA_TABLE = TableRequirement(
         "username",
         "key_id",
         "encrypted_envelope",
+        "created_at",
         "updated_at",
+        "last_used_at",
     ),
     primary_key=("owner_id", "site"),
     checks=("dlightrag_agent_accounts_identity_check",),
@@ -50,8 +56,16 @@ FROM dlightrag_agent_accounts
 WHERE owner_id = $1 AND site = $2
 """
 
+_SELECT_SUMMARIES = """
+SELECT site, email, username, created_at, last_used_at
+FROM dlightrag_agent_accounts
+WHERE owner_id = $1
+ORDER BY site
+"""
+
 # The account id and the envelope are one fact: the envelope is bound to the id, so a reset
-# that keeps the id replaces the envelope and a first registration inserts both.
+# that keeps the id replaces the envelope and a first registration inserts both. A reset is
+# the same account, so it keeps the time of its registration and of its last login.
 _UPSERT_ACCOUNT = """
 INSERT INTO dlightrag_agent_accounts
     (owner_id, site, account_id, email, username, key_id, encrypted_envelope)
@@ -65,6 +79,20 @@ SET account_id = EXCLUDED.account_id,
     updated_at = NOW()
 """
 
+_DELETE_ACCOUNT = """
+DELETE FROM dlightrag_agent_accounts
+WHERE owner_id = $1 AND site = $2
+RETURNING 1
+"""
+
+# A login that read an account which was replaced or removed meanwhile touches nothing: the
+# account id is the account the login filled.
+_MARK_USED = """
+UPDATE dlightrag_agent_accounts
+SET last_used_at = NOW()
+WHERE owner_id = $1 AND site = $2 AND account_id = $3
+"""
+
 _SELECT_SEALED_UNDER = """
 SELECT owner_id, site, account_id, email, username, key_id, encrypted_envelope
 FROM dlightrag_agent_accounts
@@ -73,7 +101,7 @@ ORDER BY owner_id, site
 LIMIT $4
 """
 
-# A re-seal changes no account, so the row's time stays what the owner last did to it, and it
+# A re-seal changes no account, so the row's times stay what the owner last did to it, and it
 # loses to anything that replaced the envelope after it was read.
 _RESEAL_ACCOUNT = """
 UPDATE dlightrag_agent_accounts
@@ -120,6 +148,35 @@ class PGAgentAccountStore(PostgresOperationRunner):
                 account.key_id,
                 account.envelope,
             )
+
+        await self._run(operation)
+
+    async def summaries(self, *, owner_id: str) -> tuple[AgentAccountSummary, ...]:
+        async def operation(conn: Any) -> tuple[AgentAccountSummary, ...]:
+            rows = await conn.fetch(_SELECT_SUMMARIES, owner_id)
+            return tuple(
+                AgentAccountSummary(
+                    site=row["site"],
+                    email=row["email"],
+                    username=row["username"],
+                    created_at=row["created_at"],
+                    last_used_at=row["last_used_at"],
+                )
+                for row in rows
+            )
+
+        return await self._run(operation)
+
+    async def delete(self, *, owner_id: str, site: str) -> bool:
+        async def operation(conn: Any) -> bool:
+            return bool(await conn.fetchval(_DELETE_ACCOUNT, owner_id, site))
+
+        # Whether there was an account to remove is the answer, so a retry must not give it.
+        return await self._run_once(operation)
+
+    async def mark_used(self, account: StoredAgentAccount) -> None:
+        async def operation(conn: Any) -> None:
+            await conn.execute(_MARK_USED, account.owner_id, account.site, account.account_id)
 
         await self._run(operation)
 
