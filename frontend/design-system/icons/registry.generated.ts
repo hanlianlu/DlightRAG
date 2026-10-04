@@ -67,6 +67,33 @@ export const ICON_REGISTRY = {
       ]
     ]
   },
+  "agent-accounts": {
+    source: "lucide",
+    sourceName: "key-round",
+    viewBox: "0 0 24 24",
+    opticalScale: 1,
+    opticalX: 0,
+    opticalY: 0,
+    fill: "none",
+    stroke: "currentColor",
+    nodes: [
+      [
+        "path",
+        {
+          "d": "M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"
+        }
+      ],
+      [
+        "circle",
+        {
+          "cx": "16.5",
+          "cy": "7.5",
+          "r": ".5",
+          fill: "currentColor"
+        }
+      ]
+    ]
+  },
   "attach": {
     source: "lucide",
     sourceName: "plus",
@@ -147,6 +174,66 @@ export const ICON_REGISTRY = {
         "path",
         {
           "d": "m6 6 12 12"
+        }
+      ]
+    ]
+  },
+  "connections": {
+    source: "lucide",
+    sourceName: "plug",
+    viewBox: "0 0 24 24",
+    opticalScale: 1,
+    opticalX: 0,
+    opticalY: 0,
+    fill: "none",
+    stroke: "currentColor",
+    nodes: [
+      [
+        "path",
+        {
+          "d": "M12 22v-5"
+        }
+      ],
+      [
+        "path",
+        {
+          "d": "M15 8V2"
+        }
+      ],
+      [
+        "path",
+        {
+          "d": "M17 8a1 1 0 0 1 1 1v4a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1z"
+        }
+      ],
+      [
+        "path",
+        {
+          "d": "M9 8V2"
+        }
+      ]
+    ]
+  },
+  "conversations": {
+    source: "lucide",
+    sourceName: "messages-square",
+    viewBox: "0 0 24 24",
+    opticalScale: 1,
+    opticalX: 0,
+    opticalY: 0,
+    fill: "none",
+    stroke: "currentColor",
+    nodes: [
+      [
+        "path",
+        {
+          "d": "M16 10a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 14.286V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"
+        }
+      ],
+      [
+        "path",
+        {
+          "d": "M20 9a2 2 0 0 1 2 2v10.286a.71.71 0 0 1-1.212.502l-2.202-2.202A2 2 0 0 0 17.172 19H10a2 2 0 0 1-2-2v-1"
         }
       ]
     ]
@@ -337,6 +424,86 @@ export const ICON_REGISTRY = {
       ]
     ]
   },
+  "info": {
+    source: "lucide",
+    sourceName: "info",
+    viewBox: "0 0 24 24",
+    opticalScale: 1,
+    opticalX: 0,
+    opticalY: 0,
+    fill: "none",
+    stroke: "currentColor",
+    nodes: [
+      [
+        "circle",
+        {
+          "cx": "12",
+          "cy": "12",
+          "r": "10"
+        }
+      ],
+      [
+        "path",
+        {
+          "d": "M12 16v-4"
+        }
+      ],
+      [
+        "path",
+        {
+          "d": "M12 8h.01"
+        }
+      ]
+    ]
+  },
+  "language": {
+    source: "lucide",
+    sourceName: "languages",
+    viewBox: "0 0 24 24",
+    opticalScale: 1,
+    opticalX: 0,
+    opticalY: 0,
+    fill: "none",
+    stroke: "currentColor",
+    nodes: [
+      [
+        "path",
+        {
+          "d": "m5 8 6 6"
+        }
+      ],
+      [
+        "path",
+        {
+          "d": "m4 14 6-6 2-3"
+        }
+      ],
+      [
+        "path",
+        {
+          "d": "M2 5h12"
+        }
+      ],
+      [
+        "path",
+        {
+          "d": "M7 2h1"
+        }
+      ],
+      [
+        "path",
+        {
+          "d": "m22 22-5-10-5 10"
+        }
+      ],
+      [
+        "path",
+        {
+          "d": "M14 18h6"
+        }
+      ]
+    ]
+  },
   "moon": {
     source: "lucide",
     sourceName: "moon",
@@ -503,6 +670,108 @@ export const ICON_REGISTRY = {
         "path",
         {
           "d": "m15 18-6-6 6-6"
+        }
+      ]
+    ]
+  },
+  "profile-memory": {
+    source: "lucide",
+    sourceName: "brain",
+    viewBox: "0 0 24 24",
+    opticalScale: 1,
+    opticalX: 0,
+    opticalY: 0,
+    fill: "none",
+    stroke: "currentColor",
+    nodes: [
+      [
+        "path",
+        {
+          "d": "M12 18V5"
+        }
+      ],
+      [
+        "path",
+        {
+          "d": "M15 13a4.17 4.17 0 0 1-3-4 4.17 4.17 0 0 1-3 4"
+        }
+      ],
+      [
+        "path",
+        {
+          "d": "M17.598 6.5A3 3 0 1 0 12 5a3 3 0 1 0-5.598 1.5"
+        }
+      ],
+      [
+        "path",
+        {
+          "d": "M17.997 5.125a4 4 0 0 1 2.526 5.77"
+        }
+      ],
+      [
+        "path",
+        {
+          "d": "M18 18a4 4 0 0 0 2-7.464"
+        }
+      ],
+      [
+        "path",
+        {
+          "d": "M19.967 17.483A4 4 0 1 1 12 18a4 4 0 1 1-7.967-.517"
+        }
+      ],
+      [
+        "path",
+        {
+          "d": "M6 18a4 4 0 0 1-2-7.464"
+        }
+      ],
+      [
+        "path",
+        {
+          "d": "M6.003 5.125a4 4 0 0 0-2.526 5.77"
+        }
+      ]
+    ]
+  },
+  "remove": {
+    source: "lucide",
+    sourceName: "trash",
+    viewBox: "0 0 24 24",
+    opticalScale: 1,
+    opticalX: 0,
+    opticalY: 0,
+    fill: "none",
+    stroke: "currentColor",
+    nodes: [
+      [
+        "path",
+        {
+          "d": "M10 11v6"
+        }
+      ],
+      [
+        "path",
+        {
+          "d": "M14 11v6"
+        }
+      ],
+      [
+        "path",
+        {
+          "d": "M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"
+        }
+      ],
+      [
+        "path",
+        {
+          "d": "M3 6h18"
+        }
+      ],
+      [
+        "path",
+        {
+          "d": "M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
         }
       ]
     ]
