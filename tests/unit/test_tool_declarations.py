@@ -260,7 +260,8 @@ def test_workspace_tools_state_what_a_run_workspace_holds() -> None:
         )
         assert "`tmp/` is scratch for this Run alone" in description
         assert "Knowledge-base documents are never files in it" in description
-        assert "becomes one only when materialize copies its resource_id" in description
+        assert "a Resource becomes one only when materialize copies its resource_id" in description
+        assert "fetched pages" not in description, "what copies is materialize's to list"
     assert SESSION_NOTE_DIRECTORY not in ls_declaration().description
 
 
@@ -273,7 +274,8 @@ def test_materialize_states_what_copies_and_that_the_copy_is_not_the_source() ->
 
     description = declared["materialize"].description
     assert "Agent Browser downloads and captures" in description
-    assert "cite its resource_id, never the copy" in description
+    assert "an earlier turn's Resources and Artifacts all copy" in description
+    assert "cite what read returns from it, never the copy" in description
     assert "Agent Browser" not in materialize_declaration().description
 
 

@@ -97,15 +97,15 @@ from dlightrag.engine.answer.tools.subagents import (
 _WORKSPACE_FACT = (
     f"Each Run's workspace starts with only `{SESSION_NOTE_DIRECTORY}/` from earlier Runs "
     "of this conversation, and `tmp/` is scratch for this Run alone. Knowledge-base documents "
-    "are never files in it; an upload, a fetched page, a download, or an earlier Artifact "
-    "becomes one only when materialize copies its resource_id."
+    "are never files in it; a Resource becomes one only when materialize copies its resource_id."
 )
 
-#: What materialize copies and what the copy is; the tool itself stays product-neutral.
+#: What materialize copies and what the copy is; the tool itself stays product-neutral. The
+#: shell and the listing tool say only that a copy is the way in, so this is the one list.
 _MATERIALIZE_FACT = (
     "Uploads, fetched pages and files, Agent Browser downloads and captures, and an earlier "
-    "turn's Resources all copy. The Resource stays the citable source: cite its resource_id, "
-    "never the copy."
+    "turn's Resources and Artifacts all copy. The Resource stays the source: cite what read "
+    "returns from it, never the copy."
 )
 
 #: A later Run of the Session adopts a published Artifact by the handle its link carries.
