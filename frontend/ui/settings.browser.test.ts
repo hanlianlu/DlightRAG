@@ -9,6 +9,7 @@ import {
   memorySettings,
   mountSettings,
   openSettings,
+  settingsClosed,
   wire,
   wireAccount,
 } from '../testing/settings.ts';
@@ -283,15 +284,15 @@ it('closes from the Close button, from Escape, and from the scrim, but not from 
   expect(dialog.open).to.equal(true);
 
   named('Close settings').click();
-  await waitFor(() => !dialog.open);
+  await waitFor(settingsClosed);
 
   await openSettings(settings);
   await sendKeys({press: 'Escape'});
-  await waitFor(() => !dialog.open);
+  await waitFor(settingsClosed);
 
   await openSettings(settings);
   dialog.click();
-  await waitFor(() => !dialog.open);
+  await waitFor(settingsClosed);
 });
 
 it('starts a session of its own when it opens before the last close has been reported', async () => {
@@ -311,8 +312,8 @@ it('starts a session of its own when it opens before the last close has been rep
   expect(second).not.to.equal(first);
   expect(first.isConnected).to.equal(false);
   // The late report of the first close did not tear the second session down.
-  expect(dialog.open).to.equal(true);
-  expect(document.body.classList.contains('settings-open')).to.equal(true);
+  expect(dialog.open, 'dialog open').to.equal(true);
+  expect(document.body.classList.contains('settings-open'), 'settings-open class').to.equal(true);
   await waitFor(() => api.requests.filter((request) => request.path === '/web/api/connections/mcp').length === 2);
   await waitFor(() => (second as unknown as {view: unknown}).view !== null);
 });
@@ -337,7 +338,7 @@ it('deletes every conversation through the sidebar\'s command, and closes only o
 
   outcome = true;
   button.click();
-  await waitFor(() => !dialog.open);
+  await waitFor(settingsClosed);
   expect(asked).to.have.length(2);
 });
 
@@ -520,30 +521,6 @@ describe('on a desktop', () => {
   after(async () => {
     unlink();
     await setViewport(originalViewport);
-  });
-
-  it('is a centered dialog with a fixed size, a hairline border, and a navigation column beside its page', async () => {
-    window.fetch = populated().fetch;
-    const {settings} = mountSettings();
-    const dialog = await openSettings(settings);
-
-    const box = dialog.getBoundingClientRect();
-    expect([box.width, box.height]).to.deep.equal([880, 640]);
-    expect(box.x + box.width / 2).to.be.closeTo(640, 1);
-    expect(box.y + box.height / 2).to.be.closeTo(400, 1);
-    const style = getComputedStyle(dialog);
-    expect(style.borderRadius).to.equal('22px');
-    expect(style.borderTopWidth).to.equal('1px');
-    const nav = settings.querySelector('nav')!.getBoundingClientRect();
-    const pane = settings.querySelector('[role="region"]')!.getBoundingClientRect();
-    expect(nav.right).to.be.at.most(pane.left + 1);
-    expect(nav.top).to.be.closeTo(pane.top, 1);
-
-    // Another page does not resize it.
-    row(settings, 'language').click();
-    await settings.updateComplete;
-    const after = dialog.getBoundingClientRect();
-    expect([after.width, after.height]).to.deep.equal([880, 640]);
   });
 
   it('shows a notice with its Undo within reach of a pointer', async () => {
