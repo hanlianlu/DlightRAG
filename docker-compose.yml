@@ -28,7 +28,8 @@ x-local-proxies: &local-proxies "127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.
 #
 # The pool's size is the members=N below. After changing it, run
 #   uv run python scripts/agent_browser_pool.py
-# which writes the three agent-browser-pool blocks for it.
+# which writes the three agent-browser-pool blocks for it, and apply it as
+# docs/operations.md (Resizing) describes.
 # >>> agent-browser-pool:anchors members=2
 x-agent-browser-networks: &agent-browser-networks
   agent-browser-1:

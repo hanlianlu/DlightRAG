@@ -235,8 +235,11 @@ docker compose logs agent-browser-egress
   `agent-browser-pool` blocks from it: each member's service on an internal network of its
   own, the networks that `agent-browser-egress`, `dlightrag-api`, `dlightrag-mcp`, and
   `dlightrag-reader` join, and the `endpoints` binding. Two members never share a network
-  ([why](security.md#agent-browser-boundary)). Then run `docker compose up -d` so every
-  process restarts with the same endpoint URLs, because the lease table is keyed by the URL.
+  ([why](security.md#agent-browser-boundary)). Then apply it with
+  `docker compose up -d --remove-orphans` plus the `--profile` flags the deployment runs
+  with, such as `--profile reader`, since a service whose profile is left out keeps its old
+  endpoints. Every process then restarts with the same endpoint URLs, which the lease table
+  is keyed by, and a member the pool no longer has is removed rather than left running.
   `tests/unit/test_compose_agent_browser_pool.py` fails when the blocks disagree with
   `members=N`.
 - **Upgrading.** The Python `playwright` package and the pool image are one version,
