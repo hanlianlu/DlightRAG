@@ -1,6 +1,13 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {expect} from '@esm-bundle/chai';
+import {resetMouse, sendKeys, sendMouse} from '@web/test-runner-commands';
+import {productionHandles} from '../stores/app-handles.ts';
+import {DEFAULT_CHANGES} from '../testing/workspaces.ts';
+import type {DlIngestTarget} from './ingest-target.ts';
+import './ingest-target.ts';
+import type {DlWorkspaceScope} from './workspace-scope.ts';
+import './workspace-scope.ts';
 
 const stylesheets = [
   '../design-system/index.css',
@@ -10,6 +17,7 @@ const stylesheets = [
   '../styles/panels.css',
   '../styles/inspector-files.module.css',
   '../styles/ingest-target.module.css',
+  '../styles/workspaces.module.css',
   '../styles/failed-file-recovery.module.css',
   '../styles/inspector-sources.module.css',
   '../styles/answer-presentation.module.css',
@@ -157,6 +165,135 @@ it('keeps reconnect text and focus indicators contrast-safe in every theme and s
     }
   }
   document.documentElement.dataset.colorMode = 'dark';
+});
+
+// The ring sits 2px outside its control, so it reads against whatever surrounds the control:
+// a surface, or a row tinted under the pointer or by selection.
+it('keeps the focus ring at 3:1 on every surface and row tint in both themes', () => {
+  const probe = element('');
+  const resolve = (property: 'color' | 'backgroundColor', value: string): Rgba => {
+    probe.style[property] = value;
+    return rgba(getComputedStyle(probe)[property]);
+  };
+  for (const colorMode of ['dark', 'light']) {
+    document.documentElement.dataset.colorMode = colorMode;
+    const ring = resolve('color', 'var(--focus-ring-color)');
+    for (const surface of ['--color-bg-base', '--color-bg-surface', '--color-bg-elevated', '--color-bg-subtle']) {
+      const plain = resolve('backgroundColor', `var(${surface})`);
+      for (const tint of ['', '--color-bg-hover', '--color-selected-row']) {
+        const background = tint ? composite(resolve('backgroundColor', `var(${tint})`), plain) : plain;
+        expect(contrastRatio(composite(ring, background), background), `${colorMode} ${surface} ${tint}`)
+          .to.be.at.least(3);
+      }
+    }
+  }
+  document.documentElement.dataset.colorMode = 'dark';
+});
+
+it('rings a keyboard-focused popover row, keeps its radio legible, and keeps the whole ring in view', async () => {
+  const {ingest, workspaces} = productionHandles();
+  const records = Array.from({length: 12}, (_, index) => ({
+    workspace: `workspace-${index}`,
+    displayName: `Workspace ${String(index).padStart(2, '0')}`,
+    embeddingModel: 'embed',
+    changes: DEFAULT_CHANGES,
+  }));
+  workspaces.init(records, ['workspace-0'], 'workspace-0');
+  ingest.resetToPrimary();
+  const houseRing = element('');
+  houseRing.style.color = 'var(--focus-ring-color)';
+  const hoverTint = element('');
+  hoverTint.style.backgroundColor = 'var(--color-bg-hover)';
+  const pickers = [
+    {
+      mount: (): DlWorkspaceScope => {
+        const scope = document.createElement('dl-workspace-scope');
+        scope.className = 'workspace-selector';
+        return scope;
+      },
+      trigger: '#workspace-trigger', popover: '#workspace-popover',
+      rows: '[data-workspace-choice]', radio: '.workspacePopoverCheck',
+    },
+    {
+      mount: (): DlIngestTarget => {
+        const target = document.createElement('dl-ingest-target');
+        target.className = 'ingest-target';
+        target.active = true;
+        return target;
+      },
+      trigger: '#ingest-target-trigger', popover: '#ingest-target-popover',
+      rows: '[data-ingest-workspace-choice]', radio: '.ingest-target-popover-radio',
+    },
+  ];
+
+  for (const picker of pickers) {
+    const host = picker.mount();
+    document.body.appendChild(host);
+    await host.updateComplete;
+    host.querySelector<HTMLButtonElement>(picker.trigger)!.focus();
+    await sendKeys({press: 'Enter'});
+    await host.updateComplete;
+    const popover = host.querySelector<HTMLElement>(picker.popover)!;
+    const rows = popover.querySelectorAll(picker.rows).length;
+    expect(popover.scrollHeight, 'the list scrolls').to.be.greaterThan(popover.clientHeight);
+
+    await sendKeys({press: 'ArrowDown'});
+    const row = document.activeElement as HTMLElement;
+    expect(row.getAttribute('aria-pressed')).to.equal('false');
+    expect(row.matches(':focus-visible')).to.equal(true);
+    for (const colorMode of ['dark', 'light']) {
+      document.documentElement.dataset.colorMode = colorMode;
+      await Promise.all(row.getAnimations({subtree: true}).map((animation) => animation.finished));
+      const style = getComputedStyle(row);
+      const surface = rgba(getComputedStyle(popover).backgroundColor);
+      expect(style.outlineStyle).to.equal('solid');
+      expect(style.outlineWidth).to.equal('2px');
+      expect(style.outlineOffset).to.equal('2px');
+      expect(style.outlineColor).to.equal(getComputedStyle(houseRing).color);
+      // Outside the row, the ring's pixels were the popover before focus: one ratio covers
+      // contrast with the adjacent colour and the change from the unfocused state.
+      expect(contrastRatio(composite(rgba(style.outlineColor), surface), surface), colorMode).to.be.at.least(3);
+      const fill = composite(rgba(style.backgroundColor), surface);
+      const radio = rgba(getComputedStyle(row.querySelector(picker.radio)!).borderTopColor);
+      expect(contrastRatio(radio, fill), `${colorMode} unselected radio on the focused row`).to.be.at.least(3);
+    }
+    document.documentElement.dataset.colorMode = 'dark';
+
+    // A ring cut off at the scroll edge loses a whole side, so every step keeps all of it.
+    for (const key of ['ArrowDown', 'ArrowUp']) {
+      for (let step = 0; step < rows; step += 1) {
+        await sendKeys({press: key});
+        const focused = document.activeElement as HTMLElement;
+        const style = getComputedStyle(focused);
+        const reach = Number.parseFloat(style.outlineOffset) + Number.parseFloat(style.outlineWidth);
+        const box = focused.getBoundingClientRect();
+        const port = popover.getBoundingClientRect();
+        const top = port.top + popover.clientTop;
+        const left = port.left + popover.clientLeft;
+        const where = `${key} to ${focused.textContent?.trim()}`;
+        expect(box.top - reach, where).to.be.at.least(top - 0.5);
+        expect(box.bottom + reach, where).to.be.at.most(top + popover.clientHeight + 0.5);
+        expect(box.left - reach, where).to.be.at.least(left - 0.5);
+        expect(box.right + reach, where).to.be.at.most(left + popover.clientWidth + 0.5);
+      }
+    }
+
+    const hovered = document.activeElement as HTMLElement;
+    const box = hovered.getBoundingClientRect();
+    const center: [number, number] = [
+      Math.round(box.left + box.width / 2),
+      Math.round(box.top + box.height / 2),
+    ];
+    try {
+      await sendMouse({type: 'move', position: center});
+      await Promise.all(hovered.getAnimations().map((animation) => animation.finished));
+      expect(getComputedStyle(hovered).backgroundColor, 'hover keeps its tint')
+        .to.equal(getComputedStyle(hoverTint).backgroundColor);
+    } finally {
+      await resetMouse();
+    }
+    host.remove();
+  }
 });
 
 it('labels Canvas layout controls, truncates long titles, and preserves compact downloads', () => {

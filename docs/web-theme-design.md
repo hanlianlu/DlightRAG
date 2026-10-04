@@ -115,6 +115,7 @@ can be read rather than measured.
 | Subtle marks | `#78716c` stone-500 | `#78716c` stone-500 |
 | Dim, disabled only | `#57534e` stone-600 | `#a8a29e` stone-400 |
 | Primary accent | `#d2b661` gold-200 | `#7e6c37` gold-400 |
+| Focus ring | gold-200 at 64% | gold-500 at 80% |
 | Danger | `#f87171` | `#b91c1c` |
 
 Muted is the faintest text role that clears WCAG AA, 4.5:1, on every surface in
@@ -132,6 +133,14 @@ the Send button's glyph while there is nothing to send. Placeholder and ghost
 text are still text and take Muted, a clear step fainter than the Primary text a
 person types. A mark that shows a state, such as an idle status light, a
 disclosure chevron, or an unchecked switch thumb, takes Subtle.
+
+The focus ring (`--color-control-ring`, aliased as `--focus-ring-color`) is a
+2px outline drawn 2px outside its control, so it reads against the surface or
+row tint around the control, not the control's own fill. It is held to 3:1 on
+every surface and row tint in both modes (3.68:1 at worst in dark, 3.42:1 in
+Mineral Light), which covers both its contrast with adjacent colours and its
+change from the unfocused state. `frontend/ui/geometry.browser.test.ts`
+enforces that floor.
 
 The mirrored stone ramps keep perceptual surface steps comparable; the gold
 ramp supplies an accessible accent in each mode. Borders and row tints use

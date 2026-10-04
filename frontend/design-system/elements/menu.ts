@@ -77,7 +77,11 @@ export function rovingFocusKeydown(event: KeyboardEvent, items: readonly HTMLEle
   } else next = typeaheadIndex(event, items, current);
   if (next === null) return false;
   event.preventDefault();
-  items[next]?.focus();
+  const item = items[next];
+  // Engines scroll focus differently (Firefox leaves a partly visible item where it is), so
+  // the step owns the scroll: the item lands wholly in view, with any scroll-margin it sets.
+  item?.focus({preventScroll: true});
+  item?.scrollIntoView({block: 'nearest'});
   return true;
 }
 

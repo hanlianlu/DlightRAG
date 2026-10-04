@@ -341,10 +341,17 @@ textarea.dl-dialog-input {
     transition: background 0.1s;
 }
 
-.dl-popover-item:hover,
-.dl-popover-item:focus-visible {
+.dl-popover-item:hover {
     background: var(--color-bg-hover);
-    outline: none;
+}
+
+/* Keyboard focus takes the ring, not the hover tint: the tint sits about 1.1:1 from the
+ * popover, and on a tinted row the unselected radio rings fall under 3:1. The scroll margin
+ * is the ring's reach (2px out, 2px wide), so a row scrolled into view keeps its whole ring. */
+.dl-popover-item:focus-visible {
+    outline: 2px solid var(--focus-ring-color);
+    outline-offset: 2px;
+    scroll-margin-block: 4px;
 }
 
 .dl-popover-create {
