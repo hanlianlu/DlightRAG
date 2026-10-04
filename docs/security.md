@@ -613,9 +613,9 @@ could read.
   a form that submits with GET puts it into the page's URL, and the error of a failed fill
   quotes it in its call log. So every filled password is replaced by `********` in the
   page's URL and title, the snapshot (before `find` filters its lines, so no query can probe
-  a value), dialog messages, the names and URLs of downloads, the text a field reads back,
-  the first line of a driver error, and the serialized HTML of a capture, always before a
-  text is cut. A failed fill's error is decided outside the handler that caught it and never
+  a value), dialog messages, the names, URLs, and bytes of downloads, the text a field reads
+  back, the first line of a driver error, and the serialized HTML of a capture, always before
+  a text is cut. A failed fill's error is decided outside the handler that caught it and never
   kept, chained, or logged, and a failed or changed fill empties the fields it filled. The set
   of filled passwords belongs to the Agent Session and the Run, outlives its page, and also
   redacts the mail it reads.
@@ -642,9 +642,10 @@ Residual risks, recorded rather than solved:
 - An account is recorded when its fields are filled, before the site accepts the form, so a
   refused sign-up leaves a record that `login` will fail with. The way out is the reset path,
   `register` on a site whose account exists.
-- A file a site generates with the password in it is admitted as it is: downloads are not
-  redacted. A password a page prints as text can be confirmed by `wait(text=…)`, and one shown
-  inside shadow DOM, which the locators do not pierce, escapes the screenshot check.
+- A downloaded file has the password masked by its exact bytes, so one a site compresses or
+  encodes into the file, in an archive, a PDF stream, or base64, is admitted with it. A
+  password a page prints as text can be confirmed by `wait(text=…)`, and one shown inside
+  shadow DOM, which the locators do not pierce, escapes the screenshot check.
 - Registrations of one owner on one site that run at once leave the last envelope. A Child's
   account stays on the site after its Run, under an alias nothing reads again.
 - Mail retention is the deployment's, and an alias that is flooded lists only its first 10,000

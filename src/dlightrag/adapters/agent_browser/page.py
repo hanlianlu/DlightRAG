@@ -720,7 +720,9 @@ class PlaywrightAgentPage:
                 return DownloadedFile(
                     self._passwords.redact(download.url),
                     name,
-                    await asyncio.to_thread(target.read_bytes),
+                    await asyncio.to_thread(
+                        lambda: self._passwords.redact_bytes(target.read_bytes())
+                    ),
                 )
             except TimeoutError:
                 return DownloadRefusal(name, "timeout")

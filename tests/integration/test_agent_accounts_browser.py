@@ -472,15 +472,24 @@ async def test_every_page_text_is_redacted(tmp_path: Path) -> None:
         await web.call(action="click", ref=await ref_in(web, 'link "Save"'))
         (download, _) = web.admitted[-1]
         assert download.url == f"{SHOP}/files/{PASSWORD_MASK}.csv"
-        # The name was masked before it was made safe.
+        # The name was masked before it was made safe, and the rows as the file was read.
         assert download.filename == "________.csv"
+        echoed_masked = download.content == f"id,password\n1,{PASSWORD_MASK}\n".encode()
+        assert echoed_masked
         # A form that submits with GET puts the password into the page's own address.
         went = await web.call(action="click", ref=await ref_in(web, 'button "Go"'))
         assert f"page: {SHOP}/search?password={PASSWORD_MASK} |" in went.text_content
         # The browser did send the password to the site in that address, so the mask is what hid it.
         asked = [request.target for request in web.proxy.requests]
         assert leaks(password, *asked) == 2
-        assert_hidden(password, capture.content, capture.url, download.url, download.filename)
+        assert_hidden(
+            password,
+            capture.content,
+            capture.url,
+            download.url,
+            download.filename,
+            download.content,
+        )
 
 
 async def ref_in(web: Browsing, label: str) -> str:

@@ -76,6 +76,7 @@ class DownloadedFile:
     """As the browser reports it: an HTTP(S), ``blob:``, or ``data:`` URL."""
     suggested_filename: str
     content: bytes
+    """The file's bytes, with every filled password masked as in a capture's HTML."""
 
 
 @dataclass(frozen=True, slots=True)
