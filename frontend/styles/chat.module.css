@@ -459,39 +459,43 @@
   color: var(--color-text-muted);
 }
 
-/* === Markdown Content (scoped to AI answer) === */
+/* === Markdown Content (scoped to the Markdown part) === */
 
-.aiMessageContent h1,
-.aiMessageContent h2,
-.aiMessageContent h3,
-.aiMessageContent h4 {
+/* Keyed on the Markdown part, never on the message body: in chat the body also
+   wraps the presentation's own chrome, such as the section titles and the
+   evidence strip, which keeps its own type. */
+
+.markdownContent h1,
+.markdownContent h2,
+.markdownContent h3,
+.markdownContent h4 {
   color: var(--color-text-secondary);
   margin: 1em 0 0.5em;
   /* stylelint-disable-next-line declaration-property-value-disallowed-list */
   line-height: 1.3;
 }
 
-.aiMessageContent h1 {
+.markdownContent h1 {
   font-size: 1.4em;
   font-weight: 600;
 }
 
-.aiMessageContent h2 {
+.markdownContent h2 {
   font-size: 1.2em;
   font-weight: 600;
 }
 
-.aiMessageContent h3 {
+.markdownContent h3 {
   font-size: 1.05em;
   font-weight: 600;
 }
 
-.aiMessageContent h4 {
+.markdownContent h4 {
   font-size: 1em;
   font-weight: 500;
 }
 
-.aiMessageContent table {
+.markdownContent table {
   border: 1px solid var(--color-border-subtle);
   border-collapse: separate;
   border-radius: var(--radius-content);
@@ -502,8 +506,8 @@
   width: 100%;
 }
 
-.aiMessageContent th,
-.aiMessageContent td {
+.markdownContent th,
+.markdownContent td {
   border: 0;
   border-bottom: 1px solid var(--color-border-subtle);
   border-inline-end: 1px solid var(--color-border-subtle);
@@ -512,15 +516,15 @@
   text-align: left;
 }
 
-.aiMessageContent tr > :last-child {
+.markdownContent tr > :last-child {
   border-inline-end: 0;
 }
 
-.aiMessageContent table > :last-child > tr:last-child > * {
+.markdownContent table > :last-child > tr:last-child > * {
   border-bottom: 0;
 }
 
-.aiMessageContent th {
+.markdownContent th {
   background: var(--color-bg-elevated);
   color: var(--color-text-secondary);
   font-weight: 600;
@@ -529,11 +533,11 @@
   letter-spacing: 0;
 }
 
-.aiMessageContent tr:nth-child(even) {
+.markdownContent tr:nth-child(even) {
   background: var(--color-row-alt);
 }
 
-.aiMessageContent pre {
+.markdownContent pre {
   background: var(--color-bg-elevated);
   border-radius: var(--radius-content);
   padding: var(--space-related) var(--space-related);
@@ -545,81 +549,81 @@
 }
 
 /* Rendered Mermaid diagram (replaces the .mermaid-source fallback). The inner
-   <img> is sized by the .aiMessageContent img rule below. */
-.aiMessageContent :global(.mermaid-figure) {
+   <img> is sized by the .markdownContent img rule below. */
+.markdownContent :global(.mermaid-figure) {
   margin: 1em 0;
   overflow-x: auto;
   text-align: center;
 }
 
-.aiMessageContent code {
+.markdownContent code {
   font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
   font-size: 0.9em;
 }
 
-.aiMessageContent :not(pre) > code {
+.markdownContent :not(pre) > code {
   background: var(--color-bg-elevated);
   padding: var(--space-inline) var(--space-tight);
   border-radius: var(--radius-control);
   color: var(--color-text-secondary);
 }
 
-.aiMessageContent ul,
-.aiMessageContent ol {
+.markdownContent ul,
+.markdownContent ol {
   margin: 0.5em 0;
   padding-left: 1.5em;
 }
 
-.aiMessageContent li {
+.markdownContent li {
   margin: 0.25em 0;
 }
 
-.aiMessageContent blockquote {
+.markdownContent blockquote {
   border-left: 3px solid var(--color-accent-emphasis);
   padding-left: var(--space-related);
   margin: 1em 0;
   color: var(--color-text-muted);
 }
 
-.aiMessageContent hr {
+.markdownContent hr {
   border: none;
   border-top: 1px solid var(--color-border-subtle);
   margin: 1.5em 0;
 }
 
-.aiMessageContent p {
+.markdownContent p {
   margin: 0.5em 0;
 }
 
 /* Lit-owned resources and link cards have their own media/link styles. Their
    roots are marked after sanitization, not by model-authored HTML. */
-.aiMessageContent img:not(:where([data-answer-typed] *)) {
+.markdownContent img:not(:where([data-answer-typed] *)) {
   max-width: 100%;
   height: auto;
   border-radius: var(--radius-content);
   margin: 0.5em 0;
 }
 
-.aiMessageContent a:not(:where([data-answer-typed] *)) {
+.markdownContent a:not(:where([data-answer-typed] *)) {
   color: var(--color-accent-action);
   text-decoration: none;
 }
 
-.aiMessageContent a:not(:where([data-answer-typed] *)):hover {
+.markdownContent a:not(:where([data-answer-typed] *)):hover {
   text-decoration: underline;
 }
 
 /* Pygments highlight container inside answer. `.highlight` is emitted by the
    server-side Pygments formatter (literal class), so it must stay global and
    not be scoped/hashed by the CSS Module. */
-.aiMessageContent :global(.highlight) {
+.markdownContent :global(.highlight) {
   background: var(--color-bg-elevated);
   border-radius: var(--radius-content);
   margin: 1em 0;
   overflow-x: auto;
 }
 
-.aiMessageContent :global(.highlight) pre {
+.markdownContent :global(.highlight) pre {
   margin: 0;
   background: transparent;
 }

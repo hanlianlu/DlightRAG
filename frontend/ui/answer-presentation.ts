@@ -147,7 +147,7 @@ export class AnswerPresentationElement extends LightElement {
 
   #part(part: PresentationPart, index: number): TemplateResult | typeof nothing {
     if (part.type === 'markdown') {
-      return html`<div class="answer-rich-content ${chatStyles.aiMessageContent}" data-answer-part=${String(index)}></div>`;
+      return html`<div class="answer-rich-content ${chatStyles.aiMessageContent} ${chatStyles.markdownContent}" data-answer-part=${String(index)}></div>`;
     }
     if (part.type === 'evidence_image' && part.evidenceImage) {
       return html`<div class="answer-inline-evidence">${this.#evidenceImage(part.evidenceImage)}</div>`;
