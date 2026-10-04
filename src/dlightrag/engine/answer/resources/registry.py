@@ -696,15 +696,11 @@ class ResourceRegistry:
             )
         )
         citable = _citable_agent_url(resource.locator)
-        self._resources[resource_id] = _Registered(
-            resource_id=resource_id,
+        self._resources[resource_id] = _browser_registered(
+            resource_id,
             filename=resource.filename,
             declared_mime=resource.declared_mime,
-            source="bytes",
             content=resource.content,
-            url=None,
-            byte_size=len(resource.content),
-            admission_origin="agent",
             acquisition=resource.acquisition,
             citable_url=citable,
         )
@@ -751,15 +747,11 @@ class ResourceRegistry:
             raise ResourceStateMismatchError("a durable browser resource names a private locator")
         if resource_id in self._resources or resource_id in self._aliases:
             raise ResourceStateMismatchError("a durable browser resource collides with another")
-        self._resources[resource_id] = _Registered(
-            resource_id=resource_id,
+        self._resources[resource_id] = _browser_registered(
+            resource_id,
             filename=filename,
             declared_mime=mime_type,
-            source="bytes",
             content=content,
-            url=None,
-            byte_size=len(content),
-            admission_origin="agent",
             acquisition=acquisition,
             citable_url=citable,
         )
@@ -2391,6 +2383,30 @@ def _citable_agent_url(locator: str | None) -> str | None:
     except ValueError:
         return None
     return normalize_public_http_url_identity(locator)
+
+
+def _browser_registered(
+    resource_id: str,
+    *,
+    filename: str,
+    declared_mime: str,
+    content: bytes,
+    acquisition: str,
+    citable_url: str | None,
+) -> _Registered:
+    """A capture or a download: inline bytes the Agent admitted, which no URL stands for."""
+    return _Registered(
+        resource_id=resource_id,
+        filename=filename,
+        declared_mime=declared_mime,
+        source="bytes",
+        content=content,
+        url=None,
+        byte_size=len(content),
+        admission_origin="agent",
+        acquisition=acquisition,
+        citable_url=citable_url,
+    )
 
 
 def browser_capture_filename(locator: str | None) -> str:

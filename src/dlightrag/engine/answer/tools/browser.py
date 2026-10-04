@@ -363,6 +363,7 @@ DOWNLOADED = (
     "Downloaded {filename} ({mime}, {size:,} bytes) as {resource_id} (browser_download); "
     "read(resource_id='{resource_id}') reads it."
 )
+DIALOG = 'The page showed a {kind} dialog: "{message}" ({verdict}).'
 NOT_ADMITTED = "The download {name} was not admitted: {why}."
 CAPTURED = "Captured this page as Web Resource {resource_id} (browser_capture)."
 NO_IMAGE = (
@@ -674,7 +675,14 @@ class _Call:
             )
             if flag
         ]
-        notes.extend(events.dialogs)
+        notes.extend(
+            DIALOG.format(
+                kind=dialog.kind,
+                message=dialog.message,
+                verdict="accepted" if dialog.accepted else "dismissed",
+            )
+            for dialog in events.dialogs
+        )
         notes.extend(await self._admit_downloads(events))
         notes.extend(self._refusals(events.refused_downloads))
         return "\n".join((frame, *notes))

@@ -28,9 +28,11 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from dlightrag.adapters.agent_browser.driver import (
     CLOSE_SECONDS,
-    NETWORK_ERROR,
     milliseconds,
+    navigation_status,
+    network_failure,
     page_content,
+    starts_download,
 )
 from dlightrag.engine.answer.agent_browser import (
     MAX_DOWNLOADS_PER_CALL,
@@ -39,6 +41,7 @@ from dlightrag.engine.answer.agent_browser import (
     DownloadRefusal,
     FoundElements,
     PageCapture,
+    PageDialog,
     PageEvents,
     PageLimits,
     PageObservation,
@@ -88,7 +91,7 @@ class PlaywrightAgentPage:
         #: Popups opened since a call last returned, which no call has adopted yet.
         self._popups: list[Page] = []
         self._downloads: list[Download] = []
-        self._dialogs: list[str] = []
+        self._dialogs: list[PageDialog] = []
         #: The last main-frame navigation answer of each page during the current call.
         self._statuses: dict[Page, int] = {}
         self._watch(page)
@@ -116,7 +119,7 @@ class PlaywrightAgentPage:
         try:
             await page.goto(url, wait_until="load", timeout=milliseconds(self._nav_seconds))
         except PlaywrightError as exc:
-            downloading = "Download is starting" in str(exc)
+            downloading = starts_download(exc)
             if not downloading:
                 raise self._failure(
                     exc,
@@ -347,11 +350,11 @@ class PlaywrightAgentPage:
         self._watch(popup)
 
     def _on_response(self, page: Page, response: Response) -> None:
-        if response.request.is_navigation_request() and response.frame == page.main_frame:
-            self._statuses[page] = response.status
+        if (status := navigation_status(page, response)) is not None:
+            self._statuses[page] = status
 
     async def _on_dialog(self, dialog: Dialog) -> None:
-        """Answer a dialog at once, because its page waits for it, and keep a line about it."""
+        """Answer a dialog at once, because its page waits for it, and note that it was shown."""
         # A prompt asks for text the model never gave. Every other dialog completes what a
         # call set in motion, and refusing it would silently undo that.
         accepted = dialog.type != "prompt"
@@ -361,11 +364,8 @@ class PlaywrightAgentPage:
         except PlaywrightError:
             # The page closed with its dialog open.
             return
-        verdict = "accepted" if accepted else "dismissed"
         if len(self._dialogs) < _MAX_DIALOGS:
-            self._dialogs.append(
-                f'The page showed a {dialog.type} dialog: "{message}" ({verdict}).'
-            )
+            self._dialogs.append(PageDialog(dialog.type, message, accepted))
 
     def _open_pages(self) -> list[Page]:
         return [page for page in self._pages if not page.is_closed()]
@@ -617,8 +617,8 @@ class PlaywrightAgentPage:
                 return page_failure(
                     "not_actionable", ref=ref, verb=verb, seconds=self._limits.action_timeout
                 )
-        elif token := NETWORK_ERROR.search(str(exc)):
-            return browser_failure("navigation_failed", detail=token.group())
+        elif (named := network_failure(exc)) is not None:
+            return named
         logger.warning("Agent Browser call failed (%s): %s", type(exc).__name__, action)
         return page_failure("action_failed", action=action, target=target, detail=_detail(exc))
 

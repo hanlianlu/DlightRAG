@@ -13,9 +13,11 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from dlightrag.adapters.agent_browser.driver import (
     CLOSE_SECONDS,
-    NETWORK_ERROR,
     milliseconds,
+    navigation_status,
+    network_failure,
     page_content,
+    starts_download,
 )
 from dlightrag.adapters.agent_browser.page import PlaywrightAgentPage
 from dlightrag.engine.answer.agent_browser import (
@@ -142,17 +144,15 @@ class PlaywrightLeasedBrowser:
             return browser_failure("disconnected")
         if isinstance(exc, PlaywrightTimeoutError):
             return browser_failure("timeout", seconds=navigation_timeout)
-        text = str(exc)
-        if "Download is starting" in text:
+        if starts_download(exc):
             return browser_failure("download")
-        token = NETWORK_ERROR.search(text)
-        return browser_failure("navigation_failed", detail=token.group() if token else None)
+        return network_failure(exc) or browser_failure("navigation_failed")
 
 
 def _note_navigation(page: Page, response: Response, statuses: list[int]) -> None:
     """Record each main-frame navigation answer; the last one is the page's status."""
-    if response.request.is_navigation_request() and response.frame == page.main_frame:
-        statuses.append(response.status)
+    if (status := navigation_status(page, response)) is not None:
+        statuses.append(status)
 
 
 __all__ = ["PlaywrightLeasedBrowser", "new_agent_context"]

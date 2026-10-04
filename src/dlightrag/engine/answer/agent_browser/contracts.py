@@ -82,13 +82,24 @@ class DownloadRefusal:
 
 
 @dataclass(frozen=True, slots=True)
+class PageDialog:
+    """One JavaScript dialog a page showed, and whether it was told yes."""
+
+    kind: str
+    """alert, confirm, beforeunload, or prompt."""
+    message: str
+    """One line of at most 200 characters."""
+    accepted: bool
+
+
+@dataclass(frozen=True, slots=True)
 class PageEvents:
     """What happened in the Agent Page around one call, besides the call itself."""
 
     downloads: tuple[DownloadedFile, ...] = ()
     refused_downloads: tuple[DownloadRefusal, ...] = ()
-    dialogs: tuple[str, ...] = ()
-    """One rendered line for each dialog the page showed, at most five."""
+    dialogs: tuple[PageDialog, ...] = ()
+    """The dialogs the page showed, at most five."""
     new_page: bool = False
     """A popup or a new tab became the active page."""
     returned: bool = False
@@ -394,6 +405,7 @@ __all__ = [
     "PageLimits",
     "LeasedBrowser",
     "PageCapture",
+    "PageDialog",
     "PageEvents",
     "PageObservation",
     "PageScreenshot",
