@@ -86,7 +86,7 @@ it('opens fail-closed when the authoritative memory read fails', async () => {
   // for a state nobody read.
   expect(memorySwitch(settings)).to.equal(null);
   expect(settings.querySelector('dl-settings-memory')!.textContent).to.contain('Could not load memory settings.');
-  expect(settings.querySelector('#memory-clear-btn')).to.equal(null);
+  expect(buttonNamed(settings, 'Clear all memories')).to.equal(null);
   expect(memoryStatus(settings)).to.equal('');
 });
 
@@ -126,7 +126,7 @@ it('shows a switch that is off with a note in place of the list and the clear ac
   expect(settings.querySelector('dl-settings-memory')!.textContent)
     .to.contain('Turn it on to view, forget or clear the stored memories.');
   expect(settings.querySelector('dl-settings-memory section')).to.equal(null);
-  expect(settings.querySelector('#memory-clear-btn')).to.equal(null);
+  expect(buttonNamed(settings, 'Clear all memories')).to.equal(null);
 });
 
 it('turns the switch with one PUT, shows its final state, and lists the memories once it is on', async () => {
@@ -151,13 +151,13 @@ it('turns the switch with one PUT, shows its final state, and lists the memories
   expect(backend.requests.filter((request) => request.method === 'PUT').map((request) => request.body))
     .to.deep.equal([{enabled: true}]);
   await waitFor(() => remembered(settings).length === 1);
-  expect(settings.querySelector('#memory-clear-btn')).not.to.equal(null);
+  expect(buttonNamed(settings, 'Clear all memories')).not.to.equal(null);
   expect(memoryStatus(settings)).to.equal('1');
 
   // The whole card is the switch's label, so a tap anywhere on it turns it back off.
   settings.querySelector<HTMLElement>('label [id="memory-enabled-toggle-label"]')!.click();
   await waitFor(() => memorySwitch(settings).getAttribute('aria-checked') === 'false' && !memorySwitch(settings).disabled);
-  expect(settings.querySelector('#memory-clear-btn')).to.equal(null);
+  expect(buttonNamed(settings, 'Clear all memories')).to.equal(null);
   expect(memoryStatus(settings)).to.equal('');
 });
 
@@ -341,7 +341,7 @@ it('asks before clearing every memory, sends one clear, and lists what is left',
   const {settings} = mountSettings();
   await openMemory(settings);
   await waitFor(() => remembered(settings).length === 1);
-  const clear = settings.querySelector<HTMLButtonElement>('#memory-clear-btn')!;
+  const clear = buttonNamed<HTMLButtonElement>(settings, 'Clear all memories')!;
   expect(clear.getAttribute('aria-label')).to.equal('Clear all memories');
   const dialog = settings.querySelector<HTMLDialogElement>('#clear-memory-dialog')!;
 

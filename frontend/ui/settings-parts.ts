@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** The pieces more than one Settings page draws, so each is drawn one way. */
 
-import {html, type TemplateResult} from 'lit';
+import {html, nothing, type TemplateResult} from 'lit';
 import styles from '../styles/settings-page.module.css';
 
 export interface SwitchCard {
@@ -36,4 +36,31 @@ export function switchCard(card: SwitchCard): TemplateResult {
         aria-checked=${String(card.checked)} aria-labelledby=${label} aria-describedby=${caption}
         ?disabled=${card.disabled} @click=${card.onToggle}></button>
     </label>`;
+}
+
+export interface DangerCard {
+  /** What the card is for, and the name of its button; a phone's button wears it in full. */
+  action: string;
+  /** The button's words beside a pointer, where the card's own label is already next to it. */
+  short: string;
+  caption: string;
+  /** The caption is a figure that changes while it shows, so a screen reader is told when it does. */
+  live?: boolean;
+  /** Whether the button stacks under the text at full width, and so has room for the full action. */
+  phone: boolean;
+  disabled?: boolean;
+  onClick: (event: Event) => void;
+}
+
+/** A card with one destructive action and the sentence that says what it will do. */
+export function dangerCard(card: DangerCard): TemplateResult {
+  return html`
+    <div class="${styles.card} ${styles.row} ${styles.dangerRow}">
+      <span class=${styles.rowText}>
+        <span class=${styles.rowLabel}>${card.action}</span>
+        <span class=${styles.rowCaption} aria-live=${card.live ? 'polite' : nothing}>${card.caption}</span>
+      </span>
+      <button type="button" class="dl-btn dl-btn-danger-text" aria-label=${card.action}
+        ?disabled=${card.disabled} @click=${card.onClick}>${card.phone ? card.action : card.short}</button>
+    </div>`;
 }

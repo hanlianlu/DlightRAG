@@ -231,17 +231,11 @@
     min-height: var(--size-button);
   }
 
-  /* What deleting does on the left, the one way to do it on the right. */
-  .dangerRow {
-    align-items: center;
+  /* What deleting does on the left and the one way to do it on the right (a danger row), set off from
+   * the fields above it. */
+  .deleteRow {
     border-top: 1px solid var(--color-border-subtle);
-    display: flex;
-    gap: var(--space-related);
     padding-top: var(--space-component);
-  }
-
-  .dangerRow > :first-child {
-    flex: 1;
   }
 
   /* The create form's closing row: what happens next, then the action that does it. */
@@ -353,11 +347,5 @@
       padding-block: var(--space-component);
     }
 
-    /* The hint goes above a full-width Delete, so neither is squeezed beside the other. */
-    .dangerRow {
-      align-items: stretch;
-      flex-direction: column;
-      gap: var(--space-tight);
-    }
   }
 }

@@ -21,11 +21,12 @@ import {PHONE_DIALOG_MEDIA} from '../lib/breakpoints.ts';
 import {LightElement, MediaController} from '../lib/lit-host.ts';
 import {type AppHandles, productionHandles} from '../stores/app-handles.ts';
 import styles from '../styles/settings-dialog.module.css';
+import shared from '../styles/settings-page.module.css';
 import {publishModalState, showOwnedModal} from './modal.ts';
 import './settings-agent-accounts.ts';
 import './settings-connections.ts';
 import './settings-conversations.ts';
-import './settings-language.ts';
+import {languageLabel} from './settings-language.ts';
 import './settings-memory.ts';
 import type {SettingsSection, SettingsSummary} from './settings-summary.ts';
 import './toast.ts';
@@ -130,14 +131,7 @@ function statusOf(summary: SettingsSummary | undefined): {short: string; detail:
           : msg(str`${summary.count} conversations · kept 365 days`, {id: 'settings.status.conversations'}),
       };
     case 'language':
-      return {
-        short: '',
-        detail: summary.preference === 'auto'
-          ? msg('Automatic', {id: 'settings.language.automatic'})
-          : summary.preference === 'en'
-            ? msg('English', {id: 'settings.language.english'})
-            : '中文',
-      };
+      return {short: '', detail: languageLabel(summary.preference)};
   }
 }
 
@@ -236,7 +230,7 @@ export class DlSettingsDialog extends LightElement {
               @click=${this.#scrimClick} @close=${this.#closed}
               @dl-settings-summary=${this.#summarized} @dl-toast-request=${this.#toastRequested}>
         <div class=${styles.frame} data-level=${this.level}>
-          <dl-icon-button class=${styles.close} name="close" size="sm"
+          <dl-icon-button class="${styles.close} ${shared.iconAction}" name="close" size="sm"
             aria-label=${msg('Close settings', {id: 'settings.close'})}
             @click=${this.#close}></dl-icon-button>
           <nav class=${styles.nav} aria-label=${msg('Settings', {id: 'settings.title'})}
@@ -260,14 +254,16 @@ export class DlSettingsDialog extends LightElement {
             <div class=${styles.paneBody} data-page-body>
               <p class=${styles.description}>${definition.description()}</p>
               ${this.mounted ? html`
-                <dl-settings-connections ?hidden=${!isPage('connections')}></dl-settings-connections>
-                <dl-settings-agent-accounts ?hidden=${!isPage('agent-accounts')}></dl-settings-agent-accounts>` : nothing}
-              <dl-settings-memory .active=${this.mounted} .current=${isPage('memory')}
+                <dl-settings-connections class=${styles.page} ?hidden=${!isPage('connections')}></dl-settings-connections>
+                <dl-settings-agent-accounts class=${styles.page}
+                  ?hidden=${!isPage('agent-accounts')}></dl-settings-agent-accounts>` : nothing}
+              <dl-settings-memory class=${styles.page} .active=${this.mounted} .current=${isPage('memory')}
                 ?hidden=${!isPage('memory')}></dl-settings-memory>
               ${this.mounted ? html`
-                <dl-settings-conversations .handles=${this.handles} .deleteAll=${this.#deleteAll}
-                  ?hidden=${!isPage('conversations')}></dl-settings-conversations>
-                <dl-settings-language ?hidden=${!isPage('language')}></dl-settings-language>` : nothing}
+                <dl-settings-conversations class=${styles.page} .handles=${this.handles}
+                  .deleteAll=${this.#deleteAll} ?hidden=${!isPage('conversations')}></dl-settings-conversations>
+                <dl-settings-language class=${styles.page}
+                  ?hidden=${!isPage('language')}></dl-settings-language>` : nothing}
             </div>
           </section>
         </div>

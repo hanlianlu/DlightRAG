@@ -800,7 +800,7 @@ def test_delete_all_is_keyboard_accessible_and_centered_on_mobile(page: Page) ->
 
     page.keyboard.press("Escape")
     dialog.wait_for(state="hidden")
-    page.wait_for_function("document.activeElement?.id === 'delete-all-btn'")
+    expect(trigger).to_be_focused()
     assert settings.is_visible()
 
 

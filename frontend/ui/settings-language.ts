@@ -9,6 +9,21 @@ import {LightElement} from '../lib/lit-host.ts';
 import shared from '../styles/settings-page.module.css';
 import {reportSettingsSummary} from './settings-summary.ts';
 
+const PREFERENCES: readonly LanguagePreference[] = ['auto', 'en', 'zh'];
+
+/** What a preference is called. The Chinese name is always in Chinese, so a reader who cannot read
+ *  the current language can still find it. */
+export function languageLabel(preference: LanguagePreference): string {
+  switch (preference) {
+    case 'auto':
+      return msg('Automatic', {id: 'settings.language.automatic'});
+    case 'en':
+      return msg('English', {id: 'settings.language.english'});
+    case 'zh':
+      return '中文';
+  }
+}
+
 export class DlSettingsLanguage extends LightElement {
   static properties = {
     preference: {state: true},
@@ -35,7 +50,10 @@ export class DlSettingsLanguage extends LightElement {
     void setLanguagePreference(preference);
   };
 
-  #choice(value: LanguagePreference, label: string, caption?: string): TemplateResult {
+  #choice(value: LanguagePreference): TemplateResult {
+    const caption = value === 'auto'
+      ? msg('Follows the browser language', {id: 'settings.language.automaticHint'})
+      : undefined;
     return html`
       <label class="dl-dialog-checkbox dl-dialog-checkbox--row">
         <input type="radio" name="language" value=${value}
@@ -44,7 +62,7 @@ export class DlSettingsLanguage extends LightElement {
                aria-describedby=${caption ? `language-${value}-caption` : nothing}
                @change=${this.#choose}>
         <span class=${shared.rowText}>
-          <span id="language-${value}-label" class=${shared.rowLabel}>${label}</span>
+          <span id="language-${value}-label" class=${shared.rowLabel}>${languageLabel(value)}</span>
           ${caption ? html`<span id="language-${value}-caption" class=${shared.rowCaption}>${caption}</span>` : nothing}
         </span>
       </label>`;
@@ -55,10 +73,7 @@ export class DlSettingsLanguage extends LightElement {
       <div class=${shared.stack}>
         <div id="language-options" class="${shared.card} ${shared.divided}" role="radiogroup"
              aria-label=${msg('Language', {id: 'settings.language'})}>
-          ${this.#choice('auto', msg('Automatic', {id: 'settings.language.automatic'}),
-            msg('Follows the browser language', {id: 'settings.language.automaticHint'}))}
-          ${this.#choice('en', msg('English', {id: 'settings.language.english'}))}
-          ${this.#choice('zh', '中文')}
+          ${PREFERENCES.map((value) => this.#choice(value))}
         </div>
       </div>`;
   }

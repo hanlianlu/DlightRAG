@@ -2,7 +2,7 @@
 
 import {expect} from '@esm-bundle/chai';
 import {sendKeys, setViewport} from '@web/test-runner-commands';
-import {linkStyles, waitFor} from '../testing/dom.ts';
+import {buttonNamed, linkStyles, waitFor} from '../testing/dom.ts';
 import {
   agentAccountsView,
   memoryPage,
@@ -327,7 +327,7 @@ it('deletes every conversation through the sidebar\'s command, and closes only o
     return outcome;
   };
   const dialog = await openSettings(settings, 'conversations');
-  const button = settings.querySelector<HTMLButtonElement>('#delete-all-btn')!;
+  const button = buttonNamed<HTMLButtonElement>(settings, 'Delete all conversations')!;
 
   button.click();
   await waitFor(() => asked.length === 1);

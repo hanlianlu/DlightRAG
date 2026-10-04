@@ -30,7 +30,7 @@ import shared from '../styles/settings-page.module.css';
 import styles from '../styles/settings-memory.module.css';
 import {loadOlderControl} from './load-older.ts';
 import {modalResult} from './modal.ts';
-import {switchCard} from './settings-parts.ts';
+import {dangerCard, switchCard} from './settings-parts.ts';
 import {reportSettingsSummary} from './settings-summary.ts';
 import {requestToast} from './toast-request.ts';
 
@@ -265,14 +265,14 @@ export class DlSettingsMemory extends LightElement {
             msg('Stored memories', {id: 'settings.memory.stored'})}</h4>
           ${count === null ? nothing : html`<span class=${styles.badge}>${count}</span>`}
         </div>
-        ${this.records?.length ? html`<ul class=${styles.list}>
+        ${this.records?.length ? html`<ul class="${shared.list} ${shared.divided}">
           ${repeat(this.records, (record) => record.memoryId, (record) => html`
             <li class=${styles.memory}>
               <span class=${styles.kind}>${record.kind === 'fact'
                 ? msg('Fact', {id: 'settings.memory.kindFact'})
                 : msg('Preference', {id: 'settings.memory.kindPreference'})}</span>
               <p class=${styles.body}>${record.body}</p>
-              <dl-icon-button class=${styles.forget} name="close" size="sm"
+              <dl-icon-button class="${styles.forget} ${shared.iconAction}" name="close" size="sm"
                 aria-label=${msg('Forget this memory', {id: 'settings.memory.forget'})}
                 ?disabled=${this.pending || this.loading}
                 @click=${() => { void this.#forget(record); }}></dl-icon-button>
@@ -307,18 +307,14 @@ export class DlSettingsMemory extends LightElement {
   }
 
   #clearCard(): TemplateResult {
-    return html`
-      <div class="${shared.card} ${shared.row} ${shared.dangerRow}">
-        <span class=${shared.rowText}>
-          <span class=${shared.rowLabel}>${msg('Clear all memories', {id: 'settings.clearAll'})}</span>
-          <span class=${shared.rowCaption}>${this.#clearBody()}</span>
-        </span>
-        <button type="button" id="memory-clear-btn" class="dl-btn dl-btn-danger-text"
-                aria-label=${msg('Clear all memories', {id: 'settings.clearAll'})}
-                ?disabled=${this.pending} @click=${this.#clear}>${this.#phone.matches
-          ? msg('Clear all memories', {id: 'settings.clearAll'})
-          : msg('Clear…', {id: 'settings.clearButton'})}</button>
-      </div>`;
+    return dangerCard({
+      action: msg('Clear all memories', {id: 'settings.clearAll'}),
+      short: msg('Clear…', {id: 'settings.clearButton'}),
+      caption: this.#clearBody(),
+      phone: this.#phone.matches,
+      disabled: this.pending,
+      onClick: this.#clear,
+    });
   }
 
   #toggle = async (event: Event): Promise<void> => {

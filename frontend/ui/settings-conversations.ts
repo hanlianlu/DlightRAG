@@ -11,6 +11,7 @@ import {PHONE_DIALOG_MEDIA} from '../lib/breakpoints.ts';
 import {LightElement, MediaController, StoreController} from '../lib/lit-host.ts';
 import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
 import shared from '../styles/settings-page.module.css';
+import {dangerCard} from './settings-parts.ts';
 import {reportSettingsSummary} from './settings-summary.ts';
 
 export class DlSettingsConversations extends LightElement {
@@ -51,19 +52,16 @@ export class DlSettingsConversations extends LightElement {
     const total = this.handles.conversations.conversations.length;
     return html`
       <div class=${shared.stack}>
-        <div class="${shared.card} ${shared.row} ${shared.dangerRow}">
-          <span class=${shared.rowText}>
-            <span class=${shared.rowLabel}>${msg('Delete all conversations', {id: 'settings.deleteAllConversations'})}</span>
-            <span id="conversation-count" class=${shared.rowCaption} aria-live="polite">${total === 1
-              ? msg('1 conversation', {id: 'settings.oneConversation'})
-              : msg(str`${total} conversations`, {id: 'settings.nConversations'})}</span>
-          </span>
-          <button type="button" id="delete-all-btn" class="dl-btn dl-btn-danger-text"
-                  aria-label=${msg('Delete all conversations', {id: 'settings.deleteAllConversations'})}
-                  @click=${this.#delete}>${this.#phone.matches
-            ? msg('Delete all conversations', {id: 'settings.deleteAllConversations'})
-            : msg('Delete…', {id: 'settings.deleteButton'})}</button>
-        </div>
+        ${dangerCard({
+          action: msg('Delete all conversations', {id: 'settings.deleteAllConversations'}),
+          short: msg('Delete…', {id: 'settings.deleteButton'}),
+          caption: total === 1
+            ? msg('1 conversation', {id: 'settings.oneConversation'})
+            : msg(str`${total} conversations`, {id: 'settings.nConversations'}),
+          live: true,
+          phone: this.#phone.matches,
+          onClick: this.#delete,
+        })}
       </div>`;
   }
 }

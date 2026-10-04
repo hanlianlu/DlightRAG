@@ -22,15 +22,10 @@
 
   /* One Close for both levels, pinned to the corner of the frame so scrolling never takes it. */
   .close {
-    color: var(--color-text-muted);
     inset-block-start: var(--space-component);
     inset-inline-end: var(--space-component);
     position: absolute;
     z-index: 1;
-  }
-
-  .close:hover {
-    color: var(--color-text-primary);
   }
 
   /* ── Navigation ── */
@@ -131,24 +126,12 @@
   }
 
   /* Pages are elements of their own; the one that is not showing is hidden, never unmounted. */
-  .pane :is(
-    dl-settings-connections,
-    dl-settings-agent-accounts,
-    dl-settings-memory,
-    dl-settings-conversations,
-    dl-settings-language
-  ) {
+  .page {
     display: block;
     min-width: 0;
   }
 
-  .pane :is(
-    dl-settings-connections,
-    dl-settings-agent-accounts,
-    dl-settings-memory,
-    dl-settings-conversations,
-    dl-settings-language
-  )[hidden] {
+  .page[hidden] {
     display: none;
   }
 

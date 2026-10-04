@@ -183,7 +183,7 @@ export class DlSettingsAgentAccounts extends LightElement {
 
   /** Removing one account, named for the website it belongs to. */
   #removeButton(account: AgentAccount): TemplateResult {
-    return html`<dl-icon-button name="remove" size="sm" class=${styles.remove}
+    return html`<dl-icon-button name="remove" size="sm" class=${shared.iconAction}
       data-remove=${account.site} ?disabled=${this.pending}
       aria-label=${msg(str`Remove the account for ${account.site}`, {id: 'agentAccounts.removeLabel'})}
       @click=${(event: Event) => { void this.#remove(account, event.currentTarget as HTMLElement); }}
@@ -246,7 +246,7 @@ export class DlSettingsAgentAccounts extends LightElement {
   /** Where a table has no room, each account is three lines: the website, how it signs in, and when it last did. */
   #list(accounts: readonly AgentAccount[], now: Date, locale: string): TemplateResult {
     return html`
-      <ul class=${styles.list}>
+      <ul class="${shared.list} ${shared.divided}">
         ${repeat(accounts, (account) => account.site, (account) => {
           const {primary} = identityOf(account);
           const when = account.lastUsedAt

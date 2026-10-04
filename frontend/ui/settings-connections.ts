@@ -486,7 +486,7 @@ export class DlSettingsConnections extends LightElement {
           </div>
           ${this.#authBlock(connection, auth)}
         </div>
-        <div class=${styles.dangerRow}>
+        <div class="${shared.dangerRow} ${styles.deleteRow}">
           <span class=${shared.hint}>${msg(
             'Deleting removes the endpoint, the label and the stored credential; to pause it, switch it off instead.',
             {id: 'connections.deleteHint'},
