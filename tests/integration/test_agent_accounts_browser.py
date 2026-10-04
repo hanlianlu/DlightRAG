@@ -1130,9 +1130,7 @@ async def test_an_account_whose_key_is_lost_recovers_through_its_reset_mail(
         generate_password(), label=ACCOUNT_LABEL, binding=(OWNER, SITE, "account")
     )
     store = MemoryAccountStore()
-    store.rows[(OWNER, SITE)] = StoredAgentAccount(
-        OWNER, SITE, "account", alias, None, key_id, envelope
-    )
+    await store.save(StoredAgentAccount(OWNER, SITE, "account", alias, None, key_id, envelope))
     async with s3_stub({}, bucket="mailbox") as bucket:
         mailbox = bucket_mailbox(bucket)
         async with browsing(tmp_path, store=store, keyring=OTHER_KEYRING, mailbox=mailbox) as web:
@@ -1153,6 +1151,8 @@ async def test_an_account_whose_key_is_lost_recovers_through_its_reset_mail(
             forgot = await web.form(f"{SHOP}/forgot")
             filled = await web.call(action="login", email_ref=forgot["email"])
             assert not filled.is_error, filled.text_content
+            # No password was filled, so Settings do not show the account as signed in to.
+            assert [row.last_used_at for row in await store.summaries(owner_id=OWNER)] == [None]
             await web.call(action="click", ref=forgot["button"])
             assert posted(web.proxy, "/sent")["email"] == [alias]
             bucket.objects[f"mail/{alias}/reset.eml"] = delivered(

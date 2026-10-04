@@ -147,8 +147,8 @@ class AgentAccountStore(Protocol):
         ...
 
     async def mark_used(self, account: StoredAgentAccount) -> None:
-        """Note that a login filled ``account`` just now, unless it was replaced or removed
-        since it was read."""
+        """Note that a login filled ``account``'s password just now, unless it was replaced or
+        removed since it was read."""
         ...
 
     async def sealed_under(
@@ -284,9 +284,9 @@ class SessionAccounts:
         return account.email if account.email == minted else None
 
     async def mark_used(self, account: AgentAccount) -> None:
-        """A login filled ``account`` now: the owner's Settings show the day it last did. That is
-        no authority, so a Child's login with the owner's account marks it too; a Child's own
-        account lives in this process and has no day to keep."""
+        """A login filled ``account``'s password now: the owner's Settings show the day it last
+        did. That is no authority, so a Child's login with the owner's account marks it too; a
+        Child's own account lives in this process and has no day to keep."""
         if isinstance(account, StoredAgentAccount):
             await self._store.mark_used(account)
 

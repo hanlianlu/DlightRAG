@@ -13,7 +13,7 @@ from dlightrag.application.agent_accounts import AgentAccountSummary
 from dlightrag.engine.answer.agent_browser import StoredAgentAccount
 
 # ``updated_at`` is the last time the owner's credentials changed, ``created_at`` the first
-# registration, which a reset keeps, and ``last_used_at`` the last login that filled them.
+# registration, which a reset keeps, and ``last_used_at`` the last login that filled its password.
 _CREATE_AGENT_ACCOUNTS = """
 CREATE TABLE IF NOT EXISTS dlightrag_agent_accounts (
     owner_id           TEXT        NOT NULL,

@@ -42,7 +42,7 @@ class AgentAccountSummary:
     created_at: datetime.datetime
     """When the owner's account on the site was first registered, which a reset keeps."""
     last_used_at: datetime.datetime | None
-    """When a login last filled its stored credentials, or None before the first one."""
+    """When a login last filled its password, or None before the first one."""
 
 
 class AgentAccountDirectory(Protocol):

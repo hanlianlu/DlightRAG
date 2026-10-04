@@ -469,11 +469,12 @@ at a `login`.
   account this site has for the Session: a Child's own Run-scoped account first, else the
   owner's. It opens the password's envelope only when a password field is named, and
   refuses an account that lacks the field named, or whose envelope no key opens, with the
-  site's reset path where the Run may register. Once it has filled an owner's account it
-  records the time as the account's last use, which Settings shows, whichever Session logged
-  in: a Child's login with the owner's account records it, and a Child's own account, which
-  lives in the worker's memory, has none. A store that cannot record it is logged and does not
-  fail the login.
+  site's reset path where the Run may register. Once it has filled the password of an owner's
+  account it records the time as the account's last use, which Settings shows, whichever
+  Session logged in: a Child's login with the owner's account records it, and a Child's own
+  account, which lives in the worker's memory, has none. A login that fills no password, the
+  reset request's, records nothing. A store that cannot record it is logged and does not fail
+  the login.
 - **What a result says.** Both end like any action that changes the page: the frame, its
   notes, then a sentence (the account recorded or reset, with `for this owner's later Runs`
   or `for this Run only (a Child Session's account)`, and for a mailbox alias a pointer to `inbox`;
