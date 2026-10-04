@@ -2,6 +2,7 @@
 /** Typographic and geometric invariants of the shared control primitives. */
 
 import {expect} from '@esm-bundle/chai';
+import {setViewport} from '@web/test-runner-commands';
 import {render} from 'lit';
 import {icon} from '../design-system/index.ts';
 
@@ -83,35 +84,109 @@ it('confirm-dialog checkbox input centers against its label line', () => {
   expect(Math.abs(inputCenter - labelCenter)).to.be.lessThanOrEqual(2);
 });
 
-it('switch foundations satisfy both symmetry invariants', () => {
+const DESKTOP = {width: 1280, height: 800};
+const PHONE = {width: 390, height: 844};
+const PHONE_LANDSCAPE = {width: 844, height: 390};
+
+/** Run a check at one viewport size, and leave the next test the one it found. */
+async function atViewport(size: {width: number; height: number}, check: () => void): Promise<void> {
+  const original = {width: window.innerWidth, height: window.innerHeight};
+  await setViewport(size);
+  try {
+    check();
+  } finally {
+    await setViewport(original);
+  }
+}
+
+/** A switch with room around it, so what reaches past its track has somewhere to land. */
+function switchControl(className: string, checked = false): HTMLButtonElement {
+  const stage = fixture('', '');
+  stage.style.padding = '40px';
+  const button = document.createElement('button');
+  button.className = className;
+  button.setAttribute('role', 'switch');
+  button.setAttribute('aria-checked', String(checked));
+  stage.append(button);
+  return button;
+}
+
+it('switch foundations satisfy both symmetry invariants', async () => {
   const token = (name: string): number => Number.parseFloat(
     getComputedStyle(document.documentElement).getPropertyValue(name),
   );
 
-  // The compact variant is the same control one icon step down, so both sizes prove out.
-  // The variant composes with the base class, exactly as the product markup uses it.
-  for (const [className, suffix] of [
-    ['dl-switch', ''],
-    ['dl-switch dl-switch--sm', '-sm'],
-  ] as const) {
-    const width = token(`--size-switch${suffix}-width`);
-    const height = token(`--size-switch${suffix}-height`);
-    const thumb = token(`--size-switch${suffix}-thumb`);
-    const inset = token(`--size-switch${suffix}-inset`);
+  // The dense variant is the same control one icon step down, so both sizes prove out beside a
+  // pointer. The variant composes with the base class, exactly as the product markup uses it.
+  await atViewport(DESKTOP, () => {
+    for (const [className, suffix] of [
+      ['dl-switch', ''],
+      ['dl-switch dl-switch--dense', '-sm'],
+    ] as const) {
+      const width = token(`--size-switch${suffix}-width`);
+      const height = token(`--size-switch${suffix}-height`);
+      const thumb = token(`--size-switch${suffix}-thumb`);
+      const inset = token(`--size-switch${suffix}-inset`);
 
-    expect(height).to.equal(thumb + 2 * inset);
+      expect(height).to.equal(thumb + 2 * inset);
 
-    // The travel token is a calc() and stays uncomputed in getComputedStyle, so prove the rendered
-    // displacement against the same invariant instead of reading the token text.
-    const button = document.createElement('button');
-    button.className = className;    button.setAttribute('role', 'switch');
-    button.setAttribute('aria-checked', 'true');
-    document.body.appendChild(button);
-    const rendered = getComputedStyle(button, '::after').transform;
-    const travel = Number.parseFloat(/matrix\(1, 0, 0, 1, ([\d.]+),/.exec(rendered)?.[1] ?? 'NaN');
+      // The travel token is a calc() and stays uncomputed in getComputedStyle, so prove the rendered
+      // displacement against the same invariant instead of reading the token text.
+      const button = switchControl(className, true);
+      const rendered = getComputedStyle(button, '::after').transform;
+      const travel = Number.parseFloat(/matrix\(1, 0, 0, 1, ([\d.]+),/.exec(rendered)?.[1] ?? 'NaN');
 
-    expect(travel).to.equal(width - thumb - 2 * inset);
-  }
+      expect(travel).to.equal(width - thumb - 2 * inset);
+      expect(button.getBoundingClientRect().width).to.equal(width);
+      expect(button.getBoundingClientRect().height).to.equal(height);
+    }
+  });
+});
+
+it('a dense switch is compact beside a pointer and the regular size where a finger is the pointer', async () => {
+  const size = (className: string): number[] => {
+    const box = switchControl(className).getBoundingClientRect();
+    return [box.width, box.height];
+  };
+
+  await atViewport(DESKTOP, () => {
+    expect(size('dl-switch')).to.deep.equal([40, 24]);
+    expect(size('dl-switch dl-switch--dense')).to.deep.equal([28, 16]);
+  });
+  // The phone layout is a narrow viewport or a short one; both put a finger on the control.
+  await atViewport(PHONE, () => {
+    expect(size('dl-switch dl-switch--dense')).to.deep.equal([40, 24]);
+  });
+  await atViewport(PHONE_LANDSCAPE, () => {
+    expect(size('dl-switch dl-switch--dense')).to.deep.equal([40, 24]);
+  });
+});
+
+it('a switch is as easy to hit as the control ladder says, however small its track is drawn', async () => {
+  const ladder = document.createElement('div');
+  ladder.style.width = 'var(--control-hit-target)';
+  document.body.append(ladder);
+  const reach = ladder.getBoundingClientRect().width / 2;
+  const edges = (distance: number): Array<[number, number]> => [
+    [distance, 0], [-distance, 0], [0, distance], [0, -distance],
+  ];
+
+  const check = (): void => {
+    for (const className of ['dl-switch', 'dl-switch dl-switch--dense']) {
+      const button = switchControl(className);
+      const track = button.getBoundingClientRect();
+      const hit = ([dx, dy]: [number, number]): boolean => document.elementFromPoint(
+        track.left + track.width / 2 + dx, track.top + track.height / 2 + dy,
+      ) === button;
+
+      // Every edge of the hit area belongs to the switch, and nothing past it does.
+      expect(edges(reach - 1).map(hit), className).to.deep.equal([true, true, true, true]);
+      expect(edges(reach + 2).map(hit), className).to.deep.equal([false, false, false, false]);
+      button.parentElement!.remove();
+    }
+  };
+  await atViewport(DESKTOP, check);
+  await atViewport(PHONE, check);
 });
 
 it('a switch thumb sits at the same inset inside its track in both states', () => {

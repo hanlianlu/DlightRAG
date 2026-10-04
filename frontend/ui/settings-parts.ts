@@ -32,7 +32,7 @@ export function switchCard(card: SwitchCard): TemplateResult {
           >${card.label}</span>
         <span id=${caption} class=${styles.rowCaption}>${card.caption}</span>
       </span>
-      <button id=${card.id} class="dl-switch dl-switch--sm" type="button" role="switch"
+      <button id=${card.id} class="dl-switch dl-switch--dense" type="button" role="switch"
         aria-checked=${String(card.checked)} aria-labelledby=${label} aria-describedby=${caption}
         ?disabled=${card.disabled} @click=${card.onToggle}></button>
     </label>`;

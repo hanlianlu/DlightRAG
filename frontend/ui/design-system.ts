@@ -101,6 +101,10 @@ if (host) {
             <button class="dl-btn" type="button">Standard</button>
             <button class="dl-btn" type="button" disabled>Disabled</button>
             <button class="dl-btn" id="ds-dialog-open" type="button">Open dialog</button>
+            <button class="dl-switch dl-switch--dense" type="button" role="switch" aria-checked="false"
+                    aria-label="Dense switch off specimen"></button>
+            <button class="dl-switch dl-switch--dense" type="button" role="switch" aria-checked="true"
+                    aria-label="Dense switch on specimen"></button>
           </div>
         </section>
       </div>

@@ -34,13 +34,6 @@
 /* The phone layout; lib/breakpoints.ts repeats this query for what only script can decide. */
 @media (width <= 720px), (height <= 480px) {
     .settings-dialog {
-        /* The compact switch is for rows beside a pointer; a finger gets the regular one. */
-        --size-switch-sm-height: var(--size-switch-height);
-        --size-switch-sm-inset: var(--size-switch-inset);
-        --size-switch-sm-thumb: var(--size-switch-thumb);
-        --size-switch-sm-travel: var(--size-switch-travel);
-        --size-switch-sm-width: var(--size-switch-width);
-
         border: 0;
         border-radius: 0;
         box-shadow: none;

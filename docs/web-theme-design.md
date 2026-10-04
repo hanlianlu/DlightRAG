@@ -179,7 +179,8 @@ that owns its data and reports a short summary for its navigation row.
   the foot of the pane, wherever the reader is, because a Memory change can arrive on any page.
 - **Controls.** Icon buttons are `dl-icon-button`. Inside the dialog the control ladder sets
   `--control-hit-target: var(--size-button)`, so they are compact beside a pointer and 44px under 1200px.
-  Switches are the compact `--sm` size on desktop and the regular 40 by 24 on a phone.
+  Switches are `dl-switch--dense`: the compact track on desktop and the regular 40 by 24 on a phone,
+  with a hit area of the same ladder size either way.
 - **Phone.** At `(width <= 720px), (height <= 480px)` the dialog fills the screen with square corners and
   becomes two levels: a section list (each row shows its icon, name, a status line such as "MCP · 1 of 2
   enabled", and a disclosure), then one page whose header holds Back, the page title and Close. The list
