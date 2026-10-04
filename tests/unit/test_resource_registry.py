@@ -28,8 +28,13 @@ from dlightrag.engine.answer.resources.models import (
 )
 from dlightrag.engine.answer.resources.registry import (
     AgentBrowserRender,
+    BrowserResourceInput,
     HostedExtract,
     ResourceEffectOwner,
+    ResourceStateMismatchError,
+    browser_capture_filename,
+    browser_download_filename,
+    browser_download_media_type,
 )
 from dlightrag.engine.answer.resources.registry import (
     ResourceRegistry as _ResourceRegistry,
@@ -1704,3 +1709,304 @@ async def test_a_rendered_image_is_served_from_the_run_without_fetching(serve) -
     assert (await registry.visual_asset(resource_id, handle.handle_id)).data == png()
     assert registry.held_visual_asset(resource_id, "vis-unknown") is None
     assert fetch.calls == 0
+
+
+# -- captures and downloads of an Agent Session's page ----------------------------------------
+
+_SEARCH = "https://example.com/search?q=a"
+_SEARCH_PAGE = "<html><body><h1>Results</h1><p>Albert Einstein said it first.</p></body></html>"
+
+
+def _capture(url: str | None = _SEARCH, html: str = _SEARCH_PAGE) -> BrowserResourceInput:
+    return BrowserResourceInput(
+        "browser_capture", html.encode(), "search.html", "text/html; charset=utf-8", url
+    )
+
+
+def _download(
+    content: bytes, *, name: str = "report.csv", mime: str = "text/csv"
+) -> BrowserResourceInput:
+    return BrowserResourceInput("browser_download", content, name, mime, "https://example.com/r")
+
+
+class _Admissions:
+    """The sink of a Run: every Resource a call admitted, with the call that admitted it."""
+
+    def __init__(self) -> None:
+        self.admitted: list[Any] = []
+
+    async def __call__(self, fetched: Any, owner: ResourceEffectOwner | None) -> None:
+        self.admitted.append((fetched, owner))
+
+
+async def _forbidden(*_args: object, **_kwargs: object) -> Any:
+    raise AssertionError("a captured page is read from its bytes, never fetched or extracted")
+
+
+def _owner(scope: str = "parent") -> ResourceEffectOwner:
+    return ResourceEffectOwner(scope, IntentId.new())
+
+
+async def test_a_capture_is_a_new_agent_resource_cited_by_the_url_the_page_ended_at() -> None:
+    sink = _Admissions()
+    owner = _owner()
+    registry = ResourceRegistry(
+        fetched_bytes_sink=sink,
+        extract_chain=(HostedExtract(_forbidden), AgentBrowserRender()),
+        page_renderer=_forbidden,
+    )
+
+    resource_id = await registry.admit_browser_resource(_capture(), effect_owner=owner, index=0)
+    result = await registry.read(resource_id, max_window_tokens=2000)
+
+    # The bytes are kept with the call that made them, under the page's public URL.
+    ((fetched, seen),) = sink.admitted
+    assert seen == owner
+    assert (fetched.resource_id, fetched.url, fetched.filename, fetched.content) == (
+        resource_id,
+        _SEARCH,
+        "search.html",
+        _SEARCH_PAGE.encode(),
+    )
+    assert (fetched.admission_origin, fetched.acquisition) == ("agent", "browser_capture")
+    assert "Albert Einstein said it first." in result.content and result.evidence_available
+    assert registry.evidence_source(resource_id, text=True) == {
+        "source_type": "web_search",
+        "resource_kind": "web",
+        "admission_origin": "agent",
+        "acquisition": "browser_capture",
+        "source_uri": _SEARCH,
+        "source_download_locator": _SEARCH,
+        "title": "search.html",
+    }
+    assert registry.conversion_effects(resource_id)
+
+
+async def test_each_capture_is_its_own_resource_and_never_rebinds_the_snapshot_of_its_url(
+    serve,
+) -> None:
+    fetch = serve(_Fetch(b"<html><body>the snapshot</body></html>"))
+    registry = ResourceRegistry()
+    owner = _owner()
+
+    first = await registry.admit_browser_resource(_capture(), effect_owner=owner, index=0)
+    second = await registry.admit_browser_resource(_capture(), effect_owner=owner, index=1)
+    other_call = await registry.admit_browser_resource(_capture(), effect_owner=_owner(), index=0)
+    snapshot = registry.register_agent_url(_SEARCH)
+    read = await registry.read(snapshot, max_window_tokens=2000)
+
+    assert len({first, second, other_call, snapshot}) == 4
+    assert "the snapshot" in read.content and fetch.calls == 1
+    assert "Albert Einstein" in (await registry.read(first, max_window_tokens=2000)).content
+
+
+@pytest.mark.parametrize(
+    "locator",
+    [
+        "https://example.com/signed?token=abc",
+        "blob:https://example.com/0f1e2d3c",
+        "data:text/csv;base64,YSxiCjEsMgo=",
+        "about:blank",
+        "http://127.0.0.1/admin",
+        None,
+    ],
+)
+async def test_a_url_adr_0005_keeps_private_is_never_stored_and_the_handle_is_the_citation(
+    locator: str | None,
+) -> None:
+    sink = _Admissions()
+    registry = ResourceRegistry(fetched_bytes_sink=sink)
+
+    resource_id = await registry.admit_browser_resource(
+        _capture(locator), effect_owner=_owner(), index=0
+    )
+
+    ((fetched, _),) = sink.admitted
+    source = registry.evidence_source(resource_id, text=True)
+    assert fetched.url == resource_id
+    assert (source["source_type"], source["source_uri"]) == ("web_attachment", resource_id)
+    assert source["source_download_locator"] == resource_id
+    assert (source["resource_kind"], source["acquisition"]) == ("web", "browser_capture")
+
+
+async def test_a_capture_with_no_text_reads_as_none_and_never_walks_the_extract_chain() -> None:
+    registry = ResourceRegistry(
+        extract_chain=(HostedExtract(_forbidden), AgentBrowserRender()), page_renderer=_forbidden
+    )
+    resource_id = await registry.admit_browser_resource(
+        _capture(html="<html><body><div></div></body></html>"), effect_owner=_owner(), index=0
+    )
+
+    result = await registry.read(resource_id, max_window_tokens=2000)
+
+    assert result.extraction_status == "no_extracted_text" and not result.evidence_available
+
+
+async def test_a_download_is_read_by_what_its_bytes_are_not_by_the_name_the_page_gave_it() -> None:
+    from tests.support.resources import pdf_bytes
+
+    pdf = pdf_bytes(2)
+    registry = ResourceRegistry()
+    name = browser_download_filename("")
+    mime = browser_download_media_type(name, pdf)
+
+    resource_id = await registry.admit_browser_resource(
+        _download(pdf, name=name, mime=mime), effect_owner=_owner(), index=0
+    )
+    result = await registry.read(resource_id, max_window_tokens=2000)
+    target = await registry.visual_target(resource_id)
+
+    assert (name, mime) == ("download", "application/pdf")
+    assert result.note is not None and "Physical PDF page count: 2" in result.note
+    assert target.kind == "pdf"
+    assert registry.evidence_source(resource_id)["acquisition"] == "browser_download"
+
+
+async def test_a_capture_or_download_over_the_limit_is_refused_in_words_a_model_can_act_on() -> (
+    None
+):
+    sink = _Admissions()
+    registry = ResourceRegistry(max_attachment_bytes=1000, fetched_bytes_sink=sink)
+
+    with pytest.raises(ResourceAdmissionError, match="the captured page exceeds 1000 bytes"):
+        await registry.admit_browser_resource(
+            _capture(html="x" * 1001), effect_owner=_owner(), index=0
+        )
+    with pytest.raises(ResourceAdmissionError, match="the download exceeds 1000 bytes"):
+        await registry.admit_browser_resource(
+            _download(b"x" * 1001), effect_owner=_owner(), index=1
+        )
+
+    assert sink.admitted == [] and registry.manifest() == ()
+
+
+async def test_a_capture_or_download_takes_no_attachment_slot_and_no_share_of_the_total() -> None:
+    registry = ResourceRegistry(max_attachments=1, max_total_attachment_bytes=10)
+    owner = _owner()
+
+    for index in range(3):
+        await registry.admit_browser_resource(
+            _download(b"x" * 100), effect_owner=owner, index=index
+        )
+    attached = registry.register(ResourceInput(filename="a.txt", content=b"small"))
+
+    assert registry.canonical_resource_id(attached) == attached
+
+
+async def test_a_resource_whose_bytes_could_not_be_kept_is_not_admitted() -> None:
+    async def failing(_fetched: Any, _owner: ResourceEffectOwner | None) -> None:
+        raise ConnectionError("the database is down")
+
+    registry = ResourceRegistry(fetched_bytes_sink=failing)
+
+    with pytest.raises(ConnectionError):
+        await registry.admit_browser_resource(_capture(), effect_owner=_owner(), index=0)
+
+    assert registry.manifest() == ()
+
+
+@pytest.mark.parametrize("cited", ["url", "handle"])
+async def test_a_resumed_run_restores_a_capture_without_the_browser_and_cites_it_as_before(
+    cited: str,
+) -> None:
+    sink = _Admissions()
+    secret = b"browser-run"
+    locator = _SEARCH if cited == "url" else "https://example.com/signed?token=abc"
+    async with ResourceRegistry(fetched_bytes_sink=sink, resource_secret=secret) as first:
+        resource_id = await first.admit_browser_resource(
+            _capture(locator), effect_owner=_owner(), index=0
+        )
+        before = await first.read(resource_id, max_window_tokens=2000)
+        provenance = first.evidence_source(resource_id, text=True)
+        view = first.conversion_effects(resource_id)
+    ((fetched, _),) = sink.admitted
+
+    async with ResourceRegistry(
+        resource_secret=secret, extract_chain=(HostedExtract(_forbidden),)
+    ) as resumed:
+        resumed.restore_browser_resource(
+            resource_id=fetched.resource_id,
+            ordinal=fetched.ordinal,
+            filename=fetched.filename,
+            mime_type=fetched.mime_type,
+            locator=fetched.url,
+            content=fetched.content,
+            acquisition=fetched.acquisition,
+        )
+        resumed.adopt_conversion_snapshot(
+            ConversionSnapshot.restore(view[0].content, {resource_id: fetched.content})
+        )
+        after = await resumed.read(resource_id, max_window_tokens=2000)
+
+        assert resumed.evidence_source(resource_id, text=True) == provenance
+        assert await resumed.materialize(resource_id) == fetched.content
+        assert after.content == before.content
+        # The slot the capture settled under is not handed out again.
+        assert resumed.allocate_fetched_ordinal("res-next") == fetched.ordinal + 1
+
+
+@pytest.mark.parametrize("locator", ["http://127.0.0.1/x", "https://example.com/a?token=abc"])
+def test_a_settled_capture_naming_a_private_locator_is_a_catalog_that_does_not_describe_the_run(
+    locator: str,
+) -> None:
+    registry = ResourceRegistry()
+
+    with pytest.raises(ResourceStateMismatchError, match="private locator"):
+        registry.restore_browser_resource(
+            resource_id="res-0123456789abcdef01234567",
+            ordinal=0,
+            filename="capture.html",
+            mime_type="text/html",
+            locator=locator,
+            content=b"<p>x</p>",
+            acquisition="browser_capture",
+        )
+
+
+@pytest.mark.parametrize(
+    ("locator", "name"),
+    [
+        ("https://example.com/search?q=a", "search.html"),
+        ("https://example.com/a/b/report.pdf", "report.html"),
+        ("https://example.com/a/b/", "b.html"),
+        ("https://example.com/", "example.com.html"),
+        ("https://example.com/" + "x" * 200, "x" * 100 + ".html"),
+        ("https://example.com/search?token=abc", "capture.html"),
+        ("blob:https://example.com/0f1e", "capture.html"),
+        (None, "capture.html"),
+    ],
+)
+def test_a_capture_is_named_for_its_page_and_always_routed_to_the_html_converter(
+    locator: str | None, name: str
+) -> None:
+    assert browser_capture_filename(locator) == name
+
+
+@pytest.mark.parametrize(
+    ("suggested", "name"),
+    [
+        ("report.csv", "report.csv"),
+        ("../../etc/passwd", "passwd"),
+        ("  ", "download"),
+        ("", "download"),
+    ],
+)
+def test_a_download_keeps_the_safe_part_of_the_name_its_page_gave_it(
+    suggested: str, name: str
+) -> None:
+    assert browser_download_filename(suggested) == name
+
+
+@pytest.mark.parametrize(
+    ("name", "content", "media_type"),
+    [
+        ("report.csv", b"a,b", "text/csv"),
+        ("figure.png", b"x", "image/png"),
+        ("download", b"%PDF-1.7 ...", "application/pdf"),
+        ("download", b"PK\x03\x04", "application/octet-stream"),
+    ],
+)
+def test_a_download_is_typed_by_its_name_and_then_by_a_pdf_signature(
+    name: str, content: bytes, media_type: str
+) -> None:
+    assert browser_download_media_type(name, content) == media_type

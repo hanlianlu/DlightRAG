@@ -1735,6 +1735,53 @@ async def test_recovery_keeps_an_adoption_without_its_view_unconverted(monkeypat
             await registry.read("res-earlier", max_window_tokens=1000)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("origin", "locator"),
+    [("caller", b"https://example.com/page"), ("agent", b"http://127.0.0.1/page")],
+    ids=["not-admitted-by-the-agent", "private-locator"],
+)
+async def test_recovery_refuses_a_browser_resource_the_agent_could_not_have_admitted(
+    origin: str, locator: bytes
+) -> None:
+    """A capture is the Agent's, and its row never names a URL that ADR 0005 keeps private."""
+    import hashlib
+
+    from dlightrag.engine.answer.resources.registry import ResourceRegistry
+    from dlightrag.engine.runtime.errors import RunExecutionError
+    from dlightrag.engine.runtime.records import RunFetchedResource
+
+    page = b"<html><body>captured</body></html>"
+    executor = _executor()
+    executor._store.list_fetched_resources = AsyncMock(
+        return_value=(
+            RunFetchedResource(
+                resource_id="res-captured",
+                ordinal=0,
+                digest=hashlib.sha256(page).hexdigest(),
+                filename="page.html",
+                mime_type="text/html",
+                source_locator=locator,
+                capabilities={
+                    "resource_kind": "web",
+                    "admission_origin": origin,
+                    "acquisition": "browser_capture",
+                },
+            ),
+        )
+    )
+
+    async def stream(*, owner_id: str, digest: str, **kwargs: object):
+        del owner_id, digest, kwargs
+        yield page
+
+    executor._blob_store.stream = stream
+
+    async with ResourceRegistry() as registry:
+        with pytest.raises(RunExecutionError, match="catalog entry is invalid"):
+            await executor._restore_registry_fetches(registry, owner_id="owner", run_id="run")
+
+
 async def test_a_settled_run_records_the_state_it_ended_at() -> None:
     """A Fork branches from a recorded Fork Point, so the settlement has to write one.
 

@@ -188,9 +188,11 @@ from dlightrag.engine.answer.resources.models import (
     ResourceRegistryError,
 )
 from dlightrag.engine.answer.resources.registry import (
+    BROWSER_ACQUISITIONS,
     BROWSER_RENDER,
     FetchedBytesSink,
     PageRenderer,
+    ResourceStateMismatchError,
 )
 from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
 from dlightrag.engine.answer.results import store_answer_result
@@ -2411,6 +2413,34 @@ class AnswerExecutor:
                     "A durable Web resource catalog entry is invalid.",
                 )
             acquisition = str(capabilities.get("acquisition") or "")
+            if acquisition in BROWSER_ACQUISITIONS:
+                # A capture or a download holds its own bytes, and only the Agent admits one.
+                if origin != "agent":
+                    raise RunExecutionError(
+                        "run_execution_failed",
+                        "A durable Web resource catalog entry is invalid.",
+                    )
+                try:
+                    registry.restore_browser_resource(
+                        resource_id=resource.resource_id,
+                        ordinal=resource.ordinal,
+                        filename=resource.filename,
+                        mime_type=resource.mime_type,
+                        locator=resource.source_locator.decode("utf-8"),
+                        content=content,
+                        acquisition=acquisition,
+                    )
+                except (
+                    UnicodeError,
+                    ValueError,
+                    ResourceRegistryError,
+                    ResourceStateMismatchError,
+                ) as exc:
+                    raise RunExecutionError(
+                        "run_execution_failed",
+                        "A durable Web resource catalog entry is invalid.",
+                    ) from exc
+                continue
             if acquisition not in {"direct_http", "exa_extract", "tavily_extract"}:
                 raise RunExecutionError(
                     "run_execution_failed",

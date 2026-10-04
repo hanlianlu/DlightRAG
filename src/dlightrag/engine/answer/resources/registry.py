@@ -19,13 +19,15 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import mimetypes
 import secrets
 import struct
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, replace
 from importlib.metadata import version
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from dlightrag.engine.agent.session.ids import IntentId
 from dlightrag.engine.agent.tools import ResourceAttachmentBytes
@@ -85,6 +87,11 @@ _CURSOR_VERSION = 1
 _CURSOR_SIGNATURE_BYTES = 8
 _CURSOR_PLACEHOLDER = "x" * 34
 _EXTRACT_ACQUISITIONS = frozenset({"exa_extract", "tavily_extract"})
+#: What an Agent Session's page yields beside a Rendered Read: the page as it stands, and a
+#: file it downloaded. Each is its own Resource, never a representation of a URL's snapshot.
+BROWSER_CAPTURE = "browser_capture"
+BROWSER_DOWNLOAD = "browser_download"
+BROWSER_ACQUISITIONS = frozenset({BROWSER_CAPTURE, BROWSER_DOWNLOAD})
 
 #: A Web Resource's rendered representation is named after it, and is never a handle
 #: the model is shown: results and notes print the Resource's own.
@@ -145,6 +152,18 @@ class ResourceEffectOwner:
     intent_id: IntentId
 
 
+@dataclass(frozen=True, slots=True)
+class BrowserResourceInput:
+    """A page capture or a downloaded file, as the Agent Browser delivered it."""
+
+    acquisition: Literal["browser_capture", "browser_download"]
+    content: bytes
+    filename: str
+    declared_mime: str
+    locator: str | None
+    """The page's final URL, or the download's URL, as the browser reported it."""
+
+
 # Persist validated fetched bytes before their ToolResult settles in the Session.
 FetchedBytesSink = Callable[
     [FetchedResourceBytes, ResourceEffectOwner | None],
@@ -179,6 +198,9 @@ class _Registered:
     stored_view_only: bool = False
     #: Where a rendered representation's page ended; provenance, never an identity.
     final_url: str | None = None
+    #: The public URL a browser capture or download is cited by; none where ADR 0005 keeps
+    #: its URL private, and the Resource is cited by its handle.
+    citable_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -649,6 +671,101 @@ class ResourceRegistry:
             self._aliases[alias] = resource_id
         self.restore_fetched_bytes(resource_id, content)
 
+    async def admit_browser_resource(
+        self, resource: BrowserResourceInput, *, effect_owner: ResourceEffectOwner, index: int
+    ) -> str:
+        """Admit a capture or a download as a new Agent Resource, kept with the call that made it.
+
+        It is a new Resource every time and never touches the URL dedup map, so what a page
+        showed after interaction never rebinds the snapshot its URL serves. It takes no
+        attachment slot and no share of the request total, as a fetched URL takes none.
+        Its bytes are inline, so a read converts or decodes them and never fetches,
+        extracts, or renders. A URL ADR 0005 keeps private is never stored: the durable
+        locator is the citable URL, or the handle.
+        """
+        self._ensure_open()
+        if len(resource.content) > self._max_attachment_bytes:
+            noun = "captured page" if resource.acquisition == BROWSER_CAPTURE else "download"
+            raise ResourceAdmissionError(f"the {noun} exceeds {self._max_attachment_bytes} bytes")
+        # The identity names the call and the file's place in it, so one call's admissions
+        # never collide and a recovered Run mints the handles it already printed.
+        resource_id = self._mint_resource_id(
+            (
+                "browser",
+                f"{effect_owner.execution_scope}\0{effect_owner.intent_id.value}\0{index}".encode(),
+            )
+        )
+        citable = _citable_agent_url(resource.locator)
+        self._resources[resource_id] = _Registered(
+            resource_id=resource_id,
+            filename=resource.filename,
+            declared_mime=resource.declared_mime,
+            source="bytes",
+            content=resource.content,
+            url=None,
+            byte_size=len(resource.content),
+            admission_origin="agent",
+            acquisition=resource.acquisition,
+            citable_url=citable,
+        )
+        if self._fetched_bytes_sink is not None:
+            try:
+                await self._fetched_bytes_sink(
+                    FetchedResourceBytes(
+                        resource_id=resource_id,
+                        ordinal=self.allocate_fetched_ordinal(resource_id),
+                        filename=resource.filename,
+                        mime_type=resource.declared_mime,
+                        url=citable or resource_id,
+                        content=resource.content,
+                        admission_origin="agent",
+                        acquisition=resource.acquisition,
+                    ),
+                    effect_owner,
+                )
+            except BaseException:
+                self._resources.pop(resource_id, None)
+                raise
+        return resource_id
+
+    def restore_browser_resource(
+        self,
+        *,
+        resource_id: str,
+        ordinal: int,
+        filename: str,
+        mime_type: str,
+        locator: str,
+        content: bytes,
+        acquisition: str,
+    ) -> None:
+        """Hydrate one settled capture or download under the handle it was admitted with.
+
+        Its locator is the citable URL or the handle itself. A row that says otherwise
+        names a URL ADR 0005 keeps private, which admission never stores, so the catalog
+        does not describe this Run.
+        """
+        self._ensure_open()
+        citable = _citable_agent_url(locator)
+        if citable is None and locator != resource_id:
+            raise ResourceStateMismatchError("a durable browser resource names a private locator")
+        if resource_id in self._resources or resource_id in self._aliases:
+            raise ResourceStateMismatchError("a durable browser resource collides with another")
+        self._resources[resource_id] = _Registered(
+            resource_id=resource_id,
+            filename=filename,
+            declared_mime=mime_type,
+            source="bytes",
+            content=content,
+            url=None,
+            byte_size=len(content),
+            admission_origin="agent",
+            acquisition=acquisition,
+            citable_url=citable,
+        )
+        self._fetched_ordinals[resource_id] = ordinal
+        self._next_fetched_ordinal = max(self._next_fetched_ordinal, ordinal + 1)
+
     def restore_discovered_resources(self, contexts: dict[str, Any]) -> None:
         """Rebuild search handles from the already durable Evidence ledger."""
         for row in contexts.get("chunks") or ():
@@ -716,6 +833,19 @@ class ResourceRegistry:
         evidence stays the Resource's own.
         """
         resource = self._require(resource_id)
+        if resource.acquisition in BROWSER_ACQUISITIONS:
+            # A capture or a download is its own text and its own bytes, cited by its
+            # public URL when it has one and by its handle when it has not.
+            source_uri = resource.citable_url or resource_id
+            return {
+                "source_type": "web_search" if resource.citable_url else "web_attachment",
+                "resource_kind": "web",
+                "admission_origin": "agent",
+                "acquisition": resource.acquisition or "",
+                "source_uri": source_uri,
+                "source_download_locator": source_uri,
+                "title": safe_source_filename(resource.filename or source_uri),
+            }
         source_uri = resource.url if resource.source == "web" and resource.url else resource_id
         acquisition = resource.acquisition or ""
         snapshot = self._snapshots.get(resource.resource_id)
@@ -2248,6 +2378,53 @@ def _is_rendered(representation: _Registered) -> bool:
     return representation.acquisition == BROWSER_RENDER
 
 
+def _citable_agent_url(locator: str | None) -> str | None:
+    """The URL a browser Resource is cited by, or None where ADR 0005 keeps it private.
+
+    A URL that carries a credential or a signature, and one that is not an HTTP(S) URL of
+    a public host (``blob:``, ``data:``, ``about:``), is cited by the Resource's handle.
+    """
+    if locator is None:
+        return None
+    try:
+        validate_agent_public_url(locator)
+    except ValueError:
+        return None
+    return normalize_public_http_url_identity(locator)
+
+
+def browser_capture_filename(locator: str | None) -> str:
+    """The name a capture is stored under.
+
+    Its ``.html`` suffix routes the serialized DOM to the HTML converter whatever the
+    URL's own path ends in, and the name carries the last path segment, or the host when
+    the path has none.
+    """
+    url = _citable_agent_url(locator)
+    if url is None:
+        return "capture.html"
+    parts = urlsplit(url)
+    segment = PurePosixPath(parts.path).name
+    stem = (
+        PurePosixPath(safe_source_filename(segment)).stem
+        if segment
+        else safe_source_filename(parts.hostname)
+    )
+    return f"{stem[:100]}.html"
+
+
+def browser_download_filename(suggested: str) -> str:
+    return safe_source_filename(suggested) if suggested.strip() else "download"
+
+
+def browser_download_media_type(filename: str, content: bytes) -> str:
+    """A download's type: its filename's, then a PDF's signature, then an opaque file's."""
+    guessed, _ = mimetypes.guess_type(filename, strict=False)
+    return guessed or (
+        "application/pdf" if content.startswith(b"%PDF-") else "application/octet-stream"
+    )
+
+
 def _cursor_prefix(rendered: bool) -> str:
     """What a cursor starts with to name the representation it continues."""
     return _RENDERED_CURSOR_PREFIX if rendered else ""
@@ -2523,9 +2700,13 @@ def _focus_order(windows: list[str], focus: str | None) -> list[int]:
 
 
 __all__ = [
+    "BROWSER_ACQUISITIONS",
+    "BROWSER_CAPTURE",
+    "BROWSER_DOWNLOAD",
     "BROWSER_RENDER",
     "RENDERED_REPRESENTATION_SUFFIX",
     "AgentBrowserRender",
+    "BrowserResourceInput",
     "ExtractStep",
     "FetchedBytesSink",
     "FetchedResourceBytes",
@@ -2537,4 +2718,7 @@ __all__ = [
     "ResourceRegistryClosedError",
     "ResourceStateMismatchError",
     "UrlTextFallback",
+    "browser_capture_filename",
+    "browser_download_filename",
+    "browser_download_media_type",
 ]
