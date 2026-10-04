@@ -274,7 +274,10 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
         cfg = self._config_getter()
         if cfg.access.auth_mode == "none":
             request.state.user_context = UserContext(user_id="anonymous", auth_mode="none")
-            if path.startswith("/web/api/connections/mcp") or path == "/web/api/video-playback":
+            if (
+                path.startswith(("/web/api/connections/mcp", "/web/api/agent-accounts"))
+                or path == "/web/api/video-playback"
+            ):
                 if _reject_web_mutation(request):
                     return _cross_origin_rejected()
                 return await self._finish_web_response(request, call_next)

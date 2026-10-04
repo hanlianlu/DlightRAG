@@ -156,6 +156,7 @@ jobs:
           uv run pytest
           tests/integration/test_agent_accounts_browser.py
           tests/integration/test_agent_accounts_pg.py
+          tests/integration/test_agent_accounts_web_pg.py
           tests/integration/test_agent_browser_pg.py
           tests/integration/test_agent_browser_tool.py
           tests/integration/test_agent_browser_tool_pg.py

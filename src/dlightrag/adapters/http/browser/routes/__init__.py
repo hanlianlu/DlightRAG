@@ -5,6 +5,7 @@ from fastapi import APIRouter
 
 from dlightrag.adapters.http.browser.auth import router as auth_router
 
+from .agent_accounts import router as agent_accounts_router
 from .bootstrap import router as bootstrap_router
 from .chat import page_router as chat_page_router
 from .chat import router as chat_api_router
@@ -34,6 +35,7 @@ api_router.include_router(images_router)
 api_router.include_router(files_router)
 api_router.include_router(memory_router)
 api_router.include_router(connections_router)
+api_router.include_router(agent_accounts_router)
 api_router.include_router(workspaces_router)
 api_router.include_router(model_catalogue_router)
 api_router.include_router(skills_router)

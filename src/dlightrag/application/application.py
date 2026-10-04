@@ -14,7 +14,7 @@ from dlightrag.application.errors import ApplicationClosedError
 
 if TYPE_CHECKING:
     from dlightrag.application.access import AccessControl
-    from dlightrag.application.agent_accounts import AgentAccountMaintenance
+    from dlightrag.application.agent_accounts import AgentAccountMaintenance, AgentAccounts
     from dlightrag.application.answer_runs import AnswerService
     from dlightrag.application.connections import Connections
     from dlightrag.application.corpus_admin import CorpusAdmin, CorpusMutationService
@@ -70,6 +70,7 @@ class _ApplicationComponents:
     memory_store: Any
     memory_embedder: Any
     web_conversations: WebConversationService
+    agent_accounts: AgentAccounts
     connections: Connections | None = None
     agent_account_maintenance: AgentAccountMaintenance | None = None
     search_toolchain: Any | None = None
@@ -128,6 +129,12 @@ class Application:
     @property
     def memory(self) -> MemoryService:
         return self._open().memory
+
+    @property
+    def agent_accounts(self) -> AgentAccounts:
+        """An owner's Agent Accounts in Settings: their list, the switch for new sign-ups, and
+        removal."""
+        return self._open().agent_accounts
 
     @property
     def retrieval(self) -> RetrievalService:

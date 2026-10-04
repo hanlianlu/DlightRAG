@@ -329,6 +329,7 @@ class _Parts:
         self.runs = object()
         self.answers = object()
         self.memory = _Memory(self.recorder)
+        self.agent_accounts = object()
         self.web_conversations = _WebConversations(self.recorder)
         self.search_toolchain: _SearchToolchain | None = None
         self.agent_account_maintenance: _Maintenance | None = None
@@ -385,6 +386,7 @@ class _Parts:
                 memory_store=cast(Any, self.memory_store),
                 memory_embedder=cast(Any, self.memory_embedder),
                 web_conversations=cast(WebConversationService, self.web_conversations),
+                agent_accounts=cast(Any, self.agent_accounts),
                 search_toolchain=cast(Any, self.search_toolchain),
                 agent_account_maintenance=cast(Any, self.agent_account_maintenance),
                 close_agent_execution=self.agent_execution.aclose,
