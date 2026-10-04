@@ -9,7 +9,7 @@ reads them when it chooses the tool, and are not repeated here.
 from dlightrag.engine.answer.execution.connection_binding import CONNECTION_TOOL_PREFIX
 
 from .answer import CITATION_GUIDANCE, EVIDENCE_USE_GUIDANCE, PRESENTATION_GUIDANCE
-from .identity import core_identity
+from .identity import CORE_STANCE, core_identity
 
 _AGENT_GUIDANCE = """\
 When the request materially depends on information or evidence not already \
@@ -68,10 +68,10 @@ _PROFILE_MEMORY_GUIDANCE = """\
 Report a memory change only after its tool confirms it.\
 """
 
-# Fast answers from excerpts it was handed; Research looks for its own evidence, so a
-# gap is reported as what is missing and what was tried rather than as Fast's fixed
-# abstention, and general knowledge is named by the answer itself, since nothing labels
-# a Research answer. The evidence-use and link rules and the citation contract are
+# Fast answers from excerpts it was handed, and the application labels an answer that had
+# no evidence; Research looks for its own evidence, so a gap is reported as what is missing
+# and what was tried, and general knowledge is named by the answer itself, since nothing
+# labels a Research answer. The evidence-use and link rules and the citation contract are
 # Fast's own fragments, so both paths cite and link identically.
 _RESEARCH_GROUNDING = f"""\
 Ground the answer in what your tools return: knowledge-base and web excerpts, page
@@ -96,7 +96,7 @@ def agent_control_prompt(
     It is provider prefix-cache input like Fast's, so it takes capability flags and
     never a clock or another per-request value.
     """
-    sections = [core_identity(environment_clock=True), _AGENT_GUIDANCE]
+    sections = [core_identity(environment_clock=True), CORE_STANCE, _AGENT_GUIDANCE]
     if connection_tools:
         sections.append(_CONNECTION_GUIDANCE)
     if artifact_publication:

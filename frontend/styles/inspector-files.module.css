@@ -102,7 +102,7 @@
 .ingest-queue-notice {
     padding: var(--space-tight) var(--space-related) 0;
     font-size: var(--font-size-caption);
-    color: var(--color-text-dim);
+    color: var(--color-text-muted);
     text-align: center;
 }
 
@@ -197,7 +197,7 @@
 .upload-folder-action {
     background: transparent;
     border: 0;
-    color: var(--color-text-subtle);
+    color: var(--color-text-muted);
     font-family: inherit;
     font-size: var(--font-size-caption);
     cursor: pointer;

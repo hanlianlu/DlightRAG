@@ -37,7 +37,7 @@ from dlightrag.engine.answer.errors import (
 from dlightrag.engine.answer.evidence import EvidenceLedger, has_unrepresentable_text
 from dlightrag.engine.answer.images import AnswerImageBudget, AnswerImagePolicy
 from dlightrag.engine.answer.memory import standing_memory_message
-from dlightrag.engine.answer.prompts import answer_core, clock_line
+from dlightrag.engine.answer.prompts import clock_line, fast_answer_prompt
 from dlightrag.engine.answer.synthesis_context import AnswerContextPacker
 from dlightrag.engine.rag.retrieval import RetrievalContexts
 
@@ -111,7 +111,7 @@ class AnswerSynthesizer:
             )
             # Zero evidence renders nothing: the request is its images, clock and question.
             messages = self._compose_user_messages(
-                answer_core(),
+                fast_answer_prompt(),
                 query,
                 [],
                 current_image_blocks=current_image_blocks,
@@ -234,7 +234,7 @@ class AnswerSynthesizer:
                 current_image_count=len(current_images or ()),
             )
             messages = self._compose_user_messages(
-                answer_core(),
+                fast_answer_prompt(),
                 query,
                 evidence.blocks,
                 current_image_blocks=current_image_blocks,

@@ -2,9 +2,11 @@
 
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import {readdirSync, readFileSync} from 'node:fs';
+import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
+const frontend = fileURLToPath(new URL('..', import.meta.url));
 const css = readFileSync(
     fileURLToPath(new URL('../design-system/foundations/color.css', import.meta.url)),
     'utf8',
@@ -24,7 +26,7 @@ function themeBlock(theme: 'dark' | 'light'): string {
     return theme === 'dark' ? semantics.slice(0, start) : semantics.slice(start);
 }
 
-function surfaceLuminance(theme: 'dark' | 'light', name: string): {step: string; value: number} {
+function stepLuminance(theme: 'dark' | 'light', name: string): {step: string; value: number} {
     const reference = new RegExp(`--${name}:\\s*var\\(--color-([\\w-]+)\\)`).exec(themeBlock(theme));
     assert.ok(reference, `--${name} is not a ramp reference in the ${theme} block`);
     const step = reference[1];
@@ -36,13 +38,19 @@ function surfaceLuminance(theme: 'dark' | 'light', name: string): {step: string;
     return {step, value: 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]};
 }
 
+function contrast(first: number, second: number): number {
+    const [lighter, darker] = [first, second].sort((a, b) => b - a);
+    return (lighter + 0.05) / (darker + 0.05);
+}
+
+const surfaceRoles = ['color-bg-base', 'color-bg-surface', 'color-bg-elevated'];
+
 // Elevation steps away from the reading canvas: lighter in dark, darker in
 // light. Nothing in a step name shows this, so it has to be checked here -- the
 // light ramp had silently inverted, putting the panel above the conversation.
 for (const [theme, direction] of [['dark', 1], ['light', -1]] as const) {
     test(`${theme} surfaces step away from the canvas`, () => {
-        const surfaces = ['color-bg-base', 'color-bg-surface', 'color-bg-elevated']
-            .map((name) => surfaceLuminance(theme, name));
+        const surfaces = surfaceRoles.map((name) => stepLuminance(theme, name));
 
         for (let i = 1; i < surfaces.length; i += 1) {
             assert.ok(
@@ -52,6 +60,61 @@ for (const [theme, direction] of [['dark', 1], ['light', -1]] as const) {
         }
     });
 }
+
+// Muted is the faintest role that clears AA for small text on every surface, so
+// a caption that takes it reads anywhere. Subtle, one step below, is held only to
+// the non-text floor: small labels had drifted onto it and read at 3.65:1 on a
+// panel.
+const contrastFloors = [
+    ['color-text-primary', 4.5],
+    ['color-text-secondary', 4.5],
+    ['color-text-tertiary', 4.5],
+    ['color-text-muted', 4.5],
+    ['color-text-subtle', 3],
+] as const;
+
+for (const theme of ['dark', 'light'] as const) {
+    test(`${theme} text roles clear their contrast floor on every surface`, () => {
+        const surfaces = surfaceRoles.map((name) => stepLuminance(theme, name));
+
+        for (const [role, floor] of contrastFloors) {
+            const text = stepLuminance(theme, role);
+            for (const surface of surfaces) {
+                assert.ok(
+                    contrast(text.value, surface.value) >= floor,
+                    `--${role} (${text.step}) is under ${floor}:1 on ${surface.step}`,
+                );
+            }
+        }
+    });
+}
+
+// Dim, one step below Subtle, clears neither floor, and WCAG waives contrast
+// only for an inactive control, so a disabled control is all it may colour.
+// Placeholders, captions, chevrons, and the switch thumb had drifted onto it
+// and read at 1.69:1 on an elevated surface.
+test('only a disabled control is coloured Dim', () => {
+    const sources = ['styles', 'design-system'].flatMap((directory) =>
+        readdirSync(join(frontend, directory), {recursive: true, encoding: 'utf8'})
+            .filter((path) => /\.(css|ts)$/.test(path) && !path.endsWith('.test.ts'))
+            .map((path) => join(directory, path)));
+
+    for (const path of sources) {
+        const source = readFileSync(join(frontend, path), 'utf8');
+        // A design-system element carries its Shadow CSS in its template's <style>.
+        const rules = (path.endsWith('.ts')
+            ? [...source.matchAll(/<style>([\s\S]*?)<\/style>/g)].map((match) => match[1]).join('\n')
+            : source
+        ).replace(/\/\*[\s\S]*?\*\//g, '');
+        for (const [, selectors, declarations] of rules.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+            if (!/var\(--color-text-dim\b(?!-)/.test(declarations)) continue;
+            for (const selector of selectors.split(',')) {
+                assert.match(selector, /:disabled|\[disabled\]|\[aria-disabled='true'\]/,
+                    `${selector.trim()} in ${path} is not a disabled control`);
+            }
+        }
+    }
+});
 
 // Every drift here arrived as a literal nobody could place by eye: an inverted
 // surface ramp, an accent a step off the gold scale, borders a few units off

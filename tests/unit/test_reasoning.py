@@ -195,7 +195,7 @@ def test_every_packaged_level_translates_to_a_response_effort(entry) -> None:
 
 def test_packaged_mimo_toggle_enables_reasoning_at_medium_on_the_response_family() -> None:
     fingerprint = model_endpoint_fingerprint(
-        "openai", "xiaomi/mimo-v2.6-flash", "https://openrouter.ai/api/v1"
+        "openai", "xiaomi/mimo-v2.6-pro", "https://openrouter.ai/api/v1"
     )
     profile = MODEL_CATALOGUE.snapshot.resolve(fingerprint)
     assert profile is not None and profile.reasoning is not None

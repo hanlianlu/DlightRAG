@@ -290,7 +290,7 @@ body.files-panel-open #files-btn {
 
 .welcome-sub {
     font-size: var(--font-size-body);
-    color: var(--color-text-subtle);
+    color: var(--color-text-muted);
 }
 
 .app.has-messages .welcome { display: none; }
@@ -377,7 +377,7 @@ body.files-panel-open #files-btn {
 }
 
 .composer-input::placeholder {
-    color: var(--color-text-dim);
+    color: var(--color-text-muted);
 }
 
 .composer-mode,
@@ -463,8 +463,7 @@ body.files-panel-open #files-btn {
 }
 
 .composer-input-mirror .skill-ghost-text {
-    color: var(--color-text-dim);
-    opacity: 0.85;
+    color: var(--color-text-muted);
 }
 
 .skill-menu {
@@ -517,7 +516,7 @@ body.files-panel-open #files-btn {
     flex: 1;
     min-width: 0;
     font-size: 0.72rem;
-    color: var(--color-text-dim);
+    color: var(--color-text-muted);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -525,7 +524,7 @@ body.files-panel-open #files-btn {
 
 .skill-menu-source {
     font-size: 0.65rem;
-    color: var(--color-text-dim);
+    color: var(--color-text-muted);
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-circle);
     padding: 0 6px;
@@ -568,7 +567,7 @@ body.files-panel-open #files-btn {
 }
 
 .composer-effort-default {
-    color: var(--color-text-dim);
+    color: var(--color-text-muted);
     font-size: 0.7rem;
 }
 
