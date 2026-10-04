@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Answer-owned text and located-pixel callbacks for Agent read/view tools."""
+"""Answer-owned text, pixel, and byte callbacks for Agent read, view, and materialize tools."""
 
 from __future__ import annotations
 

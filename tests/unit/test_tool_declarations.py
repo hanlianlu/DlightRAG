@@ -123,6 +123,7 @@ def test_research_acceptance_and_execution_use_identical_declarations(
         resource_reader=AsyncMock(),
         browser=inert_browser_host() if agent_browser else None,
         resource_viewer=AsyncMock(),
+        admitted_bytes_reader=AsyncMock(),
         environment=LocalExecutionEnvironment(tmp_path) if paths else None,
         artifacts_root=tmp_path / "artifacts" if paths else None,
         subagent_host=SubagentHost(model_guidance=model_guidance),

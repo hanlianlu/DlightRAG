@@ -5,7 +5,7 @@ DlightRAG adds direct pixel view and materialize, which copies a Resource into t
 workspace, beside the Pi-shaped read, bash, edit, write, grep, find and ls tools. This
 matrix owns their current argument surfaces, persistence, cursor and safety contracts,
 as an Answer run composes them: rooted in an Agent Workspace and backed by the resource
-reader and viewer.
+reader, viewer, and admitted-bytes reader.
 """
 
 from pathlib import Path
@@ -84,6 +84,7 @@ def _tools(tmp_path: Path) -> list[AgentTool]:
         register_web_source=None,
         resource_reader=AsyncMock(),
         resource_viewer=AsyncMock(),
+        admitted_bytes_reader=AsyncMock(),
         environment=LocalExecutionEnvironment(tmp_path),
         search_toolchain=SearchToolchain(),
     )
