@@ -75,15 +75,20 @@ _READABLE_EXTENSIONS = (
 )
 
 
-def _builtin_skill(name: str) -> dict[str, str]:
-    """The listing entry the packaged SKILL.md of a built-in Skill declares."""
+def _builtin_skills() -> list[dict[str, str]]:
+    """The listing entries the packaged SKILL.md files declare."""
     catalog = SkillCatalog.discover(builtin_root=builtin_skills_root())
-    skill = next(item for item in catalog.metadata if item.name == name)
-    return {"name": name, "description": skill.description, "source": "builtin"}
+    return [
+        {"name": skill.name, "description": skill.description, "source": "builtin"}
+        for skill in catalog.metadata
+    ]
 
 
-BUILTIN_SKILL_COUNCIL = _builtin_skill("council")
-BUILTIN_SKILL_CREATOR = _builtin_skill("skill-creator")
+def _listing(*others: dict[str, str]) -> dict[str, list[dict[str, str]]]:
+    """What /web/api/skills lists: every Skill, ordered by name."""
+    return {"skills": sorted([*_builtin_skills(), *others], key=lambda skill: skill["name"])}
+
+
 # Allow-all deployments offer every Corpus Mutation, and the default is never deleted.
 _EVERY_CHANGE = ["ingest", "replace", "delete", "retry", "reset", "delete_workspace"]
 _DEFAULT_CHANGES = ["ingest", "replace", "delete", "retry", "reset"]
@@ -258,14 +263,10 @@ async def test_skills_endpoint_merges_owner_skills(
     response = await client.get("/web/api/skills")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "skills": [
-            BUILTIN_SKILL_COUNCIL,
-            {"name": "mine", "description": "My skill.", "source": "owner"},
-            {"name": "review", "description": "Global review.", "source": "global"},
-            BUILTIN_SKILL_CREATOR,
-        ]
-    }
+    assert response.json() == _listing(
+        {"name": "mine", "description": "My skill.", "source": "owner"},
+        {"name": "review", "description": "Global review.", "source": "global"},
+    )
 
 
 async def test_skills_endpoint_lists_discovered_global_skills(
@@ -283,13 +284,9 @@ async def test_skills_endpoint_lists_discovered_global_skills(
     response = await client.get("/web/api/skills")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "skills": [
-            BUILTIN_SKILL_COUNCIL,
-            {"name": "review", "description": "Review plans.", "source": "global"},
-            BUILTIN_SKILL_CREATOR,
-        ]
-    }
+    assert response.json() == _listing(
+        {"name": "review", "description": "Review plans.", "source": "global"},
+    )
 
 
 async def test_skills_endpoint_lists_builtin_for_empty_filesystem_roots(
@@ -301,7 +298,7 @@ async def test_skills_endpoint_lists_builtin_for_empty_filesystem_roots(
     response = await client.get("/web/api/skills")
 
     assert response.status_code == 200
-    assert response.json() == {"skills": [BUILTIN_SKILL_COUNCIL, BUILTIN_SKILL_CREATOR]}
+    assert response.json() == _listing()
 
 
 async def test_answer_rejects_unknown_requested_skill(

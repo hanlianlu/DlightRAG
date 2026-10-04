@@ -155,7 +155,9 @@ confines every Agent process to its Agent Workspace: the corpus, the
 deployment's configuration, the project tree, and other Runs' workspaces stay
 outside the process view, while Bash keeps network authority for the deployment
 to enforce ([ADR 0024](adr/0024-the-agent-sees-only-its-workspace.md)). Skills
-come from packaged built-ins, the global root (default `~/.dlightrag/skills`),
+come from packaged built-ins (`council`, `office-documents`, which tells the agent
+that its workspace Python can build a requested Word, Excel or PowerPoint file, and
+`skill-creator`), the global root (default `~/.dlightrag/skills`),
 and the owner's own published Skills (default `~/.dlightrag/owner_skills`), in
 that precedence. Research parents may publish and delete their owner's Skills;
 built-in and global Skills are read-only. Outside tools come only from the

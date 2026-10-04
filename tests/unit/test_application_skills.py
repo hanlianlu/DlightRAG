@@ -5,7 +5,7 @@ from pathlib import Path
 
 from dlightrag.application.config import DlightragConfig
 from dlightrag.application.skills import skills_bundle_factory
-from dlightrag.engine.agent.skills import owner_skill_root
+from dlightrag.engine.agent.skills import SkillCatalog, builtin_skills_root, owner_skill_root
 
 
 def _config(
@@ -64,33 +64,34 @@ def test_disabled_builtin_filter_does_not_hide_global_or_owner_overrides(tmp_pat
     global_catalog = build("owner-without-override").catalog()
 
     assert global_catalog is not None
-    assert [(skill.name, skill.source) for skill in global_catalog.metadata] == [
-        ("council", "builtin"),
-        ("skill-creator", "global"),
-    ]
+    sources = {skill.name: skill.source for skill in global_catalog.metadata}
+    assert sources["council"] == "builtin"
+    assert sources["skill-creator"] == "global"
 
     owner_root = owner_skill_root(tmp_path / "owners", "owner-with-override")
     _skill(owner_root / "skill-creator", description="Owner creator.")
     owner_catalog = build("owner-with-override").catalog()
 
     assert owner_catalog is not None
-    assert [(skill.name, skill.source) for skill in owner_catalog.metadata] == [
-        ("council", "builtin"),
-        ("skill-creator", "owner"),
-    ]
+    sources = {skill.name: skill.source for skill in owner_catalog.metadata}
+    assert sources["council"] == "builtin"
+    assert sources["skill-creator"] == "owner"
 
 
 def test_disabled_builtin_filter_removes_unoverridden_builtin(tmp_path: Path) -> None:
+    every = {
+        skill.name for skill in SkillCatalog.discover(builtin_root=builtin_skills_root()).metadata
+    }
     catalog = skills_bundle_factory(_config(tmp_path, disabled_builtin_skills=("skill-creator",)))(
         "owner"
     ).catalog()
 
     assert catalog is not None
-    assert [(skill.name, skill.source) for skill in catalog.metadata] == [("council", "builtin")]
+    assert {skill.name for skill in catalog.metadata} == every - {"skill-creator"}
 
-    hidden = skills_bundle_factory(
-        _config(tmp_path, disabled_builtin_skills=("skill-creator", "council"))
-    )("owner").catalog()
+    hidden = skills_bundle_factory(_config(tmp_path, disabled_builtin_skills=tuple(sorted(every))))(
+        "owner"
+    ).catalog()
 
     assert hidden is not None
     assert hidden.metadata == ()
