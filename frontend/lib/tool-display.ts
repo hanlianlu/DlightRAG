@@ -16,6 +16,7 @@ const TOOL_VERBS: Record<string, string> = {
   read: 'Reading a document',
   browser: 'Using the browser',
   write: 'Writing a file',
+  materialize: 'Copying a resource into the workspace',
   edit: 'Editing a file',
   grep: 'Searching files',
   bash: 'Running a command',

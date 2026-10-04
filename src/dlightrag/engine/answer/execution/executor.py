@@ -205,7 +205,11 @@ from dlightrag.engine.answer.session_notes import (
 )
 from dlightrag.engine.answer.tools.browser import BrowserToolHost
 from dlightrag.engine.answer.tools.memory import MemoryHost
-from dlightrag.engine.answer.tools.resources import make_resource_reader, make_resource_viewer
+from dlightrag.engine.answer.tools.resources import (
+    make_admitted_bytes_reader,
+    make_resource_reader,
+    make_resource_viewer,
+)
 from dlightrag.engine.answer.tools.subagents import (
     ChildContextSnapshot,
     SubagentHost,
@@ -2222,12 +2226,16 @@ class AnswerExecutor:
                 return selected, selected.stream_text, profile
 
             resource_reader = None
+            admitted_bytes_reader = None
             browser = None
             if resolved.registry is not None:
                 resource_reader = make_resource_reader(
                     resolved.registry,
                     CONTEXT_POLICY.read_window_tokens(query_profile),
                     lineage=lineage_loader,
+                )
+                admitted_bytes_reader = make_admitted_bytes_reader(
+                    resolved.registry, lineage=lineage_loader
                 )
                 if agent_browser is not None:
                     browser = BrowserToolHost(agent_browser, resolved.registry, resource_reader)
@@ -2274,6 +2282,7 @@ class AnswerExecutor:
                     else None
                 ),
                 resource_reader=resource_reader,
+                admitted_bytes_reader=admitted_bytes_reader,
                 browser=browser,
                 child_model_resolver=resolve_child_model,
                 child_model_identities={

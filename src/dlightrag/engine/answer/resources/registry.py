@@ -31,6 +31,7 @@ from urllib.parse import urlsplit
 
 from dlightrag.engine.agent.session.ids import IntentId
 from dlightrag.engine.agent.tools import ResourceAttachmentBytes
+from dlightrag.engine.agent.tools.files import AdmittedBytes
 from dlightrag.engine.ai.media import verify_web_image_bytes
 from dlightrag.engine.ai.tokens import estimate_tokens
 from dlightrag.engine.answer.agent_browser import AgentBrowserError, RenderedPage, browser_failure
@@ -47,6 +48,7 @@ from dlightrag.engine.answer.resources.lexical import bm25_rank, mixed_script_te
 from dlightrag.engine.answer.resources.models import (
     EXTRACTION_TEXT,
     PREPARED_RESOURCE_HANDLE_PREFIX,
+    NoAdmittedBytesError,
     RenderedReadTargetError,
     ResourceAdmissionError,
     ResourceCursorError,
@@ -863,6 +865,28 @@ class ResourceRegistry:
     ) -> bytes:
         """Return full bytes, attributing any fetch to an explicit effect."""
         return await self._materialize_bytes(self._require(resource_id), effect_owner=effect_owner)
+
+    async def admitted_bytes(
+        self, resource_id: str, *, effect_owner: ResourceEffectOwner
+    ) -> AdmittedBytes:
+        """The bytes this Run admitted for one Resource, to copy into the Agent Workspace.
+
+        Inline and settled bytes come back as they are, and a lazily held upload loads as its
+        first read loads it, spending what that read spends. Nothing is fetched, rendered, or
+        converted: a Web Resource with no snapshot of its own raises ``NoAdmittedBytesError``,
+        naming its rendering when that is all it holds, because a rendering is a representation
+        appended to the Resource, not bytes the Resource admitted (ADR 0033).
+        """
+        resource = self._require(resource_id)
+        if resource.url is not None and resource.resource_id not in self._fetched:
+            raise NoAdmittedBytesError(
+                resource.resource_id,
+                rendered=self._settled_rendered(resource.resource_id) is not None,
+            )
+        content = await self._materialize_bytes(resource, effect_owner=effect_owner)
+        return AdmittedBytes(
+            resource.resource_id, resource.declared_mime or "application/octet-stream", content
+        )
 
     async def read(
         self,

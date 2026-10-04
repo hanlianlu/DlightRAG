@@ -23,7 +23,13 @@ from dlightrag.engine.agent.tools import (
     ToolResult,
     ToolRuntime,
 )
-from dlightrag.engine.agent.tools.files import ImagePreparer, ResourceReadRequest, ViewArgs
+from dlightrag.engine.agent.tools.files import (
+    AdmittedBytes,
+    AdmittedBytesReader,
+    ImagePreparer,
+    ResourceReadRequest,
+    ViewArgs,
+)
 from dlightrag.engine.answer.agent_browser import AgentBrowserError
 from dlightrag.engine.answer.resources.converters import (
     ConversionLimitError,
@@ -68,7 +74,7 @@ def _run_scoped_handle_refusal(exc: ResourceNotFoundError) -> str:
     """
     return (
         f"{exc}. This run neither holds that handle nor can adopt it from an earlier "
-        "turn of this conversation, so it cannot be read or viewed here. Re-attach the "
+        "turn of this conversation, so it cannot be read, viewed, or copied here. Re-attach the "
         "document, or work from the images already replayed in this context."
     )
 
@@ -97,8 +103,8 @@ def _unconverted_refusal(filename: str, media_type: str | None) -> str:
     )
 
 
-async def _adopt_earlier_then_retry(
-    retry: Callable[[], Awaitable[ToolResult]],
+async def _adopt_earlier_then_retry[T](
+    retry: Callable[[], Awaitable[T]],
     *,
     resource_id: str | None,
     lineage: LineageResourceLoader | None,
@@ -106,14 +112,15 @@ async def _adopt_earlier_then_retry(
     refusal: str,
     runtime: ToolRuntime,
     needs_text: bool = False,
-) -> ToolResult:
+) -> T | ToolResult:
     """Give one earlier Run's handle the chance to become this Run's Resource.
 
     The loader owns the lineage rule, so a handle it will not admit keeps the ordinary
     refusal. The adoption is recorded under this Run's fence before the handle
     resolves, so it holds whatever the retried call does next, and that call's own
     result carries nothing on its behalf. It spends this Run's attachment allowance,
-    so it waits for the calls before it in the batch.
+    so it waits for the calls before it in the batch. What the retried call returns
+    comes back as it is, and every refusal is a ToolResult.
 
     A read of a *convertible* resource requires a stored view, the earlier Run's or one
     this Run already holds for the same bytes, because converting it here would record
@@ -466,6 +473,37 @@ def make_resource_viewer(
     return view
 
 
+def make_admitted_bytes_reader(
+    registry: ResourceRegistry, *, lineage: LineageResourceLoader | None = None
+) -> AdmittedBytesReader:
+    """The Host's way to the bytes ``materialize`` copies.
+
+    An earlier turn's handle is adopted first, as ``view`` adopts one: a copy needs only the
+    bytes, so no stored conversion view is required.
+    """
+
+    async def admitted(resource_id: str, runtime: ToolRuntime) -> AdmittedBytes:
+        return await registry.admitted_bytes(resource_id, effect_owner=_effect_owner(runtime))
+
+    async def reader(resource_id: str, runtime: ToolRuntime) -> AdmittedBytes | ToolResult:
+        try:
+            return await admitted(resource_id, runtime)
+        except ResourceNotFoundError as exc:
+            return await _adopt_earlier_then_retry(
+                partial(admitted, resource_id, runtime),
+                resource_id=resource_id,
+                lineage=lineage,
+                registry=registry,
+                refusal=_run_scoped_handle_refusal(exc),
+                runtime=runtime,
+            )
+        except ResourceRegistryError as exc:
+            # A Web Resource with no bytes yet, or a lazy upload past the request total.
+            return ToolResult.text(str(exc), is_error=True)
+
+    return reader
+
+
 def _evidence_effects(resource_id: str, source: dict[str, str]) -> ToolEffects:
     return ToolEffects(
         evidence_sources=(
@@ -488,4 +526,4 @@ def _effect_owner(runtime: ToolRuntime) -> ResourceEffectOwner:
     return ResourceEffectOwner(execution_scope=runtime.execution_scope, intent_id=runtime.intent_id)
 
 
-__all__ = ["make_resource_reader", "make_resource_viewer"]
+__all__ = ["make_admitted_bytes_reader", "make_resource_reader", "make_resource_viewer"]

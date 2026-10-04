@@ -530,6 +530,7 @@ def test_research_declarations_include_every_configured_surface_without_binding(
     assert {
         "read",
         "write",
+        "materialize",
         "edit",
         "attach_artifact",
         "grep",
@@ -608,6 +609,42 @@ async def test_a_research_runs_browser_tool_drives_the_browser_it_was_given(
         assert opened.text_content.startswith("[browser: navigate | page: http://a.example/")
         assert provider.leased == 1
     await run_browser.aclose()
+
+
+async def test_a_research_runs_materialize_tool_copies_from_the_registry_it_was_given(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
+    from dlightrag.engine.answer.resources.models import ResourceInput
+    from dlightrag.engine.answer.resources.registry import ResourceRegistry
+    from dlightrag.engine.answer.workspace import RunWorkspace
+    from tests.tool_helpers import tool_runtime
+    from tests.unit.test_child_model_roles import _prepared_executor
+
+    async with ResourceRegistry() as registry:
+        resource_id = registry.register(
+            ResourceInput(filename="data.csv", declared_mime="text/csv", content=b"a,b\r\n1,2\r\n")
+        )
+        _, orchestrator, *_ = await _prepared_executor(monkeypatch, registry=registry)
+        orchestrator.bind_workspace(
+            RunWorkspace(
+                epoch=1,
+                workspace=tmp_path,
+                spill_dir=tmp_path / "spill",
+                environment=LocalExecutionEnvironment(tmp_path),
+            )
+        )
+        tools = {tool.name: tool for tool in orchestrator.prepare_run("question").tools}
+
+        copied = await tools["materialize"].execute(
+            tools["materialize"].input_model.model_validate(
+                {"resource_id": resource_id, "path": "tmp/data.csv"}
+            ),
+            tool_runtime(tool_name="materialize"),
+        )
+
+        assert copied.is_error is False, copied.text_content
+        assert (tmp_path / "tmp/data.csv").read_bytes() == b"a,b\r\n1,2\r\n"
 
 
 @pytest.mark.parametrize("sandbox", [True, False], ids=["sandboxed", "unsandboxed"])

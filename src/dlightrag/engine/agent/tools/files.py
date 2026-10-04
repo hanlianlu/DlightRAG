@@ -636,6 +636,86 @@ def write_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) ->
     return write_declaration().bind(execute)
 
 
+@dataclass(frozen=True, slots=True)
+class AdmittedBytes:
+    """The bytes a Host's Resource admitted, as materialize copies them."""
+
+    resource_id: str
+    """The canonical handle: after an adoption, this Run's own."""
+    media_type: str
+    content: bytes
+
+
+type AdmittedBytesReader = Callable[[str, ToolRuntime], Awaitable[AdmittedBytes | ToolResult]]
+"""A Host's way to the bytes of one resource_id; a ToolResult it returns is its refusal."""
+
+
+class MaterializeArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    resource_id: str = Field(
+        min_length=1,
+        max_length=256,
+        description="The resource_id to copy, as read and view take it.",
+    )
+    path: str = Field(
+        min_length=1,
+        max_length=_PATH_MAX_CHARS,
+        description="Workspace-relative destination path.",
+    )
+
+
+def materialize_declaration() -> ToolDeclaration:
+    return ToolDeclaration(
+        name="materialize",
+        description="Copy the bytes one resource_id of this run holds into a workspace file, byte "
+        "for byte, when a process needs the file itself rather than read's text. It replaces the "
+        "whole file at path; the success line reports the media type and byte size. It never "
+        "fetches or renders: a resource that holds no bytes yet is refused with the call to make "
+        "first.",
+        input_model=MaterializeArgs,
+        replay_policy="never",
+        contract_version=1,
+    )
+
+
+def materialize_tool(
+    environment: ExecutionEnvironment,
+    scheduler: AccessScheduler,
+    *,
+    admitted_bytes_reader: AdmittedBytesReader,
+) -> AgentTool:
+    """Copy a Resource's admitted bytes into the workspace, accounted exactly as ``write`` is.
+
+    The bytes stay in this process: they are never model context, and the tool admits no Evidence.
+    """
+
+    async def execute(args: BaseModel, runtime: ToolRuntime) -> ToolResult:
+        args = cast(MaterializeArgs, args)
+        # A refusal here loads and adopts nothing.
+        if blocked := workspace_integrity_refusal(environment):
+            return blocked
+        try:
+            path = environment.resolve(args.path)
+        except PathRejected as exc:
+            return ToolResult.text(str(exc), is_error=True)
+        destination = _escape_path(_workspace_relative_path(environment.root, path))
+        await runtime.emit_update(ToolResult.text("", subject=destination))
+        admitted = await admitted_bytes_reader(args.resource_id, runtime)
+        if isinstance(admitted, ToolResult):
+            return admitted
+        inventory = await _write_rooted(environment, scheduler, path, admitted.content)
+        if isinstance(inventory, ToolResult):
+            return inventory
+        return ToolResult.text(
+            f"materialized {admitted.resource_id} to {destination} "
+            f"({admitted.media_type}, {len(admitted.content)} bytes)",
+            effects=ToolEffects(workspace_inventory=inventory),
+        )
+
+    return materialize_declaration().bind(execute)
+
+
 def edit_declaration() -> ToolDeclaration:
     return ToolDeclaration(
         name="edit",
@@ -1633,6 +1713,8 @@ def _paginate_lines(
 
 
 __all__ = [
+    "AdmittedBytes",
+    "AdmittedBytesReader",
     "BashArgs",
     "EditArgs",
     "EditOperation",
@@ -1641,6 +1723,7 @@ __all__ = [
     "HttpReadOptions",
     "ImagePreparer",
     "LsArgs",
+    "MaterializeArgs",
     "PreparedImageAttachment",
     "ReadArgs",
     "RenderedReadArgs",
@@ -1655,6 +1738,7 @@ __all__ = [
     "grep_tool",
     "head_excerpt",
     "ls_tool",
+    "materialize_tool",
     "preview_or_spill",
     "read_tool",
     "spill_continuation",

@@ -39,6 +39,28 @@ class RenderedReadTargetError(ResourceRegistryError):
         )
 
 
+class NoAdmittedBytesError(ResourceRegistryError):
+    """Raised when a Web Resource holds no bytes of its own to copy.
+
+    Nothing may fetch or render them for the copy, so the message names the call that makes them.
+    """
+
+    def __init__(self, resource_id: str, *, rendered: bool) -> None:
+        if rendered:
+            message = (
+                f"{resource_id} holds only the Agent Browser's rendering, which is not bytes the "
+                'Resource admitted; open the page with browser(action="navigate", url=...), '
+                'capture it with browser(action="capture"), and materialize the capture\'s '
+                "resource_id"
+            )
+        else:
+            message = (
+                f"{resource_id} holds no admitted bytes yet; read(resource_id={resource_id!r}) "
+                "acquires them, then materialize copies them"
+            )
+        super().__init__(message)
+
+
 class ResourceDecodeError(ResourceRegistryError):
     """Raised when resource bytes are not decodable, mismatched text."""
 
@@ -155,6 +177,7 @@ __all__ = [
     "PUBLISHED_ARTIFACT_HANDLE_PREFIX",
     "RESOURCE_HANDLE_PREFIXES",
     "is_resource_handle",
+    "NoAdmittedBytesError",
     "ResourceAdmissionError",
     "ResourceCursorError",
     "ResourceDecodeError",

@@ -17,7 +17,7 @@ from dlightrag.engine.agent.session.ids import IntentId
 from dlightrag.engine.agent.session.plan import AgentRunPlan, AgentToolPlan
 from dlightrag.engine.agent.skills import SkillsBundleFactory
 from dlightrag.engine.agent.tools import AgentTool, ToolDeclaration, ToolResult, ToolRuntime
-from dlightrag.engine.agent.tools.files import ls_declaration
+from dlightrag.engine.agent.tools.files import ls_declaration, materialize_declaration
 from dlightrag.engine.answer.continuation_handles import SESSION_NOTE_DIRECTORY
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.execution.connection_binding import is_connection_tool
@@ -142,6 +142,8 @@ def test_research_acceptance_and_execution_use_identical_declarations(
         assert "attach_artifact" not in {tool.name for tool in declared}
         assert "remember" not in {tool.name for tool in declared}
         assert "ask_parent" in {tool.name for tool in declared}
+    # Copying a Resource into the workspace needs one, and every Session may ask for it.
+    assert ("materialize" in {tool.name for tool in declared}) == (paths and narrow is None)
     # The browser is offered to every Session of a Run that has one, and to no other, and
     # it can send workspace files to a page only where there is a workspace.
     browsers = [tool for tool in declared if tool.name == "browser"]
@@ -227,6 +229,7 @@ def test_only_tools_that_change_nothing_outside_their_run_are_read_only(tmp_path
         "browser",
         "bash",
         "write",
+        "materialize",
         "edit",
         "attach_artifact",
         "remember",
@@ -256,10 +259,22 @@ def test_workspace_tools_state_what_a_run_workspace_holds() -> None:
             "conversation" in description
         )
         assert "`tmp/` is scratch for this Run alone" in description
-        assert "earlier Artifacts and knowledge-base documents are never files in it" in (
-            description
-        )
+        assert "Knowledge-base documents are never files in it" in description
+        assert "becomes one only when materialize copies its resource_id" in description
     assert SESSION_NOTE_DIRECTORY not in ls_declaration().description
+
+
+def test_materialize_states_what_copies_and_that_the_copy_is_not_the_source() -> None:
+    """The model reads what a Run's Resources can become in the workspace on the tool that
+    copies them, once; the tool itself stays product-neutral."""
+    declared = {
+        tool.name: tool for tool in research_tool_declarations(resource_read=True, environment=True)
+    }
+
+    description = declared["materialize"].description
+    assert "Agent Browser downloads and captures" in description
+    assert "cite its resource_id, never the copy" in description
+    assert "Agent Browser" not in materialize_declaration().description
 
 
 def test_read_states_what_a_url_and_an_earlier_artifact_return() -> None:

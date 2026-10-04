@@ -486,7 +486,7 @@ def test_a_childs_default_is_its_parents_capability_minus_authority(tmp_path: Pa
     parent_names = {tool.name for tool in orchestrator.prepare_run("question").tools}
     child_names = _child_tools(orchestrator)
 
-    assert {"bash", "write", "edit"} <= child_names
+    assert {"bash", "write", "edit", "materialize"} <= child_names
     assert child_names & CHILD_FORBIDDEN_TOOLS == set()
     # Everything the parent holds that a Child does not is in the table, and the
     # Child's own guidance channel is the one addition for being a Child.

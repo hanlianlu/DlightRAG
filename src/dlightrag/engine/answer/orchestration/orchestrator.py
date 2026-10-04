@@ -53,6 +53,7 @@ from dlightrag.engine.agent.tools import (
 )
 from dlightrag.engine.agent.tools.contracts import ToolModelFunc
 from dlightrag.engine.agent.tools.files import (
+    AdmittedBytesReader,
     PreparedImageAttachment,
     ResourceReader,
     ResourceReadRequest,
@@ -208,6 +209,7 @@ class AnswerOrchestrator:
         resource_reader: ResourceReader | None = None,
         browser: BrowserToolHost | None = None,
         resource_viewer: ResourceViewer | None = None,
+        admitted_bytes_reader: AdmittedBytesReader | None = None,
         resolved_mode: ResolvedMode,
         subagent_host: SubagentHost | None = None,
         memory_host: MemoryHost | None = None,
@@ -235,6 +237,7 @@ class AnswerOrchestrator:
         self._resource_reader = resource_reader
         self._browser = browser
         self._resource_viewer = resource_viewer
+        self._admitted_bytes_reader = admitted_bytes_reader
         self._workspace: RunWorkspace | None = None
         #: The Run's durable spill rows, read when a summary must name the handles
         #: the covered prefix is about to take with it.
@@ -945,6 +948,7 @@ class AnswerOrchestrator:
             resource_reader=self._resource_reader_for_run(),
             browser=self._browser,
             resource_viewer=self._resource_viewer,
+            admitted_bytes_reader=self._admitted_bytes_reader,
             environment=None if self._workspace is None else self._workspace.environment,
             scheduler=self._access,
             search_toolchain=self._search_toolchain,

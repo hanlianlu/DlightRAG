@@ -16,6 +16,7 @@ from dlightrag.engine.agent.environment.toolchain import SearchToolchain
 from dlightrag.engine.agent.tool_content import ToolTextPart, tool_content_attachments
 from dlightrag.engine.agent.tools import AgentTool, ToolDeclaration, ToolResult, ToolRuntime
 from dlightrag.engine.agent.tools.files import (
+    AdmittedBytesReader,
     ImagePreparer,
     ResourceViewer,
     SpillWriter,
@@ -29,6 +30,8 @@ from dlightrag.engine.agent.tools.files import (
     grep_tool,
     ls_declaration,
     ls_tool,
+    materialize_declaration,
+    materialize_tool,
     preview_or_spill,
     read_declaration,
     read_tool,
@@ -83,12 +86,21 @@ from dlightrag.engine.answer.tools.subagents import (
 )
 
 #: What a Run's workspace holds, stated once on the shell and once on the listing tool.
-#: The Session's notes are the one plane a Run is handed (ADR 0022); an earlier Run's
-#: Artifact and a knowledge-base document are reached by handle or by search instead.
+#: The Session's notes are the one plane a Run is handed (ADR 0022); a Resource becomes a
+#: file only when the Agent asks for a copy (ADR 0033), and a knowledge-base document is
+#: reached by search instead.
 _WORKSPACE_FACT = (
     f"Each Run's workspace starts with only `{SESSION_NOTE_DIRECTORY}/` from earlier Runs "
-    "of this conversation, and `tmp/` is scratch for this Run alone; earlier Artifacts "
-    "and knowledge-base documents are never files in it."
+    "of this conversation, and `tmp/` is scratch for this Run alone. Knowledge-base documents "
+    "are never files in it; an upload, a fetched page, a download, or an earlier Artifact "
+    "becomes one only when materialize copies its resource_id."
+)
+
+#: What materialize copies and what the copy is; the tool itself stays product-neutral.
+_MATERIALIZE_FACT = (
+    "Uploads, fetched pages and files, Agent Browser downloads and captures, and an earlier "
+    "turn's Resources all copy. The Resource stays the citable source: cite its resource_id, "
+    "never the copy."
 )
 
 #: A later Run of the Session adopts a published Artifact by the handle its link carries.
@@ -160,6 +172,7 @@ def research_tool_declarations(
                 _stating(bash_declaration(), _WORKSPACE_FACT),
                 edit_declaration(),
                 write_declaration(),
+                _stating(materialize_declaration(), _MATERIALIZE_FACT),
                 grep_declaration(),
                 find_declaration(),
                 _stating(ls_declaration(), _WORKSPACE_FACT),
@@ -199,6 +212,7 @@ def compose_research_tools(
     resource_reader: Any | None = None,
     browser: BrowserToolHost | None = None,
     resource_viewer: ResourceViewer | None = None,
+    admitted_bytes_reader: AdmittedBytesReader | None = None,
     environment: ExecutionEnvironment | None = None,
     scheduler: AccessScheduler | None = None,
     spill: Any | None = None,
@@ -288,6 +302,14 @@ def compose_research_tools(
         ),
         "edit": lambda: edit_tool(cast(ExecutionEnvironment, environment), access, spill=spill),
         "write": lambda: write_tool(cast(ExecutionEnvironment, environment), access),
+        "materialize": lambda: _stating(
+            materialize_tool(
+                cast(ExecutionEnvironment, environment),
+                access,
+                admitted_bytes_reader=cast(AdmittedBytesReader, admitted_bytes_reader),
+            ),
+            _MATERIALIZE_FACT,
+        ),
         "grep": lambda: grep_tool(
             cast(ExecutionEnvironment, environment),
             access,

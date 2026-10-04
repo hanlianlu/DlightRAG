@@ -1,10 +1,11 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Test-maintained parity matrix: DlightRAG base tools vs the Pi baseline.
 
-DlightRAG adds direct pixel view beside the Pi-shaped read, bash, edit, write,
-grep, find and ls tools. This matrix owns their current argument surfaces,
-persistence, cursor and safety contracts, as an Answer run composes them: rooted
-in an Agent Workspace and backed by the resource reader and viewer.
+DlightRAG adds direct pixel view and materialize, which copies a Resource into the
+workspace, beside the Pi-shaped read, bash, edit, write, grep, find and ls tools. This
+matrix owns their current argument surfaces, persistence, cursor and safety contracts,
+as an Answer run composes them: rooted in an Agent Workspace and backed by the resource
+reader and viewer.
 """
 
 from pathlib import Path
@@ -54,6 +55,7 @@ MATRIX: dict[str, tuple[tuple[str, ...], dict[str, object], str, int]] = {
         3,
     ),
     "write": (("path", "content"), {}, "never", 3),
+    "materialize": (("resource_id", "path"), {}, "never", 1),
     "grep": (
         ("pattern",),
         {

@@ -160,6 +160,7 @@ export const templates: Record<
   'chatFeature.tool.read': '正在读取文档',
   'chatFeature.tool.browser': '正在使用浏览器',
   'chatFeature.tool.write': '正在写入文件',
+  'chatFeature.tool.materialize': '正在将资源复制到工作区',
   'chatFeature.tool.edit': '正在编辑文件',
   'chatFeature.tool.grep': '正在搜索文件',
   'chatFeature.tool.bash': '正在执行命令',
