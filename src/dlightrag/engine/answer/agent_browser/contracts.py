@@ -184,10 +184,7 @@ class FilledPasswords:
         self._values: set[str] = set()
 
     def add(self, password: SecretStr) -> None:
-        # The empty value a cleanup fills back in is nothing to hide, and replacing it would put
-        # the mask between every character of every text.
-        if value := password.get_secret_value():
-            self._values.add(value)
+        self._values.add(password.get_secret_value())
 
     def __bool__(self) -> bool:
         return bool(self._values)
@@ -426,6 +423,11 @@ class AgentPage(Protocol):
     ) -> PageObservation:
         """Fill each value into its field, once every ref has passed the checks of
         ``credential_form``; a failure clears what was filled and fills nothing more."""
+        ...
+
+    async def clear_fields(self, refs: tuple[str, ...], *, site: str) -> None:
+        """Empty the fields ``refs`` name, once each is known to be a field of a page of ``site``,
+        so that a form DlightRAG filled is not left holding what nothing recorded."""
         ...
 
     async def aclose(self) -> None:

@@ -877,9 +877,7 @@ class _Call:
         if recorded is None:
             # The form must not be left holding a password nothing stored.
             with suppress(AgentBrowserError):
-                await page.fill_credentials(
-                    tuple(replace(fill, value=SecretStr("")) for fill in fills), site=site
-                )
+                await page.clear_fields(tuple(fill.ref for fill in fills), site=site)
             return ToolResult.text(NOT_RECORDED, is_error=True)
         accounts.signed_in(scope, recorded)
         notes = [

@@ -404,6 +404,11 @@ class PlaywrightAgentPage:
             filled.append(field)
         return await self._after(page)
 
+    async def clear_fields(self, refs: tuple[str, ...], *, site: str) -> None:
+        page = self._begin()
+        fields = [(await self._input(page, ref, site))[0] for ref in refs]
+        await self._clear(fields)
+
     async def aclose(self) -> None:
         """Close the context and every page in it; a context that does not answer is given up."""
         await _close_context(self._context)
@@ -595,10 +600,20 @@ class PlaywrightAgentPage:
     async def _field(
         self, page: Page, ref: str, kind: Literal["email", "username", "password"], site: str
     ) -> Locator:
-        """The field a ref names, once it is known to be of ``kind`` and in a frame of ``site``.
+        """The field a ref names, once it is known to be of ``kind`` and in a frame of ``site``."""
+        field, seen = await self._input(page, ref, site)
+        if kind == "password":
+            if seen != "password":
+                raise page_failure("not_password_field", ref=ref)
+        elif seen not in ("text", "email"):
+            raise page_failure("not_text_field", ref=ref)
+        return field
 
-        A password is only ever filled into a password field of the site it belongs to, and the
-        frame's own address decides that, not the page's: a ref inside an iframe names the iframe.
+    async def _input(self, page: Page, ref: str, site: str) -> tuple[Locator, str]:
+        """The element a ref names and its input type, once it is known to be in a frame of ``site``.
+
+        A password is only ever filled into a field of the site it belongs to, and the frame's
+        own address decides that, not the page's: a ref inside an iframe names the iframe.
         """
         field = await self._element(page, ref)
         try:
@@ -613,12 +628,7 @@ class PlaywrightAgentPage:
             ) from exc
         if account_site(frame.url if frame else "") != site:
             raise page_failure("wrong_site", ref=ref, site=site)
-        if kind == "password":
-            if seen != "password":
-                raise page_failure("not_password_field", ref=ref)
-        elif seen not in ("text", "email"):
-            raise page_failure("not_text_field", ref=ref)
-        return field
+        return field, seen
 
     async def _fill_secretly(self, field: Locator, value: str) -> AgentBrowserFailure | None:
         """Fill ``value`` into the field and read it back; how that failed, or None.

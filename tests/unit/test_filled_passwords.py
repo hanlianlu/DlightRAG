@@ -6,8 +6,8 @@ from pydantic import SecretStr
 from dlightrag.engine.answer.agent_browser import PASSWORD_MASK, FilledPasswords
 
 # A fixture, not a generated password: this test is about the primitive's own behaviour.
-FIRST = SecretStr("Fixture-Pass_123*")
-SECOND = SecretStr("Another.Fixture-9*x")
+FIRST = SecretStr("Fixture-Pass_123x")
+SECOND = SecretStr("Another.Fixture-9yz")
 
 
 def test_every_filled_password_is_replaced_by_the_mask_in_text_and_in_bytes() -> None:
@@ -27,15 +27,6 @@ def test_every_filled_password_is_replaced_by_the_mask_in_text_and_in_bytes() ->
     assert as_bytes == f"<input value='{PASSWORD_MASK}'>{PASSWORD_MASK}".encode()
     assert passwords.found_in(text) and not passwords.found_in(redacted)
     assert not passwords.found_in("a prefix of Fixture-Pass_12")
-
-
-def test_an_empty_value_is_nothing_to_hide() -> None:
-    # A cleanup fills a field back to empty, and redacting that would split every text.
-    passwords = FilledPasswords()
-    passwords.add(SecretStr(""))
-
-    assert not passwords
-    assert passwords.redact("a page") == "a page" and not passwords.found_in("a page")
 
 
 def test_a_set_shows_how_many_passwords_it_holds_and_never_one() -> None:
