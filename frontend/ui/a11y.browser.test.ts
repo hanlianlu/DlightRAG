@@ -19,7 +19,10 @@ type AxeNode = {
 type Axe = {
   run: (
     root: HTMLElement,
-    options: {runOnly: {type: string; values: string[]}},
+    options: {
+      runOnly: {type: string; values: string[]};
+      checks: Record<string, {options: Record<string, unknown>}>;
+    },
   ) => Promise<{violations: {id: string; impact?: string | null; nodes: AxeNode[]}[]}>;
 };
 
@@ -126,6 +129,9 @@ async function seriousViolations(root: HTMLElement): Promise<string[]> {
     settleTransitions();
     const results = await axe.run(root, {
       runOnly: {type: 'tag', values: ['wcag2a', 'wcag2aa']},
+      // By default axe leaves failing one-character text, such as a reference
+      // id, incomplete. It is text, so it is held to the same contrast.
+      checks: {'color-contrast': {options: {ignoreLength: true}}},
     });
     for (const violation of results.violations) {
       if (violation.impact !== 'serious' && violation.impact !== 'critical') continue;
