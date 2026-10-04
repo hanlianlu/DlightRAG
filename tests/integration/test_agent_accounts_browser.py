@@ -985,9 +985,10 @@ async def test_inbox_says_why_it_has_nothing_to_show(
 ) -> None:
     # DlightRAG's own logs at every level; the S3 client's debug log is the library's to keep quiet.
     caplog.set_level(logging.DEBUG, logger="dlightrag")
-    # An account whose address the Agent typed has no alias, in a Run whose deployment now has a mailbox.
+    # An account whose address the Agent typed has no alias in a Run whose deployment now has a
+    # mailbox, though the address is on the mailbox's own domain.
     async with browsing(tmp_path) as typed:
-        await typed.register(await typed.form(f"{SHOP}/signup"))
+        await typed.register(await typed.form(f"{SHOP}/signup"), email=f"info@{DOMAIN}")
         store = typed.store
     async with s3_stub({}, bucket="mailbox") as bucket:
         async with browsing(tmp_path, store=store, mailbox=bucket_mailbox(bucket)) as web:

@@ -170,6 +170,7 @@ async def register(
     run: RunAgentAccounts,
     scope: str,
     *,
+    site: str = SITE,
     child: bool = False,
     email: str | None = "a@x.example",
     existing: AgentAccount | None = None,
@@ -177,7 +178,7 @@ async def register(
     password = generate_password()
     account = await run.record(
         scope,
-        SITE,
+        site,
         child=child,
         existing=existing,
         email=email,
@@ -309,20 +310,22 @@ async def test_the_inbox_window_opens_at_each_sign_in_and_names_only_mailbox_ali
 
     assert window is not None and window.aliases == (alias,)
     assert timedelta(0) <= window.since - before < timedelta(seconds=5)
-    # A later sign-in moves the window on and keeps the aliases of the Run, and an address the
-    # Agent typed is no alias. Another Session has no window at all.
-    typed = AgentAccount("typed.example", "me@example.com", None)
+    # A later sign-in moves the window on and keeps the aliases of the Run. An address the Agent
+    # typed is no alias, though it ends in the mailbox's domain. Another Session has no window.
+    typed, _ = await register(run, "parent", site="typed.example", email="info@orliantra.cc")
+    second, _ = await register(run, "parent", site="other.example", email=other)
     run.signed_in("parent", typed)
-    run.signed_in("parent", AgentAccount("other.example", other, None))
+    run.signed_in("parent", second)
     run.signed_in("parent", first)
     moved = run.inbox_window("parent")
     assert moved is not None and moved.aliases == (alias, other) and moved.since >= window.since
     assert run.inbox_window("child") is None
 
 
-def test_a_deployment_with_no_mailbox_keeps_no_inbox_window() -> None:
+async def test_a_deployment_with_no_mailbox_keeps_no_inbox_window() -> None:
     run = accounts(MemoryAccountStore())
+    account, _ = await register(run, "parent", email="a@orliantra.cc")
 
-    run.signed_in("parent", AgentAccount(SITE, "a@orliantra.cc", None))
+    run.signed_in("parent", account)
 
-    assert run.inbox_window("parent") is None and run.alias(AgentAccount(SITE, "a@x", None)) is None
+    assert run.inbox_window("parent") is None and run.alias(account) is None

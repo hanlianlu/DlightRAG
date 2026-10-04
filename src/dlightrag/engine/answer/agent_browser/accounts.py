@@ -248,10 +248,20 @@ class RunAgentAccounts:
         return AgentAccount(site, email, username, stored=stored)
 
     def alias(self, account: AgentAccount) -> str | None:
-        """The account's address when it is one the Agent Mailbox delivers."""
+        """The account's address when DlightRAG minted it on the Agent Mailbox's domain.
+
+        The domain does not say so: an Agent with no mailbox typed an address of its own, which
+        may end in the same domain, and reading its folder would read mail it is not owed. The
+        owner's account has an alias exactly when its address is the one worked out for the
+        owner and the site. A Child's takes only the address its session minted, so with a
+        mailbox its address is one.
+        """
         if self.mailbox is None or account.email is None:
             return None
-        return account.email if account.email.endswith(f"@{self.mailbox.alias_domain}") else None
+        if not account.persistent:
+            return account.email
+        minted = owner_alias(self._owner_id, account.site, self.mailbox.alias_domain)
+        return account.email if account.email == minted else None
 
     def signed_in(self, scope: str, account: AgentAccount) -> None:
         """The Agent Session registered or logged in with ``account`` now: its inbox window opens
