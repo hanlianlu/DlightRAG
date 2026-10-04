@@ -147,10 +147,10 @@ def test_a_filled_password_a_message_echoes_is_masked_before_anything_is_taken_f
 
 def test_a_password_an_html_message_spells_with_character_references_is_masked_too() -> None:
     passwords = FilledPasswords()
-    passwords.add(SecretStr("Zq7-Fixture.Pass*9x"))
-    # The source spells the asterisk as a reference, so only the parsed link can be masked.
+    passwords.add(SecretStr("Zq7-Fixture.Pass_9x"))
+    # The source spells a dot as a reference, so only the parsed link can be masked.
     raw = message(
-        "<p><a href='https://shop.example/login?password=Zq7-Fixture.Pass&#42;9x'>Sign in</a></p>",
+        "<p><a href='https://shop.example/login?password=Zq7-Fixture&#46;Pass_9x'>Sign in</a></p>",
         kind="html",
     )
 

@@ -7,13 +7,16 @@ count or a flag, so a failure reports a number and never the value.
 
 from __future__ import annotations
 
+import html
 import json
 import re
+import string
 import subprocess
 import sys
 import sysconfig
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from urllib.parse import quote, quote_plus
 
 import pytest
 from pydantic import SecretStr
@@ -117,16 +120,18 @@ print(json.dumps([sites, sockets]))
 
 
 def well_formed(password: str, length: int) -> bool:
-    """Whether a password has the length, only characters HTML, JSON and URL encoding leave
-    unchanged (so each has one spelling), and every class a site's composition rule asks for."""
-    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789*-._")
+    """Whether a password has the length, only letters, digits and ``-._``, a letter or a digit
+    at each end, and every class a site's composition rule asks for."""
+    allowed = set(string.ascii_letters + string.digits + "-._")
     return (
         len(password) == length
         and set(password) <= allowed
+        and password[0].isalnum()
+        and password[-1].isalnum()
         and any(c.islower() for c in password)
         and any(c.isupper() for c in password)
         and any(c.isdigit() for c in password)
-        and "*" in password
+        and any(c in "-._" for c in password)
     )
 
 
@@ -138,6 +143,20 @@ def test_a_generated_password_has_the_length_asked_and_every_class_and_never_rep
     distinct = len(set(passwords))
     assert (formed, distinct) == (200, 200)
     assert well_formed(shorter, 14) is True
+
+
+def test_no_encoding_a_page_or_a_driver_uses_changes_a_generated_password() -> None:
+    unchanged = 0
+    for _ in range(200):
+        value = generate_password().get_secret_value()
+        unchanged += (
+            quote(value, safe="") == value
+            and quote_plus(value) == value
+            and html.escape(value) == value
+            and json.dumps(value) == f'"{value}"'
+        )
+
+    assert unchanged == 200
 
 
 def accounts(

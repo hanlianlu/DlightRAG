@@ -86,7 +86,7 @@ _MAX_CODES = 5
 #: Trailing punctuation a sentence puts after a link without it belonging to the link.
 _LINK_END = ".,;:!?"
 _LINK = re.compile(r"""https?://[^\s<>"'()\[\]]+""")
-_TOKEN = re.compile(r"[A-Za-z0-9*._-]+")
+_TOKEN = re.compile(r"[A-Za-z0-9._-]+")
 _CODE = re.compile(r"\d{4,8}|(?=.*\d)(?=.*[A-Z])[A-Z0-9]{6,8}|[A-Z0-9]{3,4}-[A-Z0-9]{3,4}")
 #: A code has between 4 and 9 characters, so a longer token, such as a password, is none.
 _CODE_CHARS = range(4, 10)
@@ -149,7 +149,7 @@ def _link(url: str) -> str:
 def _codes(text: str) -> tuple[str, ...]:
     found: dict[str, None] = {}
     for token in _TOKEN.findall(text):
-        token = token.strip("*._-")
+        token = token.strip("._-")
         if len(token) in _CODE_CHARS and _CODE.fullmatch(token):
             found.setdefault(token)
     return tuple(found)[:_MAX_CODES]

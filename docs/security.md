@@ -588,9 +588,11 @@ could read.
   owner. The browser holds no credential of the owner either.
 - **DlightRAG makes the password and never shows it.** It generates 20 characters with
   `secrets`, shorter only to fit a field's `maxlength` and never below 12, from letters,
-  digits, and `*-._`, which HTML, JSON, and URL encoding leave unchanged, so a password has
-  exactly one spelling to look for. The model names fields by ref and never types or sees a
-  password. No tool argument, result, Session Entry, event, trace, log, or error carries one.
+  digits, and `-._`, which HTML, JSON, form, and percent-encoding leave as they are, and it
+  begins and ends with a letter or a digit, because Chromium trims a dot from either end of a
+  downloaded file's name. So a password has exactly one spelling to look for. The model
+  names fields by ref and never types or sees a password. No tool argument, result, Session
+  Entry, event, trace, log, or error carries one.
 - **Sealed under the key ring.** A parent's account is stored per owner, sealed under the
   [deployment key ring](#personal-connection-authorization) with a label of its own and bound
   to the owner, the site, and the account, so an account envelope never opens as a Connection
@@ -648,9 +650,9 @@ Residual risks, recorded rather than solved:
 - Mail retention is the deployment's, and an alias that is flooded lists only its first 10,000
   objects ([Operations](operations.md#agent-mailbox)). The S3 client's own debug log names the
   endpoint and the access key id, so a deployment keeps production at `log_level: info`.
-- Redaction finds a password by its exact spelling, so one that a site or the browser spells
-  differently is not found: Chromium replaces the `*` of a downloaded file's suggested name,
-  and a server may percent-encode it in a link of a mail.
+- Redaction finds a password by its exact spelling. A generated password has no spelling that
+  a browser or an encoder changes, but a page that rewrites a value on purpose, by encoding,
+  splitting, or reordering it, is not found.
 - Backups hold envelopes a retained copy of their key can still open, as for Connections, the
   Public Suffix List snapshot is as old as the pinned `tldextract` release and may split or
   share an account wrongly, and whether a site's terms allow an automated sign-up is the

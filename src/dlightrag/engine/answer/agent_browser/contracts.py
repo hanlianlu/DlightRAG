@@ -173,8 +173,10 @@ class FilledPasswords:
     """The passwords DlightRAG filled into one Agent Session's pages in this Run (ADR 0034).
 
     Every text a page or a mail yields passes through it before the tool sees it. A generated
-    password holds only characters that HTML, JSON and URL encoding leave unchanged, so the one
-    spelling it has is all there is to find.
+    password is made of letters, digits and ``-._``, which no encoding changes, and begins and
+    ends with a letter or a digit, which a browser's naming of a download leaves alone, so the
+    one spelling it has is all there is to find. A page that rewrites a value on purpose is not
+    found.
     """
 
     def __init__(self) -> None:

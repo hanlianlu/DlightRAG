@@ -113,12 +113,12 @@ MIRROR = page(
 <input aria-label="Again" type="password" name="password" oninput="mirror(this)">
 <button type="submit">Go</button></form>
 <button onclick="alert('echo ' + document.getElementById('pw').value)">Alert</button>
-<a id="dl" download="x.csv" href="#">Save</a>
+<a id="dl" download href="#">Save</a>
 <script>function mirror(input) {
   input.setAttribute('value', input.value);
   if (input.id === 'pw') {
     document.title = 'Mirror ' + input.value;
-    document.getElementById('dl').href = '/files/' + input.value + '.csv';
+    document.getElementById('dl').href = '/files/' + encodeURIComponent(input.value) + '.csv';
   } }</script>""",
 )
 # A password field a page can turn into a text field, as a "show password" button does.
@@ -145,9 +145,10 @@ PAGES = {
     f"{SHOP}/short": signup(password='type="password" maxlength="14"', confirm=False),
     f"{SHOP}/tiny": signup(password='type="password" maxlength="10"', confirm=False),
     f"{SHOP}/locked": signup(password='type="password" disabled', confirm=False),
-    # Its handler drops the asterisk of every value it is given, so what it holds is not what was filled.
+    # Its handler drops every capital letter of a value it is given, so what it holds is not what
+    # was filled.
     f"{SHOP}/stripping": signup(
-        password="""type="password" oninput="this.value = this.value.replace(/[*]/g, '')" """,
+        password="""type="password" oninput="this.value = this.value.replace(/[A-Z]/g, '')" """,
         confirm=False,
     ),
     f"{SHOP}/join": page("Welcome", "<p>Thanks for joining</p>"),
@@ -258,8 +259,7 @@ def ref_of(snapshot: str, text: str) -> str:
 
 def shows_mask(snapshot: str, label: str, ref: str) -> bool:
     """Whether ``snapshot`` shows the textbox ``label`` holding the mask. The driver quotes a value
-    YAML would read as something else, a password that starts with an asterisk among them, and
-    the mask keeps the quotes."""
+    YAML would read as something else, and the mask, which starts with an asterisk, is one."""
     pattern = rf'textbox "{label}"( \[active\])? \[ref={ref}\]: "?{re.escape(PASSWORD_MASK)}"?$'
     return re.search(pattern, snapshot, re.MULTILINE) is not None
 
@@ -441,8 +441,17 @@ async def test_every_page_text_is_redacted(tmp_path: Path) -> None:
         assert not registered.is_error, registered.text_content
         password = web.stored_password()
         value = password.get_secret_value()
+        # A file the page links by a percent-encoded address, which a site names after the
+        # password in its file name and echoes in its rows.
         web.proxy.add(
-            f"{SHOP}/files/{value}.csv", Served(b"a,b\n1,2\n", headers={"content-type": "text/csv"})
+            f"{SHOP}/files/{value}.csv",
+            Served(
+                f"id,password\n1,{value}\n".encode(),
+                headers={
+                    "content-type": "text/csv",
+                    "content-disposition": f'attachment; filename="{value}.csv"',
+                },
+            ),
         )
         # The page mirrored the value into its title and its attributes as it was filled.
         assert f"title: Mirror {PASSWORD_MASK}]" in registered.text_content
@@ -463,13 +472,15 @@ async def test_every_page_text_is_redacted(tmp_path: Path) -> None:
         await web.call(action="click", ref=await ref_in(web, 'link "Save"'))
         (download, _) = web.admitted[-1]
         assert download.url == f"{SHOP}/files/{PASSWORD_MASK}.csv"
+        # The name was masked before it was made safe.
+        assert download.filename == "________.csv"
         # A form that submits with GET puts the password into the page's own address.
         went = await web.call(action="click", ref=await ref_in(web, 'button "Go"'))
         assert f"page: {SHOP}/search?password={PASSWORD_MASK} |" in went.text_content
         # The browser did send the password to the site in that address, so the mask is what hid it.
         asked = [request.target for request in web.proxy.requests]
         assert leaks(password, *asked) == 2
-        assert_hidden(password, capture.content, capture.url, download.url)
+        assert_hidden(password, capture.content, capture.url, download.url, download.filename)
 
 
 async def ref_in(web: Browsing, label: str) -> str:

@@ -31,9 +31,12 @@ ACCOUNT_LABEL = "dlightrag-agent-account-v1"
 PASSWORD_LENGTH = 20
 #: A site that caps a password's length gets a shorter one, never shorter than this.
 MIN_PASSWORD_LENGTH = 12
-#: The punctuation HTML, JSON and URL encoding leave unchanged, so a password has one spelling.
-_SYMBOLS = "*-._"
-_ALPHABET = string.ascii_letters + string.digits + _SYMBOLS
+#: The punctuation of a password: with the letters and digits, the characters no encoding
+#: changes (HTML, JSON and form escaping, and RFC 3986's percent-encoding, leave them as they
+#: are), so a password has one spelling in every text a page and a driver print.
+_SYMBOLS = "-._"
+_ALNUM = string.ascii_letters + string.digits
+_ALPHABET = _ALNUM + _SYMBOLS
 
 
 #: The Public Suffix List snapshot the package bundles, private section included. It is read
@@ -63,17 +66,22 @@ def account_site(url: str) -> str | None:
 
 
 def generate_password(length: int = PASSWORD_LENGTH) -> SecretStr:
-    """``length`` characters drawn with ``secrets``, holding at least one lowercase letter,
-    one uppercase letter, one digit and one ``*``, so the usual composition rules pass."""
-    characters = [
+    """``length`` characters drawn with ``secrets`` from ``[A-Za-z0-9._-]``, holding at least one
+    lowercase letter, one uppercase letter, one digit and one of ``-._``, so the usual composition
+    rules pass.
+
+    It begins and ends with a letter or a digit: Chromium trims a dot from either end of a
+    downloaded file's name, and a trimmed password is a spelling nothing redacts.
+    """
+    inner = [
         secrets.choice(string.ascii_lowercase),
         secrets.choice(string.ascii_uppercase),
         secrets.choice(string.digits),
-        "*",
-        *(secrets.choice(_ALPHABET) for _ in range(length - 4)),
+        secrets.choice(_SYMBOLS),
+        *(secrets.choice(_ALPHABET) for _ in range(length - 6)),
     ]
-    secrets.SystemRandom().shuffle(characters)
-    return SecretStr("".join(characters))
+    secrets.SystemRandom().shuffle(inner)
+    return SecretStr(f"{secrets.choice(_ALNUM)}{''.join(inner)}{secrets.choice(_ALNUM)}")
 
 
 def owner_alias(owner_id: str, site: str, domain: str) -> str:

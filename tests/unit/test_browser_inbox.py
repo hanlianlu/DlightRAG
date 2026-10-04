@@ -213,7 +213,7 @@ async def test_a_session_reads_only_its_own_window() -> None:
 
 async def test_a_password_a_mail_echoes_never_reaches_the_inbox() -> None:
     alias = f"a1@{DOMAIN}"
-    password = SecretStr("Zq7-Fixture.Pass*9x")
+    password = SecretStr("Zq7-Fixture.Pass_9x")
     mailbox = ScriptedMailbox(
         {
             alias: MailListing(
