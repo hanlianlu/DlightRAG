@@ -5,6 +5,7 @@ import asyncio
 import base64
 import hashlib
 import threading
+import xml.etree.ElementTree as ET
 from io import BytesIO
 from pathlib import Path
 
@@ -859,6 +860,34 @@ def test_svg_static_projection_removes_scripts_events_and_external_links(tmp_pat
     assert "script" not in settled
     assert "onload" not in settled
     assert "evil.test" not in settled
+
+
+def test_svg_static_projection_removes_animation_that_could_set_a_link(tmp_path: Path) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "chart.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg"><a>'
+        '<animate attributeName="href" values="javascript:steal()"/>'
+        '<set attributeName="xlink:href" to="javascript:steal()"/>'
+        '<rect width="10" height="10"/></a>'
+        '<animateTransform attributeName="transform" type="rotate" to="90"/></svg>',
+        encoding="utf-8",
+    )
+
+    plan = _validate(
+        root,
+        answer="![Chart](artifact:chart.svg)",
+        attached=("chart.svg",),
+    )
+
+    assert plan.outcome["status"] == "complete"
+    settled = plan.artifacts[0].content.decode("utf-8")
+    assert "javascript:" not in settled
+    assert {element.tag.rsplit("}", 1)[-1] for element in ET.fromstring(settled).iter()} == {
+        "svg",
+        "a",
+        "rect",
+    }
 
 
 def test_svg_static_projection_rejects_nested_svg_data_but_keeps_raster_data(

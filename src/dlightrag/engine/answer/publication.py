@@ -841,7 +841,16 @@ def _sanitize_svg(content: bytes) -> bytes:
     root = DefusedElementTree.fromstring(content.decode("utf-8"))
     if root.tag.rsplit("}", 1)[-1].casefold() != "svg":
         raise ValueError("not SVG")
-    forbidden = {"script", "foreignobject", "style"}
+    # Animation can set an attribute the loop below removes, such as href, so none stays.
+    forbidden = {
+        "script",
+        "foreignobject",
+        "style",
+        "animate",
+        "animatemotion",
+        "animatetransform",
+        "set",
+    }
     for parent in root.iter():
         for child in list(parent):
             if child.tag.rsplit("}", 1)[-1].casefold() in forbidden:

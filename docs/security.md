@@ -468,9 +468,9 @@ blob bytes or Agent Workspace paths. Authenticated data/Markdown uses
 `Cache-Control: private, no-store`; active/unknown formats download with
 `nosniff`.
 
-Published SVG is sanitized of scripts, handlers, external loads, and nested SVG
-data URLs, then served under CSP sandbox. PDF preview is sandboxed without
-same-origin capability.
+Published SVG is sanitized of scripts, handlers, animation, external loads, and
+nested SVG data URLs, then served under CSP sandbox. PDF preview is sandboxed
+without same-origin capability.
 
 HTML never executes as a same-origin document. After explicit consent, the
 browser inserts authenticated inert bytes into one `srcdoc` iframe with
