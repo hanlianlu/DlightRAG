@@ -28,6 +28,7 @@ from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
+from html.parser import HTMLParser
 from io import BytesIO
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
@@ -66,16 +67,13 @@ ArtifactIssueKind = Literal[
     "unattached_reference",
 ]
 
-_HTML_EXTERNAL_RESOURCE = re.compile(
-    r"<(?:script|img|audio|video|source|iframe)\b[^>]*\bsrc\s*=\s*[\"'](?!data:|blob:|artifact:)",
+_HTML_LOADING_TAGS = frozenset({"script", "img", "audio", "video", "source", "iframe"})
+# A url() that is not a data:, blob: or same-document (#id) reference, or an @import that is not
+# data:. The whitespace is possessive so that giving it back cannot hide a data: or # behind it.
+_CSS_EXTERNAL = re.compile(
+    r"url\(\s*+(?![\"']?(?:data:|blob:|#))[^)]+\)|@import\s+(?!url\(\s*[\"']?data:)",
     re.IGNORECASE,
 )
-_HTML_STYLESHEET = re.compile(
-    r"<link\b(?=[^>]*\brel\s*=\s*[\"'][^\"']*stylesheet)(?=[^>]*\bhref\s*=\s*[\"'](?!data:))",
-    re.IGNORECASE,
-)
-_CSS_EXTERNAL_URL = re.compile(r"url\(\s*[\"']?(?!data:|blob:)[^)]+\)", re.IGNORECASE)
-_CSS_EXTERNAL_IMPORT = re.compile(r"@import\s+(?!url\(\s*[\"']?data:)", re.IGNORECASE)
 _SVG_RASTER_DATA_URL = re.compile(r"^data:image/(?:gif|jpeg|png|webp)(?:;[^,]*)?,", re.IGNORECASE)
 _MEDIA_BY_EXTENSION: dict[str, tuple[str, PresentationCapability]] = {
     ".md": ("text/markdown", "markdown"),
@@ -653,6 +651,59 @@ def _inventory(root: Path, *, limits: PublicationLimits) -> dict[str, Path]:
     return files
 
 
+class _ExternalLoads(HTMLParser):
+    """Find what an HTML document loads from outside its own file.
+
+    Markup and CSS can name a resource, and CSS can sit in a style element or in any attribute:
+    an SVG presentation attribute such as ``clip-path`` or ``filter`` takes a ``url()``. A script's
+    source is code, so a bundled library that mentions ``toDataURL(`` or builds an ``<img src=``
+    string loads nothing.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.loads_external = False
+        self.css: list[str] = []
+        self._in_style = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values: dict[str, str] = {}
+        for name, value in attrs:
+            values.setdefault(name, value or "")  # a browser keeps the first copy of an attribute
+        source = values.get("src")
+        if (
+            tag in _HTML_LOADING_TAGS
+            and source is not None
+            and not source.lower().startswith(("data:", "blob:", "artifact:"))
+        ):
+            self.loads_external = True
+        href = values.get("href")
+        if (
+            tag == "link"
+            and "stylesheet" in values.get("rel", "").lower()
+            and href is not None
+            and not href.lower().startswith("data:")
+        ):
+            self.loads_external = True
+        self.css.extend(values.values())
+        self._in_style = tag == "style"
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "style":
+            self._in_style = False
+
+    def handle_data(self, data: str) -> None:
+        if self._in_style:
+            self.css.append(data)
+
+
+def _loads_externally(text: str) -> bool:
+    scan = _ExternalLoads()
+    scan.feed(text)
+    scan.close()
+    return scan.loads_external or any(_CSS_EXTERNAL.search(css) for css in scan.css)
+
+
 def _validate_file(relative: str, path: Path, *, limits: PublicationLimits) -> StagedArtifact:
     try:
         size = path.stat().st_size
@@ -749,12 +800,7 @@ def _validate_file(relative: str, path: Path, *, limits: PublicationLimits) -> S
                     "active_preview_too_large",
                     f"Active HTML preview is limited to {limits.active_html_max_bytes} bytes.",
                 )
-            if (
-                _HTML_EXTERNAL_RESOURCE.search(text)
-                or _HTML_STYLESHEET.search(text)
-                or _CSS_EXTERNAL_URL.search(text)
-                or _CSS_EXTERNAL_IMPORT.search(text)
-            ):
+            if _loads_externally(text):
                 raise ArtifactValidationError(
                     "media_mismatch", "Active HTML must be a self-contained single file."
                 )
@@ -795,7 +841,16 @@ def _sanitize_svg(content: bytes) -> bytes:
     root = DefusedElementTree.fromstring(content.decode("utf-8"))
     if root.tag.rsplit("}", 1)[-1].casefold() != "svg":
         raise ValueError("not SVG")
-    forbidden = {"script", "foreignobject", "style"}
+    # Animation can set an attribute the loop below removes, such as href, so none stays.
+    forbidden = {
+        "script",
+        "foreignobject",
+        "style",
+        "animate",
+        "animatemotion",
+        "animatetransform",
+        "set",
+    }
     for parent in root.iter():
         for child in list(parent):
             if child.tag.rsplit("}", 1)[-1].casefold() in forbidden:

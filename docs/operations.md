@@ -93,6 +93,43 @@ and `v*` tags only mark releases on GitHub. `make release-check`, which
 runtime. `make workspace-wheels` is a local packaging check that installs the
 built wheels in isolation; it distributes nothing.
 
+## Agent Chart Rendering
+
+The built-in [`charts`](../src/dlightrag/engine/agent/builtin_skills/charts/SKILL.md)
+Skill has the Research agent write an Apache ECharts option and pipe it to
+`echarts-render`. The command draws the option as an SVG with ECharts on the
+image's `node` and rasterizes the SVG with `resvg` into a PNG; `--svg` adds a
+vector file and `--html` a self-contained interactive page. The house theme
+always applies, and Noto Sans SC is the only font `resvg` loads, so a font name
+an option writes still draws.
+
+The image adds, all under `/usr/local`:
+
+| Path | Content |
+|---|---|
+| `bin/echarts-render` | Symlink to `lib/echarts-render/echarts_render.py` |
+| `lib/echarts-render/` | The renderer from `chart-render/` (`echarts_render.py`, `ssr.cjs`, `theme.json`), `echarts.min.js`, and the ECharts and zrender licenses |
+| `bin/resvg` | The upstream resvg CLI, built from its crates.io release; the licenses of resvg and of every crate its locked build used are in `share/doc/resvg/`, one directory per crate |
+| `share/fonts/noto-sans-sc/` | Noto Sans SC Regular and Bold, with the OFL-1.1 license |
+
+Rust exists only in the builder stage. The font covers Chinese and Latin text;
+emoji, Korean and Arabic draw as boxes, and the command says so in a note.
+
+The pins to bump are `RESVG_VERSION` and the `rust:` builder tag in the
+`Dockerfile` (the tag must meet the crate's minimum Rust version); `echarts` in
+`chart-render/package.json`, followed by `npm install --package-lock-only` in
+that directory to refresh `package-lock.json`; and `NOTO_CJK`, one noto-cjk
+commit, together with the three `sha256` checksums taken from it.
+
+After a bump, build the image. Its smoke test renders a two-bar chart with a
+Chinese title as the `app` user and fails the build when node, ECharts, `resvg`
+or the font is missing or unreadable, so a broken renderer never reaches a Run.
+CI builds no image: the test runs wherever the image is built. Then render a
+bar chart, a horizontal bar chart with long Chinese category names and a line
+chart from the new image and look at the PNGs. A new ECharts release can change
+defaults, and `resvg` exits 0 after dropping text it cannot match to a font, so
+`echarts-render` treats its `No match for` warning as a failure.
+
 ## Parser Services
 
 The parser block is configured under

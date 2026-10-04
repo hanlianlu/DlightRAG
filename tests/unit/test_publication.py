@@ -5,6 +5,7 @@ import asyncio
 import base64
 import hashlib
 import threading
+import xml.etree.ElementTree as ET
 from io import BytesIO
 from pathlib import Path
 
@@ -861,6 +862,34 @@ def test_svg_static_projection_removes_scripts_events_and_external_links(tmp_pat
     assert "evil.test" not in settled
 
 
+def test_svg_static_projection_removes_animation_that_could_set_a_link(tmp_path: Path) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "chart.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg"><a>'
+        '<animate attributeName="href" values="javascript:steal()"/>'
+        '<set attributeName="xlink:href" to="javascript:steal()"/>'
+        '<rect width="10" height="10"/></a>'
+        '<animateTransform attributeName="transform" type="rotate" to="90"/></svg>',
+        encoding="utf-8",
+    )
+
+    plan = _validate(
+        root,
+        answer="![Chart](artifact:chart.svg)",
+        attached=("chart.svg",),
+    )
+
+    assert plan.outcome["status"] == "complete"
+    settled = plan.artifacts[0].content.decode("utf-8")
+    assert "javascript:" not in settled
+    assert {element.tag.rsplit("}", 1)[-1] for element in ET.fromstring(settled).iter()} == {
+        "svg",
+        "a",
+        "rect",
+    }
+
+
 def test_svg_static_projection_rejects_nested_svg_data_but_keeps_raster_data(
     tmp_path: Path,
 ) -> None:
@@ -911,6 +940,41 @@ def test_active_html_must_be_self_contained_and_within_preview_budget(tmp_path: 
 
     assert external.issues[0].kind == "media_mismatch"
     assert oversized.issues[0].kind == "active_preview_too_large"
+
+
+def test_active_html_is_checked_in_its_markup_and_styles_not_its_script_source(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    # A bundled library names `toDataURL(...)` and builds `<img src=` and `url(` strings.
+    library = (
+        "<script>var png = canvas.toDataURL('image/png');"
+        "var tag = '<img src=\"' + png + '\">'; var paint = 'url(#' + id + ')';</script>"
+    )
+
+    def issue_kinds(markup: str) -> list[str]:
+        (root / "page.html").write_text(
+            f"<!doctype html><html><body>{library}{markup}</body></html>", encoding="utf-8"
+        )
+        plan = _validate(root, answer="[Open page](artifact:page.html)", attached=("page.html",))
+        return [issue.kind for issue in plan.issues]
+
+    # An SVG points inside its own file with url(#id), which loads nothing.
+    assert issue_kinds("") == []
+    assert issue_kinds('<svg><rect clip-path="url(#c)" fill="url(\'#g\')"/></svg>') == []
+    # What loads from outside is refused wherever it sits, and a browser keeps the first copy of
+    # a repeated attribute.
+    assert issue_kinds('<link rel="stylesheet" href="https://evil.test/x.css">') == [
+        "media_mismatch"
+    ]
+    assert issue_kinds("<style>body{background:url(https://evil.test/x.png)}</style>") == [
+        "media_mismatch"
+    ]
+    assert issue_kinds('<svg><rect filter="url(https://evil.test/x.svg#f)"/></svg>') == [
+        "media_mismatch"
+    ]
+    assert issue_kinds('<img src="https://evil.test/x.png" src="data:,">') == ["media_mismatch"]
 
 
 def test_attachment_receipt_round_trips_without_rewriting_or_duplicate_placement(

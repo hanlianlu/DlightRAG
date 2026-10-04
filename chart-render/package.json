@@ -1,0 +1,7 @@
+{
+  "name": "echarts-render",
+  "private": true,
+  "dependencies": {
+    "echarts": "6.1.0"
+  }
+}

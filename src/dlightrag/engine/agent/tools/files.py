@@ -1126,10 +1126,13 @@ def _image_attachment_result(
         )
     ]
     if prepared.transformed:
+        # The part names this record, so the settlement checks the part's name against its
+        # own: the derivative is the file under the same name, told from the source by its
+        # resource id and its locator.
         durable_resources.append(
             ResourceAttachmentBytes(
                 resource_id=model_resource_id,
-                filename=f"model-{safe_name}",
+                filename=safe_name,
                 mime_type=prepared.media_type,
                 source_locator=f"{path}#model-derivative",
                 content=prepared.data,
