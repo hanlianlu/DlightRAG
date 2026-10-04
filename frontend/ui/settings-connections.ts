@@ -319,7 +319,7 @@ export class DlSettingsConnections extends LightElement {
   #labelField(connection: Connection): TemplateResult {
     return html`<label class=${styles.field}>
       <span class=${styles.fieldLabel}>${msg('Label', {id: 'connections.label'})}</span>
-      <input class=${styles.input} data-label=${connection.connectionId} .value=${connection.label}
+      <input class=${styles.input} .value=${connection.label}
         maxlength="100" @change=${(event: Event) => {
           const label = (event.target as HTMLInputElement).value;
           if (!label || label === connection.label) return;
@@ -354,7 +354,7 @@ export class DlSettingsConnections extends LightElement {
         <button class="dl-btn" type="button" @click=${() => {
           this.editingEndpoint = null;
         }}>${msg('Cancel', {id: 'connections.cancel'})}</button>
-        <button class="primary-btn" type="button" data-save-endpoint=${connection.connectionId}
+        <button class="primary-btn" type="button"
           @click=${(event: Event) => {
             const input = this.querySelector<HTMLInputElement>(`[data-endpoint="${connection.connectionId}"]`);
             if (!input?.reportValidity()) return;
@@ -395,7 +395,7 @@ export class DlSettingsConnections extends LightElement {
     if (auth === 'oauth') {
       return html`<div class=${styles.stackTight}>
         <span class=${styles.inline}>
-          <button class="dl-btn" type="button" data-oauth=${connection.connectionId}
+          <button class="dl-btn" type="button"
             @click=${(event: Event) => {
               void this.#beginAuthorization(connection, event.currentTarget as HTMLElement);
             }}>${msg('Authorize with OAuth', {id: 'connections.oauthBegin'})}</button>
@@ -405,7 +405,7 @@ export class DlSettingsConnections extends LightElement {
           )}</span>
         </span>
         ${this.authorizationUrl
-          ? html`<p><a class=${styles.continue} data-oauth-continue href=${this.authorizationUrl}
+          ? html`<p><a class=${styles.continue} href=${this.authorizationUrl}
             rel="noreferrer noopener">${msg('Continue to provider authorization', {id: 'connections.oauthContinue'})}</a></p>`
           : nothing}
       </div>`;
@@ -537,7 +537,7 @@ export class DlSettingsConnections extends LightElement {
         <div class=${styles.presetRow} role="group"
           aria-label=${msg('Presets', {id: 'connections.presets'})}>
           ${presets.map((preset) => html`
-            <button class=${styles.presetChip} type="button" data-preset=${preset.presetId}
+            <button class=${styles.presetChip} type="button"
               aria-label=${msg(str`Use the ${preset.label} preset`, {id: 'connections.usePreset'})}
               @click=${() => {
                 this.#applyPreset(preset);

@@ -24,6 +24,20 @@ export function buttonNamed<T extends HTMLElement = HTMLElement>(
     ?? null;
 }
 
+/** The first link whose text is `name`. */
+export function linkNamed<T extends HTMLAnchorElement = HTMLAnchorElement>(
+  root: ParentNode,
+  name: string,
+): T | null {
+  return Array.from(root.querySelectorAll<T>('a[href]')).find((link) => link.textContent?.trim() === name) ?? null;
+}
+
+/** The control a visible label names, whether the label wraps it or points at it. */
+export function fieldNamed<T extends HTMLElement = HTMLInputElement>(root: ParentNode, name: string): T | null {
+  const label = Array.from(root.querySelectorAll('label')).find((item) => item.textContent?.trim() === name);
+  return (label?.control as T | null | undefined) ?? null;
+}
+
 /** The first radio whose name, the text its `aria-labelledby` points at, is `name`. */
 export function radioNamed(root: ParentNode, name: string): HTMLInputElement | null {
   return Array.from(root.querySelectorAll<HTMLInputElement>('input[type="radio"]')).find((radio) => (

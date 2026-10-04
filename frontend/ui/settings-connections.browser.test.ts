@@ -2,7 +2,7 @@
 import {expect} from '@esm-bundle/chai';
 import {setViewport} from '@web/test-runner-commands';
 import './settings-connections.ts';
-import {linkStyles, waitFor} from '../testing/dom.ts';
+import {buttonNamed, fieldNamed, linkNamed, linkStyles, waitFor} from '../testing/dom.ts';
 import type {SettingsSummary} from './settings-summary.ts';
 
 const originalFetch = window.fetch;
@@ -117,7 +117,7 @@ it('fills the form from a preset and opens the new Connection on the tab its tie
   addRow.click();
   await feature.updateComplete;
 
-  const chips = [...feature.querySelectorAll<HTMLButtonElement>('[data-preset]')];
+  const chips = [...feature.querySelectorAll<HTMLButtonElement>('[role="group"][aria-label="Presets"] button')];
   expect(chips.map((chip) => chip.textContent)).to.deep.equal(['Notion', 'Wolfram']);
   expect(chips[0]!.getAttribute('aria-label')).to.equal('Use the Notion preset');
   chips[0]!.click();
@@ -269,15 +269,15 @@ it('begins authorization against the stored endpoint and labels every credential
   for (const input of feature.querySelectorAll<HTMLInputElement>('input')) {
     expect(input.labels?.length).to.equal(1);
   }
-  feature.querySelector<HTMLButtonElement>('[data-oauth="fixture"]')!.click();
-  await waitFor(() => feature.querySelector('[data-oauth-continue]') !== null);
+  buttonNamed(feature, 'Authorize with OAuth')!.click();
+  await waitFor(() => linkNamed(feature, 'Continue to provider authorization') !== null);
   expect(commands).to.have.length(1);
   expect(commands[0]!.url).to.equal('/web/api/connections/mcp/fixture/oauth');
   expect(commands[0]!.body).to.deep.equal({
     expected_revision: 'current',
     endpoint: 'https://fixture.example/mcp',
   });
-  const link = feature.querySelector<HTMLAnchorElement>('[data-oauth-continue]')!;
+  const link = linkNamed(feature, 'Continue to provider authorization')!;
   expect(link.href).to.equal('https://as.example/authorize?state=fixture');
   expect(link.rel).to.contain('noreferrer');
 });
@@ -337,7 +337,7 @@ describe('laid out as a page', () => {
     const feature = mount();
     await openCard(feature, 'fixture');
 
-    const label = feature.querySelector('[data-label="fixture"]')!.getBoundingClientRect();
+    const label = fieldNamed(feature, 'Label')!.getBoundingClientRect();
     const endpoint = feature.querySelector('[class*=endpointRow]')!.getBoundingClientRect();
     expect(label.right).to.be.at.most(endpoint.left);
     expect(label.top).to.be.closeTo(endpoint.top, 12);
@@ -355,7 +355,7 @@ describe('laid out as a page', () => {
     const feature = mount();
     await openCard(feature, 'fixture');
 
-    const label = feature.querySelector('[data-label="fixture"]')!.getBoundingClientRect();
+    const label = fieldNamed(feature, 'Label')!.getBoundingClientRect();
     const endpoint = feature.querySelector('[class*=endpointRow]')!.getBoundingClientRect();
     expect(endpoint.top).to.be.at.least(label.bottom);
   });
