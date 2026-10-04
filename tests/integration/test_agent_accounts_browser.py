@@ -472,11 +472,13 @@ async def test_every_page_text_is_redacted(tmp_path: Path) -> None:
         # The serialized page and its address, a dialog it opens and a file it links to.
         await web.call(action="capture")
         (capture, _) = web.admitted[-1]
+        assert_hidden(password, capture.content, capture.url)
         assert f'value="{PASSWORD_MASK}"'.encode() in capture.content
         alerted = await web.call(action="click", ref=await ref_in(web, 'button "Alert"'))
         assert f'a alert dialog: "echo {PASSWORD_MASK}" (accepted).' in alerted.text_content
         await web.call(action="click", ref=await ref_in(web, 'link "Save"'))
         (download, _) = web.admitted[-1]
+        assert_hidden(password, download.url, download.filename, download.content)
         assert download.url == f"{SHOP}/files/{PASSWORD_MASK}.csv"
         # The name was masked before it was made safe, and the rows as the file was read.
         assert download.filename == "________.csv"
@@ -488,14 +490,6 @@ async def test_every_page_text_is_redacted(tmp_path: Path) -> None:
         # The browser did send the password to the site in that address, so the mask is what hid it.
         asked = [request.target for request in web.proxy.requests]
         assert leaks(password, *asked) == 2
-        assert_hidden(
-            password,
-            capture.content,
-            capture.url,
-            download.url,
-            download.filename,
-            download.content,
-        )
 
 
 async def ref_in(web: Browsing, label: str) -> str:
@@ -836,6 +830,10 @@ async def test_a_childs_registration_is_run_scoped(tmp_path: Path) -> None:
         alias = recorded.group(1)
         assert web.rows == [owners_row]
         await web.call("child-a", child=True, action="click", ref=form["button"])
+        # The site's copy of the Child's password is the only one a test can learn, and from here
+        # on no call may show it either.
+        (join,) = posts(web.proxy, "/join")
+        web.watch(SecretStr(join["password"][0]))
 
         # Its login fills its own account, and another Child's falls back to the owner's.
         for scope in ("child-a", "child-b"):
@@ -849,7 +847,6 @@ async def test_a_childs_registration_is_run_scoped(tmp_path: Path) -> None:
             )
             await web.call(scope, child=True, action="click", ref=signin["button"])
 
-        (join,) = posts(web.proxy, "/join")
         own, fallback = posts(web.proxy, "/session")
         assert own["email"] == [alias]
         # Its own password is the one it registered with, and not the owner's.

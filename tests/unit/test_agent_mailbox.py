@@ -141,11 +141,12 @@ def test_a_filled_password_a_message_echoes_is_masked_before_anything_is_taken_f
 
     summary = summarized(raw, passwords)
 
-    assert summary.subject == f"Welcome {PASSWORD_MASK}"
-    assert summary.links == (f"https://shop.example/login?password={PASSWORD_MASK}",)
-    # Nothing it holds carries the password, and no part of it comes back as a code.
+    # Nothing it holds carries the password, and no part of it comes back as a code. This is
+    # asked first, so that a leak fails with a count and the comparisons below never print it.
     texts = (summary.sender, summary.subject, *summary.links, *summary.codes)
     assert (sum(value in text for text in texts), len(summary.codes)) == (0, 0)
+    assert summary.subject == f"Welcome {PASSWORD_MASK}"
+    assert summary.links == (f"https://shop.example/login?password={PASSWORD_MASK}",)
 
 
 def test_a_password_an_html_message_spells_with_character_references_is_masked_too() -> None:
