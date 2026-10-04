@@ -27,7 +27,12 @@ from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
 from dlightrag.engine.agent.tool_content import tool_content_attachments
 from dlightrag.engine.agent.tools import AgentTool, ToolResult
 from dlightrag.engine.agent.tools.contracts import CommittedOutput
-from dlightrag.engine.agent.tools.files import ImagePreparer, ResourceReader, ResourceReadRequest
+from dlightrag.engine.agent.tools.files import (
+    BashArgs,
+    ImagePreparer,
+    ResourceReader,
+    ResourceReadRequest,
+)
 from dlightrag.engine.answer.agent_browser import BrowserHolder, RunAgentBrowser
 from dlightrag.engine.answer.resources.registry import (
     FetchedResourceBytes,
@@ -47,6 +52,7 @@ from tests.support.agent_browser import (
     web_proxy,
 )
 from tests.support.dns import public_dns
+from tests.support.path_tools import path_tools
 from tests.support.resources import preparer
 from tests.tool_helpers import recording_tool_runtime
 
@@ -193,6 +199,7 @@ async def browsing(
     pages: dict[str, Served] | None = None,
     *,
     workspace: Path | LocalExecutionEnvironment | None = None,
+    scheduler: AccessScheduler | None = None,
     spill: Path | None = None,
     images: int = 3,
     proxy_url: str | None = None,
@@ -233,7 +240,7 @@ async def browsing(
             environment=(
                 LocalExecutionEnvironment(workspace) if isinstance(workspace, Path) else workspace
             ),
-            scheduler=AccessScheduler(),
+            scheduler=scheduler or AccessScheduler(),
             spill=keep if spill is not None else None,
             image_preparer=prepare,
         )
@@ -588,6 +595,27 @@ class ReadRecorder(LocalExecutionEnvironment):
     def read_bytes(self, path: Path) -> bytes:
         self.read.append(path.name)
         return super().read_bytes(path)
+
+
+async def test_an_upload_that_waited_for_the_workspace_checks_it_again_when_it_gets_it(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "report.txt").write_text("quarterly numbers", encoding="utf-8")
+    workspace, scheduler = LocalExecutionEnvironment(tmp_path), AccessScheduler()
+    bash = {tool.name: tool for tool in path_tools(workspace, scheduler=scheduler)}["bash"]
+    async with browsing(workspace=workspace, scheduler=scheduler) as web:
+        opened = await web.call(action="navigate", url=f"{SHOP}/upload")
+        attachment = ref_of(opened.text_content, "Attachment")
+
+        # The command holds the workspace, and leaves an unsafe entry in it as it ends.
+        command = BashArgs(command="ln -s /etc/passwd link; sleep 1")
+        running = asyncio.ensure_future(bash.execute(command, recording_tool_runtime([])))
+        await asyncio.sleep(0.4)
+        refused = await web.call(action="upload", ref=attachment, files=["report.txt"])
+        await running
+
+        assert refused.is_error and "workspace integrity latched" in refused.text_content
+        assert "chosen" not in refused.text_content
 
 
 async def test_upload_refuses_what_is_over_the_limit_before_it_reads_it(tmp_path: Path) -> None:

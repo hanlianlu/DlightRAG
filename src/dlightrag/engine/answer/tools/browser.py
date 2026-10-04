@@ -636,6 +636,9 @@ class _Call:
             except PathRejected as exc:
                 return ToolResult.text(str(exc), is_error=True)
             async with self._scheduler.hold(PathAccess(path=str(path), kind="read")):
+                # A command that held the workspace while this waited may have latched it.
+                if blocked := workspace_integrity_refusal(environment):
+                    return blocked
                 if environment.stat_kind(path) != "file":
                     return ToolResult.text(
                         UPLOAD_NOT_FILE.format(path=escape_path(name)), is_error=True
