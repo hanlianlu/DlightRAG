@@ -913,6 +913,37 @@ def test_active_html_must_be_self_contained_and_within_preview_budget(tmp_path: 
     assert oversized.issues[0].kind == "active_preview_too_large"
 
 
+def test_active_html_is_checked_in_its_markup_and_styles_not_its_script_source(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    # A bundled library names `toDataURL(...)` and builds an `<img src=` string.
+    library = (
+        "<script>var png = canvas.toDataURL('image/png');"
+        "var tag = '<img src=\"' + png + '\">'; var paint = 'url(#' + id + ')';</script>"
+    )
+
+    def issue_kinds(markup: str) -> list[str]:
+        (root / "page.html").write_text(
+            f"<!doctype html><html><body>{library}{markup}</body></html>", encoding="utf-8"
+        )
+        plan = _validate(root, answer="[Open page](artifact:page.html)", attached=("page.html",))
+        return [issue.kind for issue in plan.issues]
+
+    assert issue_kinds("") == []
+    assert issue_kinds('<img src="https://evil.test/x.png">') == ["media_mismatch"]
+    assert issue_kinds('<link rel="stylesheet" href="https://evil.test/x.css">') == [
+        "media_mismatch"
+    ]
+    assert issue_kinds("<style>body{background:url(https://evil.test/x.png)}</style>") == [
+        "media_mismatch"
+    ]
+    assert issue_kinds('<p style="background:url(https://evil.test/x.png)">x</p>') == [
+        "media_mismatch"
+    ]
+
+
 def test_attachment_receipt_round_trips_without_rewriting_or_duplicate_placement(
     tmp_path: Path,
 ) -> None:
