@@ -379,6 +379,30 @@ def test_profile_memory_shows_the_whole_text_of_a_memory(page: Page) -> None:
 
 
 @pytest.mark.e2e
+def test_agent_accounts_are_a_table_where_the_page_has_room_and_three_lines_where_it_has_not(
+    page: Page,
+) -> None:
+    settings = _agent_accounts_page(page, _three_accounts())
+    region = settings.get_by_role("region", name="Agent Accounts")
+
+    # The 880px dialog leaves its page room for every column, the date of registering included.
+    table = region.get_by_role("table")
+    expect(table.get_by_role("columnheader", name="Registered")).to_be_visible()
+
+    # A narrower window narrows the dialog and with it the page, which is what the page measures:
+    # every account becomes three lines, and the one that never signed in still says when it registered.
+    page.set_viewport_size({"width": 800, "height": 800})
+    expect(table).to_have_count(0)
+    rows = region.get_by_role("listitem")
+    expect(rows).to_have_count(3)
+    expect(rows.nth(2)).to_contain_text("not signed in since")
+    expect(rows.nth(2)).to_contain_text("Registered")
+
+    page.set_viewport_size({"width": 1440, "height": 900})
+    expect(table.get_by_role("columnheader", name="Registered")).to_be_visible()
+
+
+@pytest.mark.e2e
 def test_agent_accounts_page_lists_what_the_agent_registered(page: Page) -> None:
     state = _three_accounts()
     settings = _agent_accounts_page(page, state)

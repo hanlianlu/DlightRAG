@@ -179,7 +179,9 @@ that owns its data and reports a short summary for its navigation row.
   switch. A destructive action is a `.dl-btn.dl-btn-danger-text` button in its own card. A notice is the
   app's toast (`.toast`, with its shadow and its Undo) in a region the dialog owns, because the shell's
   region would sit under the scrim. It sits outside the page pane, so a Memory change shows wherever the
-  reader is, including a phone's section list.
+  reader is, including a phone's section list. Agent Accounts is a table of websites where its page is at
+  least 36rem wide and three-line rows (the website, how it signs in, when it last did) where it is
+  narrower; the page measures its own width, so a narrow window and a phone get the same rows.
 - **Controls.** Icon buttons are `dl-icon-button`. Inside the dialog the control ladder sets
   `--control-hit-target: var(--size-button)`, so they are compact beside a pointer and 44px under 1200px.
   Switches are `dl-switch--dense`: the compact track on desktop and the regular 40 by 24 on a phone,
