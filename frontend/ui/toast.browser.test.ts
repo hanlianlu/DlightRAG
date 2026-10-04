@@ -30,6 +30,26 @@ it('caps every requested duration at three seconds while preserving shorter rece
   expect(toast.request?.duration).to.equal(1500);
 });
 
+it('puts focus on the action when the receipt asks for it, and only then', async () => {
+  const toast = mountToast();
+
+  toast.showAction('Plain change', {actionLabel: 'Undo', onAction: async () => {}});
+  await toast.updateComplete;
+  expect(document.activeElement).to.equal(document.body);
+
+  toast.showAction('Forgot: one', {actionLabel: 'Undo', onAction: async () => {}, focus: true});
+  await toast.updateComplete;
+  expect(document.activeElement).to.equal(toast.querySelector('.toast-action'));
+  expect(toast.inert).to.equal(false);
+
+  // A receipt that replaced it first has nothing of the earlier one's to focus.
+  (document.activeElement as HTMLElement).blur();
+  toast.showAction('Asked to focus', {actionLabel: 'Undo', onAction: async () => {}, focus: true});
+  toast.show('Replaced at once');
+  await toast.updateComplete;
+  expect(document.activeElement).to.equal(document.body);
+});
+
 it('renders escaped text and settles an asynchronous public Undo command in place', async () => {
   const toast = mountToast();
   let calls = 0;
