@@ -2,27 +2,30 @@
 
 import {expect} from '@esm-bundle/chai';
 import {resetMouse, sendKeys, sendMouse} from '@web/test-runner-commands';
+import type {AnswerPresentation} from '../api/conversations.ts';
 import {productionHandles} from '../stores/app-handles.ts';
 import {DEFAULT_CHANGES} from '../testing/workspaces.ts';
+import type {AnswerPresentationElement} from './answer-presentation.ts';
+import type {DlChatMessageList} from './chat-message-list.ts';
+import './chat-message-list.ts';
 import type {DlIngestTarget} from './ingest-target.ts';
 import './ingest-target.ts';
 import type {DlWorkspaceScope} from './workspace-scope.ts';
 import './workspace-scope.ts';
 
+// app.css is the product's entry for the global sheets: it imports each into its
+// cascade layer, where a sheet linked on its own would be unlayered and outrank
+// every Feature module.
 const stylesheets = [
   '../design-system/index.css',
-  '../styles/global.css',
+  '../styles/app.css',
   '../styles/layout.css',
-  '../styles/shared-components.css',
-  '../styles/settings.css',
-  '../styles/panels.css',
   '../styles/inspector-files.module.css',
   '../styles/ingest-target.module.css',
   '../styles/workspaces.module.css',
   '../styles/failed-file-recovery.module.css',
   '../styles/inspector-sources.module.css',
   '../styles/answer-presentation.module.css',
-  '../styles/artifacts.css',
   '../styles/chat.module.css',
   '../styles/lightbox.module.css',
 ];
@@ -335,7 +338,7 @@ it('labels Canvas layout controls, truncates long titles, and preserves compact 
 });
 
 it('rounds and clips rich-content containers without rounding table cells', () => {
-  const answer = element('aiMessageContent');
+  const answer = element('aiMessageContent markdownContent');
   const table = document.createElement('table');
   const row = table.insertRow();
   row.insertCell().textContent = 'A';
@@ -352,6 +355,104 @@ it('rounds and clips rich-content containers without rounding table cells', () =
   expect(getComputedStyle(row.cells[0]).borderRadius).to.equal('0px');
   expect(getComputedStyle(code).borderRadius).to.equal('16px');
   expect(getComputedStyle(image).borderRadius).to.equal('16px');
+});
+
+const answerPresentation: AnswerPresentation = {
+  answerText: '### Revenue\n\nRevenue grew.',
+  parts: [{
+    type: 'markdown',
+    text: '### Revenue\n\nRevenue grew.',
+    html: '<h3>Revenue</h3><p>Revenue grew.</p>',
+    artifact: null,
+    evidenceImage: null,
+    inline: false,
+  }],
+  sources: [{id: '1', title: 'Annual report', sourceUrl: null, downloadUrl: null, chunks: []}],
+  evidenceImages: [{
+    id: 'chart',
+    chunkId: 'chunk-1',
+    sourceRef: '1',
+    url: '/web/api/images/default/chunk-1?size=full',
+    thumbnailUrl: '/web/api/images/default/chunk-1?size=thumb',
+    label: 'Chart',
+    answerImageSent: true,
+  }],
+  linkCards: [],
+  artifacts: [],
+  artifactOutcome: {status: 'complete', issues: []},
+};
+
+/** The same Answer in a chat turn and in the Artifact Canvas, whose content
+ *  well mounts the presentation with no typography of its own. */
+async function answerHosts(): Promise<[chat: HTMLElement, canvas: HTMLElement]> {
+  const chat = document.createElement('dl-chat-message-list') as DlChatMessageList;
+  chat.turns = [{
+    id: 'turn-1',
+    userText: 'How did revenue change?',
+    userAttachments: [],
+    runId: 'run-1',
+    state: 'succeeded',
+    streamText: '',
+    presentation: answerPresentation,
+    usage: {},
+    error: '',
+    progress: '',
+    liveStatus: '',
+    sawChildren: false,
+    cancelRequested: false,
+    steeringMessages: [],
+    toolRows: [],
+  }];
+  const canvas = document.createElement('dl-artifact-canvas');
+  canvas.className = 'open';
+  const content = document.createElement('div');
+  content.className = 'artifact-canvas-content';
+  const presented = document.createElement('dl-answer-presentation') as AnswerPresentationElement;
+  presented.presentation = answerPresentation;
+  content.appendChild(presented);
+  canvas.appendChild(content);
+  document.body.append(chat, canvas);
+  await chat.updateComplete;
+  await Promise.all([chat, canvas].map((host) => (
+    host.querySelector<AnswerPresentationElement>('dl-answer-presentation')?.updateComplete
+  )));
+  return [chat, canvas];
+}
+
+function styleOf(node: Element | null, properties: readonly string[]): Record<string, string> {
+  if (!node) throw new Error('missing answer node');
+  const style = getComputedStyle(node);
+  return Object.fromEntries(properties.map((property) => [property, style.getPropertyValue(property)]));
+}
+
+it('keeps Markdown typography inside Markdown parts in chat and in the Artifact Canvas', async () => {
+  const [chat, canvas] = await answerHosts();
+  const captionSize = element('');
+  captionSize.style.fontSize = 'var(--font-size-caption)';
+
+  // The presentation's own chrome renders alike whichever host wraps it: every
+  // section title is one caption label and evidence thumbnails fill their tiles.
+  const title = ['font-size', 'font-weight', 'color', 'text-transform', 'margin-top', 'margin-bottom'];
+  const caption = styleOf(canvas.querySelector('.answer-references > h3'), title);
+  expect(caption['font-size']).to.equal(getComputedStyle(captionSize).fontSize);
+  expect(caption['text-transform']).to.equal('uppercase');
+  for (const [name, host] of [['chat', chat], ['canvas', canvas]] as const) {
+    for (const selector of ['.answer-evidence > h3', '.answer-references > h3']) {
+      expect(styleOf(host.querySelector(selector), title), `${name} ${selector}`).to.deep.equal(caption);
+    }
+  }
+  const thumbnail = ['height', 'margin-top', 'margin-bottom', 'border-radius'];
+  expect(styleOf(chat.querySelector('.answer-evidence img'), thumbnail))
+    .to.deep.equal(styleOf(canvas.querySelector('.answer-evidence img'), thumbnail));
+
+  // A model-authored heading keeps the Markdown heading design in both hosts.
+  for (const host of [chat, canvas]) {
+    const body = styleOf(host.querySelector('[data-answer-part]'), ['font-size']);
+    const heading = styleOf(host.querySelector('[data-answer-part] h3'), ['font-size', 'font-weight']);
+    expect(Number.parseFloat(heading['font-size']))
+      .to.be.closeTo(Number.parseFloat(body['font-size']) * 1.05, 0.01);
+    expect(heading['font-weight']).to.equal('600');
+  }
 });
 
 it('places popovers and menus from their trigger through one anchored primitive', () => {

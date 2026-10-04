@@ -78,11 +78,8 @@
     max-width: 100%;
 }
 
-.answer-evidence h3 {
-    color: var(--color-text-muted);
-    font-size: var(--font-size-caption);
-    margin: var(--space-related) 0 0;
-    text-transform: uppercase;
+.answer-evidence {
+    margin-top: var(--space-related);
 }
 
 .answer-evidence-image {
