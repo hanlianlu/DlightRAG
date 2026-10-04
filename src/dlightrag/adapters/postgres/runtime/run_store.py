@@ -17,6 +17,10 @@ from typing import Any, Literal, cast
 
 import asyncpg
 
+from dlightrag.adapters.postgres.answer.agent_accounts import (
+    AGENT_ACCOUNTS_DDL,
+    AGENT_ACCOUNTS_SCHEMA_TABLE,
+)
 from dlightrag.adapters.postgres.answer.memory_settings import (
     MEMORY_SETTINGS_DDL,
     MEMORY_SETTINGS_SCHEMA_TABLE,
@@ -58,6 +62,10 @@ from dlightrag.adapters.postgres.runtime._terminal import (
     SETTLE_TERMINATED_RUN_CHILDREN,
     TerminalStatus,
     finish_fenced_run,
+)
+from dlightrag.adapters.postgres.runtime.browser_leases import (
+    AGENT_BROWSER_LEASES_DDL,
+    AGENT_BROWSER_LEASES_SCHEMA_TABLE,
 )
 from dlightrag.adapters.postgres.runtime.run_blob_store import BlobSizeConflict, write_blob_content
 from dlightrag.engine.agent.session.ids import SessionId
@@ -953,6 +961,8 @@ RUN_MIGRATIONS = (
             _CREATE_COMMITTED_SPILLS,
             _CREATE_SESSION_NOTES,
             *MEMORY_SETTINGS_DDL,
+            *AGENT_BROWSER_LEASES_DDL,
+            *AGENT_ACCOUNTS_DDL,
         ),
     ),
     Migration(
@@ -1127,6 +1137,16 @@ RUN_MIGRATIONS = (
             "CHECK (presentation IN "
             "('image', 'video', 'markdown', 'html', 'pdf', 'text', 'download'))",
         ),
+    ),
+    Migration(
+        "agent_browser_leases",
+        "Lease Agent Browser endpoints to Runs",
+        AGENT_BROWSER_LEASES_DDL,
+    ),
+    Migration(
+        "agent_accounts",
+        "Keep each owner's Agent Accounts, sealed under the key ring",
+        AGENT_ACCOUNTS_DDL,
     ),
 )
 
@@ -1639,6 +1659,8 @@ _RUN_TABLES = (
         ),
     ),
     MEMORY_SETTINGS_SCHEMA_TABLE,
+    AGENT_BROWSER_LEASES_SCHEMA_TABLE,
+    AGENT_ACCOUNTS_SCHEMA_TABLE,
     TableRequirement(
         name="dlightrag_answer_committed_spills",
         columns=(
@@ -2222,7 +2244,8 @@ SELECT resource_id, ordinal, blob_digest, safe_name, media_type, source_locator,
 FROM dlightrag_answer_resources
 WHERE owner_id = $1 AND run_id = $2 AND kind = 'fetched_blob'
   AND capabilities->>'resource_kind' IN (
-      'web', 'tool_attachment', 'conversion_snapshot', 'conversion_asset', 'lineage_adoption'
+      'web', 'web_render', 'tool_attachment', 'conversion_snapshot', 'conversion_asset',
+      'lineage_adoption'
   )
   AND ordinal IS NOT NULL AND source_locator IS NOT NULL
 ORDER BY ordinal, resource_id

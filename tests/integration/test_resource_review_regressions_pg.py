@@ -75,7 +75,11 @@ from dlightrag.engine.answer.resources.models import (
     ResourceAdmissionError,
     ResourceInput,
 )
-from dlightrag.engine.answer.resources.registry import ResourceRegistry
+from dlightrag.engine.answer.resources.registry import (
+    AgentBrowserRender,
+    HostedExtract,
+    ResourceRegistry,
+)
 from dlightrag.engine.answer.runs.routing import RoutingAcceptance
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 from dlightrag.engine.answer.tools.subagents import SubagentHost
@@ -91,6 +95,8 @@ from tests.integration.test_attachment_replay_pg import (  # noqa: F401
     orchestrator,
     origin,
 )
+from tests.support.agent_browser import RecordingRenderer, inert_browser_host
+from tests.support.dns import public_dns
 from tests.support.resources import pdf_bytes
 from tests.support.resources import png as png_bytes
 from tests.unit.conftest import answer_image_policy, answer_model_profile
@@ -242,7 +248,7 @@ async def test_a_web_pdf_viewed_and_read_in_one_group_resumes_as_it_was_read(pg,
 
     seen: list[Any] = []
     async with ResourceRegistry(
-        resource_secret=b"scan", url_text_fallback=extract, fetched_bytes_sink=sink
+        resource_secret=b"scan", extract_chain=(HostedExtract(extract),), fetched_bytes_sink=sink
     ) as registry:
 
         async def model(**kwargs):
@@ -277,7 +283,9 @@ async def test_a_web_pdf_viewed_and_read_in_one_group_resumes_as_it_was_read(pg,
         raise AssertionError("a resumed Run neither fetches nor extracts")
 
     monkeypatch.setattr("dlightrag.engine.answer.resources.registry.fetch_public_http", forbidden)
-    async with ResourceRegistry(resource_secret=b"scan", url_text_fallback=forbidden) as resumed:
+    async with ResourceRegistry(
+        resource_secret=b"scan", extract_chain=(HostedExtract(forbidden),)
+    ) as resumed:
         await executor(pg)._restore_registry_fetches(resumed, owner_id=OWNER, run_id=session.run_id)
         from tests.support.resources import call, tools
 
@@ -287,6 +295,184 @@ async def test_a_web_pdf_viewed_and_read_in_one_group_resumes_as_it_was_read(pg,
     assert "Extracted text of the scan." in text.text_content
     assert pages.is_error is False
     assert len(tool_content_attachments(pages.parts)) == 2
+
+
+_QUOTES_URL = "https://spa.example.com/quotes.html"
+_QUOTES_PAGE = (
+    "<html><body><h1>Quotes</h1><p>A day without sunshine is like, you know, night. "
+    "Albert Einstein</p><p>It is our choices that show what we truly are. "
+    "J.K. Rowling</p></body></html>"
+)
+
+
+async def _rendering_rows(pg, session) -> dict[str, list[dict[str, Any]]]:
+    """The Run's settled Resource rows by their kind, as recovery reads them."""
+    rows: dict[str, list[dict[str, Any]]] = {}
+    async with pg[1].acquire() as conn:
+        for row in await conn.fetch(
+            "SELECT resource_id, capabilities, source_locator FROM dlightrag_answer_resources"
+            " WHERE run_id = $1 ORDER BY resource_id",
+            uuid.UUID(session.run_id),
+        ):
+            capabilities = json.loads(row["capabilities"])
+            rows.setdefault(capabilities["resource_kind"], []).append(
+                {
+                    "resource_id": row["resource_id"],
+                    "locator": bytes(row["source_locator"]).decode(),
+                    **capabilities,
+                }
+            )
+    return rows
+
+
+async def test_a_rendered_read_settles_and_a_resumed_run_reads_it_without_a_browser(
+    pg, monkeypatch
+):
+    """The model reads a JavaScript page rendered; what settles is the rendering and its view.
+
+    The page was never fetched directly, so no Web row exists for its URL: the resumed Run
+    restores the rendering under the handle the model was shown, and reads, plain or
+    rendered, answer from it without fetching and without a browser.
+    """
+    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
+    session, session_id = await new_run(pg[0])
+    renderer = RecordingRenderer({_QUOTES_URL: _QUOTES_PAGE})
+    buffer = FetchedResourceBuffer()
+
+    async def sink(fetched, owner):
+        buffer.append(fetched, owner)
+
+    seen: list[Any] = []
+    async with ResourceRegistry(
+        resource_secret=b"quotes", page_renderer=renderer, fetched_bytes_sink=sink
+    ) as registry:
+
+        async def model(**kwargs):
+            seen.append(kwargs["messages"])
+            if len(seen) == 1:
+                return AssistantTurn(
+                    text="",
+                    tool_calls=(
+                        ToolCall("read-1", "read", {"url": _QUOTES_URL, "rendered": True}),
+                    ),
+                    stop_reason="tool_use",
+                )
+            return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
+
+        host = orchestrator(model, registry=registry, browser=inert_browser_host())
+        await drive(
+            session,
+            session_id,
+            host,
+            host.prepare_run("quote the page", registry=registry),
+            fetched_buffer=buffer,
+        )
+        (entry,) = registry.manifest()
+    answered = str(seen[-1])
+    assert "Albert Einstein" in answered and "| rendered |" in answered
+    assert renderer.calls == [_QUOTES_URL]
+
+    rows = await _rendering_rows(pg, session)
+    assert "web" not in rows
+    (rendering,) = rows["web_render"]
+    assert rendering["resource_id"] == f"{entry.resource_id}-rendered"
+    assert rendering["locator"] == entry.resource_id
+    assert (rendering["acquisition"], rendering["admission_origin"]) == ("browser_render", "agent")
+    assert (rendering["url"], rendering["final_url"]) == (_QUOTES_URL, _QUOTES_URL)
+    (view,) = rows["conversion_snapshot"]
+    assert view["locator"] == f"{entry.resource_id}-rendered"
+
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("a resumed Run neither fetches nor renders")
+
+    monkeypatch.setattr("dlightrag.engine.answer.resources.registry.fetch_public_http", forbidden)
+    async with ResourceRegistry(
+        resource_secret=b"quotes", page_renderer=forbidden, cursor_secret=b"c"
+    ) as resumed:
+        await executor(pg)._restore_registry_fetches(resumed, owner_id=OWNER, run_id=session.run_id)
+        from tests.support.resources import call, tools
+
+        read, _ = tools(resumed, rendered=True)
+        plain = await call(read, url=_QUOTES_URL)
+        explicit = await call(read, url=_QUOTES_URL, rendered=True)
+    assert plain.is_error is False and "Albert Einstein" in plain.text_content
+    assert explicit.text_content == plain.text_content
+    assert "| rendered |" in plain.text_content
+
+
+async def test_a_shell_read_through_the_chain_settles_its_bytes_and_rendering_together(
+    pg, monkeypatch
+):
+    """The direct fetch holds no text, so the automatic chain's browser supplies it.
+
+    Both settle: the shell as the Resource's snapshot and the rendering beside it. The
+    resumed Run reads the rendering without fetching the shell again or rendering it.
+    """
+    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
+    session, session_id = await new_run(pg[0])
+    shell = b"<html><body><div id='app'></div><script>run()</script></body></html>"
+    fetch = AsyncMock(
+        return_value=SimpleNamespace(content=shell, final_url=_QUOTES_URL, media_type="text/html")
+    )
+    monkeypatch.setattr("dlightrag.engine.answer.resources.registry.fetch_public_http", fetch)
+    renderer = RecordingRenderer({_QUOTES_URL: _QUOTES_PAGE})
+    buffer = FetchedResourceBuffer()
+
+    async def sink(fetched, owner):
+        buffer.append(fetched, owner)
+
+    seen: list[Any] = []
+    async with ResourceRegistry(
+        resource_secret=b"shell",
+        extract_chain=(AgentBrowserRender(),),
+        page_renderer=renderer,
+        fetched_bytes_sink=sink,
+    ) as registry:
+
+        async def model(**kwargs):
+            seen.append(kwargs["messages"])
+            if len(seen) == 1:
+                return AssistantTurn(
+                    text="",
+                    tool_calls=(ToolCall("read-1", "read", {"url": _QUOTES_URL}),),
+                    stop_reason="tool_use",
+                )
+            return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
+
+        host = orchestrator(model, registry=registry, browser=inert_browser_host())
+        await drive(
+            session,
+            session_id,
+            host,
+            host.prepare_run("quote the page", registry=registry),
+            fetched_buffer=buffer,
+        )
+        (entry,) = registry.manifest()
+    assert "Albert Einstein" in str(seen[-1])
+    assert (fetch.await_count, renderer.calls) == (1, [_QUOTES_URL])
+
+    rows = await _rendering_rows(pg, session)
+    (web,) = rows["web"]
+    assert (web["resource_id"], web["acquisition"]) == (entry.resource_id, "direct_http")
+    (rendering,) = rows["web_render"]
+    assert rendering["locator"] == entry.resource_id
+
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("a resumed Run neither fetches nor renders")
+
+    monkeypatch.setattr("dlightrag.engine.answer.resources.registry.fetch_public_http", forbidden)
+    async with ResourceRegistry(
+        resource_secret=b"shell",
+        extract_chain=(AgentBrowserRender(),),
+        page_renderer=forbidden,
+    ) as resumed:
+        await executor(pg)._restore_registry_fetches(resumed, owner_id=OWNER, run_id=session.run_id)
+        from tests.support.resources import call, tools
+
+        read, _ = tools(resumed, rendered=True)
+        plain = await call(read, resource_id=entry.resource_id)
+    assert plain.is_error is False and "Albert Einstein" in plain.text_content
+    assert "| rendered |" in plain.text_content
 
 
 @pytest.mark.parametrize(

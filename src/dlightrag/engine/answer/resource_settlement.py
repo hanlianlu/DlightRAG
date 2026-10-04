@@ -26,7 +26,8 @@ def attached_resource_update(
     """Describe one attached Resource as its row and complete Blob.
 
     ``intent_id`` names the Tool effect that attached it; publication, which is no
-    Tool effect, records its views with none.
+    Tool effect, records its views with none. Its ``attributes`` join the row's
+    capabilities beside what the row itself says about the bytes.
     """
     plan = plan_blob(attached.content)
     return FetchedResourceSettlementUpdate(
@@ -36,6 +37,7 @@ def attached_resource_update(
             safe_name=attached.filename,
             media_type=attached.mime_type,
             capabilities={
+                **dict(attached.attributes),
                 "resource_kind": attached.resource_kind,
                 "visual_source": asdict(attached.source) if attached.source is not None else None,
                 **({"resource_aliases": list(attached.aliases)} if attached.aliases else {}),

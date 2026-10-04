@@ -20,6 +20,39 @@ x-global-skills-mount: &global-skills-mount
 # reach the loopback-published ports below.
 x-local-proxies: &local-proxies "127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
 
+# The Agent Browser (ADR 0032): a pool of Playwright run-servers, each serving one Run at
+# a time, and the one egress proxy they reach the public Web through. Every member sits
+# on a network of its own that has no route out and none to the other members, because
+# --unsafe lets a connecting client choose its browser's launch arguments. The proxy and
+# the application services join every member network. Adding a member therefore means
+# its service, its internal network, that network on the proxy and on those services,
+# and its endpoint in the bindings below.
+x-agent-browser-bindings: &agent-browser-bindings
+  DLIGHTRAG_ANSWER__AGENT__BROWSER__ENDPOINTS: '["ws://agent-browser-1:3000/","ws://agent-browser-2:3000/"]'
+  DLIGHTRAG_ANSWER__AGENT__BROWSER__EGRESS_PROXY: http://agent-browser-egress:3128
+
+x-agent-browser: &agent-browser
+  restart: unless-stopped
+  image: dlightrag-agent-browser:1.63.0
+  build:
+    context: agent-browser/browser
+  init: true
+  security_opt:
+    # Playwright's recommended profile for untrusted sites. Resolved from the directory
+    # compose runs in, so run compose from the repository root.
+    - seccomp=agent-browser/browser/seccomp_profile.json
+  mem_limit: ${COMPOSE_AGENT_BROWSER_MEM_LIMIT:-2g}
+  pids_limit: 1024
+  healthcheck:
+    test:
+      - CMD
+      - node
+      - -e
+      - "fetch('http://127.0.0.1:3000/json').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
+    interval: 10s
+    timeout: 5s
+    retries: 6
+
 services:
   dlightrag-api:
     restart: unless-stopped
@@ -28,7 +61,9 @@ services:
       context: .
     ports:
       - "127.0.0.1:8100:8100"
+    networks: [default, agent-browser-1, agent-browser-2]
     environment:
+      <<: *agent-browser-bindings
       # Compose Service DNS; the native application default remains localhost.
       DLIGHTRAG_STORAGE__POSTGRES__HOST: postgres
       # The container binds 0.0.0.0, but the port above is published to
@@ -77,7 +112,9 @@ services:
     # .env (see .env.example) before exposing it on a non-loopback network.
     ports:
       - "127.0.0.1:8101:8101"
+    networks: [default, agent-browser-1, agent-browser-2]
     environment:
+      <<: *agent-browser-bindings
       # Compose Service DNS; the native application default remains localhost.
       DLIGHTRAG_STORAGE__POSTGRES__HOST: postgres
       DLIGHTRAG_INTERFACES__MCP__TRANSPORT: streamable-http
@@ -119,7 +156,9 @@ services:
       context: .
     ports:
       - "127.0.0.1:8102:8100"
+    networks: [default, agent-browser-1, agent-browser-2]
     environment:
+      <<: *agent-browser-bindings
       DLIGHTRAG_DEPLOYMENT__SERVICE_ROLE: reader
       # Compose Service DNS; the native application default remains localhost.
       DLIGHTRAG_STORAGE__POSTGRES__HOST: postgres
@@ -214,6 +253,30 @@ services:
       timeout: 3s
       retries: 10
 
+  # The Agent Browser pool. No service waits for these: a render with no browser
+  # up fails as unreachable, and the Run goes on without it.
+  agent-browser-1:
+    <<: *agent-browser
+    networks: [agent-browser-1]
+
+  agent-browser-2:
+    <<: *agent-browser
+    networks: [agent-browser-2]
+
+  # Squid admits public destinations only (agent-browser/egress/squid.conf), so a
+  # browser that loses or ignores its proxy setting reaches nothing.
+  agent-browser-egress:
+    restart: unless-stopped
+    image: dlightrag-agent-browser-egress:local
+    build:
+      context: agent-browser/egress
+    networks: [default, agent-browser-1, agent-browser-2]
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/3128"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
   docling:
     profiles: [docling]
     image: ${DOCLING_SERVE_IMAGE:-quay.io/docling-project/docling-serve-cpu:latest}
@@ -243,6 +306,12 @@ services:
 configs:
   dlightrag_config:
     file: ./config.yaml
+
+networks:
+  agent-browser-1:
+    internal: true
+  agent-browser-2:
+    internal: true
 
 volumes:
   dlightrag_data:

@@ -15,19 +15,36 @@ from dlightrag.engine.agent.tool_content import (
     encode_tool_content,
     tool_content_attachments,
 )
-from dlightrag.engine.agent.tools import ToolResult, fit_tool_result
-from dlightrag.engine.agent.tools.files import ViewArgs, read_tool, view_tool
+from dlightrag.engine.agent.tools import ToolEffects, ToolResult, fit_tool_result
+from dlightrag.engine.agent.tools.files import (
+    RenderedReadArgs,
+    ViewArgs,
+    read_declaration,
+    read_tool,
+    view_tool,
+)
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY
 from dlightrag.engine.ai.tokens import estimate_tokens
+from dlightrag.engine.answer.agent_browser import browser_failure
+from dlightrag.engine.answer.resource_settlement import attached_resource_update
 from dlightrag.engine.answer.resources.converters import ResourceConversionError
 from dlightrag.engine.answer.resources.models import ResourceInput, ResourceRegistryError
-from dlightrag.engine.answer.resources.registry import ResourceRegistry
+from dlightrag.engine.answer.resources.registry import HostedExtract, ResourceRegistry
 from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
 from dlightrag.engine.answer.tools.resources import make_resource_reader, make_resource_viewer
 from dlightrag.engine.answer.web_sources import WebExtractResult
 from dlightrag.engine.public_http import PublicHttpFetch
+from tests.support.agent_browser import RecordingRenderer
 from tests.support.dns import public_dns
-from tests.support.resources import call, docx_images, pdf_bytes, png, preparer, tools
+from tests.support.resources import (
+    call,
+    docx_images,
+    pdf_bytes,
+    png,
+    preparer,
+    printed_handle,
+    tools,
+)
 from tests.tool_helpers import tool_runtime
 from tests.unit.conftest import answer_model_profile
 
@@ -300,7 +317,7 @@ class _ScanRun:
             )
 
         return ResourceRegistry(
-            url_text_fallback=extract,
+            extract_chain=(HostedExtract(extract),),
             fetched_bytes_sink=self.persist,
             resource_secret=b"scan-run",
             cursor_secret=b"scan-cursors",
@@ -400,6 +417,139 @@ async def test_a_resumed_run_reads_and_views_a_web_pdf_as_before(monkeypatch):
         a.content_digest for a in tool_content_attachments(pages.parts)
     ]
     assert run.fetches == [_SCAN_URL]
+
+
+# -- Rendered Reads (ADR 0032) --------------------------------------------------------------
+
+_APP = "https://spa.example.com/app.html"
+_APP_PAGE = "<html><body><h1>Quotes</h1><p>Albert Einstein</p><p>J.K. Rowling</p></body></html>"
+
+
+def test_rendered_is_offered_only_with_an_agent_browser_and_only_for_urls() -> None:
+    plain = read_declaration(public_url=True)
+    offered = read_declaration(public_url=True, rendered=True)
+
+    assert "rendered" not in plain.definition.parameters["properties"]
+    assert "rendered" in offered.definition.parameters["properties"]
+    assert "rendered=true" in offered.description and "rendered=true" not in plain.description
+    # A host that cannot read a URL has no rendering of one to offer.
+    assert read_declaration(public_url=False, rendered=True) == read_declaration(public_url=False)
+
+
+@pytest.mark.parametrize(
+    ("arguments", "complaint"),
+    [
+        ({"path": "notes.txt", "rendered": True}, "only for url or resource_id"),
+        ({"url": _APP, "rendered": True, "http": {"accept": "text/html"}}, "direct acquisition"),
+        ({"url": _APP, "rendered": True, "cursor": "r.x"}, "returned resource_id"),
+        ({"rendered": True}, "exactly one of"),
+    ],
+)
+def test_a_rendered_read_of_anything_but_a_url_or_a_web_resource_is_a_validation_error(
+    arguments, complaint
+) -> None:
+    with pytest.raises(ValidationError, match=complaint):
+        RenderedReadArgs.model_validate(arguments)
+
+
+async def test_a_rendered_read_settles_its_rendering_its_view_and_where_it_came_from(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
+    renderer = RecordingRenderer({_APP: _APP_PAGE})
+    async with ResourceRegistry(page_renderer=renderer) as registry:
+        read, _ = tools(registry, rendered=True)
+
+        result = await call(read, url=_APP, rendered=True)
+
+        assert result.is_error is False, result.text_content
+        resource_id = printed_handle(result)
+        assert f"[resource: {resource_id} | rendered | lines 1-" in result.text_content
+        assert "Albert Einstein" in result.text_content
+        assert "[Rendered view from the Agent Browser (browser_render)." in result.text_content
+        (source,) = result.effects.evidence_sources
+        assert dict(source.attributes)["acquisition"] == "browser_render"
+        assert source.source_uri == _APP
+        rendering, snapshot = result.effects.attached_resources
+        assert (rendering.resource_kind, snapshot.resource_kind) == (
+            "web_render",
+            "conversion_snapshot",
+        )
+        assert (rendering.resource_id, rendering.source_locator) == (
+            f"{resource_id}-rendered",
+            resource_id,
+        )
+        assert snapshot.filename == "conversion.json"
+        assert dict(rendering.attributes) == {
+            "acquisition": "browser_render",
+            "admission_origin": "agent",
+            "url": _APP,
+            "final_url": _APP,
+        }
+        # The row records these beside its kind.
+        row = attached_resource_update(rendering, session_id="s", intent_id="i")
+        assert row.resource.capabilities["resource_kind"] == "web_render"
+        assert row.resource.capabilities["url"] == _APP
+        assert row.resource.source_locator == resource_id.encode()
+
+
+async def test_a_render_the_browser_could_not_give_is_an_error_that_settles_nothing(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
+    renderer = RecordingRenderer({_APP: browser_failure("busy")})
+    async with ResourceRegistry(page_renderer=renderer) as registry:
+        read, _ = tools(registry, rendered=True)
+
+        result = await call(read, url=_APP, rendered=True)
+
+        assert result.is_error is True
+        assert result.text_content == browser_failure("busy").public_message
+        assert result.effects == ToolEffects()
+
+
+async def test_a_rendered_read_of_uploaded_bytes_is_an_error_that_settles_nothing() -> None:
+    async with ResourceRegistry(page_renderer=RecordingRenderer({})) as registry:
+        resource = registry.register(ResourceInput(filename="a.txt", content=b"uploaded"))
+        read, _ = tools(registry, rendered=True)
+
+        result = await call(read, resource_id=resource, rendered=True)
+
+        assert result.is_error is True
+        assert f"{resource} is not a Web Resource" in result.text_content
+        assert result.effects == ToolEffects()
+
+
+async def test_viewing_an_image_of_a_rendering_fetches_nothing(monkeypatch) -> None:
+    import base64
+
+    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
+    fetches: list[str] = []
+
+    async def fetch(url, **_kwargs):
+        fetches.append(url)
+        raise AssertionError("the image is in the rendering the Run holds")
+
+    monkeypatch.setattr("dlightrag.engine.answer.resources.registry.fetch_public_http", fetch)
+    image = base64.b64encode(png()).decode()
+    page = f"<html><body><p>Chart</p><img alt='chart' src='data:image/png;base64,{image}'></body></html>"
+    async with ResourceRegistry(page_renderer=RecordingRenderer({_APP: page})) as registry:
+        read, view = tools(registry, rendered=True)
+        text = await call(read, url=_APP, rendered=True)
+        resource_id = printed_handle(text)
+        handle = text.text_content.split("[visual handles: ")[1].split(" ")[0].rstrip("]")
+
+        pixels = await call(view, resource_id=resource_id, locator=handle)
+
+        assert pixels.is_error is False, pixels.text_content
+        (attachment,) = tool_content_attachments(pixels.parts)
+        assert attachment.data == png()
+        assert attachment.source is not None and attachment.source.resource_id == resource_id
+        (source,) = pixels.effects.evidence_sources
+        assert dict(source.attributes)["acquisition"] == "browser_render"
+        # What the view settles includes the rendering it came from, so recovery has it.
+        assert "web_render" in {row.resource_kind for row in pixels.effects.attached_resources}
+        assert fetches == []
 
 
 async def test_a_text_longer_than_one_result_is_read_to_the_end_in_pages_the_runtime_keeps_whole():

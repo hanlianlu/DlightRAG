@@ -7,7 +7,7 @@ import pytest
 
 from dlightrag.adapters.postgres.connections import PGConnectionsStore
 from dlightrag.application.connections import ConnectionCommand, Connections, ConnectionsError
-from dlightrag.application.connections.credentials import CredentialCipher
+from dlightrag.engine.credential_cipher import CredentialCipher
 from tests.integration.run_runtime_pg_harness import drop_owned_database, isolated_run_runtime
 from tests.support.pg import PG_CONN_KWARGS, drop_scratch_database, notification_hub
 
@@ -119,7 +119,7 @@ async def test_bearer_encrypted_owner_bound_and_rotatable_without_echo():
 
     from pydantic import SecretStr
 
-    from dlightrag.application.connections.credentials import CredentialCipher
+    from dlightrag.engine.credential_cipher import CredentialCipher
     from tests.unit.test_connections_config import KEYRING
 
     class AuthMcp(FakeMcp):
@@ -550,7 +550,7 @@ async def test_endpoint_candidate_failure_keeps_enabled_head_and_success_preserv
 async def test_revoke_erases_live_grant_and_delete_tombstones_only_this_owner():
     from pydantic import SecretStr
 
-    from dlightrag.application.connections.credentials import CredentialCipher
+    from dlightrag.engine.credential_cipher import CredentialCipher
     from tests.unit.test_connections_config import KEYRING
 
     async with isolated_run_runtime("connection_revoke") as (_, pool):

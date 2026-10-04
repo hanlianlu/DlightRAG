@@ -16,6 +16,7 @@ from dlightrag.engine.ai.catalog import resolve_model_profile
 from dlightrag.engine.ai.fingerprints import model_endpoint_fingerprint
 from dlightrag.engine.ai.reasoning import resolve_reasoning
 from dlightrag.engine.ai.settings import ChatModelSelector, ModelSettings
+from dlightrag.engine.answer.agent_browser import AgentBrowserSettings
 from dlightrag.engine.answer.capabilities import (
     AnswerCapabilitySettings,
     AnswerImagePolicySettings,
@@ -133,9 +134,31 @@ def answer_model_runtime_settings(config: DlightragConfig) -> AnswerModelRuntime
             exa_api_key=web.exa.api_key,
             tavily_api_key=web.tavily.api_key,
             search_providers=web.search_order(),
-            extract_providers=web.extract_order(),
+            extract_providers=config.answer.extract_chain(),
         ),
         query_image_limit=MAX_QUERY_IMAGES,
+    )
+
+
+def agent_browser_settings(config: DlightragConfig) -> AgentBrowserSettings | None:
+    """Snapshot the deployment's Agent Browser, or None when none is configured."""
+    browser = config.answer.agent.browser
+    # Endpoints require the proxy, so a browser with the one has the other.
+    if not browser.enabled or browser.egress_proxy is None:
+        return None
+    return AgentBrowserSettings(
+        endpoints=browser.endpoints,
+        egress_proxy=browser.egress_proxy,
+        chromium_sandbox=browser.chromium_sandbox,
+        connect_timeout_seconds=browser.connect_timeout_seconds,
+        lease_wait_seconds=browser.lease_wait_seconds,
+        navigation_timeout_seconds=browser.navigation_timeout_seconds,
+        settle_timeout_seconds=browser.settle_timeout_seconds,
+        action_timeout_seconds=browser.action_timeout_seconds,
+        snapshot_depth=browser.snapshot_depth,
+        # A download is admitted under the bound of any fetched Resource.
+        max_download_bytes=config.answer.generation.max_attachment_bytes,
+        idle_release_seconds=browser.idle_release_seconds,
     )
 
 

@@ -6,7 +6,8 @@ from typing import Any, TypeGuard
 
 from fastapi import HTTPException
 
-_INERT_SVG_CSP = "sandbox; default-src 'none'; img-src data:"
+#: Served with an SVG, which is a document: it may draw, and no script or load of its own runs.
+INERT_SVG_CSP = "sandbox; default-src 'none'; img-src data:"
 
 
 def artifact_range(header: str, total: int) -> tuple[int, int | None, int, str | None]:
@@ -57,7 +58,7 @@ def artifact_response(
         "X-Content-Type-Options": "nosniff",
     }
     if media_type == "image/svg+xml":
-        headers["Content-Security-Policy"] = _INERT_SVG_CSP
+        headers["Content-Security-Policy"] = INERT_SVG_CSP
     if content_range is not None:
         headers["Content-Range"] = content_range
     return effective_type, headers
@@ -83,6 +84,7 @@ def _range_not_satisfiable(total: int) -> HTTPException:
 
 
 __all__ = [
+    "INERT_SVG_CSP",
     "artifact_presentation_available",
     "artifact_range",
     "artifact_response",

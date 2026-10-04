@@ -1135,6 +1135,7 @@ def _bound_child_runner(
     control_ack: ControlAcknowledger | None = None,
     is_detaching: Callable[[], bool] | None = None,
     session_notes: SessionNotesPlane | None = None,
+    close_agent_page: Callable[[str], Awaitable[None]] | None = None,
 ) -> Callable[[SessionId, ChildRequest, str, ChildContextSnapshot], Awaitable[ChildOutcome]]:
     async def run_child(
         child_id: SessionId,
@@ -1162,6 +1163,7 @@ def _bound_child_runner(
             control_ack=control_ack,
             is_detaching=is_detaching,
             session_notes=session_notes,
+            close_agent_page=close_agent_page,
         )
 
     return run_child
@@ -1191,12 +1193,15 @@ async def run_child_session(
     control_ack: ControlAcknowledger | None = None,
     is_detaching: Callable[[], bool] | None = None,
     session_notes: SessionNotesPlane | None = None,
+    close_agent_page: Callable[[str], Awaitable[None]] | None = None,
 ) -> ChildOutcome:
     """Run or restore one Child through the same deep AgentSessionRuntime.
 
     A Child shares its parent Run's working copy, so it promotes the Session's notes
     under the same lease: a note a Child writes must reach memory at the Child's own
-    Tool settlement, not only if the parent happens to settle another one.
+    Tool settlement, not only if the parent happens to settle another one. The page it
+    drove in the Run's Agent Browser closes when its drive ends, however it ends, so a
+    Child that is continued starts without one.
     """
     if context_snapshot.parent_session_id != parent_session_id:
         raise RunExecutionError(
@@ -1425,6 +1430,9 @@ async def run_child_session(
         raise
     except SessionLeaseLostError as exc:
         raise LeaseLostError from exc
+    finally:
+        if close_agent_page is not None:
+            await close_agent_page(child_id.value)
     snapshot = await child_repository.load(child_id)
     orchestrator.restore_runtime_snapshot(prepared, snapshot)
     await _restore_durable_evidence(prepared, child_repository, child_id)

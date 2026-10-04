@@ -226,7 +226,10 @@ Research drives `AgentSessionRuntime` over one selected Lane. Its closed
 run-local registry may include:
 
 - knowledge-base, resource, and optional provider-neutral public Web tools;
-- rooted file/Bash tools when execution is enabled;
+- the `browser` tool, when the deployment configures an [Agent Browser](#agent-browser);
+- rooted file/Bash tools when execution is enabled, among them
+  [`materialize`](resource-reading.md#materialize), which copies a Resource into the
+  Agent Workspace;
 - Profile Memory tools for the parent (children recall only);
 - progressive `load_skill`, plus `publish_skill`/`delete_skill` for the parent;
 - the tools of every enabled
@@ -253,7 +256,8 @@ again when it ends its turn; unread results are. The built-in `council` Skill is
 investigations and at most one curated cross-examination; it adds no tools, asks
 for no narrowing of its children, which hold the default set, and is not a
 permission gate. A user's explicit `/skill:` request is made to the Run's own
-agent, so a child gets the Skill catalog but not that request.
+agent, so a child gets the Skill catalog, while it holds `load_skill`, but not that
+request.
 
 Child `model_role` selects a configured model, not a task category or permission.
 The objective remains arbitrary free text; omitting the selector chooses `query`.
@@ -343,6 +347,146 @@ chain, while an Extract that yields no usable text counts as a provider failure.
 Result URLs become inert resource handles that only an explicit `read` or
 `view` fetches, under the
 [Resource acquisition](resource-reading.md#registration-and-acquisition) rules.
+A configured Agent Browser joins the Extract chain at its end unless
+`extract_providers` names it elsewhere
+([Public Web Sources](configuration.md#public-web-sources)): when the direct fetch
+failed or held no text, the chain's steps run in order and the first usable text wins,
+so a browser at the end renders the page in the Run's browser only when no hosted
+provider supplied any. `read(..., rendered=true)` asks for that rendering directly
+([Rendered reads](resource-reading.md#rendered-reads)).
+
+### Agent Browser
+
+A deployment that configures an [Agent Browser](architecture.md#agent-browser) gives
+Research four tiers of reading ([ADR 0032](adr/0032-the-agent-browser.md)): `read(url)`
+over direct HTTP, always first; the configured hosted Extract chain; a Rendered Read,
+for a page whose content a script builds ([Rendered reads](resource-reading.md#rendered-reads));
+and the `browser` tool, for a task that needs interaction. The tool's description
+teaches the tiers: read pages with `read`, pass `rendered=true` only when a read
+returned a JavaScript shell, and use `browser` only for a search form, a filter,
+pagination behind a button, or a file behind a download control. Fast has no tools, so
+it has no browser.
+
+- **An Agent Page for each Agent Session.** An Agent Session's first `navigate` leases the
+  Run's browser, if the Run holds none, and opens that Session's Agent Page. Any other
+  first action answers that no page is open and leases nothing. A Child Session holds the
+  tool by default ([ADR 0025](adr/0025-a-child-inherits-capability-not-authority.md)) and
+  has an Agent Page of its own in the same browser, so two Children never see each other's
+  cookies or pages. When a page closes, and how long the Run holds its browser, is in
+  [Architecture](architecture.md#agent-browser).
+- **Actions.** `navigate`, `snapshot`, `find`, `back`, and `wait` (for text, for text to
+  go, or for seconds); `click`, `type` (optionally pressing Enter), `select`, `press`,
+  and `scroll`; `screenshot` and `capture`; `upload`, which is offered only where the
+  Run has a workspace (`trust`); and `register`, `login`, and `inbox`, which belong to
+  [Agent Accounts and the Agent Mailbox](#agent-accounts-and-the-agent-mailbox). Only a
+  configured capability's actions are offered, and
+  no configured value appears in the description or the schema, so changing a timeout
+  never changes a pinned plan. The tool is not read-only and never replays: each call runs
+  alone, and a call pending at a crash settles its outcome as unknown.
+- **Snapshots and refs.** An action that changes the page returns the page's frame
+  (`[browser: <action> | page: <url> | title: <title>]`, with `| HTTP <status>` when the
+  page answered 400 or above, which is reported and never a failure) and a depth-limited
+  accessibility snapshot whose `[ref=eN]` markers name the elements the next action
+  uses. A ref comes from the latest snapshot or `find` of its page and acts only on that
+  page. `find` returns the snapshot lines that contain a query, at most 30, with their
+  refs, and reaches elements below the snapshot's depth. A snapshot beyond the result
+  bounds (51,200 UTF-8 bytes or 2,000 lines) is kept whole in the workspace and its head
+  shown, with the `read` call that returns the rest; without a workspace the call says the
+  full snapshot is unavailable and does not fail, because its action completed and a
+  failure would invite a repeat.
+- **Popups, dialogs, downloads.** A popup or a new tab becomes the active page once the
+  call that opened it has acted and the page it acted on has settled, and the result says
+  so. One that opens later becomes the active page when the next call that names no ref
+  begins, and a call that names a ref acts on the page its ref came from. A page that
+  closes itself returns the previous page, or leaves none until the next `navigate`. `alert`,
+  `confirm`, and `beforeunload` dialogs are accepted, a `prompt` is dismissed, and each
+  is reported with its message, because refusing one would undo what the call set in
+  motion. A file a page downloads is admitted and named in the result
+  ([Browser captures and downloads](resource-reading.md#browser-captures-and-downloads)).
+- **Captures and screenshots.** `capture` admits the current page as a new citable Web
+  Resource and returns its first window as `read` would. A screenshot is the page's
+  pixels attached to the result against the Run's image budget
+  (`answer.generation.max_images` and its byte and pixel limits, which `view` shares), and
+  it is context, never evidence. Everything else a page yields, its text, snapshots, and
+  screenshots, is untrusted model context; only a capture or a download can be cited.
+- **Failures.** A failed call is an error result with one fixed sentence per reason: no
+  page open, the page closed, the page lost when the browser disconnected, no element
+  with the ref, an element not clickable within the action timeout, a key the browser does
+  not know, no earlier page, a target that is not a file input, a wait that timed out, a
+  page that did not load, and a pool that is busy or unreachable. Driver error text
+  enters only the first line of a failed action.
+- **A CAPTCHA stops the path.** On a CAPTCHA or any other human-verification check the
+  model stops that path and reports it; the tool's description says so
+  ([Security](security.md#agent-browser-boundary)).
+- **Recovery.** A recovered Run starts with no page and leases a fresh browser at its next
+  `navigate`, so the next call that is not a `navigate` says that a Run that resumed after
+  an interruption starts with no open page. Captures and downloads that settled are
+  restored without a browser.
+
+### Agent Accounts And The Agent Mailbox
+
+A Run whose deployment allows Agent Accounts (`answer.agent.browser.account_registration`,
+on by default) offers `register` and `login`, and one that also configures an Agent Mailbox
+offers `inbox` ([ADR 0034](adr/0034-agent-accounts-and-the-agent-mailbox.md); what keeps a
+password from the model is in [Security](security.md#agent-accounts)). An Agent Session acts
+as an identity of its own: the tool's description says never to type the owner's details into
+a form, and that DlightRAG makes every password and fills it by ref. Turning accounts off
+withdraws both actions together, and a Run accepted with them is pinned to them.
+
+- **`register`** acts on the page `navigate` opened and leases nothing. It takes
+  `password_refs` (one or two, such as a password and its confirmation), and optionally
+  `email_ref` and `username_ref`; the model types a username into its field first. It checks
+  every ref (the element exists, is of the right kind, and is in a frame of the page's own
+  site) before it fills anything, sizes the password to the smallest `maxlength` the
+  password fields state, and refuses below 12 characters. The address is the one the account
+  already has, which is filled again; else, with a mailbox, the owner's mailbox alias for the
+  site (a Child gets a random one of its own), which is filled; else the address the Agent typed,
+  which must hold one `@` with text on each side of it and no whitespace. The username is the
+  one typed, 1 to 128 characters with no control character. A new account needs at least one
+  of them. It then generates the password, fills it, and records the account before the site
+  has accepted the form, because DlightRAG cannot see the site's verdict. A refused sign-up
+  leaves the record that `login` will fail with, and so does a password the site rejected.
+- **A password reset is a registration.** `register` on a form of a site whose account
+  exists gives the account a new password, keeps its account id and address, and replaces its
+  envelope. That is also how an account recovers when no key opens its envelope: `login` with
+  `email_ref` alone, on the site's reset request form, fills the account's address and opens
+  the `inbox` window, the reset mail's link opens with `navigate`, and `register` on the reset
+  form seals a new password.
+- **`login`** takes any of `email_ref`, `username_ref`, and `password_refs`, and fills the
+  account this site has for the Session: a Child's own Run-scoped account first, else the
+  owner's. It opens the password's envelope only when a password field is named, and
+  refuses an account that lacks the field named, or whose envelope no key opens, with the
+  site's reset path.
+- **What a result says.** Both end like any action that changes the page: the frame, its
+  notes, then a sentence (the account recorded or reset, with `for this owner's later Runs`
+  or `for this Run only (a Child Session's account)`, and for a mailbox alias a pointer to `inbox`;
+  or the fields filled), then the bounded snapshot, in which a password is only
+  `********`. They carry no Evidence. A refusal fills nothing and stores nothing. The
+  reasons: no key ring; a page with no `https` registrable domain; a ref that is stale,
+  in a frame of another site, or not a password, or not a text or email, field; a
+  `maxlength` below 12; an address or username that cannot be recorded; a new account with
+  neither; a fill that failed or that the page changed, which clears what it filled; an
+  account that could not be stored, which does the same and tells the model not to submit;
+  no account for the site, or one without the field named; and an envelope no key opens.
+- **`inbox`** needs no page and no lease. It shows mail that the mailbox aliases of this
+  Agent Session's accounts received since its latest `register` or `login` in the Run, from
+  two minutes before it, because the time is the bucket's own clock; the Session's other
+  mailbox aliases in the Run stay in the window. Before either action it says so, and so it
+  does for accounts with no mailbox alias, an address the Agent typed being none. It shows
+  the newest five messages of its mailbox aliases, each with its time, mailbox alias, sender,
+  subject, up to four links, and up to five codes, says how many more there were, and says
+  when a mailbox alias holds more than a listing reads
+  ([the bucket's contract](configuration.md#agent-mailbox)). A link over 2,048 characters or
+  beyond the first four is only counted. A code is a token of four to nine characters that
+  looks like one. A message over 1 MiB is listed and not read, and one that cannot be parsed
+  is listed as such. An empty window is not an error: the result says mail can take a minute
+  and to call `inbox` again after a `wait`. A bucket that cannot be read is reported by its
+  error code alone ([Operations](operations.md#agent-mailbox)). Mail is untrusted context,
+  and a link in it is followed with `navigate` ([Security](security.md#agent-accounts)).
+- **Subjects and recovery.** `register` and `login` name the page they act on, as the other
+  actions do, and `inbox` names its mailbox aliases. A recovered Run has no Run-scoped
+  account, no window, and no page, as it has no browser; the owner's accounts are intact, and
+  `inbox` needs a new `register` or `login` first.
 
 ## Context And Model Budgets
 
@@ -567,7 +711,7 @@ emits them. Timeout or failure leaves original sources unchanged.
 ## Answer Attachments And Resources
 
 Attachments, caller links, Web Search results, and URLs the Agent chooses become
-Resources of one Answer Run, which Research reads as bounded text and views as
-pixels; they never become corpus data.
-[Answer Resource Reading and Viewing](resource-reading.md) owns that contract,
-and their blobs follow [Run retention](run-runtime.md#retention).
+Resources of one Answer Run, which Research reads as bounded text, views as pixels,
+and, with execution enabled, copies into its Agent Workspace; they never become corpus
+data. [Answer Resource Reading, Viewing, and Copying](resource-reading.md) owns that
+contract, and their blobs follow [Run retention](run-runtime.md#retention).

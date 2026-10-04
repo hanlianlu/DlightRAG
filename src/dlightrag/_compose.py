@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from dlightrag.application.application import Application, _ApplicationComponents
 from dlightrag.application.config import DlightragConfig, get_config
@@ -19,6 +19,9 @@ from dlightrag.engine.ai.embedding import MultimodalEmbedder
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.telemetry import Telemetry
 from dlightrag.engine.runtime.workspace import SessionNotesLimits
+
+if TYPE_CHECKING:
+    from dlightrag.engine.answer.agent_browser import AgentMailbox
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +89,25 @@ def agent_confinement_policy(config: DlightragConfig) -> ConfinementPolicy:
     return policy
 
 
+def _agent_mailbox(config: DlightragConfig) -> AgentMailbox | None:
+    """The Agent Mailbox this deployment configures, or None where it names no bucket."""
+    from dlightrag.adapters.agent_mailbox import S3AgentMailbox
+
+    mailbox = config.answer.agent.mailbox
+    if not mailbox.enabled:
+        return None
+    # The configuration requires the rest of the settings whenever it names a bucket.
+    return S3AgentMailbox(
+        alias_domain=cast(str, mailbox.alias_domain),
+        bucket=cast(str, mailbox.bucket),
+        prefix=mailbox.prefix,
+        endpoint=mailbox.endpoint,
+        region=mailbox.region,
+        access_key_id=cast(str, mailbox.access_key_id),
+        secret_access_key=cast(str, mailbox.secret_access_key),
+    )
+
+
 def _compose(config: DlightragConfig) -> _ApplicationComponents:
     """Construct this process's collaborators from one resolved configuration."""
     from dlightrag_memory.postgres import PostgresMemoryStore
@@ -94,6 +116,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.adapters.mcp.oauth import PersonalOAuthClient
     from dlightrag.adapters.mcp.personal_http import PersonalMcpClient
     from dlightrag.adapters.observability import LangfuseTelemetry
+    from dlightrag.adapters.postgres.answer.agent_accounts import PGAgentAccountStore
     from dlightrag.adapters.postgres.answer.memory_settings import PGMemorySettingsStore
     from dlightrag.adapters.postgres.connections import PGConnectionsStore
     from dlightrag.adapters.postgres.corpus.corpus import PGReadinessProbe, build_pg_corpus_backend
@@ -105,9 +128,9 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.adapters.postgres.runtime import PGRunBlobStore, PGRunStore
     from dlightrag.adapters.postgres.web.web_conversations import PGWebConversationStore
     from dlightrag.application.access import access_control_from_settings
+    from dlightrag.application.agent_accounts import AgentAccountMaintenance
     from dlightrag.application.answer_runs import AnswerService
     from dlightrag.application.connections import Connections
-    from dlightrag.application.connections.credentials import KEYRING_FILE, deployment_cipher
     from dlightrag.application.corpus_admin import (
         CorpusAdmin,
         CorpusMutationExecutor,
@@ -129,6 +152,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.application.runs import RunService
     from dlightrag.application.settings import (
         access_settings,
+        agent_browser_settings,
         answer_capability_settings,
         answer_executor_settings,
         answer_model_runtime_settings,
@@ -159,6 +183,11 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     )
     from dlightrag.engine.ai.telemetry import safe_log_text
     from dlightrag.engine.ai.vision import ModelImageCapabilities
+    from dlightrag.engine.answer.agent_browser import (
+        AgentAccountsBinding,
+        AgentBrowserBinding,
+        has_mailbox,
+    )
     from dlightrag.engine.answer.capabilities import (
         AnswerCapabilityCoordinator,
         AnswerCapabilityView,
@@ -166,6 +195,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.engine.answer.execution import AnswerExecutor, AnswerResourceResolver
     from dlightrag.engine.answer.model_runtime import AnswerModelRuntime
     from dlightrag.engine.answer.workspace import agent_workspace_reclaimer
+    from dlightrag.engine.credential_cipher import KEYRING_FILE, deployment_cipher
     from dlightrag.engine.dependencies import DependencyComponent
     from dlightrag.engine.rag.corpus.downloads import SourceDownloadService
     from dlightrag.engine.rag.retrieval.federation import FederatedReranker
@@ -385,14 +415,43 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         ),
         auto_install=agent_config.search_tool_auto_install,
     )
+    # One key ring seals Connection credentials and Agent Account passwords alike.
+    cipher = deployment_cipher(config.working_dir_path / KEYRING_FILE, create=not config.is_reader)
     connections = Connections(
         store=PGConnectionsStore(),
         mcp=PersonalMcpClient(),
         oauth=PersonalOAuthClient(),
         policy=config.answer.agent.connections,
-        cipher=deployment_cipher(
-            config.working_dir_path / KEYRING_FILE, create=not config.is_reader
-        ),
+        cipher=cipher,
+    )
+
+    browser_settings = agent_browser_settings(config)
+    agent_browser = None
+    if browser_settings is not None:
+        # Playwright loads only where an Agent Browser is configured.
+        from dlightrag.adapters.agent_browser import PooledBrowserProvider
+        from dlightrag.adapters.postgres.runtime.browser_leases import PGAgentBrowserLeaseStore
+
+        agent_browser = AgentBrowserBinding(
+            PooledBrowserProvider(
+                endpoints=browser_settings.endpoints,
+                egress_proxy=browser_settings.egress_proxy,
+                chromium_sandbox=browser_settings.chromium_sandbox,
+                connect_timeout_seconds=browser_settings.connect_timeout_seconds,
+                leases=PGAgentBrowserLeaseStore(),
+            ),
+            browser_settings,
+            AgentAccountsBinding(PGAgentAccountStore(), cipher, _agent_mailbox(config))
+            if config.answer.agent.browser.account_registration
+            else None,
+        )
+
+    accounts = None if agent_browser is None else agent_browser.accounts
+    health.set_agent_browser(
+        endpoints=len(config.answer.agent.browser.endpoints),
+        sandbox=config.answer.agent.browser.chromium_sandbox,
+        accounts=accounts is not None,
+        mailbox=has_mailbox(accounts),
     )
 
     answer_executor = AnswerExecutor(
@@ -422,6 +481,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         memory_capability_current=memory.capability_current,
         connection_tool_resolver=connections.restore_research,
         skills_bundle_factory=skills_bundle_factory(config, ensure_dirs=True),
+        browser=agent_browser,
         on_dependency_unavailable=health.mark_component_degraded,
         on_dependency_recovered=health.mark_component_healthy,
     )
@@ -554,6 +614,11 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
 
     return _ApplicationComponents(
         connections=connections,
+        # A writer re-seals Agent Account envelopes whatever its browser configuration, since
+        # envelopes sealed earlier must still follow a rotation; a reader writes nothing.
+        agent_account_maintenance=None
+        if config.is_reader
+        else AgentAccountMaintenance(store=PGAgentAccountStore(), cipher=cipher),
         health=health,
         capabilities=capabilities,
         model_catalogue=model_catalogue,

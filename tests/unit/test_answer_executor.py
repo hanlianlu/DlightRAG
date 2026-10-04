@@ -18,7 +18,15 @@ from PIL import Image
 
 from dlightrag.adapters.observability import LangfuseTelemetry
 from dlightrag.adapters.observability import langfuse as langfuse_state
+from dlightrag.application.config import (
+    AgentBrowserConfig,
+    AgentExecutionConfig,
+    AnswerSectionSettings,
+    WebSourceProviderConfig,
+    WebSourcesConfig,
+)
 from dlightrag.application.errors import CorpusUnavailableError
+from dlightrag.application.settings import answer_model_runtime_settings
 from dlightrag.engine.agent.environment import SearchToolchain
 from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
 from dlightrag.engine.agent.session.ids import EntryId, LaneId, ProjectionId, SessionId
@@ -39,6 +47,11 @@ from dlightrag.engine.ai.reasoning import best_effort_reasoning_profile
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelSettings
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
+from dlightrag.engine.answer.agent_browser import (
+    AgentBrowserBinding,
+    RenderedPage,
+    browser_failure,
+)
 from dlightrag.engine.answer.capabilities import (
     AnswerCapabilities,
     RequestModelContext,
@@ -88,6 +101,8 @@ from dlightrag.engine.runtime.records import (
     artifact_digest,
 )
 from tests.in_memory_session_repository import MemoryAgentSessionRepository
+from tests.support.agent_browser import FakeProvider, browser_settings
+from tests.support.dns import public_dns
 from tests.unit.conftest import RecordingLangfuse, answer_image_policy
 
 
@@ -369,33 +384,36 @@ def _fingerprint(role: str) -> ModelInvocationFingerprint:
     return ModelInvocationFingerprint("openai", f"test-{role}", None, "chat_completion")
 
 
-def _executor() -> AnswerExecutor:
+def _executor(**overrides: Any) -> AnswerExecutor:
     executor = AnswerExecutor(
-        store=MagicMock(),
-        blob_store=MagicMock(),
-        pool=MagicMock(),
-        warm=Mock(),
-        retrieve=AsyncMock(),
-        planning=MagicMock(),
-        models=MagicMock(),
-        capabilities=MagicMock(),
-        resources=MagicMock(),
-        settings=AnswerExecutorSettings(
-            default_top_k=10,
-            default_chunk_top_k=20,
-            semantic_highlights=SemanticHighlightSettings(
-                enabled=True,
-                timeout=10.0,
-                max_concurrency=8,
-                batch_size=8,
-                max_input_chars=4096,
-                cache_size=500,
+        **{
+            "store": MagicMock(),
+            "blob_store": MagicMock(),
+            "pool": MagicMock(),
+            "warm": Mock(),
+            "retrieve": AsyncMock(),
+            "planning": MagicMock(),
+            "models": MagicMock(),
+            "capabilities": MagicMock(),
+            "resources": MagicMock(),
+            "settings": AnswerExecutorSettings(
+                default_top_k=10,
+                default_chunk_top_k=20,
+                semantic_highlights=SemanticHighlightSettings(
+                    enabled=True,
+                    timeout=10.0,
+                    max_concurrency=8,
+                    batch_size=8,
+                    max_input_chars=4096,
+                    cache_size=500,
+                ),
             ),
-        ),
-        telemetry=NOOP_TELEMETRY,
-        model_invocation_fingerprint_for_role=_fingerprint,  # type: ignore[arg-type]
-        shell_confinement=ConfinementPolicy(),
-        search_toolchain=SearchToolchain(),
+            "telemetry": NOOP_TELEMETRY,
+            "model_invocation_fingerprint_for_role": _fingerprint,
+            "shell_confinement": ConfinementPolicy(),
+            "search_toolchain": SearchToolchain(),
+            **overrides,
+        }
     )
 
     # These unit doubles replace execution; dedicated model-contract tests exercise preflight.
@@ -512,6 +530,7 @@ def test_research_declarations_include_every_configured_surface_without_binding(
     assert {
         "read",
         "write",
+        "materialize",
         "edit",
         "attach_artifact",
         "grep",
@@ -532,6 +551,222 @@ def test_research_declarations_include_every_configured_surface_without_binding(
         web_search=False, memory=False, model_guidance="", injected=()
     )
     assert not {"remember", "forget", "recall_memory"} & {tool.name for tool in without_memory}
+
+
+def test_a_deployment_offers_a_rendered_read_exactly_when_it_configures_an_agent_browser(
+    test_config: Any,
+) -> None:
+    from dlightrag._compose import _compose
+
+    pool = AgentBrowserConfig(
+        endpoints=("ws://agent-browser-1:3000/",), egress_proxy="http://agent-browser-egress:3128"
+    )
+    agent = test_config.answer.agent.model_copy(update={"browser": pool})
+    configured = test_config.model_copy(
+        update={"answer": test_config.answer.model_copy(update={"agent": agent})}
+    )
+
+    def read_properties(config: Any) -> dict[str, Any]:
+        executor = _compose(config).coordinator._executors["answer"]
+        declarations = executor.research_tool_declarations(
+            web_search=False, memory=False, model_guidance="", injected=()
+        )
+        return {tool.name: tool for tool in declarations}["read"].definition.parameters[
+            "properties"
+        ]
+
+    assert "rendered" in read_properties(configured)
+    assert "rendered" not in read_properties(test_config)
+
+
+@pytest.mark.parametrize(
+    ("registration", "mailbox", "offered"),
+    [
+        (True, False, {"register", "login"}),
+        (True, True, {"register", "login", "inbox"}),
+        # The mailbox delivers an account's mail, so a deployment that turns accounts off has none.
+        (False, True, set()),
+        (False, False, set()),
+    ],
+    ids=["accounts", "accounts-and-mailbox", "mailbox-without-accounts", "turned-off"],
+)
+def test_a_deployment_offers_the_account_actions_it_allows_and_the_inbox_it_can_read(
+    test_config: Any, registration: bool, mailbox: bool, offered: set[str]
+) -> None:
+    from dlightrag._compose import _compose
+    from dlightrag.application.config import AgentMailboxConfig
+
+    pool = AgentBrowserConfig(
+        endpoints=("ws://agent-browser-1:3000/",),
+        egress_proxy="http://agent-browser-egress:3128",
+        account_registration=registration,
+    )
+    inbox = AgentMailboxConfig(
+        bucket="agent-mail",
+        alias_domain="orliantra.cc",
+        access_key_id="fixture-key-id",
+        secret_access_key="fixture-secret-key",
+    )
+    agent = test_config.answer.agent.model_copy(
+        update={"browser": pool, "mailbox": inbox if mailbox else AgentMailboxConfig()}
+    )
+    configured = test_config.model_copy(
+        update={"answer": test_config.answer.model_copy(update={"agent": agent})}
+    )
+
+    def browser_actions(config: Any) -> set[str]:
+        executor = _compose(config).coordinator._executors["answer"]
+        declarations = executor.research_tool_declarations(
+            web_search=False, memory=False, model_guidance="", injected=()
+        )
+        browser = {tool.name: tool for tool in declarations}.get("browser")
+        if browser is None:
+            return set()
+        return set(browser.definition.parameters["properties"]["action"]["enum"])
+
+    assert browser_actions(configured) & {"register", "login", "inbox"} == offered
+    # Health says what was composed, from the configuration alone.
+    health = _compose(configured).health.agent_browser
+    assert (health["accounts"], health["mailbox"]) == (registration, registration and mailbox)
+    # A deployment with no Agent Browser has no browser tool, and so no account actions.
+    assert browser_actions(test_config) == set()
+
+
+async def test_a_research_runs_browser_tool_drives_the_browser_it_was_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dlightrag.engine.answer.agent_browser import BrowserHolder, RunAgentBrowser
+    from dlightrag.engine.answer.resources.registry import ResourceRegistry
+    from tests.support.dns import public_dns
+    from tests.tool_helpers import tool_runtime
+    from tests.unit.test_child_model_roles import _prepared_executor
+
+    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
+    provider = FakeProvider()
+    holder = BrowserHolder("owner", "11111111-1111-1111-1111-111111111111", "worker", 1)
+    run_browser = RunAgentBrowser(provider, holder, browser_settings())
+
+    async with ResourceRegistry() as registry:
+        _, orchestrator, *_ = await _prepared_executor(
+            monkeypatch, registry=registry, agent_browser=run_browser
+        )
+        tools = {tool.name: tool for tool in orchestrator.prepare_run("question").tools}
+
+        opened = await tools["browser"].execute(
+            tools["browser"].input_model.model_validate(
+                {"action": "navigate", "url": "http://a.example/"}
+            ),
+            tool_runtime(tool_name="browser"),
+        )
+
+        assert opened.text_content.startswith("[browser: navigate | page: http://a.example/")
+        assert provider.leased == 1
+    await run_browser.aclose()
+
+
+async def test_a_research_runs_browser_tool_acts_on_the_agent_accounts_it_was_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dlightrag.engine.answer.agent_browser import (
+        AgentAccountsBinding,
+        BrowserHolder,
+        RunAgentAccounts,
+        RunAgentBrowser,
+    )
+    from dlightrag.engine.answer.resources.registry import ResourceRegistry
+    from dlightrag.engine.credential_cipher import CredentialCipher
+    from tests.support.agent_browser import MemoryAccountStore
+    from tests.tool_helpers import tool_runtime
+    from tests.unit.test_child_model_roles import _prepared_executor
+
+    holder = BrowserHolder("owner", "11111111-1111-1111-1111-111111111111", "worker", 1)
+    # A deployment whose key ring is missing: the account actions are offered, and refuse.
+    keyless = RunAgentAccounts(
+        owner_id="owner", binding=AgentAccountsBinding(MemoryAccountStore(), CredentialCipher(None))
+    )
+
+    run_browser = RunAgentBrowser(FakeProvider(), holder, browser_settings())
+    async with ResourceRegistry() as registry:
+        _, orchestrator, *_ = await _prepared_executor(
+            monkeypatch, registry=registry, agent_browser=run_browser, agent_accounts=keyless
+        )
+        tool = {tool.name: tool for tool in orchestrator.prepare_run("question").tools}["browser"]
+
+    refused = await tool.execute(
+        tool.input_model.model_validate({"action": "login", "email_ref": "e1"}),
+        tool_runtime(tool_name="browser"),
+    )
+    assert refused.is_error and refused.text_content.startswith("Agent Accounts are unavailable")
+
+
+async def test_a_research_runs_materialize_tool_copies_from_the_registry_it_was_given(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
+    from dlightrag.engine.answer.resources.models import ResourceInput
+    from dlightrag.engine.answer.resources.registry import ResourceRegistry
+    from dlightrag.engine.answer.workspace import RunWorkspace
+    from tests.tool_helpers import tool_runtime
+    from tests.unit.test_child_model_roles import _prepared_executor
+
+    async with ResourceRegistry() as registry:
+        resource_id = registry.register(
+            ResourceInput(filename="data.csv", declared_mime="text/csv", content=b"a,b\r\n1,2\r\n")
+        )
+        _, orchestrator, *_ = await _prepared_executor(monkeypatch, registry=registry)
+        orchestrator.bind_workspace(
+            RunWorkspace(
+                epoch=1,
+                workspace=tmp_path,
+                spill_dir=tmp_path / "spill",
+                environment=LocalExecutionEnvironment(tmp_path),
+            )
+        )
+        tools = {tool.name: tool for tool in orchestrator.prepare_run("question").tools}
+
+        copied = await tools["materialize"].execute(
+            tools["materialize"].input_model.model_validate(
+                {"resource_id": resource_id, "path": "tmp/data.csv"}
+            ),
+            tool_runtime(tool_name="materialize"),
+        )
+
+        assert copied.is_error is False, copied.text_content
+        assert (tmp_path / "tmp/data.csv").read_bytes() == b"a,b\r\n1,2\r\n"
+
+
+@pytest.mark.parametrize("sandbox", [True, False], ids=["sandboxed", "unsandboxed"])
+def test_a_deployment_reports_the_chromium_sandbox_it_configures_for_its_agent_browser(
+    test_config: Any, sandbox: bool
+) -> None:
+    from dlightrag._compose import _compose
+
+    pool = AgentBrowserConfig(
+        endpoints=("ws://agent-browser-1:3000/",),
+        egress_proxy="http://agent-browser-egress:3128",
+        chromium_sandbox=sandbox,
+    )
+    agent = test_config.answer.agent.model_copy(update={"browser": pool})
+    configured = test_config.model_copy(
+        update={"answer": test_config.answer.model_copy(update={"agent": agent})}
+    )
+
+    assert _compose(configured).health.agent_browser == {
+        "state": "configured",
+        "endpoints": 1,
+        "sandbox": sandbox,
+        "accounts": True,
+        "mailbox": False,
+    }
+
+
+async def test_closing_the_executor_closes_the_browser_pool() -> None:
+    provider = FakeProvider()
+    executor = _executor(browser=AgentBrowserBinding(provider, browser_settings()))
+
+    await executor.aclose()
+
+    assert provider.closed is True
 
 
 def test_pinned_child_lifecycle_requires_current_contract() -> None:
@@ -731,7 +966,7 @@ def test_execution_rejects_changed_context_or_model_pins() -> None:
         mismatched.validate_pinned_model_profiles(request)
 
 
-def _resource_resolver() -> AnswerResourceResolver:
+def _resource_resolver(models: Any = None) -> AnswerResourceResolver:
     capabilities = MagicMock()
     capabilities.refresh_answer = AsyncMock(
         return_value=AnswerCapabilities(
@@ -755,7 +990,7 @@ def _resource_resolver() -> AnswerResourceResolver:
             image_max_bytes=5_000_000,
             image_max_pixels=4_000_000,
         ),
-        models=MagicMock(),
+        models=models or MagicMock(),
         capabilities=capabilities,
     )
 
@@ -816,6 +1051,75 @@ def test_a_resume_under_rotated_database_credentials_mints_the_same_handles(
     ]
 
     assert handles[0] == handles[1]
+
+
+@pytest.mark.parametrize(
+    ("extract_providers", "renderer", "asked"),
+    [
+        pytest.param(None, True, ["exa+tavily", "browser"], id="derived-order-ends-in-browser"),
+        pytest.param(("exa",), True, ["exa", "browser"], id="explicit-list-ends-in-browser"),
+        pytest.param((), True, ["browser"], id="no-hosted-provider"),
+        pytest.param(
+            ("exa", "browser", "tavily"), True, ["exa", "browser", "tavily"], id="between"
+        ),
+        pytest.param(("browser", "exa"), True, ["browser", "exa"], id="first"),
+        pytest.param(("exa", "browser", "tavily"), False, ["exa+tavily"], id="no-renderer"),
+    ],
+)
+async def test_a_run_tries_hosted_providers_and_its_browser_in_the_configured_order(
+    monkeypatch: pytest.MonkeyPatch,
+    test_config: Any,
+    extract_providers: tuple[str, ...] | None,
+    renderer: bool,
+    asked: list[str],
+) -> None:
+    """A deployment with an Agent Browser: the configuration decides what a Run asks, and when.
+
+    The browser is the end of the chain unless the list names it, and a Run with no renderer
+    (Fast has none) skips it and asks the hosted providers around it as one.
+    """
+
+    async def blocked(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("HTTP 403")
+
+    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
+    monkeypatch.setattr("dlightrag.engine.answer.resources.registry.fetch_public_http", blocked)
+    calls: list[str] = []
+
+    async def extract(url: str, *, providers: tuple[str, ...]) -> Any:
+        calls.append("+".join(providers))
+        raise RuntimeError("no text")
+
+    async def render(url: str) -> RenderedPage:
+        calls.append("browser")
+        raise browser_failure("unreachable")
+
+    answer = AnswerSectionSettings(
+        web_sources=WebSourcesConfig(
+            exa=WebSourceProviderConfig(api_key="exa-key"),
+            tavily=WebSourceProviderConfig(api_key="tavily-key"),
+            extract_providers=extract_providers,  # pyright: ignore[reportArgumentType]
+        ),
+        agent=AgentExecutionConfig(
+            browser=AgentBrowserConfig(
+                endpoints=("ws://agent-browser-1:3000/",),
+                egress_proxy="http://agent-browser-egress:3128",
+            )
+        ),
+    )
+    runtime = answer_model_runtime_settings(test_config.model_copy(update={"answer": answer}))
+    order = runtime.web_sources.extract_providers
+    resolver = _resource_resolver(SimpleNamespace(extract_order=lambda: order))
+    registry = resolver.build_resource_context(
+        [ResourceInput(url="https://example.com/report")],
+        web_sources=cast(Any, SimpleNamespace(extract=extract)),
+        page_renderer=render if renderer else None,
+        resource_identity=new_resource_identity(),
+    )
+
+    await registry.read(registry.manifest()[0].resource_id, max_window_tokens=2000)
+
+    assert calls == asked
 
 
 def _png_bytes(color: str = "white") -> bytes:
@@ -1371,7 +1675,7 @@ async def test_stream_close_failure_does_not_skip_registry_close(
 
     registry = MagicMock(aclose=AsyncMock())
 
-    await _close_execution_resources(Stream(), registry)
+    await _close_execution_resources(Stream(), registry, None)
 
     registry.aclose.assert_awaited_once()
     assert "Failed to close Answer stream" in caplog.text
@@ -1588,6 +1892,53 @@ async def test_recovery_keeps_an_adoption_without_its_view_unconverted(monkeypat
 
         with pytest.raises(ResourceNotConvertedError):
             await registry.read("res-earlier", max_window_tokens=1000)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("origin", "locator"),
+    [("caller", b"https://example.com/page"), ("agent", b"http://127.0.0.1/page")],
+    ids=["not-admitted-by-the-agent", "private-locator"],
+)
+async def test_recovery_refuses_a_browser_resource_the_agent_could_not_have_admitted(
+    origin: str, locator: bytes
+) -> None:
+    """A capture is the Agent's, and its row never names a URL that ADR 0005 keeps private."""
+    import hashlib
+
+    from dlightrag.engine.answer.resources.registry import ResourceRegistry
+    from dlightrag.engine.runtime.errors import RunExecutionError
+    from dlightrag.engine.runtime.records import RunFetchedResource
+
+    page = b"<html><body>captured</body></html>"
+    executor = _executor()
+    executor._store.list_fetched_resources = AsyncMock(
+        return_value=(
+            RunFetchedResource(
+                resource_id="res-captured",
+                ordinal=0,
+                digest=hashlib.sha256(page).hexdigest(),
+                filename="page.html",
+                mime_type="text/html",
+                source_locator=locator,
+                capabilities={
+                    "resource_kind": "web",
+                    "admission_origin": origin,
+                    "acquisition": "browser_capture",
+                },
+            ),
+        )
+    )
+
+    async def stream(*, owner_id: str, digest: str, **kwargs: object):
+        del owner_id, digest, kwargs
+        yield page
+
+    executor._blob_store.stream = stream
+
+    async with ResourceRegistry() as registry:
+        with pytest.raises(RunExecutionError, match="catalog entry is invalid"):
+            await executor._restore_registry_fetches(registry, owner_id="owner", run_id="run")
 
 
 async def test_a_settled_run_records_the_state_it_ended_at() -> None:

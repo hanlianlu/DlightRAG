@@ -56,7 +56,12 @@ _SERVICE_URLS = [
             "interfaces.mcp.resource_server_url",
             "observability.langfuse_host",
             "answer.agent.connections.oauth_callback_url",
+            "answer.agent.browser.egress_proxy",
         )
+    ),
+    (
+        "answer.agent.browser.endpoints.0",
+        _nested("answer.agent.browser.endpoints", [_URL.replace("https", "ws")]),
     ),
 ]
 
@@ -67,7 +72,8 @@ _SERVICE_URLS = [
 def test_a_service_url_with_credentials_fails_naming_only_the_field(
     location: str, overrides: dict[str, Any]
 ) -> None:
-    field = location.rsplit(".", 1)[-1]
+    # A list item's location ends in its index, but the error names the setting.
+    field = next(part for part in reversed(location.split(".")) if not part.isdigit())
 
     with pytest.raises(ValueError) as caught:
         load_config(**overrides)

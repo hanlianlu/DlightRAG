@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import BaseModel
 
-from dlightrag.application.connections.credentials import CredentialCipher
 from dlightrag.application.connections.models import CatalogueTool
 from dlightrag.application.connections.service import Connections
 from dlightrag.engine.agent.environment import SearchToolchain
@@ -17,7 +16,7 @@ from dlightrag.engine.agent.session.ids import IntentId
 from dlightrag.engine.agent.session.plan import AgentRunPlan, AgentToolPlan
 from dlightrag.engine.agent.skills import SkillsBundleFactory
 from dlightrag.engine.agent.tools import AgentTool, ToolDeclaration, ToolResult, ToolRuntime
-from dlightrag.engine.agent.tools.files import ls_declaration
+from dlightrag.engine.agent.tools.files import ls_declaration, materialize_declaration
 from dlightrag.engine.answer.continuation_handles import SESSION_NOTE_DIRECTORY
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.execution.connection_binding import is_connection_tool
@@ -32,6 +31,8 @@ from dlightrag.engine.answer.tools.subagents import (
     child_guidance_declarations,
     subagent_declarations,
 )
+from dlightrag.engine.credential_cipher import CredentialCipher
+from tests.support.agent_browser import StubMailbox, inert_browser_host
 
 
 class Arguments(BaseModel):
@@ -81,6 +82,10 @@ async def test_binding_preserves_the_plan_and_adds_real_execution() -> None:
         (True, True, True, True, True, ("read", "search_web")),
     ],
 )
+@pytest.mark.parametrize(
+    ("agent_browser", "agent_accounts", "agent_mailbox"),
+    [(False, False, False), (True, False, False), (True, True, False), (True, True, True)],
+)
 def test_research_acceptance_and_execution_use_identical_declarations(
     tmp_path: Path,
     paths: bool,
@@ -89,6 +94,9 @@ def test_research_acceptance_and_execution_use_identical_declarations(
     skills: bool,
     child: bool,
     narrow: tuple[str, ...] | None,
+    agent_browser: bool,
+    agent_accounts: bool,
+    agent_mailbox: bool,
 ) -> None:
     factory = SkillsBundleFactory(global_root=tmp_path / "global", owner_root=tmp_path / "owners")
     model_guidance = "Configured model roles."
@@ -96,6 +104,9 @@ def test_research_acceptance_and_execution_use_identical_declarations(
     declared = research_tool_declarations(
         web_search=web,
         resource_read=True,
+        agent_browser=agent_browser,
+        agent_accounts=agent_accounts,
+        agent_mailbox=agent_mailbox,
         resource_view=True,
         environment=paths,
         artifact_publication=paths,
@@ -117,7 +128,13 @@ def test_research_acceptance_and_execution_use_identical_declarations(
         search_web=AsyncMock() if web else None,
         register_web_source=None,
         resource_reader=AsyncMock(),
+        browser=inert_browser_host(
+            accounts=agent_accounts, mailbox=StubMailbox() if agent_mailbox else None
+        )
+        if agent_browser
+        else None,
         resource_viewer=AsyncMock(),
+        admitted_bytes_reader=AsyncMock(),
         environment=LocalExecutionEnvironment(tmp_path) if paths else None,
         artifacts_root=tmp_path / "artifacts" if paths else None,
         subagent_host=SubagentHost(model_guidance=model_guidance),
@@ -137,6 +154,39 @@ def test_research_acceptance_and_execution_use_identical_declarations(
         assert "attach_artifact" not in {tool.name for tool in declared}
         assert "remember" not in {tool.name for tool in declared}
         assert "ask_parent" in {tool.name for tool in declared}
+    # Copying a Resource into the workspace needs one, and every Session may ask for it.
+    assert ("materialize" in {tool.name for tool in declared}) == (paths and narrow is None)
+    # The browser is offered to every Session of a Run that has one, and to no other, and
+    # it can send workspace files to a page only where there is a workspace.
+    browsers = [tool for tool in declared if tool.name == "browser"]
+    assert bool(browsers) == (agent_browser and (narrow is None))
+    for browser in browsers:
+        actions = browser.definition.parameters["properties"]["action"]["enum"]
+        assert ("upload" in actions) == paths
+        # register and login are offered exactly where the Run has Agent Accounts, and inbox
+        # where it also has an Agent Mailbox.
+        assert ("register" in actions, "login" in actions) == (agent_accounts, agent_accounts)
+        assert ("inbox" in actions) == agent_mailbox
+
+
+def test_the_agent_browser_is_part_of_the_plan_a_run_is_pinned_to() -> None:
+    """Acceptance pins the tools, so a Run accepted with a browser executes with one."""
+    plain = research_tool_declarations(resource_read=True)
+    browsing = research_tool_declarations(resource_read=True, agent_browser=True)
+    plans = [
+        AgentRunPlan.from_tools(tools, model_role="query", context_policy_revision="test-policy")
+        for tools in (plain, browsing)
+    ]
+
+    assert plans[0].digest != plans[1].digest
+    read = {tool.name: tool for tool in browsing}["read"]
+    assert "rendered" in read.definition.parameters["properties"]
+    assert "rendered=true" in read.description
+    # A Host with no Agent Browser, like a Fast Run, is offered nothing to ask for.
+    assert (
+        "rendered"
+        not in {tool.name: tool for tool in plain}["read"].definition.parameters["properties"]
+    )
 
 
 @pytest.mark.parametrize("child", [False, True])
@@ -146,6 +196,7 @@ def test_no_built_in_tool_is_named_like_a_connection_tool(tmp_path: Path, child:
     declared = research_tool_declarations(
         web_search=True,
         resource_read=True,
+        agent_browser=True,
         resource_view=True,
         environment=True,
         artifact_publication=True,
@@ -171,6 +222,7 @@ def test_only_tools_that_change_nothing_outside_their_run_are_read_only(tmp_path
     declared = research_tool_declarations(
         web_search=True,
         resource_read=True,
+        agent_browser=True,
         resource_view=True,
         environment=True,
         artifact_publication=True,
@@ -189,9 +241,16 @@ def test_only_tools_that_change_nothing_outside_their_run_are_read_only(tmp_path
         "grep",
         "find",
     }
-    assert {"bash", "write", "edit", "attach_artifact", "remember", "mcp__test__lookup"} <= {
-        tool.name for tool in declared if not tool.read_only
-    }
+    assert {
+        "browser",
+        "bash",
+        "write",
+        "materialize",
+        "edit",
+        "attach_artifact",
+        "remember",
+        "mcp__test__lookup",
+    } <= {tool.name for tool in declared if not tool.read_only}
 
 
 def test_workspace_tools_state_what_a_run_workspace_holds() -> None:
@@ -216,10 +275,32 @@ def test_workspace_tools_state_what_a_run_workspace_holds() -> None:
             "conversation" in description
         )
         assert "`tmp/` is scratch for this Run alone" in description
-        assert "earlier Artifacts and knowledge-base documents are never files in it" in (
-            description
-        )
+        assert "Knowledge-base documents are never files in it" in description
+        assert "a Resource becomes one only when materialize copies its resource_id" in description
+        assert "fetched pages" not in description, "what copies is materialize's to list"
     assert SESSION_NOTE_DIRECTORY not in ls_declaration().description
+
+
+def test_materialize_states_what_copies_and_that_the_copy_is_not_the_source() -> None:
+    """The model reads what a Run's Resources can become in the workspace on the tool that
+    copies them, once; the tool itself stays product-neutral."""
+    declared = {
+        tool.name: tool for tool in research_tool_declarations(resource_read=True, environment=True)
+    }
+
+    description = declared["materialize"].description
+    assert "Agent Browser downloads and captures" in description
+    assert "an earlier turn's Resources and Artifacts all copy" in description
+    assert "cite what read returns from it, never the copy" in description
+    assert "Agent Browser" not in materialize_declaration().description
+
+
+def test_a_workspace_with_no_resource_reading_has_nothing_to_copy() -> None:
+    """A copy takes the bytes of a Resource, and a Run that cannot read Resources holds none."""
+    declared = {tool.name for tool in research_tool_declarations(environment=True)}
+
+    assert {"read", "bash", "write"} <= declared
+    assert "materialize" not in declared
 
 
 def test_read_states_what_a_url_and_an_earlier_artifact_return() -> None:

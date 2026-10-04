@@ -30,6 +30,37 @@ class ResourceCursorError(ResourceRegistryError):
     """Raised when a continuation cursor is unknown or bound to another read."""
 
 
+class RenderedReadTargetError(ResourceRegistryError):
+    """Raised when ``rendered=true`` names a target that is not a Web Resource."""
+
+    def __init__(self, resource_id: str) -> None:
+        super().__init__(
+            f"rendered=true reads a URL or a Web Resource; {resource_id} is not a Web Resource"
+        )
+
+
+class NoAdmittedBytesError(ResourceRegistryError):
+    """Raised when a Web Resource holds no bytes of its own to copy.
+
+    Nothing may fetch or render them for the copy, so the message names the call that makes them.
+    """
+
+    def __init__(self, resource_id: str, *, rendered: bool) -> None:
+        if rendered:
+            message = (
+                f"{resource_id} holds only the Agent Browser's rendering, which is not bytes the "
+                'Resource admitted; open the page with browser(action="navigate", url=...), '
+                'capture it with browser(action="capture"), and materialize the capture\'s '
+                "resource_id"
+            )
+        else:
+            message = (
+                f"{resource_id} holds no admitted bytes yet; read(resource_id={resource_id!r}) "
+                "acquires them, then materialize copies them"
+            )
+        super().__init__(message)
+
+
 class ResourceDecodeError(ResourceRegistryError):
     """Raised when resource bytes are not decodable, mismatched text."""
 
@@ -116,6 +147,8 @@ class ResourceReadResult:
     visual_handles: tuple[VisualHandle, ...] = field(default_factory=tuple)
     evidence_available: bool = True
     note: str | None = None
+    rendered: bool = False
+    """Whether the text is the Web Resource's rendered representation, not its snapshot."""
 
 
 #: The handle families this system mints. A durable handle is whatever its minter
@@ -144,6 +177,7 @@ __all__ = [
     "PUBLISHED_ARTIFACT_HANDLE_PREFIX",
     "RESOURCE_HANDLE_PREFIXES",
     "is_resource_handle",
+    "NoAdmittedBytesError",
     "ResourceAdmissionError",
     "ResourceCursorError",
     "ResourceDecodeError",
@@ -151,6 +185,7 @@ __all__ = [
     "ResourceManifestEntry",
     "ResourceNotConvertedError",
     "ResourceNotFoundError",
+    "RenderedReadTargetError",
     "ResourceReadResult",
     "ResourceRegistryError",
     "TextWindowLocator",

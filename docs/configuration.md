@@ -91,6 +91,7 @@ setting, with an error that names the field and never repeats the value:
   `access.web_identity.jwks_url`
 - `interfaces.mcp.resource_server_url` and `observability.langfuse_host`
 - `answer.agent.connections.oauth_callback_url`
+- `answer.agent.browser.endpoints[]` and `answer.agent.browser.egress_proxy`
 
 Put the credential in the service's own secret setting instead (`api_key`,
 `api_token`, `milvus_token`, and so on). A model catalogue entry published at
@@ -865,9 +866,12 @@ Interactive HTML is separately opt-in and isolated by the Web artifact boundary
 ([Security](security.md#answer-artifact-browser-boundary)).
 
 Research reaches external tools only through its owner's Personal MCP
-Connections; `answer.agent.connections` holds their non-secret policy, whose
+Connections and the deployment's [Agent Browser](#agent-browser);
+`answer.agent.connections` holds the Connections' non-secret policy, whose
 fields and limits are in
 [Personal MCP Connections](personal-mcp-connections.md#streamable-http-security-and-limits).
+No owner authorizes the Agent Browser: `read` uses it to render public pages, and the
+`browser` tool drives one.
 
 Research discovers Skills from packaged built-ins, an operator-global root, and
 owner roots ([Architecture](architecture.md#agent-execution) gives the
@@ -881,6 +885,131 @@ setup wizard prepares the directory, and manual operators create it before
 `docker compose up`. Owners write their own Skills under `owner_skills_root`
 only through the validated `publish_skill` and `delete_skill` tools, within a
 20-skill / 20 MiB quota per owner. Every worker must see the same skill roots.
+
+## Agent Browser
+
+```yaml
+answer:
+  agent:
+    browser:
+      endpoints: []                   # DLIGHTRAG_ANSWER__AGENT__BROWSER__ENDPOINTS
+      egress_proxy: null              # DLIGHTRAG_ANSWER__AGENT__BROWSER__EGRESS_PROXY
+      chromium_sandbox: true
+      lease_wait_seconds: 10          # 0–120
+      connect_timeout_seconds: 15     # above 0, at most 120
+      navigation_timeout_seconds: 30  # above 0, at most 300
+      settle_timeout_seconds: 5       # 0–60
+      action_timeout_seconds: 10      # above 0, at most 120
+      snapshot_depth: 12              # 1–64
+      idle_release_seconds: 30        # 0–600
+      account_registration: true      # DLIGHTRAG_ANSWER__AGENT__BROWSER__ACCOUNT_REGISTRATION
+```
+
+The Agent Browser lets Research read a page as a browser renders it and drive one with
+the `browser` tool, in a pool of Playwright containers the deployment runs
+([ADR 0032](adr/0032-the-agent-browser.md); the pool's topology and boundary are in
+[Security](security.md#agent-browser-boundary)). No endpoint means no Agent
+Browser: `read` declares no `rendered` argument, the Extract chain has no browser step,
+and Research has no `browser` tool.
+
+- `endpoints` lists one Playwright run-server WebSocket URL (`ws://` or `wss://`) per
+  pool container; each serves one Run at a time. They must be unique, hold no query,
+  fragment, or userinfo, and be spelled identically in every process that runs Query
+  workers, because the shared lease table is keyed by the URL.
+- `egress_proxy` is the HTTP proxy every browser launch uses (`http://host:port`, no
+  path). It is the pool's only way out, so `endpoints` require it: startup refuses
+  endpoints without it, naming the field.
+- Both are Compose Service names, so `docker-compose.yml` binds them
+  ([ADR 0006](adr/0006-configuration-ownership-and-deployment-bindings.md)) and
+  `config.yaml` leaves them unset. The bundled stack binds two members and the Squid
+  proxy for `dlightrag-api`, `dlightrag-mcp`, and `dlightrag-reader`.
+- `chromium_sandbox` is whether every browser launches inside Chromium's own process
+  sandbox. Whether a pool host can start it is for the operator to state, so DlightRAG
+  neither probes for it nor falls back: on a host that cannot, every launch fails and
+  renders report the pool unreachable until the host is relaxed
+  ([troubleshooting](operations.md#agent-browser-pool)) or this is `false`. `false` launches
+  Chromium with `--no-sandbox`, leaving the container and its network as the only
+  isolation ([Security](security.md#agent-browser-boundary)).
+- `lease_wait_seconds` is how long a render, or the first `navigate` of an Agent Page,
+  waits for a free browser before it reports the pool busy.
+  `connect_timeout_seconds` bounds connecting to one browser.
+- `navigation_timeout_seconds` is how long a page may take to load. It also bounds the
+  `browser` tool's `wait` for text, `screenshot`, and `capture`, and the save of one
+  downloaded file. `settle_timeout_seconds` is how long a loaded page may take to go quiet
+  before it is read as it stands.
+- `action_timeout_seconds` is how long one element action, one snapshot, or one `find` may
+  take on a page the `browser` tool drives. `snapshot_depth` is how many levels of the
+  page its accessibility snapshot shows; deeper elements keep their refs, and `find`
+  locates them. A file a page downloads is bounded by `answer.generation.max_attachment_bytes`
+  ([Answer Generation And Attachments](#answer-generation-and-attachments)).
+- `idle_release_seconds`: a Run leases a browser at its first render or Agent Page and
+  gives it back once it has gone this long with no Agent Page open and no render in
+  flight, so a Run that rendered once does not hold a pool member for its whole duration.
+  An Agent Page that stays open keeps the browser leased
+  ([when](architecture.md#agent-browser)). The next render or page leases again, and `0`
+  gives it back as soon as nothing is open. Settlement releases whatever is held either
+  way.
+- `account_registration` is whether the Agent may register on third-party sites and sign
+  in with Agent Accounts of its own ([ADR 0034](adr/0034-agent-accounts-and-the-agent-mailbox.md);
+  [what the actions do](retrieval-answer.md#agent-accounts-and-the-agent-mailbox)). `false`
+  offers neither `register` nor `login`, and so no `inbox`. Accounts the Agent made earlier
+  stay in PostgreSQL and still follow a key ring rotation. Without a key ring, register and
+  login fail closed whatever this says.
+
+The pool's size is the deployment's limit on Runs using a browser at the same moment
+([sizing](operations.md#agent-browser-pool)). What `GET /health` says of the Agent
+Browser is in [Interfaces](interfaces.md#health-and-errors).
+
+## Agent Mailbox
+
+```yaml
+answer:
+  agent:
+    mailbox:
+      endpoint: null        # DLIGHTRAG_ANSWER__AGENT__MAILBOX__ENDPOINT; null is AWS S3's own
+      region: null          # DLIGHTRAG_ANSWER__AGENT__MAILBOX__REGION; null is the SDK's own resolution
+      bucket: null          # DLIGHTRAG_ANSWER__AGENT__MAILBOX__BUCKET
+      prefix: mail          # DLIGHTRAG_ANSWER__AGENT__MAILBOX__PREFIX
+      alias_domain: null    # DLIGHTRAG_ANSWER__AGENT__MAILBOX__ALIAS_DOMAIN
+```
+
+The Agent Mailbox is optional ([ADR 0034](adr/0034-agent-accounts-and-the-agent-mailbox.md)). It
+gives the Agent addresses of its own to register with and lets it read the mail that arrives
+at them with `inbox`; without it the Agent may use a temporary-mail site through the
+browser itself, and `register` records the address it typed. No bucket means no Agent
+Mailbox, and an Agent Mailbox needs [Agent Accounts](#agent-browser) to be on.
+
+- The two keys are secrets, so they belong in `.env` and nowhere in YAML
+  ([ADR 0006](adr/0006-configuration-ownership-and-deployment-bindings.md)):
+  `DLIGHTRAG_ANSWER__AGENT__MAILBOX__ACCESS_KEY_ID` and
+  `DLIGHTRAG_ANSWER__AGENT__MAILBOX__SECRET_ACCESS_KEY`. They never render, and an Agent's
+  own processes get no `DLIGHTRAG_*` variable. A deployment that runs the checked-in
+  `config.yaml` keeps its endpoint, bucket, and alias domain in `.env` as well, as it keeps its
+  access policy.
+- Naming a `bucket` requires `alias_domain` and both keys, and without a bucket none of
+  `endpoint`, `region`, `alias_domain`, or the keys may be set; startup refuses either mistake
+  and names the setting. A blank variable in `.env` is an unset setting. `bucket` is a valid
+  S3 bucket name, `prefix` is slash-separated segments of `A-Za-z0-9._-` or empty, and
+  `alias_domain` is a lower-case domain with at least two labels.
+- `region` is the bucket's region as its endpoint names it, such as `us-east-1` on AWS S3 or
+  `auto` on Cloudflare R2. It has no default: unset, the SDK resolves the region as it does
+  for any S3 client, from its usual environment and profile, and an unset `endpoint` is AWS
+  S3's own.
+- `alias_domain` is the domain the Agent's mailbox aliases are minted on, which the
+  deployment's mail routing must deliver. A mailbox alias is the same for one owner and site
+  in every Run.
+- **The bucket's contract is its layout.** Each message is written whole, as one object, under
+  `<prefix>/<envelope recipient, lower case>/`: the envelope recipient, because a `To:` header
+  does not reliably name the address a message was delivered to, and lower case because
+  DlightRAG mints lower-case mailbox aliases and a site may capitalize one. DlightRAG lists
+  one mailbox alias's prefix and never scans the bucket, reads `LastModified` as when mail
+  arrived, never an object's name or a header, and needs only list and get access. A listing
+  reads at most the first 10,000 stored messages of a mailbox alias and says when it holds
+  more, so a deployment keeps its retention short. How mail reaches the bucket, with an
+  example, and how long it stays, are the deployment's
+  ([Operations](operations.md#agent-mailbox)).
+
+What `GET /health` says of it is in [Interfaces](interfaces.md#health-and-errors).
 
 ## Public Web Sources
 
@@ -901,10 +1030,20 @@ Set each list explicitly to give Search and Extract independent failover order.
 Every provider named in a list must have a key. The setup wizard can configure
 Exa, Tavily, both with one shared order, or independent Search/Extract orders.
 
+`extract_providers` may also name `browser`, the [Agent Browser](#agent-browser),
+which holds no key. A configured Agent Browser always joins the automatic Extract
+chain after the hosted providers, whether the order is derived or explicit, unless
+the list names `browser` elsewhere, which only positions it (`[browser, exa]` renders
+before it asks Exa). The wizard's explicit lists therefore need no `browser` entry,
+and `[]` turns off the hosted providers while a configured browser still ends the
+chain. Naming `browser` while `answer.agent.browser` has no endpoints is a startup
+error, as naming a provider without its key is.
+
 How Research uses the chains is in [Web Search](retrieval-answer.md#web-search):
 `search_web` takes result count, domains, date range, and
 `fast`/`balanced`/`deep` effort, and `read` uses the Extract chain only when a
-direct anonymous fetch fails or yields no usable text.
+direct anonymous fetch fails or yields no usable text; a browser step renders the
+page ([Rendered reads](resource-reading.md#rendered-reads)).
 
 ## Citations And Highlights
 

@@ -7,6 +7,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 
+from dlightrag.adapters.http.artifact_delivery import INERT_SVG_CSP
 from dlightrag.adapters.http.browser.conversation_models import (
     ConversationHistory,
     ConversationPage,
@@ -240,8 +241,13 @@ async def run_resource(
         "Cache-Control": "private, max-age=3600",
         "X-Content-Type-Options": "nosniff",
     }
-    if not descriptor.mime_type.lower().startswith("image/"):
+    media_type = descriptor.mime_type.lower()
+    if not media_type.startswith("image/"):
         headers["Content-Disposition"] = _attachment_content_disposition(descriptor.filename)
+    elif media_type.partition(";")[0].strip() == "image/svg+xml":
+        # An SVG is a document: opened inline on this origin its script would run as the
+        # owner, whether the Run fetched it or a page's download named it.
+        headers["Content-Security-Policy"] = INERT_SVG_CSP
     return Response(content=content, media_type=descriptor.mime_type, headers=headers)
 
 

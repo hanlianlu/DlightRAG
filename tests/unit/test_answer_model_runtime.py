@@ -32,12 +32,17 @@ def _policy(profile: ModelProfile) -> AnswerImagePolicy:
     )
 
 
-def _runtime(*, vlm_profile: ModelProfile | None = None) -> AnswerModelRuntime:
+def _runtime(
+    *,
+    vlm_profile: ModelProfile | None = None,
+    web_sources: WebSourceRuntimeSettings | None = None,
+) -> AnswerModelRuntime:
     settings = AnswerModelRuntimeSettings(
         model_roles=ModelRoleSettings(
             default=ModelSettings(provider="openai", model="test-model", api_key="test")
         ),
-        web_sources=WebSourceRuntimeSettings(
+        web_sources=web_sources
+        or WebSourceRuntimeSettings(
             exa_api_key="exa-test",
             search_providers=("exa",),
             extract_providers=("exa",),
@@ -111,6 +116,16 @@ async def test_close_is_idempotent_and_prevents_recreation() -> None:
         runtime.vlm_func()
     with pytest.raises(AnswerModelRuntimeClosedError):
         runtime.web_sources()
+
+
+def test_the_browser_in_the_extract_chain_is_bound_per_run_and_builds_no_hosted_provider() -> None:
+    chain = WebSourceRuntimeSettings(
+        exa_api_key="exa-test", search_providers=("exa",), extract_providers=("exa", "browser")
+    )
+    only_browser = WebSourceRuntimeSettings(extract_providers=("browser",))
+
+    assert _runtime(web_sources=chain).web_sources() is not None
+    assert _runtime(web_sources=only_browser).web_sources() is None
 
 
 def test_query_image_describer_follows_vlm_profile() -> None:

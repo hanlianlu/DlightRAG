@@ -320,8 +320,16 @@ Citable, run-scoped source material with durable identity and content/locator in
 _Avoid_: Summary, agent prose
 
 **Web Resource**:
-A run-scoped public HTTP(S) source admitted from a caller, Web Search, or an Agent-selected URL and represented by a Resource Handle. Admission origin and acquisition method are independent provenance facts. Within one Answer Run, the same normalized URL resolves to its first successfully admitted durable snapshot rather than silently refetching mutable content. Raw Bash output is model context, not Web Evidence.
+A run-scoped public HTTP(S) source admitted from a caller, Web Search, or an Agent-selected URL and represented by a Resource Handle. Admission origin and acquisition method are independent provenance facts; the Agent Browser's acquisitions are `browser_render`, `browser_capture`, and `browser_download`. Within one Answer Run, the same normalized URL resolves to its first successfully admitted durable snapshot rather than silently refetching mutable content. A Rendered Read appends a second representation to it without replacing that snapshot, while a Browser Capture or a browser download is a Resource of its own. Raw Bash output is model context, not Web Evidence.
 _Avoid_: Web Search result, URL attachment, raw URL, Bash output
+
+**Rendered Read**:
+A `read` of a Web Resource through the Agent Browser. Its representation is appended to the same Web Resource, with acquisition `browser_render`, and never replaces an admitted snapshot; the Resource keeps one handle, and a cursor names the representation it continues. The model asks for one with `rendered=true`, or the Extract chain's browser step makes one when the direct fetch failed or held no text. Its text is the browser's assertion of the page after its scripts ran, not an attestation that an anonymous GET serves the same page.
+_Avoid_: screenshot, page capture, snapshot replacement, hosted extraction
+
+**Browser Capture**:
+A Web Resource admitted from the Agent Browser's current page (acquisition `browser_capture`). Browser downloads are admitted as Resources with acquisition `browser_download`. Each capture is its own Resource and never rebinds its URL's snapshot, because the page it holds is the one the Agent drove to, which a fetch of its URL may not reproduce. Its citation is the page's final public URL, or its Resource Handle when the page has none.
+_Avoid_: screenshot, Rendered Read, URL snapshot, page cache
 
 **Resource Handle**:
 An owner/run-scoped identity through which prepared, fetched, evidence-backed, spilled, or published content remains addressable across recovery; it is opaque except for a Published Artifact's deterministic address (`artifact-<hash of its Artifact path>`), which is derived on purpose so the Tool can name it before the publication exists. A later Run on the same Agent Session may adopt an earlier Run's Resource on first use; the adopting Run then holds the canonical handle, the earlier handle stays readable only as its alias, and the adopting Run never converts newly adopted bytes: a convertible document reads text only through the conversion view stored with it, and other formats are decoded from the adopted bytes. What a later Run may adopt is declared once, as (capability, resource kind) pairs, so a new re-readable kind is added where it is written rather than in each reader.
@@ -403,6 +411,30 @@ _Avoid_: Connection Generation, Fencing Epoch
 The adapter behind exactly two modes: `disabled` and `trust`. Trust runs the Agent's processes in the host user's authority **confined to its Agent Workspace**: the corpus, the deployment's configuration, the project tree, and other Runs' workspaces are outside the process view, while the toolchain's runtime stays readable. The allow-list is code, capabilities declare the layers they need, and one that overlaps the corpus or the project tree fails composition. Network egress is the deployment's to enforce, because a path list cannot enforce it.
 _Avoid_: implicit downgrade, permission catalog, approval prompt, shell-command filtering as a security boundary
 
+**Agent Browser**:
+The Run-scoped browser capability: one browser per Research Run, leased from a pool the deployment runs, with a short-lived anonymous context for each Rendered Read and an Agent Page for each Agent Session that opens one. It is a deployment capability reached through tools, never a Connection or a process of the Agent, and the deployment's network, not DlightRAG, confines what it reaches. Fast never has one.
+_Avoid_: Connection, Chromium in the answering container, browsing session, browser profile
+
+**Agent Page**:
+An Agent Session's anonymous context in its Run's leased Agent Browser, which the model drives as one active page; a popup or new tab becomes the active page. It ends with its Agent Session or Run.
+_Avoid_: browser session, browsing session, context (in prose)
+
+**BrowserProvider**:
+The port that leases a Run's browser endpoint. It is an ordinary adapter boundary with one implementation, a pool of Playwright run-servers; see [Architecture](architecture.md#agent-browser) for when a lease is live.
+_Avoid_: Connection provider, browser service, MCP server
+
+**Agent Account**:
+An account the Agent registered on a third-party site under its own identity. DlightRAG generates its password, fills it by ref, and seals it under the deployment key ring; a parent's account persists for its owner, a Child's lasts for its Run.
+_Avoid_: owner account, saved login, browser profile
+
+**Agent Mailbox**:
+An optional deployment capability that delivers mail sent to Mailbox Aliases, read from an S3-compatible bucket the deployment fills.
+_Avoid_: inbox provider, temporary mail
+
+**Mailbox Alias**:
+An address DlightRAG mints on the Agent Mailbox's domain for one account: deterministic per owner and site for a parent's account, random for a Child's.
+_Avoid_: alias on its own (a Resource Handle also has aliases), temporary address, the owner's email
+
 **Agent Skill**:
 A progressively disclosed `SKILL.md` package discovered from packaged built-ins, the operator-global root, or one owner's published skills. Precedence is built-in, then global, then owner. Metadata is projected first; the framework reads contained references only through `load_skill` and never executes Skill code. What an Agent's own processes may read is the roots the capability declares to the Execution Environment (ADR 0024): the operator-global root and the Run owner's own shard, never the shared parent and never a sibling owner's. Users write their own skills only through the validated `publish_skill` tool.
 _Avoid_: owner Profile Memory, marketplace plugin, arbitrary extension
@@ -412,7 +444,7 @@ An owner-bound remote tool invoked through a bounded foreground Streamable-HTTP 
 _Avoid_: Personal Connection, MCP registry, marketplace, OAuth platform
 
 **Agent Workspace**:
-The model-visible filesystem rooted at the active Workspace Epoch's workspace directory. It lives exactly as long as its Run's row: retention removes the tree with the row, and a sweep removes roots whose row is already gone, both guarded by the row rather than by directory age.
+The model-visible filesystem rooted at the active Workspace Epoch's workspace directory. It lives exactly as long as its Run's row: retention removes the tree with the row, and a sweep removes roots whose row is already gone, both guarded by the row rather than by directory age. A Resource is never a file in it until Resource Materialization copies one.
 _Avoid_: Corpus Workspace, working_dir, workspace when it could mean a corpus scope
 
 **Workspace Epoch**:
@@ -422,6 +454,10 @@ _Avoid_: Durable Progress, Fencing Epoch, checkpoint
 **Workspace Inventory**:
 The current Workspace Epoch's path, type, size, and digest observation of an Agent Workspace.
 _Avoid_: Journal Entry, checkpoint, historical epoch listing
+
+**Resource Materialization**:
+Copying a Resource's admitted original bytes into the Agent Workspace with the `materialize` tool. The Resource stays the immutable, citable original; the copy is mutable work with no provenance of its own, so a citation names the Resource, never the file. `ResourceRegistry.materialize`, which loads a Resource's bytes into the registry, lineage adoption, and the binding of a Session's notes into a Workspace are not this term.
+_Avoid_: adoption, re-download
 
 **Session Note**:
 A file the answering agent writes under its Agent Workspace's reserved notes path, outside `artifacts/`, so that work product survives one Run's compaction and the next turn of the same Session reads it. Memory belongs to the Agent Session, not to the Run: one authoritative note set per Session holds each note's bytes, size, digest, revision, and writing Run, and every Run of that Session materializes a working copy of it when it binds and promotes its changes back at Tool settlement under its own lease. A session note therefore outlives the Run that wrote it, and per-Run reclamation cannot take it. The Context Projection names each note by the `read(path=…)` call that reads it again. Memory never fails a Run: a plane that cannot be read, a note the plane refuses for budget, or a promotion that fails is recorded on the Run's trace and the Run proceeds with the working copy it has. A Session Note is never citable, never a second statement of what happened, and never a Memory Record.

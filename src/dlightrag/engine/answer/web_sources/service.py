@@ -56,9 +56,22 @@ class WebSourceService:
             return replace(result, degradation=_degradation(failures, provider.name))
         raise _exhausted("search", failures)
 
-    async def extract(self, url: str, *, effort: WebEffort = "balanced") -> WebExtractResult:
+    async def extract(
+        self,
+        url: str,
+        *,
+        effort: WebEffort = "balanced",
+        providers: tuple[str, ...],
+    ) -> WebExtractResult:
+        """Extract ``url`` with the configured providers that ``providers`` names, in order.
+
+        A chain that places the Agent Browser between hosted providers asks each run of
+        them separately, so the browser sits where the order puts it.
+        """
         failures: list[WebSourceUnavailable] = []
         for provider in self._extract_providers:
+            if provider.name not in providers:
+                continue
             try:
                 async with public_network_admission():
                     result = await provider.extract(url, effort=effort)

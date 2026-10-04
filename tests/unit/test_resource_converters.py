@@ -337,3 +337,29 @@ async def test_registry_text_resource_has_no_visual_handles() -> None:
 
     assert result.content == "plain notes"
     assert result.visual_handles == ()
+
+
+async def test_html_is_converted_in_the_charset_its_media_type_declares() -> None:
+    """The transport's charset beats the document's own ``<meta charset>``.
+
+    A rendered page is serialized as UTF-8 whatever its meta still says, and a server
+    that declares UTF-8 in its Content-Type means it, as a browser reads it.
+    """
+    page = '<html><head><meta charset="iso-8859-1"></head><body><p>café</p></body></html>'.encode()
+
+    declared = await convert_resource(
+        page, filename="page.html", declared_mime="text/html; charset=utf-8"
+    )
+
+    assert "café" in declared.text
+
+
+@pytest.mark.parametrize(
+    "declared", ["application/pdf; charset=binary", "text/html; charset=nonsense"]
+)
+async def test_a_charset_no_codec_knows_is_no_charset_at_all(declared: str) -> None:
+    page = b"<html><body><p>plain ascii</p></body></html>"
+
+    converted = await convert_resource(page, filename="page.html", declared_mime=declared)
+
+    assert "plain ascii" in converted.text
