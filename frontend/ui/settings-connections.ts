@@ -405,8 +405,8 @@ export class DlSettingsConnections extends LightElement {
           )}</span>
         </span>
         ${this.authorizationUrl
-          ? html`<p><a data-oauth-continue href=${this.authorizationUrl} rel="noreferrer noopener"
-            >${msg('Continue to provider authorization', {id: 'connections.oauthContinue'})}</a></p>`
+          ? html`<p><a class=${styles.continue} data-oauth-continue href=${this.authorizationUrl}
+            rel="noreferrer noopener">${msg('Continue to provider authorization', {id: 'connections.oauthContinue'})}</a></p>`
           : nothing}
       </div>`;
     }
