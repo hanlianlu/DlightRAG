@@ -235,10 +235,9 @@ read(rendered=true), the Extract chain's browser step, or a browser(...) call
   `PGAgentAccountStore`), and a writer's `AgentAccountMaintenance` re-seals their envelopes
   after a key ring rotation, as Connections re-encrypts Grants. The engine states the
   `AgentMailbox` port and `summarize_mail`; `adapters/agent_mailbox.py` implements it as
-  `S3AgentMailbox` over the existing `aiobotocore` dependency, with no vendor code.
-  `CredentialCipher` and the loading of the key ring live in
-  `dlightrag.engine.credential_cipher`, which Connections and Agent Accounts both import,
-  each sealing under a label of its own.
+  `S3AgentMailbox` over the existing `aiobotocore` dependency, with no vendor code. The
+  key ring is shared with Connections
+  ([Secret handling](personal-mcp-connections.md#secret-handling-and-key-ring)).
 - **Fails closed, and the Run goes on.** A busy or unreachable pool, a page that fails,
   or a lost browser is a model-visible reason on that `read` or `browser` call, not a Run
   failure.
@@ -321,7 +320,8 @@ image carries the Python `playwright` package and its driver, not a browser.
 
 Every process mounts one shared POSIX `deployment.working_dir` at the same
 absolute path: it holds corpus files, operator inputs, and the key ring the first
-writer creates, which seals Connection credentials and Agent Account passwords. Every process executing trusted Research also
+writer creates ([Secret handling](personal-mcp-connections.md#secret-handling-and-key-ring)).
+Every process executing trusted Research also
 mounts one shared `answer.agent.workspace_root`, outside the working directory,
 and the global and per-owner Skills roots. Milvus or Zilliz changes only vector
 storage and is writer-only: PostgreSQL text chunks remain the BM25 and chunk

@@ -428,8 +428,12 @@ An account the Agent registered on a third-party site under its own identity. Dl
 _Avoid_: owner account, saved login, browser profile
 
 **Agent Mailbox**:
-An optional deployment capability that delivers mail sent to Agent aliases, read from an S3-compatible bucket the deployment fills. Mail is untrusted context, never Evidence.
+An optional deployment capability that delivers mail sent to Mailbox Aliases, read from an S3-compatible bucket the deployment fills.
 _Avoid_: inbox provider, temporary mail
+
+**Mailbox Alias**:
+An address DlightRAG mints on the Agent Mailbox's domain for one account: deterministic per owner and site for a parent's account, random for a Child's.
+_Avoid_: alias on its own (a Resource Handle also has aliases), temporary address, the owner's email
 
 **Agent Skill**:
 A progressively disclosed `SKILL.md` package discovered from packaged built-ins, the operator-global root, or one owner's published skills. Precedence is built-in, then global, then owner. Metadata is projected first; the framework reads contained references only through `load_skill` and never executes Skill code. What an Agent's own processes may read is the roots the capability declares to the Execution Environment (ADR 0024): the operator-global root and the Run owner's own shard, never the shared parent and never a sibling owner's. Users write their own skills only through the validated `publish_skill` tool.

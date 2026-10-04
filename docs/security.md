@@ -583,9 +583,9 @@ makes that safe is that no password is ever anywhere the model, or anything it c
 could read.
 
 - **An identity of its own.** No credential, name, address, or other personal information
-  of the owner enters a form, and the tool's description says so. An Agent Mailbox alias
-  is 16 characters of an unkeyed hash of the owner and the site and carries nothing of the
-  owner. The browser holds no credential of the owner either.
+  of the owner enters a form, and the tool's description says so. A mailbox alias is 16
+  characters of an unkeyed hash of the owner and the site and carries nothing of the owner.
+  The browser holds no credential of the owner either.
 - **DlightRAG makes the password and never shows it.** It generates 20 characters with
   `secrets`, shorter only to fit a field's `maxlength` and never below 12, from letters,
   digits, and `-._`, which HTML, JSON, form, and percent-encoding leave as they are, and it
@@ -594,11 +594,10 @@ could read.
   names fields by ref and never types or sees a password. No tool argument, result, Session
   Entry, event, trace, log, or error carries one.
 - **Sealed under the key ring.** A parent's account is stored per owner, sealed under the
-  [deployment key ring](#personal-connection-authorization) with a label of its own and bound
-  to the owner, the site, and the account, so an account envelope never opens as a Connection
-  Grant, nor a Grant as an account, and one owner's never opens for another's. Without a ring,
-  register and login fail closed, and an envelope no key opens is unusable until the site's
-  password reset replaces it. No route, view, export, or result returns a password.
+  deployment key ring with a label and a binding of its own
+  ([Secret handling](personal-mcp-connections.md#secret-handling-and-key-ring)). Without a
+  ring, register and login fail closed, and an envelope no key opens is unusable until the
+  site's password reset replaces it. No route, view, export, or result returns a password.
 - **Filled only into the account's own site.** A password goes only into a password field in
   an `https` frame whose registrable domain, by the pinned Public Suffix List's eTLD+1 with
   its private section, is the account's site, judged by the frame's own address and not the
@@ -626,34 +625,31 @@ could read.
   filled password or cannot be read, comparing in DlightRAG's process so no password is ever
   sent into a page. A filled form is screenshotted after it is submitted, not before.
 - **Children register for the Run.** A Child keeps `register`, but its account is held in the
-  worker's memory under its Agent Session until the Run settles, with a random alias, so
-  nothing durable is written for the owner that the parent did not make
+  worker's memory under its Agent Session until the Run settles, with a random mailbox
+  alias, so nothing durable is written for the owner that the parent did not make
   ([ADR 0025](adr/0025-a-child-inherits-capability-not-authority.md)). A Child may sign in
   with the owner's accounts, which is capability.
-- **Mail is untrusted.** Anyone who learns an alias can write to it, so mail is context and
-  never Evidence, the result says so, and a link in it is opened with `navigate` under its
-  first-URL check. DlightRAG reads the bucket and never writes or deletes. The bucket's keys
-  are `.env` secrets that live only in DlightRAG's processes: an Agent's own processes get no
-  `DLIGHTRAG_*` variable.
+- **Mail is untrusted.** Anyone who learns a mailbox alias can write to it, so mail is
+  context and never Evidence, the result says so, and a link in it is opened with `navigate`
+  under its first-URL check. DlightRAG reads the bucket and never writes or deletes. The
+  bucket's keys are `.env` secrets that live only in DlightRAG's processes: an Agent's own
+  processes get no `DLIGHTRAG_*` variable.
 
 Residual risks, recorded rather than solved:
 
 - A site and its scripts necessarily see the password, and it crosses the pool's internal
   network unencrypted inside the Playwright protocol. One password for each account confines
   a leak to that account.
-- An account is recorded when its fields are filled, before the site accepts the form, so a
-  refused sign-up leaves a record that `login` will fail with. The way out is the reset path,
-  `register` on a site whose account exists.
 - A downloaded file has the password masked by its exact bytes, so one a site compresses or
   encodes into the file, in an archive, a PDF stream, or base64, is admitted with it. A
   password a page prints as text can be confirmed by `wait(text=…)`, and one a page draws on
   a canvas, generates with CSS (`content: attr(...)`), or shows inside shadow DOM, which the
   locators do not pierce, escapes the screenshot check.
 - Registrations of one owner on one site that run at once leave the last envelope. A Child's
-  account stays on the site after its Run, under an alias nothing reads again.
-- Mail retention is the deployment's, and an alias that is flooded lists only its first 10,000
-  objects ([Operations](operations.md#agent-mailbox)). The S3 client's own debug log names the
-  endpoint and the access key id, so a deployment keeps production at `log_level: info`.
+  account stays on the site after its Run, under a mailbox alias nothing reads again.
+- A mailbox alias anyone can write to can be flooded until a listing no longer reaches its
+  newest mail, and retention is the deployment's
+  ([bucket contract](configuration.md#agent-mailbox)).
 - Redaction finds a password by its exact spelling. A generated password has no spelling that
   a browser or an encoder changes, but a page that rewrites a value on purpose, by encoding,
   splitting, or reordering it, is not found.
@@ -730,9 +726,7 @@ even with bearer auth.
 
 Personal MCP Connections authorize with OAuth PKCE and state, deposit each callback
 once into an encrypted inbox, and keep credentials sealed under the deployment key
-ring; the [contract](personal-mcp-connections.md) has the details. The ring has a second
-consumer, [Agent Accounts](#agent-accounts), and each seals under a label of its own, so
-an envelope of one never opens as the other's. A callback URL
+ring; the [contract](personal-mcp-connections.md) has the details. A callback URL
 carries the code and state in its query: the Web strips them before its own
 logging, and operators must redact them in upstream proxies and external tracing,
 which are outside this application. Removing live ciphertext does not erase

@@ -408,9 +408,9 @@ restart.
 
 ## Key Ring Rotation
 
-Personal Connection credentials and Agent Account passwords are sealed under
-`<deployment.working_dir>/connection-keyring.json`, which the first writer
-creates ([format](personal-mcp-connections.md#secret-handling-and-key-ring)).
+The deployment key ring is `<deployment.working_dir>/connection-keyring.json`, which the
+first writer creates ([format and consumers](personal-mcp-connections.md#secret-handling-and-key-ring)).
+Rotating it moves what each consumer sealed to the new key.
 
 1. Add a fresh 32-byte base64url key under a new ID, keeping the old IDs:
 
@@ -445,9 +445,8 @@ creates ([format](personal-mcp-connections.md#secret-handling-and-key-ring)).
 ## Agent Mailbox
 
 The Agent Mailbox ([ADR 0034](adr/0034-agent-accounts-and-the-agent-mailbox.md)) is
-optional. DlightRAG only reads: whole RFC 822 messages from an S3-compatible bucket,
-which it never writes to or deletes from, and the repository holds no vendor code.
-[Configuration](configuration.md#agent-mailbox) has the fields and the bucket's layout.
+optional, and the repository holds no vendor code for it.
+[Configuration](configuration.md#agent-mailbox) has the fields and the bucket's contract.
 How mail reaches the bucket, and how long it stays, are the deployment's. The steps
 below are one deployment's, a catch-all on its own domain through Cloudflare Email
 Routing and an Email Worker to R2; the Worker is an example for that deployment, not
@@ -467,8 +466,7 @@ product code, and another one could use SES receipt rules that write to S3.
 - **The bucket.** Create an R2 bucket (for example `dlightrag-agent-mail`; lower-case
   letters, digits, `-`, and `.`) in the default location. A jurisdiction changes the
   endpoint to `https://<account-id>.<jurisdiction>.r2.cloudflarestorage.com`.
-- **The Worker.** Cloudflare accepts mail up to 25 MiB, of which DlightRAG reads only
-  messages up to 1 MiB: a larger one is listed and not read. It gives the Worker the envelope
+- **The Worker.** Cloudflare accepts mail up to 25 MiB and gives the Worker the envelope
   recipient as `message.to`. Bind the bucket as `MAIL` and set `PREFIX` to the same value as
   `answer.agent.mailbox.prefix`, `mail` by default:
 
@@ -485,29 +483,23 @@ product code, and another one could use SES receipt rules that write to S3.
     },
   };
   ```
-
-  The recipient is the envelope's because a `To:` header need not name the address a
-  message was delivered to, and lower case because DlightRAG mints lower-case aliases and a
-  site may capitalize one. The object's name is only for people: DlightRAG reads when mail
-  arrived from the object's `LastModified`, never from a header.
 - **Routing.** Enable Email Routing for the zone, which adds Cloudflare's MX and SPF
   records. The wizard may ask for a destination address to verify; it is not used, and the
   Agent never uses any address of the owner's. Set the catch-all to **Send to a Worker**,
   choose the Worker, and check it is **Active**. Leave subaddressing off.
 - **Retention is the deployment's, and DlightRAG never deletes.** Add an R2 lifecycle rule
-  that deletes objects under the prefix after 30 days. An alias that has more than 10,000
-  stored messages is listed from its first 10,000 only, and `inbox` says so.
+  that deletes objects under the prefix after 30 days, so a mailbox alias stays within what a
+  listing reads ([the bucket's contract](configuration.md#agent-mailbox)).
 - **The key.** Create an R2 account API token with **Object Read only**, scoped to the
   bucket. DlightRAG only lists and gets. Note its Access Key ID and Secret Access Key when
   it is created; the Secret is shown once. The endpoint is
   `https://<account-id>.r2.cloudflarestorage.com`. Revoke and recreate the token, and update
   `.env`, if either key may have leaked.
-- **Turning it on.** Put the five settings in `.env`
-  ([names and rules](configuration.md#agent-mailbox)), run an image that has this code, and
-  restart `dlightrag-api`, `dlightrag-mcp`, and `dlightrag-reader`. `GET /health` then shows
-  `"accounts": true` and `"mailbox": true` under `agent_browser`
-  ([what it reports](interfaces.md#health-and-errors)), from configuration alone: the bucket
-  is first reached by a Run's `inbox`, and a wrong key or bucket answers there as
+- **Turning it on.** Put the settings in `.env`
+  ([names and rules](configuration.md#agent-mailbox)) and restart `dlightrag-api`,
+  `dlightrag-mcp`, and `dlightrag-reader`. `GET /health` then shows `"accounts": true` and
+  `"mailbox": true` under `agent_browser` ([what it reports](interfaces.md#health-and-errors)).
+  A wrong key or bucket answers at a Run's `inbox` as
   `The Agent Mailbox could not be read (AccessDenied)`, naming only the error code.
 - **Test a message.** Send mail from any address to `probe-<anything>@<domain>`. An object
   named `<prefix>/probe-<anything>@<domain>/<time>-<id>.eml` appears in the bucket. If it does
@@ -517,9 +509,6 @@ product code, and another one could use SES receipt rules that write to S3.
   among them. Keep production at `log_level: info`, since the S3 client's debug log names the
   endpoint and the access key id. Neither the key nor an endpoint reaches an error or a log
   line DlightRAG writes.
-- **Mail is untrusted.** Anyone who learns an alias can write to it, which is why DlightRAG
-  gives mail to the model only as context and never as Evidence
-  ([Security](security.md#agent-accounts)).
 - **Development.** `tests/integration/test_agent_accounts_browser.py` drives `register`,
   `login`, and `inbox` in a real Chromium over a proxy that terminates TLS, against a
   loopback S3 double, with no database, and `tests/integration/test_agent_accounts_pg.py`

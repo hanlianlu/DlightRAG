@@ -435,8 +435,8 @@ withdraws both actions together, and a Run accepted with them is pinned to them.
   every ref (the element exists, is of the right kind, and is in a frame of the page's own
   site) before it fills anything, sizes the password to the smallest `maxlength` the
   password fields state, and refuses below 12 characters. The address is the one the account
-  already has, which is filled again; else, with a mailbox, the owner's alias for the site (a
-  Child gets a random alias of its own), which is filled; else the address the Agent typed,
+  already has, which is filled again; else, with a mailbox, the owner's mailbox alias for the
+  site (a Child gets a random one of its own), which is filled; else the address the Agent typed,
   which must hold one `@` with text on each side of it and no whitespace. The username is the
   one typed, 1 to 128 characters with no control character. A new account needs at least one
   of them. It then generates the password, fills it, and records the account before the site
@@ -455,7 +455,7 @@ withdraws both actions together, and a Run accepted with them is pinned to them.
   site's reset path.
 - **What a result says.** Both end like any action that changes the page: the frame, its
   notes, then a sentence (the account recorded or reset, with `for this owner's later Runs`
-  or `for this Run only (a Child Session's account)`, and for an alias a pointer to `inbox`;
+  or `for this Run only (a Child Session's account)`, and for a mailbox alias a pointer to `inbox`;
   or the fields filled), then the bounded snapshot, in which a password is only
   `********`. They carry no Evidence. A refusal fills nothing and stores nothing. The
   reasons: no key ring; a page with no `https` registrable domain; a ref that is stale,
@@ -464,26 +464,25 @@ withdraws both actions together, and a Run accepted with them is pinned to them.
   neither; a fill that failed or that the page changed, which clears what it filled; an
   account that could not be stored, which does the same and tells the model not to submit;
   no account for the site, or one without the field named; and an envelope no key opens.
-- **`inbox`** needs no page and no lease. It shows mail that the aliases of this Agent
-  Session's accounts received since its latest `register` or `login` in the Run, from two
-  minutes before it, because the time is the bucket's own clock; the Session's other
-  aliases in the Run stay in the window. Before either action it says so, and so it does
-  for accounts with no alias. It shows the newest five messages of its aliases, each with
-  its time, alias, sender, subject, up to four links, and up to five codes, says how many
-  more there were, and says when an alias holds more than 10,000 stored messages. A link over
-  2,048 characters or beyond the first four is only counted. A code is a token of four to
-  nine characters that looks like one. A message over 1 MiB is listed and not read, and one
-  that cannot be parsed is listed as such. An empty window is not an error: the result says
-  mail can take a minute and to call `inbox` again after a `wait`. A bucket that cannot be
-  read is reported by its error code alone ([Operations](operations.md#agent-mailbox)).
-- **Mail is context.** The result states that anyone who learns an alias can write to it, and
-  that mail is never evidence. Every filled password is masked in its headers and body before
-  anything is extracted, so none comes back as a code. A link in it is followed with
-  `navigate`.
+- **`inbox`** needs no page and no lease. It shows mail that the mailbox aliases of this
+  Agent Session's accounts received since its latest `register` or `login` in the Run, from
+  two minutes before it, because the time is the bucket's own clock; the Session's other
+  mailbox aliases in the Run stay in the window. Before either action it says so, and so it
+  does for accounts with no mailbox alias, an address the Agent typed being none. It shows
+  the newest five messages of its mailbox aliases, each with its time, mailbox alias, sender,
+  subject, up to four links, and up to five codes, says how many more there were, and says
+  when a mailbox alias holds more than a listing reads
+  ([the bucket's contract](configuration.md#agent-mailbox)). A link over 2,048 characters or
+  beyond the first four is only counted. A code is a token of four to nine characters that
+  looks like one. A message over 1 MiB is listed and not read, and one that cannot be parsed
+  is listed as such. An empty window is not an error: the result says mail can take a minute
+  and to call `inbox` again after a `wait`. A bucket that cannot be read is reported by its
+  error code alone ([Operations](operations.md#agent-mailbox)). Mail is untrusted context,
+  and a link in it is followed with `navigate` ([Security](security.md#agent-accounts)).
 - **Subjects and recovery.** `register` and `login` name the page they act on, as the other
-  actions do, and `inbox` names its aliases. A recovered Run has no Run-scoped account, no
-  window, and no page, as it has no browser; the owner's accounts are intact, and `inbox`
-  needs a new `register` or `login` first.
+  actions do, and `inbox` names its mailbox aliases. A recovered Run has no Run-scoped
+  account, no window, and no page, as it has no browser; the owner's accounts are intact, and
+  `inbox` needs a new `register` or `login` first.
 
 ## Context And Model Budgets
 

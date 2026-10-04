@@ -995,14 +995,19 @@ Mailbox, and an Agent Mailbox needs [Agent Accounts](#agent-browser) to be on.
   `auto` on Cloudflare R2. It has no default: unset, the SDK resolves the region as it does
   for any S3 client, from its usual environment and profile, and an unset `endpoint` is AWS
   S3's own.
-- `alias_domain` is the domain the Agent's addresses are minted on, which the deployment's
-  mail routing must deliver. An address is the same for one owner and site in every Run.
+- `alias_domain` is the domain the Agent's mailbox aliases are minted on, which the
+  deployment's mail routing must deliver. A mailbox alias is the same for one owner and site
+  in every Run.
 - **The bucket's contract is its layout.** Each message is written whole, as one object, under
   `<prefix>/<envelope recipient, lower case>/`: the envelope recipient, because a `To:` header
-  does not reliably name the address a message was delivered to. DlightRAG lists one alias's
-  prefix and never scans the bucket, reads `LastModified` as when mail arrived, and needs
-  only list and get access. How mail reaches the bucket, with an example, and how long it
-  stays, are the deployment's ([Operations](operations.md#agent-mailbox)).
+  does not reliably name the address a message was delivered to, and lower case because
+  DlightRAG mints lower-case mailbox aliases and a site may capitalize one. DlightRAG lists
+  one mailbox alias's prefix and never scans the bucket, reads `LastModified` as when mail
+  arrived, never an object's name or a header, and needs only list and get access. A listing
+  reads at most the first 10,000 stored messages of a mailbox alias and says when it holds
+  more, so a deployment keeps its retention short. How mail reaches the bucket, with an
+  example, and how long it stays, are the deployment's
+  ([Operations](operations.md#agent-mailbox)).
 
 What `GET /health` says of it is in [Interfaces](interfaces.md#health-and-errors).
 

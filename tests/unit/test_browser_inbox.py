@@ -208,7 +208,7 @@ async def test_inbox_needs_a_sign_in_and_an_alias_and_reports_a_bucket_it_cannot
 
     assert [r.is_error for r in (unopened, unaliased, unreadable)] == [True] * 3
     assert unopened.text_content.startswith("inbox shows mail only after register or login")
-    assert unaliased.text_content.startswith("The accounts this Agent Session used have no Agent")
+    assert unaliased.text_content.startswith("The accounts this Agent Session used have no mailbox")
     assert unreadable.text_content == "The Agent Mailbox could not be read (AccessDenied)."
     # Only the call that had an alias asked the bucket anything.
     assert [address for address, *_ in mailbox.asked] == [alias]

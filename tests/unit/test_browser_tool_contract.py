@@ -100,7 +100,7 @@ def test_an_agent_mailbox_adds_the_inbox_line_and_no_field() -> None:
     plain, mailing = (properties(upload=True, accounts=True, mailbox=on) for on in (False, True))
 
     assert set(mailing) == set(plain)
-    assert "inbox: mail to this session's aliases" in mailing["action"]["description"]
+    assert "inbox: mail to this session's mailbox aliases" in mailing["action"]["description"]
     assert "inbox" not in plain["action"]["description"]
 
 

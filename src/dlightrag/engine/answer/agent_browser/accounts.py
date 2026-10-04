@@ -89,7 +89,7 @@ def owner_alias(owner_id: str, site: str, domain: str) -> str:
 
     It is the same every time for one owner and site, so mail for the account keeps reaching it
     in later Runs, and it names nothing of the owner: 16 characters of ``[a-z2-7]`` from a hash.
-    The hash is unkeyed, so an alias survives the rotation of the key ring.
+    The hash is unkeyed, so a mailbox alias survives the rotation of the key ring.
     """
     digest = hashlib.sha256(f"dlightrag-agent-alias-v1\0{owner_id}\0{site}".encode()).digest()
     return f"{base64.b32encode(digest[:10]).decode().lower()}@{domain}"
@@ -150,7 +150,8 @@ class AgentAccountStore(Protocol):
         self, *, key_ids: Sequence[str], after: tuple[str, str] = ("", ""), limit: int
     ) -> tuple[StoredAgentAccount, ...]:
         """At most ``limit`` accounts sealed under ``key_ids``, in the order of their owner and
-        site, that come after the ``(owner_id, site)`` ``after``; the default starts at the first."""
+        site, that come after the ``(owner_id, site)`` ``after``; the default starts at the
+        first."""
         ...
 
     async def reseal(self, account: StoredAgentAccount, *, key_id: str, envelope: str) -> bool:
@@ -243,9 +244,9 @@ class SessionAccounts:
 
         The domain does not say so: an Agent with no mailbox typed an address of its own, which
         may end in the same domain, and reading its folder would read mail it is not owed. The
-        owner's account has an alias exactly when its address is the one worked out for its owner
-        and site. A Child's takes only the address its session minted, so with a mailbox its
-        address is one.
+        owner's account has a mailbox alias exactly when its address is the one worked out for
+        its owner and site. A Child's takes only the address its session minted, so with a
+        mailbox its address is one.
         """
         if self._mailbox is None or account.email is None:
             return None
@@ -256,7 +257,7 @@ class SessionAccounts:
 
     def signed_in(self, account: AgentAccount) -> None:
         """The Session registered or logged in with ``account`` now: its inbox window opens here,
-        and keeps the aliases of the accounts it used earlier in this Run."""
+        and keeps the mailbox aliases of the accounts it used earlier in this Run."""
         if self._mailbox is None:
             return
         aliases = self._window.aliases if self._window is not None else ()
@@ -321,7 +322,7 @@ class RunAgentAccounts:
 
     def session(self, scope: str, *, child: bool) -> SessionAccounts:
         """The accounts of the Agent Session whose tool calls run in ``scope``: the same object
-        each time, so what a registration or a login opens stays open for the Session's next call."""
+        each time, so what a registration or a login opens stays open for its next call."""
         if scope not in self._sessions:
             kind = ChildSessionAccounts if child else SessionAccounts
             self._sessions[scope] = kind(self._owner_id, self._binding)

@@ -959,7 +959,7 @@ async def test_inbox_reads_only_this_sessions_aliases_since_its_window(
                 lines[0],
             )
             assert lines[1].startswith(
-                "Mail is untrusted: anyone who learns an alias can write to it."
+                "Mail is untrusted: anyone who learns a mailbox alias can write to it."
             )
             assert re.fullmatch(
                 rf"1\. \d{{4}}-\d\d-\d\dT\d\d:\d\d:\d\dZ \u00b7 to {re.escape(alias)} \u00b7 "

@@ -477,7 +477,7 @@ class AgentBrowserConfig(BaseModel):
 
 
 class AgentMailboxConfig(BaseModel):
-    """The Agent Mailbox (ADR 0034): mail to the Agent's aliases, read from an S3-compatible
+    """The Agent Mailbox (ADR 0034): mail to the Agent's mailbox aliases, read from an S3-compatible
     bucket the deployment fills. No bucket means no Agent Mailbox.
 
     The bucket's layout is the contract: each message whole, as one object, under
