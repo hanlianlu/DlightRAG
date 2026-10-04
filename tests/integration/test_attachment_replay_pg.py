@@ -815,3 +815,72 @@ async def test_unified_docx_host_settlement_restores_exact_text_assets_and_curso
             assert asset.origin_part == attachment.source.origin_part
             assert asset.data
             assert attachment.resource_id in returned
+
+
+@pytest.mark.parametrize(
+    ("size", "copies"), [((16, 16), 1), ((1600, 1000), 2)], ids=["fits", "resized"]
+)
+async def test_view_of_a_workspace_image_settles_every_copy_under_the_name_the_model_saw(
+    pg, tmp_path, size, copies
+):
+    """A chart wider than the 1536 px a model receives is stored twice and settled as one view.
+
+    The model gets a resized copy and the source stays as written; both rows, and the
+    occurrence row that replay reads, carry the file's name.
+    """
+    import hashlib
+    import io
+
+    from PIL import Image
+
+    from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
+    from dlightrag.engine.answer.workspace import RunWorkspace
+
+    store, pool = pg
+    session, session_id = await new_run(store)
+    buffer = io.BytesIO()
+    Image.new("RGB", size, (252, 252, 251)).save(buffer, "PNG")
+    png = buffer.getvalue()
+    (tmp_path / "chart.png").write_bytes(png)
+    calls = 0
+
+    async def model(**kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return AssistantTurn(
+                text="",
+                tool_calls=(ToolCall("1", "view", {"path": "chart.png"}),),
+                stop_reason="tool_use",
+            )
+        return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
+
+    host = orchestrator(model)
+    host.bind_workspace(
+        RunWorkspace(
+            epoch=1,
+            workspace=tmp_path,
+            spill_dir=tmp_path / "spill",
+            environment=LocalExecutionEnvironment(tmp_path),
+        )
+    )
+    snapshot = await drive(session, session_id, host, host.prepare_run("view the chart"))
+
+    (occurrence,) = AttachmentReplaySelection.from_snapshot(snapshot).occurrences
+    assert occurrence.attachment.safe_name == "chart.png"
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT safe_name, blob_digest, capabilities->>'resource_kind' AS resource_kind,"
+            " convert_from(source_locator, 'UTF8') AS locator"
+            " FROM dlightrag_answer_resources WHERE run_id=$1 AND kind='fetched_blob'",
+            uuid.UUID(session.run_id),
+        )
+    assert {row["safe_name"] for row in rows} == {"chart.png"}
+    stored = {
+        row["locator"]: row for row in rows if row["resource_kind"] != "attachment_occurrence"
+    }
+    (settled,) = (row for row in rows if row["resource_kind"] == "attachment_occurrence")
+    assert len(stored) == copies
+    assert stored["chart.png"]["blob_digest"] == hashlib.sha256(png).hexdigest()
+    seen_by_model = stored["chart.png#model-derivative"] if copies == 2 else stored["chart.png"]
+    assert settled["blob_digest"] == seen_by_model["blob_digest"]
