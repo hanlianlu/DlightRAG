@@ -426,17 +426,19 @@ function styleOf(node: Element | null, properties: readonly string[]): Record<st
 
 it('keeps Markdown typography inside Markdown parts in chat and in the Artifact Canvas', async () => {
   const [chat, canvas] = await answerHosts();
-  const caption = element('');
-  caption.style.fontSize = 'var(--font-size-caption)';
+  const captionSize = element('');
+  captionSize.style.fontSize = 'var(--font-size-caption)';
 
-  // The presentation's own chrome renders alike whichever host wraps it: the
-  // section titles stay caption labels and evidence thumbnails fill their tiles.
+  // The presentation's own chrome renders alike whichever host wraps it: every
+  // section title is one caption label and evidence thumbnails fill their tiles.
   const title = ['font-size', 'font-weight', 'color', 'text-transform', 'margin-top', 'margin-bottom'];
-  for (const selector of ['.answer-evidence > h3', '.answer-references > h3']) {
-    const inCanvas = styleOf(canvas.querySelector(selector), title);
-    expect(styleOf(chat.querySelector(selector), title), selector).to.deep.equal(inCanvas);
-    expect(inCanvas['font-size']).to.equal(getComputedStyle(caption).fontSize);
-    expect(inCanvas['text-transform']).to.equal('uppercase');
+  const caption = styleOf(canvas.querySelector('.answer-references > h3'), title);
+  expect(caption['font-size']).to.equal(getComputedStyle(captionSize).fontSize);
+  expect(caption['text-transform']).to.equal('uppercase');
+  for (const [name, host] of [['chat', chat], ['canvas', canvas]] as const) {
+    for (const selector of ['.answer-evidence > h3', '.answer-references > h3']) {
+      expect(styleOf(host.querySelector(selector), title), `${name} ${selector}`).to.deep.equal(caption);
+    }
   }
   const thumbnail = ['height', 'margin-top', 'margin-bottom', 'border-radius'];
   expect(styleOf(chat.querySelector('.answer-evidence img'), thumbnail))

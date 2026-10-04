@@ -104,7 +104,7 @@ export class AnswerPresentationElement extends LightElement {
       ${presentation.evidenceImages.length > 0 ? html`
         <section class="answer-evidence" aria-label=${msg('Visual Evidence', {id: 'answerPresentation.visualEvidenceAria'})}
                  @click=${this.#handleIntent} @keydown=${this.#handleKeyIntent}>
-          <h3>${msg('Visual Evidence', {id: 'answerPresentation.visualEvidence'})}</h3>
+          <h3 class=${answerStyles['answer-section-title']}>${msg('Visual Evidence', {id: 'answerPresentation.visualEvidence'})}</h3>
           <div class=${answerStyles['answer-image-strip']}>
             ${repeat(
               presentation.evidenceImages,
@@ -117,7 +117,7 @@ export class AnswerPresentationElement extends LightElement {
       ${presentation.sources.length > 0 ? html`
         <section class=${answerStyles['answer-references']} aria-label=${msg('References', {id: 'answerPresentation.referencesAria'})}
                  @click=${this.#handleIntent} @keydown=${this.#handleKeyIntent}>
-          <h3 class=${answerStyles['answer-references-title']}>${msg('References', {id: 'answerPresentation.references'})}</h3>
+          <h3 class=${answerStyles['answer-section-title']}>${msg('References', {id: 'answerPresentation.references'})}</h3>
           <div class=${`${answerStyles['answer-reference-list']}${this.referencesExpanded ? ` ${answerStyles.expanded}` : ''}`}>
           ${repeat(
             presentation.sources,
