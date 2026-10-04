@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""What a render and an interactive session share of the Playwright driver."""
+"""What a render and an Agent Page share of the Playwright driver."""
 
 from __future__ import annotations
 

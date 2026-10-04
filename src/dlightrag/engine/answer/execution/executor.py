@@ -1482,8 +1482,8 @@ class AnswerExecutor:
                     list_guidance=store.list_pending_child_guidance,
                     prepare_dispatch=_bound_child_dispatch_preparer(run.orchestrator),
                     run_child=_bound_child_runner(
-                        close_browser_session=(
-                            agent_browser.close_session if agent_browser is not None else None
+                        close_agent_page=(
+                            agent_browser.close_page if agent_browser is not None else None
                         ),
                         orchestrator=run.orchestrator,
                         telemetry=self._telemetry,

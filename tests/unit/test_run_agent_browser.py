@@ -10,12 +10,12 @@ import pytest
 from dlightrag.engine.answer.agent_browser import (
     AgentBrowserError,
     AgentBrowserSettings,
+    AgentPage,
     BrowserHolder,
-    BrowserSession,
-    InteractiveLimits,
+    PageLimits,
     RunAgentBrowser,
     browser_failure,
-    interactive_failure,
+    page_failure,
 )
 from tests.support.agent_browser import FakeLease, FakeProvider, browser_settings
 
@@ -162,15 +162,15 @@ async def test_a_run_that_never_rendered_settles_without_touching_the_pool() -> 
 
 
 async def open_page(browser: RunAgentBrowser, scope: str, url: str = "http://a.example/") -> None:
-    await browser.with_session(scope, lambda session: session.navigate(url), open_page=True)
+    await browser.with_page(scope, lambda page: page.navigate(url), open_page=True)
 
 
-async def test_a_session_with_no_page_leases_nothing_and_says_why() -> None:
+async def test_an_agent_session_with_no_page_leases_nothing_and_says_why() -> None:
     provider = FakeProvider()
     browser = RunAgentBrowser(provider, HOLDER, settings())
 
     with pytest.raises(AgentBrowserError) as unopened:
-        await browser.with_session("child", lambda session: session.navigate("http://a.example/"))
+        await browser.with_page("child", lambda page: page.navigate("http://a.example/"))
 
     assert unopened.value.reason == "no_page"
     assert 'browser(action="navigate"' in unopened.value.public_message
@@ -178,7 +178,7 @@ async def test_a_session_with_no_page_leases_nothing_and_says_why() -> None:
     await browser.aclose()
 
 
-async def test_sessions_open_their_pages_on_the_runs_one_browser_under_its_limits() -> None:
+async def test_agent_pages_open_on_the_runs_one_browser_under_its_limits() -> None:
     lease = FakeLease()
     provider = FakeProvider(lease)
     browser = RunAgentBrowser(
@@ -188,46 +188,46 @@ async def test_sessions_open_their_pages_on_the_runs_one_browser_under_its_limit
     await open_page(browser, "parent", "http://parent.example/")
     await open_page(browser, "child", "http://child.example/")
 
-    assert (provider.leased, len(lease.sessions)) == (1, 2)
-    assert lease.limits == [InteractiveLimits(7, 3, 2, 9, 1024 * 1024)] * 2
+    assert (provider.leased, len(lease.pages)) == (1, 2)
+    assert lease.limits == [PageLimits(7, 3, 2, 9, 1024 * 1024)] * 2
     assert (browser.current_url("parent"), browser.current_url("child")) == (
         "http://parent.example/",
         "http://child.example/",
     )
     await browser.aclose()
-    assert [session.closed for session in lease.sessions] == [1, 1]
+    assert [page.closed for page in lease.pages] == [1, 1]
     assert lease.closed == 1
 
 
-async def test_a_sessions_later_calls_reach_the_page_it_opened() -> None:
+async def test_an_agent_sessions_later_calls_reach_the_page_it_opened() -> None:
     lease = FakeLease()
     browser = RunAgentBrowser(FakeProvider(lease), HOLDER, settings())
     await open_page(browser, "parent", "http://one.example/")
 
-    await browser.with_session("parent", lambda session: session.navigate("http://two.example/"))
+    await browser.with_page("parent", lambda page: page.navigate("http://two.example/"))
 
-    assert lease.sessions[0].visited == ["http://one.example/", "http://two.example/"]
-    assert len(lease.sessions) == 1
+    assert lease.pages[0].visited == ["http://one.example/", "http://two.example/"]
+    assert len(lease.pages) == 1
     await browser.aclose()
 
 
-async def test_a_run_keeps_its_browser_while_any_session_has_a_page() -> None:
+async def test_a_run_keeps_its_browser_while_any_agent_page_is_open() -> None:
     first, second = FakeLease(), FakeLease()
     provider = FakeProvider(first, second)
     browser = RunAgentBrowser(provider, HOLDER, settings(idle=0.05))
     await open_page(browser, "parent")
     await open_page(browser, "child")
 
-    await browser.close_session("child")
+    await browser.close_page("child")
     await asyncio.sleep(0.3)
-    assert (first.closed, first.sessions[1].closed) == (0, 1)
+    assert (first.closed, first.pages[1].closed) == (0, 1)
 
-    await browser.close_session("parent")
+    await browser.close_page("parent")
     await asyncio.sleep(0.3)
     assert first.closed == 1
 
     await open_page(browser, "parent")
-    assert (provider.leased, len(second.sessions)) == (2, 1)
+    assert (provider.leased, len(second.pages)) == (2, 1)
     await browser.aclose()
 
 
@@ -243,30 +243,30 @@ async def test_a_render_in_a_browser_with_a_page_does_not_start_the_idle_clock()
     await browser.aclose()
 
 
-async def test_closing_a_session_ends_its_page_and_leaves_the_others_and_the_lease() -> None:
+async def test_closing_an_agent_page_leaves_the_others_and_the_lease() -> None:
     lease = FakeLease()
     browser = RunAgentBrowser(FakeProvider(lease), HOLDER, settings())
     await open_page(browser, "parent")
     await open_page(browser, "child")
 
-    await browser.close_session("child")
-    await browser.close_session("child")
-    await browser.close_session("never-opened")
+    await browser.close_page("child")
+    await browser.close_page("child")
+    await browser.close_page("never-opened")
 
-    assert [session.closed for session in lease.sessions] == [0, 1]
+    assert [page.closed for page in lease.pages] == [0, 1]
     assert (browser.current_url("parent"), browser.current_url("child")) == (
         "http://a.example/",
         None,
     )
     with pytest.raises(AgentBrowserError) as gone:
-        await browser.with_session("child", lambda session: session.navigate("http://a.example/"))
+        await browser.with_page("child", lambda page: page.navigate("http://a.example/"))
     assert gone.value.reason == "no_page"
     assert lease.closed == 0
     await browser.aclose()
 
 
 async def test_a_disconnect_gives_the_browser_back_and_loses_every_page_that_lived_on_it() -> None:
-    dead = FakeLease(session_failure=interactive_failure("disconnected"))
+    dead = FakeLease(call_failure=page_failure("disconnected"))
     fresh = FakeLease()
     provider = FakeProvider(dead, fresh)
     browser = RunAgentBrowser(provider, HOLDER, settings())
@@ -277,7 +277,7 @@ async def test_a_disconnect_gives_the_browser_back_and_loses_every_page_that_liv
 
     # The scope that saw it die starts over on a browser leased afresh.
     await open_page(browser, "parent")
-    assert (provider.leased, len(fresh.sessions)) == (2, 1)
+    assert (provider.leased, len(fresh.pages)) == (2, 1)
     await browser.aclose()
 
 
@@ -289,24 +289,24 @@ async def test_the_other_sessions_of_a_browser_that_disconnected_are_told_their_
     browser = RunAgentBrowser(provider, HOLDER, settings())
     await open_page(browser, "parent")
     await open_page(browser, "child")
-    lease.sessions[0].failure = interactive_failure("disconnected")
+    lease.pages[0].failure = page_failure("disconnected")
 
     with pytest.raises(AgentBrowserError) as dropped:
-        await browser.with_session("parent", lambda session: session.navigate("http://b.example/"))
+        await browser.with_page("parent", lambda page: page.navigate("http://b.example/"))
     assert dropped.value.reason == "disconnected"
     assert lease.closed == 1
 
     for scope in ("child", "parent"):
         with pytest.raises(AgentBrowserError) as lost:
-            await browser.with_session(scope, lambda session: session.navigate("http://b.example/"))
+            await browser.with_page(scope, lambda page: page.navigate("http://b.example/"))
         assert lost.value.reason == "page_lost"
     assert provider.leased == 1
 
-    # Opening a page again is how a session recovers, and it clears only its own loss.
+    # Opening a page again is how an Agent Session recovers, and it clears only its own loss.
     await open_page(browser, "child")
     assert provider.leased == 2
     with pytest.raises(AgentBrowserError) as still_lost:
-        await browser.with_session("parent", lambda session: session.navigate("http://b.example/"))
+        await browser.with_page("parent", lambda page: page.navigate("http://b.example/"))
     assert still_lost.value.reason == "page_lost"
     await browser.aclose()
 
@@ -319,15 +319,15 @@ async def test_a_late_disconnect_report_from_a_browser_the_run_replaced_changes_
     await open_page(browser, "quick")
     release = asyncio.Event()
 
-    async def disconnects_late(session: BrowserSession) -> None:
+    async def disconnects_late(page: AgentPage) -> None:
         await release.wait()
-        raise interactive_failure("disconnected")
+        raise page_failure("disconnected")
 
-    late = asyncio.create_task(browser.with_session("slow", disconnects_late))
+    late = asyncio.create_task(browser.with_page("slow", disconnects_late))
     await asyncio.sleep(0)
-    old.sessions[1].failure = interactive_failure("disconnected")
+    old.pages[1].failure = page_failure("disconnected")
     with pytest.raises(AgentBrowserError):
-        await browser.with_session("quick", lambda session: session.navigate("http://b.example/"))
+        await browser.with_page("quick", lambda page: page.navigate("http://b.example/"))
     await open_page(browser, "after")
     assert (old.closed, provider.leased) == (1, 2)
 
@@ -353,15 +353,13 @@ async def test_a_busy_pool_means_no_page_was_opened_and_the_next_try_asks_the_po
     )
 
     await open_page(browser, "parent")
-    assert (provider.leased, len(lease.sessions)) == (2, 1)
+    assert (provider.leased, len(lease.pages)) == (2, 1)
     await browser.aclose()
 
 
 async def test_a_page_that_fails_to_open_leaves_a_browser_with_no_page_to_rest() -> None:
     lease = FakeLease(
-        opening_failure=interactive_failure(
-            "action_failed", action="open", target="a page", detail="x"
-        )
+        opening_failure=page_failure("action_failed", action="open", target="a page", detail="x")
     )
     browser = RunAgentBrowser(FakeProvider(lease), HOLDER, settings(idle=0.05))
 
@@ -376,7 +374,7 @@ async def test_a_page_that_fails_to_open_leaves_a_browser_with_no_page_to_rest()
 
 
 async def test_a_browser_found_disconnected_while_opening_a_page_is_given_back() -> None:
-    dead = FakeLease(opening_failure=interactive_failure("disconnected"))
+    dead = FakeLease(opening_failure=page_failure("disconnected"))
     fresh = FakeLease()
     provider = FakeProvider(dead, fresh)
     browser = RunAgentBrowser(provider, HOLDER, settings())
@@ -386,7 +384,7 @@ async def test_a_browser_found_disconnected_while_opening_a_page_is_given_back()
     assert (dropped.value.reason, dead.closed) == ("disconnected", 1)
 
     await open_page(browser, "parent")
-    assert (provider.leased, len(fresh.sessions)) == (2, 1)
+    assert (provider.leased, len(fresh.pages)) == (2, 1)
     await browser.aclose()
 
 
@@ -399,7 +397,7 @@ async def test_a_run_that_settled_opens_no_page() -> None:
     await browser.aclose()
     await browser.aclose()
 
-    assert (lease.closed, lease.sessions[0].closed) == (1, 1)
+    assert (lease.closed, lease.pages[0].closed) == (1, 1)
     with pytest.raises(AgentBrowserError) as closed:
         await open_page(browser, "child")
     assert closed.value.reason == "not_configured"

@@ -30,9 +30,9 @@ from dlightrag.engine.answer.agent_browser import (
     AgentBrowserError,
     AgentBrowserSettings,
     BrowserHolder,
-    InteractiveLimits,
     LeasedBrowser,
     PageEvents,
+    PageLimits,
     PageObservation,
     PageState,
     RenderedPage,
@@ -286,8 +286,8 @@ class RecordingRenderer:
         return RenderedPage(requested_url=url, final_url=url, html=html, status=200)
 
 
-class FakeSession:
-    """An Agent Session's page as its Run sees it: it can be called, asked where it is, and closed.
+class FakePage:
+    """An Agent Page as its Run sees it: it can be called, asked where it is, and closed.
 
     A ``failure`` is what every call raises, as a browser that disconnected would.
     """
@@ -311,11 +311,11 @@ class FakeSession:
 
 
 class FakeLease:
-    """A leased browser that renders from a table, hosts fake sessions, and records its use.
+    """A leased browser that renders from a table, hosts fake Agent Pages, and records its use.
 
     ``gate`` holds every render until it is set, so a test can have renders in flight, and
-    ``peak`` is the most that were. ``session_failure`` is what every session it opens
-    raises from its calls, and ``opening_failure`` what opening one raises.
+    ``peak`` is the most that were. ``call_failure`` is what every call on a page it opens
+    raises, and ``opening_failure`` what opening one raises.
     """
 
     def __init__(
@@ -323,16 +323,16 @@ class FakeLease:
         *,
         failure: AgentBrowserError | None = None,
         gate: asyncio.Event | None = None,
-        session_failure: AgentBrowserError | None = None,
+        call_failure: AgentBrowserError | None = None,
         opening_failure: AgentBrowserError | None = None,
     ) -> None:
         self.failure = failure
         self.gate = gate
-        self.session_failure = session_failure
+        self.call_failure = call_failure
         self.opening_failure = opening_failure
         self.rendered: list[str] = []
-        self.sessions: list[FakeSession] = []
-        self.limits: list[InteractiveLimits] = []
+        self.pages: list[FakePage] = []
+        self.limits: list[PageLimits] = []
         self.closed = 0
         self.active = 0
         self.peak = 0
@@ -352,13 +352,13 @@ class FakeLease:
         finally:
             self.active -= 1
 
-    async def open_session(self, limits: InteractiveLimits) -> Any:
+    async def open_page(self, limits: PageLimits) -> Any:
         if self.opening_failure is not None:
             raise self.opening_failure
         self.limits.append(limits)
-        session = FakeSession(failure=self.session_failure)
-        self.sessions.append(session)
-        return session
+        page = FakePage(failure=self.call_failure)
+        self.pages.append(page)
+        return page
 
     async def aclose(self) -> None:
         self.closed += 1
@@ -444,7 +444,7 @@ __all__ = [
     "FakeLease",
     "FakeLeases",
     "FakeProvider",
-    "FakeSession",
+    "FakePage",
     "LaunchRecorder",
     "ProxiedRequest",
     "RecordingRenderer",

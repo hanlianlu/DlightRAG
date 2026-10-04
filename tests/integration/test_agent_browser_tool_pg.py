@@ -357,15 +357,15 @@ async def test_the_lease_is_held_while_a_page_is_open_and_the_idle_clock_starts_
         run = web.browser(session, idle=0.2)
         navigate = lambda s: s.navigate(f"{SHOP}/")  # noqa: E731
         try:
-            await run.with_session("parent", navigate, open_page=True)
+            await run.with_page("parent", navigate, open_page=True)
             await asyncio.sleep(0.6)
             assert await web.holder() == session.run_id
 
-            await run.close_session("parent")
+            await run.close_page("parent")
             await asyncio.sleep(0.6)
             assert await web.holder() is None
 
-            await run.with_session("parent", navigate, open_page=True)
+            await run.with_page("parent", navigate, open_page=True)
             await asyncio.sleep(0.6)
             assert await web.holder() == session.run_id
         finally:
@@ -404,7 +404,7 @@ def children_of(
         release_children=fenced(store.release_child_sessions),
         prepare_dispatch=_bound_child_dispatch_preparer(host),
         run_child=_bound_child_runner(
-            close_browser_session=run.close_session,
+            close_agent_page=run.close_page,
             telemetry=NOOP_TELEMETRY,
             orchestrator=host,
             repository=session.execution.session_repository,

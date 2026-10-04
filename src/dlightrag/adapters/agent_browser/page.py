@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""One Agent Session's browser context: its pages, and what it does on the active one."""
+"""One Agent Page: an Agent Session's browser context, and what it does on its active page."""
 
 from __future__ import annotations
 
@@ -38,15 +38,15 @@ from dlightrag.engine.answer.agent_browser import (
     DownloadedFile,
     DownloadRefusal,
     FoundElements,
-    InteractiveLimits,
     PageCapture,
     PageEvents,
+    PageLimits,
     PageObservation,
     PageScreenshot,
     PageState,
     UploadFile,
     browser_failure,
-    interactive_failure,
+    page_failure,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,7 +68,7 @@ _SCROLL_SHARE = 0.8
 _DEFAULT_VIEWPORT_HEIGHT = 720
 
 
-class PlaywrightBrowserSession:
+class PlaywrightAgentPage:
     """An anonymous context of the Run's browser with one active page.
 
     A popup or a new tab becomes the active page once the call that opened it has acted,
@@ -77,7 +77,7 @@ class PlaywrightBrowserSession:
     """
 
     def __init__(
-        self, browser: Browser, context: BrowserContext, page: Page, limits: InteractiveLimits
+        self, browser: Browser, context: BrowserContext, page: Page, limits: PageLimits
     ) -> None:
         self._browser = browser
         self._context = context
@@ -94,9 +94,9 @@ class PlaywrightBrowserSession:
 
     @classmethod
     async def open(
-        cls, browser: Browser, context: BrowserContext, limits: InteractiveLimits
-    ) -> PlaywrightBrowserSession:
-        """Start a session in ``context``, which it owns from then on, with a blank page."""
+        cls, browser: Browser, context: BrowserContext, limits: PageLimits
+    ) -> PlaywrightAgentPage:
+        """Start an Agent Page in ``context``, which it owns from then on, with a blank page."""
         try:
             page = await context.new_page()
         except BaseException:
@@ -143,7 +143,7 @@ class PlaywrightBrowserSession:
             ) from exc
         # A step back inside the same document answers nothing, and still moved the page.
         if response is None and page.url == before:
-            raise interactive_failure("no_history")
+            raise page_failure("no_history")
         return await self._after(page)
 
     async def snapshot(self) -> PageObservation:
@@ -182,7 +182,7 @@ class PlaywrightBrowserSession:
                     page,
                     "wait for",
                     "the text",
-                    timed_out=interactive_failure(
+                    timed_out=page_failure(
                         "wait_timeout",
                         text=" ".join(awaited.split())[:_QUOTED_CHARS],
                         change="appear" if appears else "disappear",
@@ -236,7 +236,7 @@ class PlaywrightBrowserSession:
                 await element.press(key, timeout=self._action_ms)
         except PlaywrightError as exc:
             if "Unknown key" in str(exc):
-                raise interactive_failure("invalid_key", key=key) from exc
+                raise page_failure("invalid_key", key=key) from exc
             raise self._failure(
                 exc,
                 page,
@@ -288,7 +288,7 @@ class PlaywrightBrowserSession:
                         await element.click(timeout=self._action_ms)
                     await (await chooser.value).set_files(payload, timeout=self._action_ms)
                 except PlaywrightTimeoutError:
-                    raise interactive_failure("not_file_input", ref=ref) from None
+                    raise page_failure("not_file_input", ref=ref) from None
         except PlaywrightError as exc:
             raise self._failure(
                 exc, page, "upload files to", f"element {ref}", ref=ref, verb="given files"
@@ -372,9 +372,7 @@ class PlaywrightBrowserSession:
         self._pages = self._open_pages()
         if not self._pages:
             # Every page closes with a browser that is gone.
-            raise interactive_failure(
-                "page_closed" if self._browser.is_connected() else "disconnected"
-            )
+            raise page_failure("page_closed" if self._browser.is_connected() else "disconnected")
         return self._pages[-1]
 
     async def _page_to_navigate(self) -> Page:
@@ -475,7 +473,7 @@ class PlaywrightBrowserSession:
         except PlaywrightError as exc:
             raise self._failure(exc, page, "look for", f"element {ref}") from exc
         if found == 0:
-            raise interactive_failure("stale_ref", ref=ref)
+            raise page_failure("stale_ref", ref=ref)
         return element
 
     async def _deliver(self, events: PageEvents, page: Page | None) -> PageEvents:
@@ -563,22 +561,20 @@ class PlaywrightBrowserSession:
         """
         if not self._browser.is_connected():
             logger.warning("Agent Browser disconnected during a call (%s)", type(exc).__name__)
-            return interactive_failure("disconnected")
+            return page_failure("disconnected")
         if page is not None and page.is_closed():
-            return interactive_failure("page_closed")
+            return page_failure("page_closed")
         if isinstance(exc, PlaywrightTimeoutError):
             if timed_out is not None:
                 return timed_out
             if ref is not None:
-                return interactive_failure(
+                return page_failure(
                     "not_actionable", ref=ref, verb=verb, seconds=self._limits.action_timeout
                 )
         elif token := NETWORK_ERROR.search(str(exc)):
             return browser_failure("navigation_failed", detail=token.group())
         logger.warning("Agent Browser call failed (%s): %s", type(exc).__name__, action)
-        return interactive_failure(
-            "action_failed", action=action, target=target, detail=_detail(exc)
-        )
+        return page_failure("action_failed", action=action, target=target, detail=_detail(exc))
 
 
 def _size(path: Path) -> int:
@@ -611,4 +607,4 @@ async def _close_context(context: BrowserContext) -> None:
         logger.warning("Failed to close an Agent Browser context", exc_info=True)
 
 
-__all__ = ["PlaywrightBrowserSession"]
+__all__ = ["PlaywrightAgentPage"]

@@ -2,11 +2,11 @@
 """One Research Run's use of its Agent Browser: lease on first need, release when idle.
 
 A Run leases its browser the first time a Rendered Read renders or an Agent Session
-opens a page, shares it between its Parent and Child Sessions, and gives it back when it
-settles, or after it has sat unused for the configured time (ADR 0032). The browser is
-unused when no Agent Session has a page open and no render is in flight, so a Run keeps
-its browser for as long as any of its Sessions has a page, and the idle clock starts only
-when none has. The lease itself lives and expires with the Run's own lease, so a Run that
+opens its Agent Page, shares it between its Parent and Child Sessions, and gives it back
+when it settles, or after it has sat unused for the configured time (ADR 0032). The
+browser is unused when no Agent Page is open and no render is in flight, so a Run keeps
+its browser for as long as any Agent Page is open, and the idle clock starts only when
+none is. The lease itself lives and expires with the Run's own lease, so a Run that
 dies frees its browser without this class running.
 """
 
@@ -20,14 +20,14 @@ from typing import cast
 from dlightrag.engine.answer.agent_browser.contracts import (
     AgentBrowserError,
     AgentBrowserSettings,
+    AgentPage,
     BrowserHolder,
     BrowserProvider,
-    BrowserSession,
-    InteractiveLimits,
     LeasedBrowser,
+    PageLimits,
     RenderedPage,
     browser_failure,
-    interactive_failure,
+    page_failure,
 )
 
 logger = logging.getLogger(__name__)
@@ -48,7 +48,7 @@ class RunAgentBrowser:
         self._provider = provider
         self._holder = holder
         self._settings = settings
-        self._limits = InteractiveLimits(
+        self._limits = PageLimits(
             navigation_timeout=settings.navigation_timeout_seconds,
             action_timeout=settings.action_timeout_seconds,
             settle_timeout=settings.settle_timeout_seconds,
@@ -56,9 +56,9 @@ class RunAgentBrowser:
             max_download_bytes=settings.max_download_bytes,
         )
         self._lease: LeasedBrowser | None = None
-        #: Each Agent Session's context, by the scope its tool calls run in. Only the
+        #: Each Agent Session's page, by the scope its tool calls run in. Only the
         #: current lease has any, so the lease lock guards the two together.
-        self._sessions: dict[str, BrowserSession] = {}
+        self._pages: dict[str, AgentPage] = {}
         #: The scopes whose page died with a browser that disconnected.
         self._lost: set[str] = set()
         self._lease_lock = asyncio.Lock()
@@ -92,19 +92,19 @@ class RunAgentBrowser:
             self._rest()
 
     @property
-    def limits(self) -> InteractiveLimits:
+    def limits(self) -> PageLimits:
         """The bounds every page of this Run works within."""
         return self._limits
 
     def current_url(self, scope: str) -> str | None:
         """Where the Agent Session's active page is, or None when it has no page."""
-        session = self._sessions.get(scope)
-        return None if session is None else session.current_url()
+        page = self._pages.get(scope)
+        return None if page is None else page.current_url()
 
-    async def with_session[T](
+    async def with_page[T](
         self,
         scope: str,
-        call: Callable[[BrowserSession], Awaitable[T]],
+        call: Callable[[AgentPage], Awaitable[T]],
         *,
         open_page: bool = False,
     ) -> T:
@@ -113,29 +113,29 @@ class RunAgentBrowser:
         Without a page and without ``open_page`` it leases nothing and says why there is
         none: the browser that held it disconnected, or the Session never opened one.
         """
-        session = self._sessions.get(scope)
-        if session is not None:
-            # A session lives exactly as long as the lease it was opened on, so with no
-            # await between the two reads the lease is the session's.
+        page = self._pages.get(scope)
+        if page is not None:
+            # A page lives exactly as long as the lease it was opened on, so with no
+            # await between the two reads the lease is the page's.
             lease = cast(LeasedBrowser, self._lease)
         elif open_page:
-            lease, session = await self._open_session(scope)
+            lease, page = await self._open_page(scope)
         else:
-            raise interactive_failure("page_lost" if scope in self._lost else "no_page")
+            raise page_failure("page_lost" if scope in self._lost else "no_page")
         try:
-            return await call(session)
+            return await call(page)
         except AgentBrowserError as exc:
             if exc.reason == "disconnected":
                 await self._discard(lease)
             raise
 
-    async def close_session(self, scope: str) -> None:
+    async def close_page(self, scope: str) -> None:
         """Close the Agent Session's page when its Session ends; the browser stays leased."""
         async with self._lease_lock:
-            session = self._sessions.pop(scope, None)
+            page = self._pages.pop(scope, None)
             self._lost.discard(scope)
-        if session is not None:
-            await session.aclose()
+        if page is not None:
+            await page.aclose()
         self._rest()
 
     async def aclose(self) -> None:
@@ -149,10 +149,10 @@ class RunAgentBrowser:
             idle.cancel()
             await asyncio.gather(idle, return_exceptions=True)
         async with self._lease_lock:
-            sessions = list(self._sessions.values())
-            self._sessions.clear()
+            pages = list(self._pages.values())
+            self._pages.clear()
             lease, self._lease = self._lease, None
-            await asyncio.gather(*(session.aclose() for session in sessions))
+            await asyncio.gather(*(page.aclose() for page in pages))
             if lease is not None:
                 await lease.aclose()
 
@@ -169,7 +169,7 @@ class RunAgentBrowser:
             )
         return self._lease
 
-    async def _open_session(self, scope: str) -> tuple[LeasedBrowser, BrowserSession]:
+    async def _open_page(self, scope: str) -> tuple[LeasedBrowser, AgentPage]:
         """Lease the browser if the Run holds none, and register the scope's page on it.
 
         Leasing and registering are one critical section, so a page is never registered on
@@ -182,16 +182,16 @@ class RunAgentBrowser:
                     lease = await self._leased_locked()
                 except AgentBrowserError as exc:
                     # The pool's sentences say a page was not rendered; here none was opened.
-                    raise interactive_failure(exc.reason) from exc
+                    raise page_failure(exc.reason) from exc
                 try:
-                    session = await lease.open_session(self._limits)
+                    page = await lease.open_page(self._limits)
                 except AgentBrowserError as exc:
                     if exc.reason == "disconnected":
                         await self._discard_locked(lease)
                     raise
-                self._sessions[scope] = session
+                self._pages[scope] = page
                 self._lost.discard(scope)
-                return lease, session
+                return lease, page
             finally:
                 # A browser with no page open rests, and one with a page does not.
                 self._rest()
@@ -210,8 +210,8 @@ class RunAgentBrowser:
         if self._lease is not lease:
             return
         self._lease = None
-        self._lost.update(self._sessions)
-        self._sessions.clear()
+        self._lost.update(self._pages)
+        self._pages.clear()
         await lease.aclose()
 
     def _cancel_idle(self) -> None:
@@ -220,7 +220,7 @@ class RunAgentBrowser:
             idle.cancel()
 
     def _unused(self) -> bool:
-        return not self._in_flight and not self._sessions
+        return not self._in_flight and not self._pages
 
     def _rest(self) -> None:
         """Start the idle timer once no page is open and no render is in flight."""

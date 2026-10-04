@@ -21,7 +21,7 @@ from functools import partial
 
 from playwright.async_api import Browser, Playwright, async_playwright
 
-from dlightrag.adapters.agent_browser.playwright_session import PlaywrightLeasedBrowser
+from dlightrag.adapters.agent_browser.leased_browser import PlaywrightLeasedBrowser
 from dlightrag.engine.answer.agent_browser import (
     AgentBrowserError,
     BrowserHolder,

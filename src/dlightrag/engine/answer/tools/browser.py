@@ -59,7 +59,7 @@ from dlightrag.engine.agent.tools.listing import escape_path
 from dlightrag.engine.answer.agent_browser import (
     MAX_DOWNLOADS_PER_CALL,
     AgentBrowserError,
-    BrowserSession,
+    AgentPage,
     DownloadRefusal,
     PageEvents,
     PageObservation,
@@ -468,36 +468,36 @@ class _Call:
                     await avalidate_public_http_url(url)
                 except PublicHttpPolicyError as exc:
                     return ToolResult.text(NAVIGATE_REFUSED.format(exc=exc), is_error=True)
-                return await self._acting(lambda s: s.navigate(url), open_page=True)
+                return await self._acting(lambda p: p.navigate(url), open_page=True)
             case "back":
-                return await self._acting(lambda s: s.back())
+                return await self._acting(lambda p: p.back())
             case "snapshot":
-                return await self._acting(lambda s: s.snapshot())
+                return await self._acting(lambda p: p.snapshot())
             case "wait":
                 return await self._acting(
-                    lambda s: s.wait(
+                    lambda p: p.wait(
                         text=request.text, text_gone=request.text_gone, seconds=request.seconds
                     )
                 )
             case "click":
-                return await self._acting(lambda s: s.click(cast(str, request.ref)))
+                return await self._acting(lambda p: p.click(cast(str, request.ref)))
             case "type":
                 return await self._acting(
-                    lambda s: s.type_text(
+                    lambda p: p.type_text(
                         cast(str, request.ref), cast(str, request.text), submit=request.submit
                     )
                 )
             case "select":
                 return await self._acting(
-                    lambda s: s.select(cast(str, request.ref), request.values)
+                    lambda p: p.select(cast(str, request.ref), request.values)
                 )
             case "press":
                 return await self._acting(
-                    lambda s: s.press(cast(str, request.key), ref=request.ref)
+                    lambda p: p.press(cast(str, request.key), ref=request.ref)
                 )
             case "scroll":
                 return await self._acting(
-                    lambda s: s.scroll(direction=request.direction, ref=request.ref)
+                    lambda p: p.scroll(direction=request.direction, ref=request.ref)
                 )
             case "upload":
                 return await self._upload()
@@ -508,19 +508,19 @@ class _Call:
             case "capture":
                 return await self._capture()
 
-    async def _session[T](
-        self, call: Callable[[BrowserSession], Awaitable[T]], *, open_page: bool = False
+    async def _on_page[T](
+        self, call: Callable[[AgentPage], Awaitable[T]], *, open_page: bool = False
     ) -> T:
-        return await self._host.browser.with_session(self._scope, call, open_page=open_page)
+        return await self._host.browser.with_page(self._scope, call, open_page=open_page)
 
     async def _acting(
         self,
-        call: Callable[[BrowserSession], Awaitable[PageObservation]],
+        call: Callable[[AgentPage], Awaitable[PageObservation]],
         *,
         open_page: bool = False,
     ) -> ToolResult:
         """A call that answers with the page and its snapshot."""
-        observation = await self._session(call, open_page=open_page)
+        observation = await self._on_page(call, open_page=open_page)
         report = await self._report(observation.page, observation.events)
         if observation.snapshot is None:
             return ToolResult.text(report)
@@ -528,7 +528,7 @@ class _Call:
 
     async def _find(self) -> ToolResult:
         query = cast(str, self._request.query)
-        found = await self._session(lambda s: s.find(query, limit=_FOUND_SHOWN))
+        found = await self._on_page(lambda p: p.find(query, limit=_FOUND_SHOWN))
         report = await self._report(found.page, found.events)
         if not found.lines:
             return ToolResult.text("\n".join((report, NOTHING_FOUND.format(query=query))))
@@ -539,7 +539,7 @@ class _Call:
 
     async def _screenshot(self) -> ToolResult:
         request = self._request
-        shot = await self._session(lambda s: s.screenshot(full_page=request.full_page))
+        shot = await self._on_page(lambda p: p.screenshot(full_page=request.full_page))
         report = await self._report(shot.page, shot.events)
         label = _label(shot.page.url)
         prepared = (
@@ -589,7 +589,7 @@ class _Call:
 
     async def _capture(self) -> ToolResult:
         host = self._host
-        cap = await self._session(lambda s: s.capture())
+        cap = await self._on_page(lambda p: p.capture())
         report = await self._report(cap.page, cap.events)
         try:
             resource_id = await host.registry.admit_browser_resource(
@@ -618,7 +618,7 @@ class _Call:
         files = await self._workspace_files(environment)
         if isinstance(files, ToolResult):
             return files
-        return await self._acting(lambda s: s.upload(cast(str, self._request.ref), files))
+        return await self._acting(lambda p: p.upload(cast(str, self._request.ref), files))
 
     async def _workspace_files(
         self, environment: ExecutionEnvironment

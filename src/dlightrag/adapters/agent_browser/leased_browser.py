@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""One leased Playwright browser: the page renders it gives and the sessions it hosts."""
+"""One leased Playwright browser: the renders it gives and the Agent Pages it hosts."""
 
 from __future__ import annotations
 
@@ -17,14 +17,14 @@ from dlightrag.adapters.agent_browser.driver import (
     milliseconds,
     page_content,
 )
-from dlightrag.adapters.agent_browser.interactive import PlaywrightBrowserSession
+from dlightrag.adapters.agent_browser.page import PlaywrightAgentPage
 from dlightrag.engine.answer.agent_browser import (
     AgentBrowserError,
-    BrowserSession,
-    InteractiveLimits,
+    AgentPage,
+    PageLimits,
     RenderedPage,
     browser_failure,
-    interactive_failure,
+    page_failure,
 )
 
 logger = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ async def new_agent_context(browser: Browser, *, accept_downloads: bool) -> Brow
     It passes no proxy of its own, so the context inherits the launch proxy that is the
     pool's only way out, and the connection never exposes the application's network to
     the browser (ADR 0032). It starts empty and lets no page register a worker; it keeps
-    downloads only where a session reads them.
+    downloads only where an Agent Page reads them.
     """
     return await browser.new_context(accept_downloads=accept_downloads, service_workers="block")
 
@@ -98,18 +98,18 @@ class PlaywrightLeasedBrowser:
                 logger.warning("Failed to close an Agent Browser context in time")
                 raise browser_failure("disconnected") from None
 
-    async def open_session(self, limits: InteractiveLimits) -> BrowserSession:
-        """Open an Agent Session's context, which lives until the session closes."""
+    async def open_page(self, limits: PageLimits) -> AgentPage:
+        """Open an Agent Session's Agent Page, which lives until it is closed."""
         if not self._browser.is_connected():
-            raise interactive_failure("disconnected")
+            raise page_failure("disconnected")
         try:
             context = await new_agent_context(self._browser, accept_downloads=True)
-            return await PlaywrightBrowserSession.open(self._browser, context, limits)
+            return await PlaywrightAgentPage.open(self._browser, context, limits)
         except PlaywrightError as exc:
             if not self._browser.is_connected():
-                raise interactive_failure("disconnected") from exc
+                raise page_failure("disconnected") from exc
             logger.warning("Agent Browser failed to open a page (%s)", type(exc).__name__)
-            raise interactive_failure(
+            raise page_failure(
                 "action_failed", action="open", target="a page", detail=type(exc).__name__
             ) from exc
 

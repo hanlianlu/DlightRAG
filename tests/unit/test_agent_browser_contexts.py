@@ -10,7 +10,7 @@ from typing import Any, cast
 import pytest
 from playwright.async_api import Browser
 
-from dlightrag.adapters.agent_browser.playwright_session import new_agent_context
+from dlightrag.adapters.agent_browser.leased_browser import new_agent_context
 
 SOURCE = Path(__file__).resolve().parents[2] / "src" / "dlightrag"
 
@@ -50,5 +50,5 @@ def _uses(name: str) -> list[tuple[str, int]]:
 
 
 def test_the_one_place_a_context_is_made_is_the_agent_browser_adapter() -> None:
-    assert [name for name, _ in _uses("new_context")] == ["playwright_session.py"]
+    assert [name for name, _ in _uses("new_context")] == ["leased_browser.py"]
     assert _uses("expose_network") == []

@@ -208,9 +208,9 @@ read(rendered=true), the Extract chain's browser step, or a browser(...) call
   dead worker, frees its browser with nothing left to release. A recovered Run leases a
   fresh browser on first need.
 - **A port and one adapter.** The engine states `BrowserProvider`, `LeasedBrowser`,
-  `BrowserSession` (one page's actions), `BrowserLeases` (the shared record of who holds
-  each endpoint), and `RenderedPage`; `adapters/agent_browser` implements the provider as
-  `PooledBrowserProvider` and a page as `PlaywrightBrowserSession`, over the Playwright
+  `AgentPage`, `BrowserLeases` (the shared record of who holds each endpoint), and
+  `RenderedPage`; `adapters/agent_browser` implements the provider as
+  `PooledBrowserProvider` and an Agent Page as `PlaywrightAgentPage`, over the Playwright
   protocol, and is the only module that imports Playwright. The registry receives a
   `PageRenderer` and the tool a `BrowserToolHost`, never a driver; composition
   (`_compose`) builds the provider only when `answer.agent.browser` names endpoints.

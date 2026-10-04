@@ -40,8 +40,8 @@ MAX_DOWNLOADS_PER_CALL = 4
 
 
 @dataclass(frozen=True, slots=True)
-class InteractiveLimits:
-    """The bounds one Agent Session's page works within, from the settings of its Run."""
+class PageLimits:
+    """The bounds an Agent Page works within, from the settings of its Run."""
 
     navigation_timeout: float
     """Seconds a navigation, a wait for text, a screenshot, or one download's save may take."""
@@ -75,7 +75,7 @@ class DownloadedFile:
 
 @dataclass(frozen=True, slots=True)
 class DownloadRefusal:
-    """One download the session did not deliver, and why."""
+    """One download the Agent Page did not deliver, and why."""
 
     suggested_filename: str
     reason: Literal["too_large", "timeout", "failed", "limit"]
@@ -83,7 +83,7 @@ class DownloadRefusal:
 
 @dataclass(frozen=True, slots=True)
 class PageEvents:
-    """What the session's pages did around one call, besides the call itself."""
+    """What happened in the Agent Page around one call, besides the call itself."""
 
     downloads: tuple[DownloadedFile, ...] = ()
     refused_downloads: tuple[DownloadRefusal, ...] = ()
@@ -94,7 +94,7 @@ class PageEvents:
     returned: bool = False
     """The active page closed, and an earlier page is active again."""
     closed: bool = False
-    """The last page closed: the session has no page."""
+    """The last page closed: nothing is open until the next navigate."""
     http_status: int | None = None
     """The active page's last main-frame navigation response during the call."""
 
@@ -201,7 +201,7 @@ _PUBLIC_MESSAGES: dict[AgentBrowserFailure, str] = {
 #: What the model reads when a ``browser`` call fails. A reason missing here keeps its
 #: sentence above, which a call and a render say in the same words. Driver error text
 #: enters only through ``action_failed``, and only its first line.
-_INTERACTIVE_MESSAGES: dict[AgentBrowserFailure, str] = {
+_PAGE_MESSAGES: dict[AgentBrowserFailure, str] = {
     "no_page": (
         'No page is open in this Agent Session. Start with browser(action="navigate", '
         "url=...); a Run that resumed after an interruption starts with no open page."
@@ -254,21 +254,21 @@ def browser_failure(reason: AgentBrowserFailure, **fields: object) -> AgentBrows
     return AgentBrowserError(reason, _PUBLIC_MESSAGES[reason].format(**fields))
 
 
-def interactive_failure(reason: AgentBrowserFailure, **fields: object) -> AgentBrowserError:
+def page_failure(reason: AgentBrowserFailure, **fields: object) -> AgentBrowserError:
     """The error for ``reason`` as a ``browser`` call reports it.
 
     ``fields`` are the ones its sentence names: ``ref``, ``verb``, ``key``, ``text`` and
     ``change``, ``action``, ``target`` and ``detail``, ``seconds``. A reason a render
     reports in the same words is the render's error.
     """
-    template = _INTERACTIVE_MESSAGES.get(reason)
+    template = _PAGE_MESSAGES.get(reason)
     if template is None:
         return browser_failure(reason, **fields)
     return AgentBrowserError(reason, template.format(**fields))
 
 
-class BrowserSession(Protocol):
-    """One Agent Session's context in the Run's browser, with one active page.
+class AgentPage(Protocol):
+    """An Agent Session's anonymous context in the Run's browser, driven as one active page.
 
     A call acts on the active page and answers with what it left. A popup or a new tab
     becomes the active page only after the call that opened it, so a ref always acts on
@@ -319,7 +319,7 @@ class LeasedBrowser(Protocol):
         self, url: str, *, navigation_timeout: float, settle_timeout: float
     ) -> RenderedPage: ...
 
-    async def open_session(self, limits: InteractiveLimits) -> BrowserSession: ...
+    async def open_page(self, limits: PageLimits) -> AgentPage: ...
 
     async def aclose(self) -> None:
         """Disconnect the browser, then release its lease."""
@@ -386,11 +386,11 @@ __all__ = [
     "BrowserHolder",
     "BrowserLeases",
     "BrowserProvider",
-    "BrowserSession",
+    "AgentPage",
     "DownloadRefusal",
     "DownloadedFile",
     "FoundElements",
-    "InteractiveLimits",
+    "PageLimits",
     "LeasedBrowser",
     "PageCapture",
     "PageEvents",
@@ -400,5 +400,5 @@ __all__ = [
     "RenderedPage",
     "UploadFile",
     "browser_failure",
-    "interactive_failure",
+    "page_failure",
 ]
