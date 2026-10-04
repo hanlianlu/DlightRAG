@@ -442,11 +442,10 @@ Execution modes:
   project tree, and other Runs' workspaces stay outside that view
   ([ADR 0024](adr/0024-the-agent-sees-only-its-workspace.md)). Bash keeps the service
   user's network authority, which is the deployment's to enforce with a network
-  policy rather than a path list. `materialize` copies a Resource's admitted bytes into
-  the Agent Workspace only when the Agent asks, through the application process, so the
-  shell gains no credential and no route to the Blob plane. The copy is untrusted content
-  like any file Bash fetches, counts against the workspace quota, and is never citable
-  ([ADR 0033](adr/0033-resource-materialization.md)).
+  policy rather than a path list. [`materialize`](resource-reading.md#materialize) copies
+  a Resource's admitted bytes into the Agent Workspace through the application process, so
+  the shell gains no credential and no route to the Blob plane. The copy is untrusted
+  content, like any file Bash fetches.
 
 Root checks are not a shell sandbox. Research reaches outside tools only through
 its owner's Personal MCP Connections, pinned per Run and gated per effect, with

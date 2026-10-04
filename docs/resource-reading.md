@@ -1,4 +1,4 @@
-# Answer Resource Reading and Viewing
+# Answer Resource Reading, Viewing, and Copying
 
 This document owns how an Answer Run reads, views, and copies its Resources: the
 `read`, `view`, and `materialize` tools, extraction status and visual discovery,
@@ -120,8 +120,8 @@ Rendered Read, Browser Capture, Resource Materialization, and Blob.
   through the same access scheduler, the workspace quota refuses what does not fit, and
   it replaces a file already there. The settlement carries the Workspace Inventory fact
   for the path, with its size, mode, and the SHA-256 of what is on disk, and a copy under
-  `notes/` is a Session Note within that plane's budget. A refusal of the latch or of the
-  path loads and adopts nothing.
+  `notes/` is a Session Note within that plane's budget. A refusal of the latch, of the
+  path, or of a directory at the path loads and adopts nothing.
 - The copy is work, not a source. The bytes pass through the application process and
   never enter model context, and the copy admits no Evidence and has no provenance of
   its own: a citation names the Resource, never the file, and a file the Agent builds
@@ -219,8 +219,8 @@ itself.
   survives.
 - **Downloads.** A download is typed by its filename, then by a PDF signature, and is
   otherwise opaque. It becomes Evidence when `read` or `view` reads it, as any Resource
-  does, not when it is admitted. A process that needs the file itself, a CSV to compute
-  over, takes it with [`materialize`](#materialize).
+  does, not when it is admitted. With `trust`, a process that needs the file itself, a CSV
+  to compute over, takes it with [`materialize`](#materialize).
 - **Handles and settlement.** A handle is minted from the Agent Session, the call, and the
   file's place in the call, so a recovered Run mints the handles it already printed. The
   bytes settle with the call that produced them, in the same transaction as its result:
