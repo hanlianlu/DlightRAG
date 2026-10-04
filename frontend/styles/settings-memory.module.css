@@ -88,19 +88,16 @@
     white-space: nowrap;
   }
 
-  /* Two lines of the memory; the whole text is its tooltip. */
+  /* The whole memory, as the agent wrote it: its own line breaks stay, and a long word wraps. */
   .body {
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
     color: var(--color-text-secondary);
-    display: -webkit-box;
     font-size: var(--font-size-detail);
     grid-area: body;
     line-height: var(--line-height-control);
     margin: 0;
-    overflow: hidden;
     overflow-wrap: anywhere;
     padding-block: var(--space-inline);
+    white-space: pre-wrap;
   }
 
   .forget {

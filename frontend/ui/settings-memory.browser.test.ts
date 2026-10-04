@@ -90,7 +90,7 @@ it('opens fail-closed when the authoritative memory read fails', async () => {
   expect(memoryStatus(settings)).to.equal('');
 });
 
-it('shows the stored memories with their kind, and the whole text of each as its tooltip', async () => {
+it('shows the stored memories with their kind and their text', async () => {
   const long = 'Reports go to the investment committee and use tables and short bullets, never long paragraphs.';
   window.fetch = wire({
     'GET /web/api/memory/settings': () => memorySettings(true, 2),
@@ -109,7 +109,7 @@ it('shows the stored memories with their kind, and the whole text of each as its
   expect(list.querySelector('[class*=badge]')!.textContent).to.equal('2');
   const rows = [...list.querySelectorAll('li')];
   expect(rows.map((item) => item.firstElementChild!.textContent)).to.deep.equal(['Preference', 'Fact']);
-  expect(rows[0]!.querySelector('p')!.title).to.equal(long);
+  expect(remembered(settings)[0]).to.equal(long);
   // The text of a memory is text, never markup.
   expect(list.querySelector('img')).to.equal(null);
   expect(remembered(settings)[1]).to.equal('<img src=x> Lives in Sweden');

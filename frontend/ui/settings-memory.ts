@@ -266,7 +266,7 @@ export class DlSettingsMemory extends LightElement {
               <span class=${styles.kind}>${record.kind === 'fact'
                 ? msg('Fact', {id: 'settings.memory.kindFact'})
                 : msg('Preference', {id: 'settings.memory.kindPreference'})}</span>
-              <p class=${styles.body} title=${record.body}>${record.body}</p>
+              <p class=${styles.body}>${record.body}</p>
               <dl-icon-button class=${styles.forget} name="close" size="sm"
                 aria-label=${msg('Forget this memory', {id: 'settings.memory.forget'})}
                 ?disabled=${this.pending || this.loading}

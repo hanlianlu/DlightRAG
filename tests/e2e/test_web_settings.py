@@ -64,6 +64,28 @@ def _names(rows: Locator) -> list[str]:
     )
 
 
+def _install_memory_routes(
+    page: Page, bodies: list[str], *, next_cursor: str | None = None
+) -> None:
+    """Profile Memory on, holding one memory per body, with a next page when there is a cursor."""
+
+    def memory(route: Route) -> None:
+        if urlparse(route.request.url).path == "/web/api/memory/settings":
+            route.fulfill(json={"enabled": True, "active_count": len(bodies)})
+            return
+        route.fulfill(
+            json={
+                "memories": [
+                    {"memory_id": f"memory-{index}", "kind": "preference", "body": body}
+                    for index, body in enumerate(bodies)
+                ],
+                "next_cursor": next_cursor,
+            }
+        )
+
+    page.route("**/web/api/memory**", memory)
+
+
 def _install_busy_settings_routes(page: Page) -> None:
     """Connections with presets, and Profile Memory on with a next page, so every page has controls."""
 
@@ -105,26 +127,16 @@ def _install_busy_settings_routes(page: Page) -> None:
             }
         )
 
-    def memory(route: Route) -> None:
-        if urlparse(route.request.url).path == "/web/api/memory/settings":
-            route.fulfill(json={"enabled": True, "active_count": 2})
-            return
-        route.fulfill(
-            json={
-                "memories": [
-                    {"memory_id": "one", "kind": "preference", "body": "Use concise answers"},
-                    {"memory_id": "two", "kind": "fact", "body": "Works on the ingestion service"},
-                ],
-                "next_cursor": "more",
-            }
-        )
-
     page.route("**/web/api/connections/mcp", connections)
     page.route(
         "**/web/api/connections/mcp/*/oauth",
         lambda route: route.fulfill(json={"authorization_url": "https://auth.example/authorize"}),
     )
-    page.route("**/web/api/memory**", memory)
+    _install_memory_routes(
+        page,
+        ["Use concise answers", "Works on the ingestion service"],
+        next_cursor="more",
+    )
 
 
 # What a finger meets inside the dialog, and how large the area is that answers to it. The browser is
@@ -334,6 +346,35 @@ def test_settings_fills_a_phone_and_every_control_a_finger_meets_is_44px(page: P
 
     visit("Language")
     _assert_fingers_are_served(settings, "Language")
+
+
+@pytest.mark.e2e
+def test_profile_memory_shows_the_whole_text_of_a_memory(page: Page) -> None:
+    text = (
+        "Reports go to the investment committee and use tables and short bullets, never long "
+        "paragraphs, and every figure carries the page it came from.\n"
+        "Ask before sending anything outside the firm."
+    )
+    _install_conversation_routes(page)
+    _install_memory_routes(page, [text])
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto("/web/")
+    page.locator("[aria-current='page']").wait_for()
+
+    settings = _open_settings_page(page, "Profile Memory")
+    body = settings.get_by_role("region", name="Profile Memory").locator("li p")
+    expect(body).to_have_text(text)
+    # Nothing is cut off, and the memory's own line break is kept: far more than the two lines it
+    # was once clamped to.
+    shape = body.evaluate(
+        """element => ({
+            clipped: element.scrollHeight > element.clientHeight,
+            lines: element.getBoundingClientRect().height
+                / Number.parseFloat(getComputedStyle(element).lineHeight),
+        })"""
+    )
+    assert shape["clipped"] is False
+    assert shape["lines"] >= 3.5
 
 
 @pytest.mark.e2e
