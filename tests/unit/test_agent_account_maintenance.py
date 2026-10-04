@@ -69,10 +69,12 @@ async def test_the_loop_passes_now_and_again_and_stops_when_closed() -> None:
     asked = 0
     original = store.sealed_under
 
-    async def counting(*, key_ids: Sequence[str], limit: int) -> tuple[StoredAgentAccount, ...]:
+    async def counting(
+        *, key_ids: Sequence[str], after: tuple[str, str], limit: int
+    ) -> tuple[StoredAgentAccount, ...]:
         nonlocal asked
         asked += 1
-        return await original(key_ids=key_ids, limit=limit)
+        return await original(key_ids=key_ids, after=after, limit=limit)
 
     store.sealed_under = counting  # type: ignore[method-assign]
     maintenance = AgentAccountMaintenance(store=store, cipher=ring("next", "test", "next"))
@@ -95,12 +97,14 @@ async def test_a_store_that_fails_is_retried_and_only_the_kind_of_failure_is_log
     failures = 0
     original = store.sealed_under
 
-    async def down(*, key_ids: Sequence[str], limit: int) -> tuple[StoredAgentAccount, ...]:
+    async def down(
+        *, key_ids: Sequence[str], after: tuple[str, str], limit: int
+    ) -> tuple[StoredAgentAccount, ...]:
         nonlocal failures
         failures += 1
         if failures <= 2:
             raise ConnectionError("password authentication failed for user dlightrag at db:5432")
-        return await original(key_ids=key_ids, limit=limit)
+        return await original(key_ids=key_ids, after=after, limit=limit)
 
     store.sealed_under = down  # type: ignore[method-assign]
     caplog.set_level(logging.DEBUG)

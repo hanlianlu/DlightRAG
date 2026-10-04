@@ -68,9 +68,9 @@ SET account_id = EXCLUDED.account_id,
 _SELECT_SEALED_UNDER = """
 SELECT owner_id, site, account_id, email, username, key_id, encrypted_envelope
 FROM dlightrag_agent_accounts
-WHERE key_id = ANY($1::text[])
+WHERE key_id = ANY($1::text[]) AND (owner_id, site) > ($2::text, $3::text)
 ORDER BY owner_id, site
-LIMIT $2
+LIMIT $4
 """
 
 # A re-seal changes no account, so the row's time stays what the owner last did to it, and it
@@ -124,10 +124,10 @@ class PGAgentAccountStore(PostgresOperationRunner):
         await self._run(operation)
 
     async def sealed_under(
-        self, *, key_ids: Sequence[str], limit: int
+        self, *, key_ids: Sequence[str], after: tuple[str, str] = ("", ""), limit: int
     ) -> tuple[StoredAgentAccount, ...]:
         async def operation(conn: Any) -> tuple[StoredAgentAccount, ...]:
-            rows = await conn.fetch(_SELECT_SEALED_UNDER, list(key_ids), limit)
+            rows = await conn.fetch(_SELECT_SEALED_UNDER, list(key_ids), *after, limit)
             return tuple(_stored(row) for row in rows)
 
         return await self._run(operation)

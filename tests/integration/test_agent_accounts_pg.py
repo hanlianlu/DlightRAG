@@ -150,17 +150,19 @@ async def test_reseal_moves_retired_envelopes_and_skips_ones_no_key_opens(pool: 
         owner: (site, await register(store, old, owner, site))
         for owner, site in (("alice", "one.example"), ("bob", "two.example"))
     }
-    # One envelope sealed under a key the rotated ring no longer holds, and one under a key it
-    # holds but sealed for another account, so it opens for nobody.
+    # One envelope sealed under a key the rotated ring no longer holds. Others sealed under a
+    # key it holds but for another account, so they open for nobody: three ahead of the
+    # readable accounts, which is more than the page a pass reads, and one after them.
     await store.save(sealed(ring("gone", "gone"), "carol", "lost.example", "c", bound_to="c"))
-    await store.save(sealed(old, "dave", "bad.example", "d", bound_to="someone-else"))
+    for owner in ("aaron", "abby", "abel", "dave"):
+        await store.save(sealed(old, owner, "bad.example", owner, bound_to="someone-else"))
     before = {
         (o, s): await row_of(pool, o, s)
         for o, s in [("alice", "one.example"), ("bob", "two.example")]
     }
 
     rotated = ring("next", "test", "next")
-    resealed = await reseal_agent_accounts(store, rotated)
+    resealed = await reseal_agent_accounts(store, rotated, limit=2)
 
     assert resealed == 2
     for owner, (site, password) in readable.items():
@@ -172,9 +174,12 @@ async def test_reseal_moves_retired_envelopes_and_skips_ones_no_key_opens(pool: 
         account = await run.login_target("parent", site, child=False)
         assert account is not None and run.password(account) == password
     assert (await row_of(pool, "carol", "lost.example"))["key_id"] == "gone"
-    assert (await row_of(pool, "dave", "bad.example"))["key_id"] == "test"
+    assert [(await row_of(pool, o, "bad.example"))["key_id"] for o in ("aaron", "dave")] == [
+        "test",
+        "test",
+    ]
     # What is left under a retired key opens for nobody, and a second pass moves nothing.
-    assert await reseal_agent_accounts(store, rotated) == 0
+    assert await reseal_agent_accounts(store, rotated, limit=2) == 0
 
 
 async def test_a_reset_saved_between_the_read_and_the_reseal_wins(pool: Any) -> None:

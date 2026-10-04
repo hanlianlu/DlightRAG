@@ -519,9 +519,13 @@ class MemoryAccountStore:
         self.rows[(account.owner_id, account.site)] = account
 
     async def sealed_under(
-        self, *, key_ids: Sequence[str], limit: int
+        self, *, key_ids: Sequence[str], after: tuple[str, str] = ("", ""), limit: int
     ) -> tuple[StoredAgentAccount, ...]:
-        sealed = [row for row in self.rows.values() if row.key_id in key_ids]
+        sealed = [
+            row
+            for row in self.rows.values()
+            if row.key_id in key_ids and (row.owner_id, row.site) > after
+        ]
         return tuple(sorted(sealed, key=lambda row: (row.owner_id, row.site))[:limit])
 
     async def reseal(self, account: StoredAgentAccount, *, key_id: str, envelope: str) -> bool:

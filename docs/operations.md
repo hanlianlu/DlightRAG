@@ -422,7 +422,7 @@ creates ([format](personal-mcp-connections.md#secret-handling-and-key-ring)).
    encrypts with the old key. Writer maintenance then re-encrypts live Grants
    ([Operational lifecycle](personal-mcp-connections.md#operational-lifecycle)) and
    re-seals Agent Account envelopes, in a loop of its own that passes at startup and
-   then once a minute, up to 100 accounts a pass.
+   then once a minute, over every account still under an old key.
 3. Wait until the old key's Grant, OAuth inbox, and Agent Account counts reach
    zero. Inbox flows expire within `oauth_timeout` (at most 600 seconds) and are then
    collected. On the deployment database, count envelopes; never select or export them:

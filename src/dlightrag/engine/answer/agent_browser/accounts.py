@@ -124,8 +124,11 @@ class AgentAccountStore(Protocol):
         ...
 
     async def sealed_under(
-        self, *, key_ids: Sequence[str], limit: int
-    ) -> tuple[StoredAgentAccount, ...]: ...
+        self, *, key_ids: Sequence[str], after: tuple[str, str] = ("", ""), limit: int
+    ) -> tuple[StoredAgentAccount, ...]:
+        """At most ``limit`` accounts sealed under ``key_ids``, in the order of their owner and
+        site, that come after the ``(owner_id, site)`` ``after``; the default starts at the first."""
+        ...
 
     async def reseal(self, account: StoredAgentAccount, *, key_id: str, envelope: str) -> bool:
         """Replace the envelope ``account`` holds, unless it changed meanwhile."""
@@ -298,25 +301,32 @@ class RunAgentAccounts:
 async def reseal_agent_accounts(
     store: AgentAccountStore, cipher: CredentialCipher, *, limit: int = 100
 ) -> int:
-    """One bounded pass: re-seal the passwords under a retired key with the active key.
+    """One pass over the accounts sealed under a retired key, ``limit`` of them at a time:
+    re-seal each password under the active key.
 
     An envelope no key opens is left alone, and its account recovers through the site's reset
-    mail. Returns how many accounts it re-sealed.
+    mail. A page is read after the last account of the one before, so the ones left alone
+    never keep a later account from being read. Returns how many accounts it re-sealed.
     """
     retired = cipher.retired_key_ids
     if not retired:
         return 0
     resealed = 0
-    for account in await store.sealed_under(key_ids=retired, limit=limit):
-        binding = (account.owner_id, account.site, account.account_id)
-        try:
-            password = cipher.open(account.envelope, label=ACCOUNT_LABEL, binding=binding)
-        except UnreadableEnvelope:
-            continue
-        key_id, envelope = cipher.seal(password, label=ACCOUNT_LABEL, binding=binding)
-        if await store.reseal(account, key_id=key_id, envelope=envelope):
-            resealed += 1
-    return resealed
+    after = ("", "")
+    while True:
+        page = await store.sealed_under(key_ids=retired, after=after, limit=limit)
+        for account in page:
+            binding = (account.owner_id, account.site, account.account_id)
+            try:
+                password = cipher.open(account.envelope, label=ACCOUNT_LABEL, binding=binding)
+            except UnreadableEnvelope:
+                continue
+            key_id, envelope = cipher.seal(password, label=ACCOUNT_LABEL, binding=binding)
+            if await store.reseal(account, key_id=key_id, envelope=envelope):
+                resealed += 1
+        if len(page) < limit:
+            return resealed
+        after = (page[-1].owner_id, page[-1].site)
 
 
 __all__ = [
