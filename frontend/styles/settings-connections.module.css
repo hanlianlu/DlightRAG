@@ -224,11 +224,11 @@
     min-height: var(--size-button);
   }
 
-  /* The provider's link is a control of its own, so its box is as tall as a button's, and it is
-   * the accent colour and underlined: the browser's default blue is unreadable on the dark theme. */
+  /* The provider's link is a control of its own, so its box is as tall as a button's. It takes
+   * Accent text, underlined: the browser's default blue is unreadable on the dark theme. */
   .continue {
     align-items: center;
-    color: var(--color-accent-emphasis);
+    color: var(--color-accent-text);
     display: inline-flex;
     min-height: var(--size-button);
     text-decoration: underline;
