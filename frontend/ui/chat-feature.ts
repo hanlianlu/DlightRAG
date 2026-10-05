@@ -281,21 +281,18 @@ export class DlChatFeature extends LightElement {
       ? current.submissionId
       : crypto.randomUUID();
     this.#childSubmissions.set(slot, {fingerprint, submissionId});
+    let ambiguous = false;
     try {
-      const result = await send(submissionId);
+      return await send(submissionId);
+    } catch (error) {
+      ambiguous = childCommandAmbiguous(error);
+      throw error;
+    } finally {
+      // Only an outcome the reader cannot know keeps its id, so a retry is the same command.
       const retained = this.#childSubmissions.get(slot);
-      if (retained?.fingerprint === fingerprint && retained.submissionId === submissionId) {
+      if (!ambiguous && retained?.fingerprint === fingerprint && retained.submissionId === submissionId) {
         this.#childSubmissions.delete(slot);
       }
-      return result;
-    } catch (error) {
-      if (!childCommandAmbiguous(error)) {
-        const retained = this.#childSubmissions.get(slot);
-        if (retained?.fingerprint === fingerprint && retained.submissionId === submissionId) {
-          this.#childSubmissions.delete(slot);
-        }
-      }
-      throw error;
     }
   }
 
