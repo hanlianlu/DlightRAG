@@ -449,7 +449,7 @@ export class DlInspectorFiles extends LightElement {
   #restoreDeleteTrigger(): void {
     const trigger = this.#deleteTrigger;
     this.#deleteTrigger = null;
-    if (trigger?.isConnected) trigger.focus();
+    trigger?.focus();
   }
 
   async #requestWorkspaceAction(
@@ -605,11 +605,7 @@ export class DlInspectorFiles extends LightElement {
     this.actionConfirmed = false;
     const returnFocus = this.#actionReturnFocus;
     this.#actionReturnFocus = null;
-    const target = returnFocus?.isConnected && !returnFocus.inert
-      && !returnFocus.closest('[hidden]')
-      ? returnFocus
-      : null;
-    if (target?.isConnected && !target.inert) target.focus();
+    returnFocus?.focus();
   };
 
   #deleteDialog(): TemplateResult {

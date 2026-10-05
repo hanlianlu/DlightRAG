@@ -364,7 +364,7 @@ export class DlSettingsDialog extends LightElement {
     document.body.classList.remove('settings-open');
     const returnFocus = this.#returnFocus;
     this.#returnFocus = null;
-    if (returnFocus?.isConnected && !returnFocus.inert) returnFocus.focus();
+    returnFocus?.focus();
   };
 
   /** Deleting every conversation is the sidebar's command; Settings has nothing left to show once it ran. */

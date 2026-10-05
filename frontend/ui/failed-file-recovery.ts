@@ -404,7 +404,7 @@ export class DlFailedFileRecovery extends LightElement {
   #restoreRetryFocus(): void {
     const trigger = this.#retryTrigger;
     this.#retryTrigger = null;
-    if (trigger?.isConnected) trigger.focus();
+    trigger?.focus();
   }
 
   #confirmDialog(): TemplateResult {

@@ -133,7 +133,7 @@ export class DlArtifactCanvas extends LightElement {
     if (restoreFocus) {
       window.requestAnimationFrame(() => {
         if (focusGeneration !== this.#focusGeneration || this.classList.contains('open')) return;
-        if (returnFocus?.isConnected && !returnFocus.inert) returnFocus.focus();
+        returnFocus?.focus();
       });
     } else if (focusedInside) {
       focusedElement()?.blur();

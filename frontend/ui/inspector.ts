@@ -152,7 +152,7 @@ export class DlInspector extends LightElement {
     if (restoreFocus) {
       window.requestAnimationFrame(() => {
         if (focusGeneration !== this.#focusGeneration || this.open) return;
-        if (returnFocus?.isConnected && !returnFocus.inert) returnFocus.focus();
+        returnFocus?.focus();
       });
     }
   }

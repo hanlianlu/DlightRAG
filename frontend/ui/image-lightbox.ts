@@ -86,7 +86,7 @@ export class DlImageLightbox extends LightElement {
     this.#returnFocus = null;
     window.requestAnimationFrame(() => {
       if (focusGeneration !== this.#focusGeneration || this.openState) return;
-      if (returnFocus?.isConnected && !returnFocus.inert) returnFocus.focus();
+      returnFocus?.focus();
     });
   }
 
