@@ -47,7 +47,6 @@ export class DlImageLightbox extends LightElement {
     this.classList.add(lightboxStyles.imageLightbox);
     this.setAttribute('role', 'dialog');
     this.setAttribute('aria-modal', 'true');
-    this.setAttribute('aria-label', msg('Image viewer', {id: 'imageLightbox.ariaLabel'}));
     this.tabIndex = -1;
     document.addEventListener('keydown', this.#keydown, {capture: true, signal: this.lifetime});
     this.#syncHost();
@@ -112,7 +111,9 @@ export class DlImageLightbox extends LightElement {
     `;
   }
 
+  /** The host's own state, drawn on every update so that the name follows a language change. */
   #syncHost(): void {
+    this.setAttribute('aria-label', msg('Image viewer', {id: 'imageLightbox.ariaLabel'}));
     this.classList.toggle(lightboxStyles.open, this.openState);
     this.setAttribute('aria-hidden', this.openState ? 'false' : 'true');
     this.inert = !this.openState;

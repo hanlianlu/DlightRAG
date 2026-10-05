@@ -1,6 +1,8 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {expect} from '@esm-bundle/chai';
+import {setLanguagePreference} from '../i18n/locale.ts';
+import {waitFor} from '../testing/dom.ts';
 import type {DlImageLightbox} from './image-lightbox.ts';
 import './image-lightbox.ts';
 
@@ -67,4 +69,18 @@ it('does not restore stale focus when close is immediately followed by reopen', 
   expect(lightbox.inert).to.equal(false);
   expect(document.activeElement).not.to.equal(firstTrigger);
   expect(document.activeElement).to.equal(lightbox);
+});
+
+it('is named in the language the reader switches to while it stays mounted', async () => {
+  const lightbox = document.createElement('dl-image-lightbox') as DlImageLightbox;
+  document.body.append(lightbox);
+  await lightbox.updateComplete;
+  expect(lightbox.getAttribute('aria-label')).to.equal('Image viewer');
+
+  try {
+    await setLanguagePreference('zh');
+    await waitFor(() => lightbox.getAttribute('aria-label') === '图片查看器');
+  } finally {
+    await setLanguagePreference('auto');
+  }
 });
