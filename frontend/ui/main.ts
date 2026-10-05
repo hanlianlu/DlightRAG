@@ -3,9 +3,13 @@
 import '../design-system/index.css';
 import '../styles/app.css';
 
+import {reportUncaughtErrors} from '../api/client-errors.ts';
 import type {DlApp} from './app.ts';
 import {defineDesignSystemElements} from '../design-system/index.ts';
 import {initializeLanguagePreference} from '../i18n/locale.ts';
+
+// First, so an error in anything below is reported.
+reportUncaughtErrors();
 
 // Registration is explicit and happens before the app module can render.
 defineDesignSystemElements();
