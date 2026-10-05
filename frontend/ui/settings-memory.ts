@@ -154,7 +154,7 @@ export class DlSettingsMemory extends LightElement {
     this.#seenOperations.add(identity);
     const message = memorySummary(event);
     if (event.outcome !== 'changed' || !event.changeId) {
-      requestToast(this, {message, duration: 3000});
+      requestToast(this, {message});
       return;
     }
     const changeId = event.changeId;
@@ -163,7 +163,6 @@ export class DlSettingsMemory extends LightElement {
       message,
       action: {
         actionLabel: msg('Undo', {id: 'settings.memory.undo'}),
-        duration: 3000,
         focus: takeFocus,
         onAction: async () => {
           if (this.pending) throw new Error('Memory operation in progress');
@@ -323,7 +322,6 @@ export class DlSettingsMemory extends LightElement {
       if (!signal.aborted) {
         requestToast(this, {
           message: msg('Could not save memory settings.', {id: 'settings.memorySaveFailed'}),
-          duration: 3000,
         });
       }
     } finally {
@@ -350,14 +348,12 @@ export class DlSettingsMemory extends LightElement {
       if (!signal.aborted) {
         requestToast(this, {
           message: msg('Memory cleared.', {id: 'settings.memoryCleared'}),
-          duration: 3000,
         });
       }
     } catch {
       if (!signal.aborted) {
         requestToast(this, {
           message: msg('Could not clear memory.', {id: 'settings.memoryClearFailedToast'}),
-          duration: 3000,
         });
       }
     } finally {
@@ -411,7 +407,7 @@ export class DlSettingsMemory extends LightElement {
       }, undoable);
     } catch {
       if (!signal.aborted) requestToast(this, {
-        message: msg('Could not forget this memory.', {id: 'settings.memory.forgetFailed'}), duration: 3000,
+        message: msg('Could not forget this memory.', {id: 'settings.memory.forgetFailed'}),
       });
     } finally {
       if (!signal.aborted) {

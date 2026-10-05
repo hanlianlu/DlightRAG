@@ -345,7 +345,7 @@ export class DlSettingsDialog extends LightElement {
     if (!toast) return;
     event.stopPropagation();
     if (event.detail.action) toast.showAction(event.detail.message, event.detail.action);
-    else toast.show(event.detail.message, event.detail.duration);
+    else toast.show(event.detail.message);
   };
 
   #closed = (): void => {

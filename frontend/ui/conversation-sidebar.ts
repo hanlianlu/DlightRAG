@@ -191,7 +191,6 @@ export class DlConversationSidebar extends LightElement {
       if (result === 'error') {
         requestToast(this, {
           message: msg('Could not delete conversations.', {id: 'conversationSidebar.deleteAllFailed'}),
-          duration: 3000,
         });
       } else {
         this.chatFeature?.clearDraft();
@@ -204,7 +203,6 @@ export class DlConversationSidebar extends LightElement {
                 message: msg('Conversations deleted; could not clear Profile memory.', {
                   id: 'conversationSidebar.memoryClearFailed',
                 }),
-                duration: 3000,
               });
             }
           }
@@ -303,7 +301,6 @@ export class DlConversationSidebar extends LightElement {
       message: msg('Wait for the current question to be accepted.', {
         id: 'conversationSidebar.waitForAcceptedQuestion',
       }),
-      duration: 3000,
     });
     return true;
   }
@@ -437,7 +434,6 @@ export class DlConversationSidebar extends LightElement {
     if (result === 'missing') {
       requestToast(this, {
         message: msg('Conversation unavailable.', {id: 'conversationSidebar.renameMissing'}),
-        duration: 3000,
       });
       return;
     }
@@ -447,7 +443,6 @@ export class DlConversationSidebar extends LightElement {
             id: 'conversationSidebar.renameTooLong',
           })
         : msg('Could not rename the conversation.', {id: 'conversationSidebar.renameFailed'}),
-      duration: 3000,
     });
   }
 
@@ -487,7 +482,6 @@ export class DlConversationSidebar extends LightElement {
           message: msg('Could not delete the conversation.', {
             id: 'conversationSidebar.deleteFailed',
           }),
-          duration: 3000,
         });
       } else if (wasActive) {
         this.chatFeature?.clearDraft();

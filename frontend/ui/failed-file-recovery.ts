@@ -358,7 +358,6 @@ export class DlFailedFileRecovery extends LightElement {
       if (corpusRunActive(run)) {
         requestToast(this, {
           message: msg('Document recovery started.', {id: 'inspectorFiles.recovery.started'}),
-          duration: 3000,
         });
       }
     } catch (error) {
@@ -370,7 +369,6 @@ export class DlFailedFileRecovery extends LightElement {
             id: 'inspectorFiles.recovery.startFailed',
           }),
         ),
-        duration: 3000,
       });
     } finally {
       if (this.#session.finishMutation(controller)) this.recoveryPending = false;
@@ -380,7 +378,7 @@ export class DlFailedFileRecovery extends LightElement {
   async #resumeRepair(): Promise<void> {
     const outcome = await this.#tracker.resume();
     if (outcome === 'stale') return;
-    requestToast(this, {message: resumeRepairResult(outcome), duration: 3000});
+    requestToast(this, {message: resumeRepairResult(outcome)});
   }
 
   async #settleRecovery(run: TrackedCorpusRun): Promise<void> {
@@ -401,7 +399,6 @@ export class DlFailedFileRecovery extends LightElement {
       message: run.status === 'succeeded'
         ? msg('Document recovery finished.', {id: 'inspectorFiles.recovery.finished'})
         : msg('Document recovery failed.', {id: 'inspectorFiles.recovery.failed'}),
-      duration: 3000,
     });
   }
 

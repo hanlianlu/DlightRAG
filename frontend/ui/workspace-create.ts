@@ -59,7 +59,6 @@ export class DlWorkspaceCreate extends LightElement {
             error,
             msg('Failed to create workspace', {id: 'workspaceCreate.failed'}),
           ),
-          duration: 3000,
         });
       }
     } finally {

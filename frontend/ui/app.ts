@@ -357,7 +357,7 @@ export class DlApp extends LightElement {
     const toast = this.#toast();
     if (!toast) return;
     if (event.detail.action) toast.showAction(event.detail.message, event.detail.action);
-    else toast.show(event.detail.message, event.detail.duration);
+    else toast.show(event.detail.message);
   }
 
   #runningChanged(event: CustomEvent<ChatRunningChangeDetail>): void {
@@ -389,7 +389,6 @@ export class DlApp extends LightElement {
         msg('Wait for the file change to finish before opening conversations.', {
           id: 'app.waitForFileChange',
         }),
-        3000,
       );
       return;
     }

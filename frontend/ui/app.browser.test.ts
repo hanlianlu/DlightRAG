@@ -50,6 +50,7 @@ const SAFE_PNG =
 
 const originalFetch = window.fetch;
 const originalMatchMedia = window.matchMedia;
+const originalSetTimeout = window.setTimeout;
 const OriginalResizeObserver = window.ResizeObserver;
 
 function desktopMedia(query: string): MediaQueryList {
@@ -76,6 +77,11 @@ function compactMedia(query: string): MediaQueryList {
     removeEventListener() {},
     dispatchEvent: () => true,
   };
+}
+
+/** Every wait the page asks for takes a seventy-fifth of its time: a receipt's three seconds pass in 40 ms. */
+function pageTimersRunFast(): void {
+  window.setTimeout = ((handler: TimerHandler, delay = 0) => originalSetTimeout(handler, delay / 75)) as typeof window.setTimeout;
 }
 
 function response(body: unknown, status = 200): Response {
@@ -113,6 +119,7 @@ beforeEach(() => {
 afterEach(() => {
   window.fetch = originalFetch;
   window.matchMedia = originalMatchMedia;
+  window.setTimeout = originalSetTimeout;
   window.ResizeObserver = OriginalResizeObserver;
   document.body.replaceChildren();
   document.body.className = '';
@@ -213,11 +220,8 @@ it('pauses an actionable receipt while the Image Lightbox makes the app inert', 
   await app.ready;
 
   const toast = app.querySelector<DlToastRegion>('dl-toast-region')!;
-  toast.showAction('Undo available', {
-    actionLabel: 'Undo',
-    onAction: async () => {},
-    duration: 40,
-  });
+  pageTimersRunFast();
+  toast.showAction('Undo available', {actionLabel: 'Undo', onAction: async () => {}});
   const returnFocus = Array.from(app.querySelectorAll<HTMLButtonElement>('button'))
     .find((button) => button.textContent?.trim() === 'Files')!;
   returnFocus.dispatchEvent(new CustomEvent<ImageOpenDetail>('dl-image-open', {
@@ -231,7 +235,7 @@ it('pauses an actionable receipt while the Image Lightbox makes the app inert', 
   await toast.updateComplete;
 
   expect(toast.inert).to.equal(true);
-  await new Promise((resolve) => setTimeout(resolve, 60));
+  await new Promise((resolve) => originalSetTimeout(resolve, 60));
   await toast.updateComplete;
   expect(toast.textContent).to.contain('Undo available');
   expect(toast.querySelector('button')?.textContent).to.equal('Undo');
@@ -246,7 +250,7 @@ it('pauses an actionable receipt while the Image Lightbox makes the app inert', 
   expect(toast.inert).to.equal(false);
   expect(document.activeElement).to.equal(returnFocus);
 
-  await new Promise((resolve) => setTimeout(resolve, 60));
+  await new Promise((resolve) => originalSetTimeout(resolve, 60));
   await toast.updateComplete;
   expect(toast.textContent?.trim()).to.equal('');
   expect(toast.querySelector('button')).to.equal(null);
@@ -267,12 +271,12 @@ it('keeps Undo available across Settings and a sibling native modal', async () =
   await waitFor(() => settingsDialog.open);
 
   let undone = false;
+  pageTimersRunFast();
   settings.dispatchEvent(new CustomEvent<ToastRequestDetail>('dl-toast-request', {
     detail: {
       message: 'Undo available',
       action: {
         actionLabel: 'Undo',
-        duration: 40,
         onAction: async () => { undone = true; },
       },
     },
@@ -284,7 +288,7 @@ it('keeps Undo available across Settings and a sibling native modal', async () =
   await toast.updateComplete;
   expect(toast.inert).to.equal(true);
 
-  await new Promise((resolve) => setTimeout(resolve, 60));
+  await new Promise((resolve) => originalSetTimeout(resolve, 60));
   expect(toast.querySelector<HTMLButtonElement>('button')?.textContent).to.equal('Undo');
 
   const continuation = app.querySelector<DlContinuationDialog>('dl-continuation-dialog')!;

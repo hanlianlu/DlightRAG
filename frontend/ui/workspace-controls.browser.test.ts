@@ -239,7 +239,7 @@ it('reports a submitted creation failure after its popover is dismissed', async 
   rejectCreate(new TypeError('network unavailable'));
   await waitFor(() => receipt !== null);
 
-  expect(receipt).to.deep.equal({message: 'Failed to create workspace', duration: 3000});
+  expect(receipt).to.deep.equal({message: 'Failed to create workspace'});
   expect(scope.querySelector<HTMLElement>('[role="dialog"][aria-label="Workspaces"]')?.hidden)
     .to.equal(true);
 });
@@ -261,7 +261,7 @@ it('explains a refused workspace command instead of echoing the access rule', as
   input.value = 'Research';
   create.click();
   await waitFor(() => receipts.length === 1);
-  expect(receipts[0]).to.deep.equal({message: 'You do not have permission to do that.', duration: 3000});
+  expect(receipts[0]).to.deep.equal({message: 'You do not have permission to do that.'});
 
   status = 409;
   await waitFor(() => !create.disabled);

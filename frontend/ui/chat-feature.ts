@@ -311,7 +311,6 @@ export class DlChatFeature extends LightElement {
             error,
             msg('The continuation could not be started.', {id: 'chatFeature.continuationFailed'}),
           ),
-          duration: 3000,
         });
       }
     } finally {
@@ -543,7 +542,6 @@ export class DlChatFeature extends LightElement {
         message: msg('Conversation service is unavailable. Please retry loading the conversation.', {
           id: 'chatFeature.conversationUnavailable',
         }),
-        duration: 3000,
       });
       return;
     }
@@ -752,7 +750,6 @@ export class DlChatFeature extends LightElement {
       if (!signal.aborted && this.#runController.runId === runId) {
         requestToast(this, {
           message: msg('This run can no longer be steered.', {id: 'chatFeature.steerUnavailable'}),
-          duration: 3000,
         });
       }
       return;

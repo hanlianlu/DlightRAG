@@ -5,24 +5,19 @@ import {msg} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {LightElement} from '../lib/lit-host.ts';
 
-const MAX_TOAST_DURATION = 3000;
+/** How long a receipt stays, not counting the time it is paused. */
+const TOAST_DURATION = 3000;
 
 export interface ActionToastOptions {
   actionLabel: string;
   onAction: () => Promise<string | undefined>;
-  duration?: number;
   /** Move focus to the action once it shows: for a command whose own control has just gone away. */
   focus?: boolean;
 }
 
-export type ToastRequestDetail =
-  | {message: string; duration?: number; action?: never}
-  | {message: string; action: ActionToastOptions; duration?: never};
-
-interface ToastRequest {
+export interface ToastRequestDetail {
   message: string;
-  duration: number;
-  action: ActionToastOptions | null;
+  action?: ActionToastOptions;
 }
 
 /** Accessible toast state, timer lifecycle, and asynchronous action ownership. */
@@ -35,7 +30,7 @@ export class DlToastRegion extends LightElement {
   };
 
   declare shellInert: boolean;
-  declare request: ToastRequest | null;
+  declare request: ToastRequestDetail | null;
   declare visible: boolean;
   declare pending: boolean;
 
@@ -68,21 +63,13 @@ export class DlToastRegion extends LightElement {
   }
 
   /** Replace the current receipt with a plain status message. */
-  show(message: string, duration = 3000): void {
-    this.#show({
-      message,
-      duration,
-      action: null,
-    });
+  show(message: string): void {
+    this.#show({message});
   }
 
   /** Replace the current receipt with one asynchronous action. */
   showAction(message: string, options: ActionToastOptions): void {
-    this.#show({
-      message,
-      duration: options.duration ?? MAX_TOAST_DURATION,
-      action: options,
-    });
+    this.#show({message, action: options});
     if (options.focus) void this.#focusAction();
   }
 
@@ -114,15 +101,11 @@ export class DlToastRegion extends LightElement {
     if (this.request === request) this.querySelector<HTMLElement>('.toast-action')?.focus();
   }
 
-  #show(request: ToastRequest): void {
-    const bounded = {
-      ...request,
-      duration: Math.min(request.duration, MAX_TOAST_DURATION),
-    };
-    this.request = bounded;
+  #show(request: ToastRequestDetail): void {
+    this.request = request;
     this.visible = true;
     this.pending = false;
-    this.#startTimer(bounded.duration);
+    this.#startTimer();
   }
 
   #hide(): void {
@@ -138,9 +121,9 @@ export class DlToastRegion extends LightElement {
     this.#timer = null;
   }
 
-  #startTimer(duration: number): void {
+  #startTimer(): void {
     this.#stopTimer();
-    this.#remaining = duration;
+    this.#remaining = TOAST_DURATION;
     this.#resume();
   }
 
@@ -191,23 +174,20 @@ export class DlToastRegion extends LightElement {
     this.#stopTimer();
     this.pending = true;
     let message: string;
-    let duration: number;
     try {
       message = await request.action.onAction()
         || msg('Change undone.', {id: 'toast.changeUndone'});
-      duration = 3000;
     } catch {
       message = msg('Could not undo the change.', {id: 'toast.undoFailed'});
-      duration = 3000;
     }
     if (this.request !== request) return;
-    const settled: ToastRequest = {message, duration, action: null};
+    const settled: ToastRequestDetail = {message};
     this.request = settled;
     this.pending = false;
     await this.updateComplete;
     if (this.request !== settled) return;
     this.#focused = this.contains(document.activeElement);
-    this.#startTimer(duration);
+    this.#startTimer();
   };
 }
 

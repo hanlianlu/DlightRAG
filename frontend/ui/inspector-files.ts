@@ -234,13 +234,12 @@ export class DlInspectorFiles extends LightElement {
     if (this.#deletingWorkspace) {
       requestToast(this, {
         message: msg('This workspace is being deleted.', {id: 'inspectorFiles.uploadWhileDeleting'}),
-        duration: 3000,
       });
       return;
     }
     const workspace = this.handles.ingest.workspace;
     if (!this.handles.workspaces.changes(workspace).includes('ingest')) {
-      requestToast(this, {message: authRefusalMessage(403), duration: 3000});
+      requestToast(this, {message: authRefusalMessage(403)});
       return;
     }
     this.#invalidateOlderFiles();
@@ -260,7 +259,6 @@ export class DlInspectorFiles extends LightElement {
       this.acceptedFiles = receipt.fileCount ?? files.length;
       requestToast(this, {
         message: msg('Files received — Corpus update accepted', {id: 'inspectorFiles.filesReceived'}),
-        duration: 3000,
       });
       this.#tracker.follow(receipt);
       followed = true;
@@ -274,7 +272,7 @@ export class DlInspectorFiles extends LightElement {
         msg('Upload failed.', {id: 'inspectorFiles.uploadFailed'}),
       );
       this.error = message;
-      requestToast(this, {message, duration: 3000});
+      requestToast(this, {message});
     } finally {
       this.#finishMutation();
       if (this.#session.finishRequest(controller)) {
@@ -318,7 +316,6 @@ export class DlInspectorFiles extends LightElement {
       if (!this.#isCurrent(controller, workspace, generation)) return;
       requestToast(this, {
         message: msg('File deletion accepted.', {id: 'inspectorFiles.fileDeleted'}),
-        duration: 3000,
       });
       this.#tracker.follow(receipt);
       followed = true;
@@ -332,7 +329,7 @@ export class DlInspectorFiles extends LightElement {
         msg('Deletion failed.', {id: 'inspectorFiles.deletionFailed'}),
       );
       this.error = message;
-      requestToast(this, {message, duration: 3000});
+      requestToast(this, {message});
     } finally {
       this.#finishMutation();
       if (this.#session.finishRequest(controller)) this.loading = false;
@@ -352,7 +349,6 @@ export class DlInspectorFiles extends LightElement {
       message: run.status === 'succeeded'
         ? msg('Corpus update finished.', {id: 'inspectorFiles.corpusUpdateFinished'})
         : msg('Corpus update did not finish.', {id: 'inspectorFiles.corpusUpdateFailed'}),
-      duration: 3000,
     });
     await this.reload(false);
     const recovery = this.querySelector<DlFailedFileRecovery>('dl-failed-file-recovery');
@@ -369,7 +365,6 @@ export class DlInspectorFiles extends LightElement {
         : msg('Corpus update status is no longer available.', {
           id: 'inspectorFiles.corpusRunStatusUnavailable',
         }),
-      duration: 3000,
     });
     await this.reload(false);
     const recovery = this.querySelector<DlFailedFileRecovery>('dl-failed-file-recovery');
@@ -403,7 +398,7 @@ export class DlInspectorFiles extends LightElement {
     if (outcome === 'stale') return;
     const message = resumeRepairResult(outcome);
     if (outcome === 'failed') this.error = message;
-    requestToast(this, {message, duration: 3000});
+    requestToast(this, {message});
   }
 
   #invalidateOlderFiles(): void {
@@ -588,7 +583,6 @@ export class DlInspectorFiles extends LightElement {
           message: apiErrorMessage(error, kind === 'delete'
             ? msg('Could not accept workspace deletion.', {id: 'inspectorFiles.deleteWorkspaceFailed'})
             : msg('Could not accept Corpus reset.', {id: 'inspectorFiles.resetFailed'})),
-          duration: 3000,
         });
       }
     } finally {
@@ -608,7 +602,6 @@ export class DlInspectorFiles extends LightElement {
     if (!succeeded) {
       requestToast(this, {
         message: msg('Workspace deletion did not finish.', {id: 'inspectorFiles.deleteWorkspaceDidNotFinish'}),
-        duration: 3000,
       });
       await this.reload(false);
       return;
@@ -619,7 +612,6 @@ export class DlInspectorFiles extends LightElement {
     this.handles.ingest.resetToPrimary();
     requestToast(this, {
       message: msg(str`Workspace ${name} deleted.`, {id: 'inspectorFiles.workspaceDeleted'}),
-      duration: 3000,
     });
   }
 

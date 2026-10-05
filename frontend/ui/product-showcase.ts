@@ -32,4 +32,4 @@ if (host) {
   `, host);
 }
 
-document.querySelector<DlToastRegion>('dl-toast-region')?.show('Product showcase ready.', 5000);
+document.querySelector<DlToastRegion>('dl-toast-region')?.show('Product showcase ready.');

@@ -26,7 +26,7 @@ export function mountSettings(): Mounted {
   toast.className = 'toast';
   shell.addEventListener('dl-toast-request', (event: CustomEvent<ToastRequestDetail>) => {
     if (event.detail.action) toast.showAction(event.detail.message, event.detail.action);
-    else toast.show(event.detail.message, event.detail.duration);
+    else toast.show(event.detail.message);
   });
   const settings = document.createElement('dl-settings-dialog') as DlSettingsDialog;
   shell.append(toast, settings);

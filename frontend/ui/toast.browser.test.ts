@@ -4,6 +4,8 @@ import {expect} from '@esm-bundle/chai';
 import type {DlToastRegion} from './toast.ts';
 import './toast.ts';
 
+const originalSetTimeout = window.setTimeout;
+
 function mountToast(): DlToastRegion {
   const toast = document.createElement('dl-toast-region');
   toast.className = 'toast';
@@ -11,23 +13,31 @@ function mountToast(): DlToastRegion {
   return toast;
 }
 
+/** A receipt's three seconds pass in the next task; the ids stay real, so pausing still clears them. */
+function receiptsExpireAtOnce(): void {
+  window.setTimeout = ((handler: TimerHandler) => originalSetTimeout(handler, 0)) as typeof window.setTimeout;
+}
+
 afterEach(() => {
+  window.setTimeout = originalSetTimeout;
   document.body.replaceChildren();
 });
 
-it('caps every requested duration at three seconds while preserving shorter receipts', () => {
+it('keeps a receipt for three seconds, and the answer to its Undo as long', async () => {
   const toast = mountToast();
+  const delays: (number | undefined)[] = [];
+  window.setTimeout = ((handler: TimerHandler, delay?: number) => {
+    delays.push(delay);
+    return originalSetTimeout(handler, 0);
+  }) as typeof window.setTimeout;
 
-  toast.show('Long receipt', 5000);
-  expect(toast.request?.duration).to.equal(3000);
-  toast.showAction('Long action receipt', {
-    actionLabel: 'Undo',
-    onAction: async () => {},
-    duration: 12_000,
-  });
-  expect(toast.request?.duration).to.equal(3000);
-  toast.show('Short receipt', 1500);
-  expect(toast.request?.duration).to.equal(1500);
+  toast.show('Plain receipt');
+  toast.showAction('Undo available', {actionLabel: 'Undo', onAction: async () => {}});
+  await toast.updateComplete;
+  toast.querySelector<HTMLButtonElement>('button')!.click();
+  await new Promise((resolve) => originalSetTimeout(resolve, 0));
+
+  expect(delays).to.deep.equal([3000, 3000, 3000]);
 });
 
 it('puts focus on the action when the receipt asks for it, and only then', async () => {
@@ -105,42 +115,36 @@ it('replaces an actionable receipt with a plain command without stale controls',
 
 it('does not resume while hover ends but keyboard focus remains inside', async () => {
   const toast = mountToast();
-  toast.showAction('Remembered', {
-    actionLabel: 'Undo',
-    onAction: async () => {},
-    duration: 40,
-  });
+  receiptsExpireAtOnce();
+  toast.showAction('Remembered', {actionLabel: 'Undo', onAction: async () => {}});
   await toast.updateComplete;
   const action = toast.querySelector<HTMLButtonElement>('button')!;
 
   toast.dispatchEvent(new MouseEvent('mouseenter'));
   action.focus();
   toast.dispatchEvent(new MouseEvent('mouseleave'));
-  await new Promise((resolve) => setTimeout(resolve, 60));
+  await new Promise((resolve) => setTimeout(resolve, 0));
   await toast.updateComplete;
 
-  expect(document.activeElement).to.equal(action);
   expect(toast.textContent).to.contain('Remembered');
+  expect(document.activeElement).to.equal(action);
   action.blur();
-  await new Promise((resolve) => setTimeout(resolve, 60));
+  await new Promise((resolve) => setTimeout(resolve, 0));
   await toast.updateComplete;
   expect(toast.textContent?.trim()).to.equal('');
 });
 
 it('pauses an actionable receipt while Shell modality makes it unreachable', async () => {
   const toast = mountToast();
-  toast.showAction('Remembered', {
-    actionLabel: 'Undo',
-    onAction: async () => {},
-    duration: 40,
-  });
+  receiptsExpireAtOnce();
+  toast.showAction('Remembered', {actionLabel: 'Undo', onAction: async () => {}});
   await toast.updateComplete;
   expect(toast.inert).to.equal(false);
 
   toast.shellInert = true;
   await toast.updateComplete;
   expect(toast.inert).to.equal(true);
-  await new Promise((resolve) => setTimeout(resolve, 60));
+  await new Promise((resolve) => setTimeout(resolve, 0));
   await toast.updateComplete;
   expect(toast.textContent).to.contain('Remembered');
   expect(toast.querySelector('button')?.textContent).to.equal('Undo');
@@ -148,7 +152,7 @@ it('pauses an actionable receipt while Shell modality makes it unreachable', asy
   toast.shellInert = false;
   await toast.updateComplete;
   expect(toast.inert).to.equal(false);
-  await new Promise((resolve) => setTimeout(resolve, 60));
+  await new Promise((resolve) => setTimeout(resolve, 0));
   await toast.updateComplete;
 
   expect(toast.inert).to.equal(true);

@@ -151,7 +151,7 @@ export class DlSettingsAgentAccounts extends LightElement {
       if (!signal.aborted) this.view = fresh;
     } catch {
       if (!signal.aborted) {
-        requestToast(this, {message: msg('Could not save the sign-up setting.', {id: 'agentAccounts.saveFailed'}), duration: 3000});
+        requestToast(this, {message: msg('Could not save the sign-up setting.', {id: 'agentAccounts.saveFailed'})});
       }
     } finally {
       if (!signal.aborted) {
@@ -182,7 +182,7 @@ export class DlSettingsAgentAccounts extends LightElement {
       if (signal.aborted) return;
       // The account is already gone, here or in another tab: the fresh view says so.
       if (error instanceof ApiError && error.status === 404) await this.#load();
-      else requestToast(this, {message: msg('Could not remove the account.', {id: 'agentAccounts.removeFailed'}), duration: 3000});
+      else requestToast(this, {message: msg('Could not remove the account.', {id: 'agentAccounts.removeFailed'})});
     } finally {
       if (!signal.aborted) {
         this.pending = false;
