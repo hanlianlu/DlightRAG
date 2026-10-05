@@ -418,7 +418,8 @@ function childRow(id: string): Record<string, unknown> {
 const settledTurnWire = {
   turn_id: 'turn-1', turn_number: 1, answer_run_id: 'run-1', submission_id: 'submission-1',
   status: 'succeeded', cancel_requested: false, user_text: 'Question', assistant_text: 'Answer.',
-  user_attachments: [], usage: {}, error_kind: null, error_message: null, child_count: 2,
+  user_attachments: [], steering_messages: [], usage: {}, error_kind: null, error_message: null,
+  child_count: 2,
   created_at: '2026-01-01T00:00:00Z',
   presentation: {
     answer_text: 'Answer.',
