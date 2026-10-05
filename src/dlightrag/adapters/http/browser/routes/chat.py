@@ -280,7 +280,8 @@ async def answer_run_children(
     cursor: Annotated[str | None, Query(min_length=1, max_length=1024)] = None,
 ) -> dict[str, Any]:
     user = getattr(request.state, "user_context", None)
-    if await conversation_service.turn_for_run(user, run_id) is None:
+    turn = await conversation_service.turn_for_run(user, run_id)
+    if turn is None:
         raise HTTPException(status_code=404, detail="Answer run not found")
     answers = get_application(request).answers
     try:
@@ -301,6 +302,9 @@ async def answer_run_children(
         raise HTTPException(status_code=404, detail="Answer run not found")
     return {
         "run_id": run_id,
+        # The Run's own status, so a client can tell a live Run (commands apply)
+        # from a settled one (the server refuses them) without another request.
+        "run_status": turn.run.status,
         "children": [dict(child) for child in page.children],
         "next_cursor": (
             answers.child_roster_cursor_codec.encode(page.next_cursor)

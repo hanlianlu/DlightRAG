@@ -594,8 +594,9 @@ Route families cover:
   surface `/runs/{run_id}/resources/{resource_id}` (plus `/thumbnail`), which
   serves an accepted upload, a publication, and an image the run fetched,
   rendered, or adopted under the id its registry recorded;
-- `/answer`, submission reconciliation, status/resume/steer/children,
-  child observation/control/guidance reply, fork/cancel,
+- `/answer`, submission reconciliation, status/resume/steer/children (whose
+  page also carries the Run's own `run_status`, so a client sees whether Child
+  commands still apply), child observation/control/guidance reply, fork/cancel,
   Artifacts/presentation, and events; and
 - Files/upload and same-origin `/corpus-runs/{run_id}`
   status/events/cancel/resume, workspaces, images, Memory, the owner's Agent Accounts,
