@@ -824,6 +824,8 @@ it('answers a question for the parent through a box the reader opens', async () 
   expect(sent.path).to.equal('/web/api/answer/run-1/child-guidance/req-a/reply');
   expect(sent.body).to.deep.equal({content: 'Use the report'});
   expect(session(dock).querySelector('[data-reply]'), 'the box closes once the reply is accepted').to.equal(null);
+  // The box took the focus with it, so the reader goes to the title and not to the page behind.
+  await waitFor(() => document.activeElement === session(dock).querySelector('h3'));
 });
 
 it('says why a reply was refused, and shows the question as it now stands at once', async () => {
@@ -854,6 +856,7 @@ it('says why a reply was refused, and shows the question as it now stands at onc
     button(session(dock), 'Answer instead')!.click();
     await waitFor(() => session(dock).querySelector('[data-reply]') !== null);
     const reply = session(dock).querySelector<HTMLTextAreaElement>('[data-reply]')!;
+    reply.focus();
     await type(dock, reply, 'Use the report');
     const reads = (suffix: string) => requests.filter((request) => (
       request.method === 'GET' && request.path.endsWith(suffix)
@@ -866,6 +869,7 @@ it('says why a reply was refused, and shows the question as it now stands at onc
     await waitFor(() => shown(dock).includes(history) && !shown(dock).includes('Asking the parent'));
     expect(reads('/children'), 'the roster is asked about the child again').to.be.greaterThan(before.roster);
     expect(reads('/children/a'), 'and so is the child').to.be.greaterThan(before.child);
+    await waitFor(() => document.activeElement === session(dock).querySelector('h3'));
     dock.remove();
   }
 });

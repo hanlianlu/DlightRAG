@@ -443,7 +443,7 @@ export class DlChildSession extends LightElement {
           ? receipt.operationId
           : operationId,
       };
-      if (action === 'reply') this.answering = null;
+      if (action === 'reply') this.#closeReply();
       if (action === 'cancel') {
         this.confirming = false;
         void this.updateComplete.then(() => { this.focusTitle(); });
@@ -460,7 +460,11 @@ export class DlChildSession extends LightElement {
         this.missing = true;
       } else {
         this.outcome = {code: refused ? error.outcome : 'failed', childSessionId, operationId};
-        if (refused) this.#reobserve();
+        if (refused) {
+          // A reply is refused because its question is no longer open, so the box has nothing left to send.
+          if (action === 'reply') this.#closeReply();
+          this.#reobserve();
+        }
       }
     } finally {
       this.#sending.delete(key);
@@ -506,6 +510,15 @@ export class DlChildSession extends LightElement {
     this.answering = (event.currentTarget as HTMLElement).dataset.request!;
     void this.updateComplete.then(() => { this.querySelector<HTMLTextAreaElement>('[data-reply]')?.focus(); });
   };
+
+  /** Close the reply box once its question is settled. A reader who was in the box, or nowhere, goes to the
+   * title: the box takes their focus with it, and the sheet on a phone traps Tab only from inside. */
+  #closeReply(): void {
+    const active = document.activeElement;
+    const stranded = active === document.body || this.contains(active);
+    this.answering = null;
+    if (stranded) void this.updateComplete.then(() => { this.focusTitle(); });
+  }
 
   #closeAnswer = (): void => {
     const requestId = this.answering;
