@@ -427,18 +427,15 @@ function layout(option, ctx) {
     const pieLabels = !narrow && option.series.every((s) => s.type !== 'pie' || s.label?.show !== false);
     option.series = option.series.map((s) => {
       if (s.type !== 'pie') return s;
-      const radius = narrow ? ['40%', '66%'] : ['44%', '70%'];
       const pie = {
         ...s,
-        radius: s.radius ?? radius,
-        center: s.center ?? ['50%', narrow ? '44%' : '54%'],
         label: pieLabels ? {fontSize: profile.axis, formatter: '{d}%', ...s.label} : {show: false},
       };
       if (!pieLabels) pie.labelLine = {show: false};
       return pie;
     });
     delete option.grid;
-    return {legendHeight, topReserve, bottomReserve};
+    return {legendHeight, topReserve, bottomReserve, pieLabels};
   }
   if (!info.cartesian) return {legendHeight, topReserve, bottomReserve};
 
@@ -499,6 +496,23 @@ function layout(option, ctx) {
     option.dataZoom = [{type: 'inside', xAxisIndex: 0, filterMode: 'none', zoomLock: false}];
   }
   return {legendHeight, topReserve, bottomReserve};
+}
+
+/**
+ * Seat each pie in the box the legend leaves: centred there, as large as its outside labels allow.
+ * Pixels, not percentages, so a legend that takes two rows moves the pie, not the labels over it.
+ */
+function placePies(option, {width, height, top, bottom, labels}) {
+  const free = height - top - bottom;
+  const outer = Math.max(40, Math.min((width - (labels ? 112 : 16)) / 2, (free - (labels ? 44 : 16)) / 2));
+  option.series = option.series.map((s) => {
+    if (s.type !== 'pie') return s;
+    return {
+      ...s,
+      radius: s.radius ?? [Math.round(outer * 0.6), Math.round(outer)],
+      center: s.center ?? [Math.round(width / 2), Math.round(top + free / 2)],
+    };
+  });
 }
 
 /** The height of the chart body: from the aspect on the figure's width, never below its minimum. */
@@ -577,6 +591,9 @@ function prepare(spec, state = {}, width = 720, env = {}) {
     categories: finalCategories,
     reserve: reserve.topReserve + reserve.bottomReserve,
   });
+  if (describe(option).circular) {
+    placePies(option, {width, height, top: reserve.topReserve, bottom: reserve.bottomReserve, labels: reserve.pieLabels});
+  }
   return {
     option: Theme.decorate(clone(option), paletteName),
     height,

@@ -335,6 +335,23 @@ test('a pie shows its labels outside on a wide figure and leaves them to the leg
   assert.equal(plan(spec, {}, 360).option.legend.bottom, 4);
 });
 
+test('a pie is seated in the box its legend leaves, in pixels, and keeps the radius an author wrote', () => {
+  const rows = ['新能源汽车及零部件制造', '半导体及集成电路', '生物医药与医疗器械', '工业机器人与智能装备', '新型显示与光电子', '航空航天与国防装备'].map((p, i) => ({p, v: 10 - i}));
+  const spec = (series = {}) => chart({dataset: {source: rows}, series: [{type: 'pie', encode: {itemName: 'p', value: 'v'}, ...series}]});
+  const wide = plan(spec(), {}, 560);
+  const [x, y] = wide.option.series[0].center;
+  const [inner, outer] = wide.option.series[0].radius;
+  assert.equal(x, 280);
+  assert.ok(wide.option.legend.type === 'plain' && y > 70, `centre ${y}`);
+  assert.ok(inner < outer, `radius ${inner}, ${outer}`);
+  assert.ok(y - outer >= 48 + 14 && y + outer <= wide.height - 14, `pie ${y - outer}..${y + outer} in ${wide.height}`);
+  assert.deepEqual(plan(spec({radius: ['10%', '50%']}), {}, 560).option.series[0].radius, ['10%', '50%']);
+  // Without outside labels a narrow figure gives the pie more than the labelled one would get, and keeps it inside the figure.
+  const narrow = plan(spec(), {}, 360);
+  const [, narrowOuter] = narrow.option.series[0].radius;
+  assert.ok(narrowOuter > (360 - 112) / 2 && narrowOuter * 2 <= 360 - 16, `narrow radius ${narrowOuter}`);
+});
+
 test('the height follows the aspect, a narrow figure gets a taller aspect, and minHeight is a floor', () => {
   const spec = (extra) => ({...bars({}), ...extra});
   assert.equal(plan(spec({aspect: '2:1'}), {}, 800).height, 400);
