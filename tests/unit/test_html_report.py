@@ -19,6 +19,7 @@ _ROWS = [
     {"region": "华北", "quarter": "2023Q1", "revenue": 8, "profit": 1},
     {"region": "华北", "quarter": "2023Q2", "revenue": 9, "profit": 1},
 ]
+_EXAMPLES = Path(html_report.__file__).parent / "report/examples"
 _OPTION: dict[str, Any] = {
     "title": {"text": "季度销售额", "subtext": "单位：万元 · 来源：内部销售数据"},
     "dataset": {"source": _ROWS},
@@ -192,15 +193,22 @@ def test_a_report_over_the_artifact_limit_is_refused(
     failed(build(report(chart())), "20 MiB")
 
 
-def test_the_toolkit_adds_no_footer_credit_watermark_or_timestamp(build) -> None:
-    document = build(report(chart())).document
-    own = document.split('<div class="report">')[1].split("</div>")[0]
-    chrome = document[: document.index("<script>")] + html_report._runtime()
+@pytest.mark.parametrize("example", ("brief", "dashboard", "multipage"))
+def test_the_toolkit_adds_no_footer_credit_watermark_or_timestamp(build, example: str) -> None:
+    fragment = (_EXAMPLES / f"{example}.html").read_text(encoding="utf-8")
+    document = build(fragment).document
 
-    assert "<footer" not in own and "<footer" not in chrome
-    assert not re.search(
-        r"powered by|built with|generated (on|by|at)|©|all rights reserved", chrome, re.I
+    # The body is the author's fragment in one wrapper, with nothing before or after it.
+    assert (
+        document.split("<body>", 1)[1]
+        == f'\n<div class="report">\n{fragment}\n</div>\n</body>\n</html>\n'
     )
+    # What the toolkit writes itself, its stylesheet and runtime, says nothing a reader would see
+    # as a credit, a disclaimer, a notice or a stamp: the same table the build warns by.
+    chrome = (html_report._REPORT / "report.css").read_text("utf-8") + html_report._runtime()
+    assert "<footer" not in chrome
+    for family, rule in html_report._BOILERPLATE_RULES:
+        assert not rule.search(chrome), family
     assert not re.search(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}", chrome)
 
 
@@ -662,7 +670,7 @@ def test_warnings_do_not_fail_the_build_and_are_counted_in_the_summary(build) ->
 
 def test_the_golden_examples_build_without_a_warning(build, tmp_path: Path) -> None:
     for name in ("brief", "dashboard", "multipage"):
-        example = Path(html_report.__file__).parent / "report/examples" / f"{name}.html"
+        example = _EXAMPLES / f"{name}.html"
         result = build(example.read_text(encoding="utf-8"))
 
         assert result.code == 0, result.err

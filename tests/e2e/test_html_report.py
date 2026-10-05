@@ -171,6 +171,20 @@ def test_echarts_is_in_the_document_once_and_the_report_adds_one_global(
     assert page.eval("() => Object.isFrozen(Report)")
 
 
+@pytest.mark.parametrize("example", list(_CHARTS))
+def test_a_hydrated_report_shows_the_authors_words_and_its_controls_and_no_notice_credit_or_stamp(
+    built: dict[str, Path], open_report, example: str
+) -> None:
+    page = open_report(built[example], 1280)
+
+    for page_id, _charts in each_page(example, page):
+        text = page.eval("() => document.body.innerText")
+        for family, rule in html_report._BOILERPLATE_RULES:
+            found = rule.search(text)
+            assert found is None, f"{example}/{page_id}: {family}: {found and found.group(0)!r}"
+        assert page.eval("() => document.querySelectorAll('footer').length") == 0
+
+
 # ---- the Mineral look, in both colour schemes ---------------------------------------------------
 
 
