@@ -66,7 +66,9 @@ RUN cargo install --locked resvg --version ${RESVG_VERSION} --root /out \
         \( -iname '*licen[cs]e*' -o -iname 'COPYING*' -o -iname 'NOTICE*' -o -iname 'COPYRIGHT*' \) \
         -exec cp --parents {} /out/licenses/ \;
 
-# Charts: ECharts draws on the image's node, so only echarts.min.js and its licenses ship.
+# Charts: ECharts draws on the image's node, so only echarts.min.js and its licenses ship, beside
+# the two commands (echarts-render, html-report), the one palette and house theme they share, and
+# the report runtime. The report examples ship too: small, and what an agent reads to see the contract.
 FROM node:26-slim AS chart-render
 WORKDIR /build
 COPY chart-render/package.json chart-render/package-lock.json ./
@@ -75,8 +77,10 @@ RUN npm ci --omit=dev --no-audit --no-fund \
     && cp node_modules/echarts/dist/echarts.min.js /out/ \
     && cp node_modules/echarts/LICENSE node_modules/echarts/NOTICE node_modules/echarts/licenses/LICENSE-d3 /out/licenses/ \
     && cp node_modules/zrender/LICENSE /out/licenses/LICENSE-zrender
-COPY chart-render/echarts_render.py chart-render/ssr.cjs chart-render/theme.json /out/
-RUN chmod 755 /out/echarts_render.py
+COPY chart-render/echarts_render.py chart-render/html_report.py chart-render/ssr.cjs chart-render/theme.js chart-render/theme.json chart-render/palette.json /out/
+COPY chart-render/report/core.js chart-render/report/runtime.js chart-render/report/report.css chart-render/report/preview.cjs /out/report/
+COPY chart-render/report/examples/ /out/report/examples/
+RUN chmod 755 /out/echarts_render.py /out/html_report.py
 
 # Charts: Noto Sans SC (OFL-1.1), pinned to one noto-cjk commit and checked by digest. A remote
 # ADD arrives 0600, unreadable to app, and ADD --chmod leaves its parent directory closed, so the
@@ -106,7 +110,8 @@ COPY --from=resvg /out/bin/resvg /usr/local/bin/resvg
 COPY --from=resvg /out/licenses/ /usr/local/share/doc/resvg/
 COPY --from=chart-fonts /fonts/ /usr/local/share/fonts/noto-sans-sc/
 COPY --from=chart-render /out/ /usr/local/lib/echarts-render/
-RUN ln -s /usr/local/lib/echarts-render/echarts_render.py /usr/local/bin/echarts-render
+RUN ln -s /usr/local/lib/echarts-render/echarts_render.py /usr/local/bin/echarts-render \
+    && ln -s /usr/local/lib/echarts-render/html_report.py /usr/local/bin/html-report
 # Create non-root user BEFORE copying files to avoid chown layer duplication
 RUN groupadd --gid 1000 app && useradd --uid 1000 --gid app --create-home app \
     && mkdir -p /app/dlightrag_storage /home/app/.dlightrag/agent_workspaces \
@@ -129,6 +134,13 @@ USER app
 # Charts need node, resvg, ECharts and the font together as the app user: fail the build, not a Run.
 RUN printf '%s' '{"title":{"text":"冒烟测试 Smoke"},"xAxis":{"type":"category","data":["甲","乙"]},"yAxis":{},"series":[{"type":"bar","data":[1,2]}]}' \
     | echarts-render - /tmp/chart-smoke.png && test -s /tmp/chart-smoke.png && rm /tmp/chart-smoke.png
+
+# Reports need the same tools and the runtime files: build a one-chart report and its previews as the
+# app user, so a toolkit that cannot run fails the build, not a Run.
+RUN printf '%s' '<h1>冒烟测试 Smoke</h1><figure class="chart" data-chart="a"></figure><script type="application/json" id="chart-a">{"option":{"title":{"text":"冒烟测试","subtext":"单位：个 · 来源：测试"},"xAxis":{"type":"category","data":["甲","乙"]},"yAxis":{},"series":[{"type":"bar","data":[1,2]}]}}</script>' > /tmp/report-smoke.html \
+    && html-report build /tmp/report-smoke.html /tmp/report-smoke.out.html --preview /tmp/report-smoke \
+    && test -s /tmp/report-smoke.out.html && test -s /tmp/report-smoke/a-360.png && test -s /tmp/report-smoke/a-900.png \
+    && rm -r /tmp/report-smoke.html /tmp/report-smoke.out.html /tmp/report-smoke
 
 # Default image role; deployments can override it for MCP or maintenance commands.
 CMD ["dlightrag-api"]
