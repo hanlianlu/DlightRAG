@@ -13,7 +13,6 @@ import {
   getAnswerRunChildrenPage,
   replyAnswerChild,
   steerAnswerRun,
-  type ConversationAttachmentReference,
   type ConversationTurn,
 } from '../api/conversations.ts';
 import {ApiError} from '../api/wire.ts';
@@ -29,6 +28,7 @@ import {
 } from '../lib/run-controller.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
+import type {PendingAttachment} from '../stores/attachment-store.ts';
 import type {AgentEffort, AgentEffortOffer} from '../lib/agent-effort.ts';
 import {EMPTY_AGENT_EFFORT_OFFER} from '../lib/agent-effort.ts';
 import {AnswerSubmissionController} from '../stores/answer-submission-controller.ts';
@@ -98,15 +98,26 @@ function childCommandAmbiguous(error: unknown): boolean {
   return true;
 }
 
+/** The turn as the reader sees it the moment they send it, before the server has accepted anything. */
 function optimisticTurn(
   submissionId: string,
   query: string,
-  attachments: readonly ConversationAttachmentReference[],
+  attachments: readonly PendingAttachment[],
 ): ChatTurnView {
   return {
     id: `local-${submissionId}`,
     userText: query,
-    userAttachments: attachments,
+    userAttachments: attachments.map((item, index) => ({
+      attachmentId: item.id,
+      ordinal: index + 1,
+      kind: item.kind,
+      filename: item.file.name,
+      mimeType: item.file.type,
+      byteSize: item.file.size,
+      url: item.objectUrl,
+      thumbnailUrl: item.objectUrl,
+      label: item.file.name,
+    })),
     runId: '',
     state: 'pending',
     streamText: '',
@@ -452,18 +463,7 @@ export class DlChatFeature extends LightElement {
     const snapshot = answerSubmissionSnapshot(actor);
     if (['accepted', 'handedOff', 'edited', 'discarded'].includes(snapshot.status)) return null;
     const {intent, lease} = actor.getSnapshot().context;
-    const attachments: ConversationAttachmentReference[] = lease.items.map((item, index) => ({
-      attachmentId: item.id,
-      ordinal: index + 1,
-      kind: item.kind,
-      filename: item.file.name,
-      mimeType: item.file.type,
-      byteSize: item.file.size,
-      url: item.objectUrl,
-      thumbnailUrl: item.objectUrl,
-      label: item.file.name,
-    }));
-    const turn = optimisticTurn(intent.submissionId, intent.query, attachments);
+    const turn = optimisticTurn(intent.submissionId, intent.query, lease.items);
     if (snapshot.status === 'submitting' || snapshot.status === 'reconciling') return turn;
     return {
       ...turn,
@@ -540,19 +540,8 @@ export class DlChatFeature extends LightElement {
     }
     const conversationId = this.handles.conversations.answerConversationId;
     const lease = this.handles.attachments.leaseAll();
-    const liveAttachmentRefs: ConversationAttachmentReference[] = lease.items.map((item, index) => ({
-      attachmentId: item.id,
-      ordinal: index + 1,
-      kind: item.kind,
-      filename: item.file.name,
-      mimeType: item.file.type,
-      byteSize: item.file.size,
-      url: item.objectUrl,
-      thumbnailUrl: item.objectUrl,
-      label: item.file.name,
-    }));
     const submissionId = crypto.randomUUID();
-    const turn = optimisticTurn(submissionId, query, liveAttachmentRefs);
+    const turn = optimisticTurn(submissionId, query, lease.items);
     const actor = this.#submissionController.start({
       query,
       mode,
