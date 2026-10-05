@@ -822,6 +822,7 @@ answer:
     execution_environment: trust   # disabled | trust
     workspace_root: null           # absolute path; null → ~/.dlightrag/agent_workspaces
     child_guidance_timeout_seconds: 300  # default ask_parent expiry; 1–86400
+    child_concurrency: 16          # Child Sessions one Run runs at once; at least 1
     session_notes:                 # durable Agent memory per Agent Session
       max_count: 64                # 1–1024 notes
       max_bytes: 262144            # 1024–16 MiB total
@@ -845,6 +846,10 @@ answer:
   conversations:
     active_html_preview_enabled: true
 ```
+
+`child_concurrency` is how many Child Sessions one Run runs at once; a `spawn_agent`
+call starts at most 16, so at the default none of its children waits for a slot, and
+a lower value makes the rest wait while the roster already reads them `running`.
 
 `session_notes` bounds the notes one Agent Session keeps, independently of
 `publication.workspace_max_bytes`, which bounds one Run's workspace; a note that

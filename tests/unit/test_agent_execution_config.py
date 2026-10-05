@@ -25,6 +25,12 @@ def test_execution_environment_defaults_to_trust() -> None:
     assert AgentExecutionConfig().execution_environment == "trust"
 
 
+def test_child_concurrency_is_at_least_one() -> None:
+    assert AgentExecutionConfig(child_concurrency=1).child_concurrency == 1
+    with pytest.raises(ValidationError):
+        AgentExecutionConfig(child_concurrency=0)
+
+
 def test_disabled_ignores_workspace_root(tmp_path: Path) -> None:
     config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
         deployment={
