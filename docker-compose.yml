@@ -95,9 +95,10 @@ services:
       - dlightrag_agent_workspaces:/home/app/.dlightrag/agent_workspaces
       # Operator-provisioned global Skills; read-only for every user's Agent.
       - *global-skills-mount
-      # Per-owner Agent Skills, written only through the validated
-      # publish_skill/delete_skill tools. Persisted across container
-      # recreations; multi-host deployments must share this path.
+      # Per-owner Agent Skills: published only through the validated publish_skill
+      # tool, turned off or deleted through set_skill_enabled, delete_skill or
+      # Settings. Persisted across container recreations; multi-host deployments
+      # must share this path.
       - dlightrag_owner_skills:/home/app/.dlightrag/owner_skills
     depends_on:
       postgres:
@@ -148,9 +149,10 @@ services:
       - dlightrag_agent_workspaces:/home/app/.dlightrag/agent_workspaces
       # Operator-provisioned global Skills; read-only for every user's Agent.
       - *global-skills-mount
-      # Per-owner Agent Skills, written only through the validated
-      # publish_skill/delete_skill tools. Persisted across container
-      # recreations; multi-host deployments must share this path.
+      # Per-owner Agent Skills: published only through the validated publish_skill
+      # tool, turned off or deleted through set_skill_enabled, delete_skill or
+      # Settings. Persisted across container recreations; multi-host deployments
+      # must share this path.
       - dlightrag_owner_skills:/home/app/.dlightrag/owner_skills
     depends_on:
       postgres:

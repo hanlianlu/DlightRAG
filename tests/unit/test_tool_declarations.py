@@ -342,6 +342,7 @@ def test_skill_declarations_need_no_owner_or_catalogue(tmp_path: Path, monkeypat
         "load_skill",
         "publish_skill",
         "delete_skill",
+        "set_skill_enabled",
     ]
     assert [tool.name for tool in factory.declarations(child=True)] == ["load_skill"]
     assert list(tmp_path.iterdir()) == []

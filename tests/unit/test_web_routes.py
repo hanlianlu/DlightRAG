@@ -351,6 +351,257 @@ async def test_answer_with_requested_skill_forces_research_mode(
     assert call.kwargs["requested_skill"] == "review"
 
 
+@pytest.fixture
+def skill_roots(test_config: DlightragConfig, tmp_path: Path) -> tuple[Path, Path]:
+    """The operator-global and the per-owner Skill roots of this deployment, both empty."""
+    global_root, owners_root = tmp_path / "global", tmp_path / "owners"
+    mutate_config(test_config, "answer.agent.skills_root", str(global_root))
+    mutate_config(test_config, "answer.agent.owner_skills_root", str(owners_root))
+    return global_root, owners_root
+
+
+def _write_skill(root: Path, name: str, description: str, body: str = "body") -> None:
+    (root / name).mkdir(parents=True)
+    (root / name / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: {description}\n---\n{body}", encoding="utf-8"
+    )
+
+
+async def test_the_owner_lists_only_their_own_skills_on_or_off_with_the_quota(
+    client, skill_roots: tuple[Path, Path]
+) -> None:
+    global_root, owners_root = skill_roots
+    mine = owner_skill_root(owners_root, DEPLOYMENT_OWNER_ID)
+    _write_skill(global_root, "triage", "Global triage.")
+    _write_skill(mine, "weekly-report", "Weekly report.")
+    _write_skill(mine, "review", "My review.")
+    await client.put("/web/api/skills/mine/review/enabled", json={"enabled": False})
+
+    response = await client.get("/web/api/skills/mine")
+
+    assert response.status_code == 200
+    # The owner's own tier only, by name, whatever the tiers below hold and whether or not a
+    # Skill is on; the route must not be taken for a Skill called `mine`.
+    assert response.json() == {
+        "skills": [
+            {"name": "review", "description": "My review.", "enabled": False},
+            {"name": "weekly-report", "description": "Weekly report.", "enabled": True},
+        ],
+        "limit": 20,
+    }
+
+
+async def test_turning_a_skill_off_leaves_slash_completion_to_the_tier_below_it(
+    client, skill_roots: tuple[Path, Path]
+) -> None:
+    global_root, owners_root = skill_roots
+    mine = owner_skill_root(owners_root, DEPLOYMENT_OWNER_ID)
+    _write_skill(global_root, "review", "Global review.")
+    _write_skill(mine, "review", "My review.")
+    _write_skill(mine, "weekly-report", "Weekly report.")
+
+    off = await client.put("/web/api/skills/mine/review/enabled", json={"enabled": False})
+    off_again = await client.put("/web/api/skills/mine/review/enabled", json={"enabled": False})
+    lonely = await client.put("/web/api/skills/mine/weekly-report/enabled", json={"enabled": False})
+
+    assert off.status_code == off_again.status_code == lonely.status_code == 200
+    assert off.json() == off_again.json()
+    assert off.json() == {"name": "review", "description": "My review.", "enabled": False}
+    # Settings still lists what is off, marked; completion offers only what can be loaded, and
+    # the Skill an override had hidden is back.
+    assert [
+        (skill["name"], skill["enabled"])
+        for skill in (await client.get("/web/api/skills/mine")).json()["skills"]
+    ] == [("review", False), ("weekly-report", False)]
+    assert (await client.get("/web/api/skills")).json() == _listing(
+        {"name": "review", "description": "Global review.", "source": "global"}
+    )
+
+    on = await client.put("/web/api/skills/mine/review/enabled", json={"enabled": True})
+
+    assert on.json() == {"name": "review", "description": "My review.", "enabled": True}
+    assert {"name": "review", "description": "My review.", "source": "owner"} in (
+        await client.get("/web/api/skills")
+    ).json()["skills"]
+
+
+@pytest.mark.parametrize("body", [{}, {"enabled": "false"}, {"enabled": None}, {"on": True}])
+async def test_the_enabled_switch_is_a_boolean_and_nothing_else(
+    client, skill_roots: tuple[Path, Path], body: dict[str, Any]
+) -> None:
+    mine = owner_skill_root(skill_roots[1], DEPLOYMENT_OWNER_ID)
+    _write_skill(mine, "review", "My review.")
+
+    response = await client.put("/web/api/skills/mine/review/enabled", json=body)
+
+    assert response.status_code == 422
+    assert not (mine / "review" / ".disabled").exists()
+
+
+async def test_the_owner_reads_a_skill_document_as_text_and_deletes_a_skill_with_its_marker(
+    client, skill_roots: tuple[Path, Path]
+) -> None:
+    global_root, owners_root = skill_roots
+    mine = owner_skill_root(owners_root, DEPLOYMENT_OWNER_ID)
+    _write_skill(global_root, "review", "Global review.", body="GLOBAL <script>alert(1)</script>")
+    _write_skill(mine, "review", "My review.", body="MINE <script>alert(1)</script>")
+    await client.put("/web/api/skills/mine/review/enabled", json={"enabled": False})
+
+    document = await client.get("/web/api/skills/mine/review/document")
+
+    # A Skill that is off is still the owner's to read; the text is shown, never run.
+    assert document.status_code == 200
+    assert document.headers["content-type"] == "text/plain; charset=utf-8"
+    assert document.headers["x-content-type-options"] == "nosniff"
+    assert document.text == (mine / "review" / "SKILL.md").read_text(encoding="utf-8")
+    assert "MINE" in document.text and "GLOBAL" not in document.text
+
+    deleted = await client.delete("/web/api/skills/mine/review")
+
+    assert deleted.status_code == 204 and deleted.content == b""
+    assert not mine.joinpath("review").exists()
+    assert (await client.get("/web/api/skills/mine")).json()["skills"] == []
+    # Nothing of the owner's is left to hide the global Skill.
+    assert (await client.get("/web/api/skills")).json() == _listing(
+        {"name": "review", "description": "Global review.", "source": "global"}
+    )
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("PUT", "/web/api/skills/mine/{name}/enabled"),
+        ("GET", "/web/api/skills/mine/{name}/document"),
+        ("DELETE", "/web/api/skills/mine/{name}"),
+    ],
+)
+async def test_a_name_that_is_not_one_of_the_owners_own_skills_is_not_found(
+    client, skill_roots: tuple[Path, Path], method: str, path: str
+) -> None:
+    global_root, owners_root = skill_roots
+    _write_skill(global_root, "triage", "Global triage.")
+    _write_skill(owner_skill_root(owners_root, DEPLOYMENT_OWNER_ID), "weekly-report", "Mine.")
+
+    async def send(name: str):
+        return await client.request(
+            method, path.format(name=name), json={"enabled": False} if method == "PUT" else None
+        )
+
+    # Unknown, global, built-in, and not even a name.
+    for name in ("nope", "triage", "skill-creator", "Bad_Name", "-x-"):
+        response = await send(name)
+
+        assert response.status_code == 404, name
+        assert response.json()["error_type"] == "not_found"
+    assert (global_root / "triage" / "SKILL.md").is_file()
+    assert list(global_root.rglob(".disabled")) == []
+    assert len(list(owners_root.rglob("SKILL.md"))) == 1
+    # The route is there: the owner's own Skill is served by the very same request.
+    assert (await send("weekly-report")).status_code in {200, 204}
+
+
+async def test_one_owner_cannot_list_turn_off_read_or_delete_another_owners_skills(
+    client, test_config: DlightragConfig, skill_roots: tuple[Path, Path]
+) -> None:
+    from dlightrag.adapters.http.browser.auth import WEB_CSRF_COOKIE
+
+    key, team = "test-only-web-jwt-key-32-bytes!!", "https://team.cloudflareaccess.com"
+    mutate_config(test_config, "access.auth_mode", "jwt")
+    mutate_config(test_config, "access.jwt_verification_key", key)
+
+    def token(subject: str) -> dict[str, str]:
+        expires = datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1)
+        claims = {"iss": team, "sub": subject, "exp": expires}
+        return {"Authorization": f"Bearer {jwt.encode(claims, key, algorithm='HS256')}"}
+
+    def owner(subject: str) -> dict[str, str]:
+        """What the browser of one signed-in owner sends, the double-submit token included."""
+        headers = token(subject)
+        if csrf := client.cookies.get(WEB_CSRF_COOKIE):
+            headers["X-CSRF-Token"] = csrf
+        return headers
+
+    alice = owner_skill_root(
+        skill_roots[1], owner_id_from_principal(auth_mode="jwt", user_id="alice", issuer=team)
+    )
+    _write_skill(alice, "weekly-report", "Alice's weekly report.", body="ALICE")
+
+    assert (await client.get("/web/api/skills/mine", headers=owner("bob"))).json() == {
+        "skills": [],
+        "limit": 20,
+    }
+    for method, path, body in (
+        ("PUT", "/web/api/skills/mine/weekly-report/enabled", {"enabled": False}),
+        ("GET", "/web/api/skills/mine/weekly-report/document", None),
+        ("DELETE", "/web/api/skills/mine/weekly-report", None),
+    ):
+        response = await client.request(method, path, json=body, headers=owner("bob"))
+        assert response.status_code == 404, method
+    assert (await client.get("/web/api/skills", headers=owner("bob"))).json() == _listing()
+    assert (alice / "weekly-report" / "SKILL.md").is_file()
+    assert not (alice / "weekly-report" / ".disabled").exists()
+
+    # The double-submit token guards these writes as it does every other owner write.
+    unguarded = await client.put(
+        "/web/api/skills/mine/weekly-report/enabled",
+        json={"enabled": False},
+        headers=token("alice"),
+    )
+    assert (
+        unguarded.status_code == 403 and unguarded.json()["error_kind"] == "cross_origin_rejected"
+    )
+
+    mine = await client.put(
+        "/web/api/skills/mine/weekly-report/enabled",
+        json={"enabled": False},
+        headers=owner("alice"),
+    )
+    assert mine.json() == {
+        "name": "weekly-report",
+        "description": "Alice's weekly report.",
+        "enabled": False,
+    }
+    assert (await client.get("/web/api/skills/mine", headers=owner("alice"))).json()["skills"] == [
+        {"name": "weekly-report", "description": "Alice's weekly report.", "enabled": False}
+    ]
+
+
+async def test_an_explicit_request_for_a_disabled_skill_is_refused_and_points_to_settings(
+    client, mock_application, skill_roots: tuple[Path, Path]
+) -> None:
+    global_root, owners_root = skill_roots
+    mine = owner_skill_root(owners_root, DEPLOYMENT_OWNER_ID)
+    _write_skill(global_root, "review", "Global review.")
+    _write_skill(mine, "review", "My review.")
+    _write_skill(mine, "weekly-report", "Weekly report.")
+    for name in ("review", "weekly-report"):
+        await client.put(f"/web/api/skills/mine/{name}/enabled", json={"enabled": False})
+    mock_application.web_conversations.start_answer.return_value = None
+
+    async def request(skill: str):
+        return await client.post(
+            "/web/api/answer",
+            json={
+                "query": "Check this plan",
+                "workspaces": ["default"],
+                "submission_id": SUBMISSION_ID,
+                "requested_skill": skill,
+            },
+        )
+
+    refused = await request("weekly-report")
+
+    # The same refusal as an unknown Skill, in the same envelope, saying what to do about it.
+    assert refused.status_code == 422
+    assert refused.json()["kind"] == "invalid_request"
+    assert "weekly-report is disabled" in refused.json()["message"]
+    assert "Settings" in refused.json()["message"]
+    # A Skill the tier below serves is requestable: it reaches the service, which finds no
+    # conversation to continue and answers 404 as in the request test above.
+    assert (await request("review")).status_code == 404
+    assert (await request("nope")).json()["message"] == "Unknown Agent Skill: nope"
+
+
 async def test_vite_hashed_assets_are_immutable(client):
     from dlightrag.adapters.http.browser.static_files import APP_DIR
 

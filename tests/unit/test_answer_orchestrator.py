@@ -85,16 +85,20 @@ async def test_an_explicit_skill_request_goes_to_the_parent_and_not_to_its_child
 
 
 def test_skills_bundle_tool_membership_differs_between_parent_and_child(tmp_path: Path) -> None:
+    from dlightrag.engine.answer.tools.composition import CHILD_FORBIDDEN_TOOLS
+
     owner_root = tmp_path / "owner"
     bundle = SkillsBundle(owner_root=owner_root)
 
     parent = {tool.name for tool in bundle.tools(child=False)}
     child = {tool.name for tool in bundle.tools(child=True)}
 
-    assert {"load_skill", "publish_skill", "delete_skill"} <= parent
-    assert "load_skill" in child
-    assert "publish_skill" not in child
-    assert "delete_skill" not in child
+    owner_skill_authority = {"publish_skill", "delete_skill", "set_skill_enabled"}
+    assert {"load_skill"} | owner_skill_authority <= parent
+    assert child == {"load_skill"}
+    # Both mechanisms of ADR 0025 withhold them: the bundle offers a Child only `load_skill`,
+    # and the table keeps a `tools` list from naming them back.
+    assert owner_skill_authority <= CHILD_FORBIDDEN_TOOLS
 
 
 @pytest.mark.asyncio

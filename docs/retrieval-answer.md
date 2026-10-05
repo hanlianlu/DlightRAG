@@ -245,7 +245,8 @@ run-local registry may include:
   [`materialize`](resource-reading.md#materialize), which copies a Resource into the
   Agent Workspace;
 - Profile Memory tools for the parent (children recall only);
-- progressive `load_skill`, plus `publish_skill`/`delete_skill` for the parent;
+- progressive `load_skill`, plus `publish_skill`, `delete_skill` and `set_skill_enabled` for
+  the parent;
 - the tools of every enabled
   [Personal MCP Connection](personal-mcp-connections.md) its owner holds; and
 - bounded asynchronous Child Sessions with explicit snapshots and Evidence

@@ -4,7 +4,11 @@
 from pathlib import Path
 
 from dlightrag.application.config import DlightragConfig
-from dlightrag.application.skills import skills_bundle_factory
+from dlightrag.application.skills import (
+    owner_skills_directory,
+    skill_read_layers,
+    skills_bundle_factory,
+)
 from dlightrag.engine.agent.skills import SkillCatalog, builtin_skills_root, owner_skill_root
 
 
@@ -95,3 +99,14 @@ def test_disabled_builtin_filter_removes_unoverridden_builtin(tmp_path: Path) ->
 
     assert hidden is not None
     assert hidden.metadata == ()
+
+
+def test_the_directory_an_owner_manages_is_the_shard_their_agent_reads(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+
+    managed = owner_skills_directory(config, owner_id="alice")
+    [_global_layer, owner_layer] = skill_read_layers(config, owner_id="alice")
+
+    # What Settings lists and changes is what the owner's Agent processes read, and nobody else's.
+    assert managed == owner_layer.path == owner_skill_root(tmp_path / "owners", "alice")
+    assert managed != owner_skills_directory(config, owner_id="bob")

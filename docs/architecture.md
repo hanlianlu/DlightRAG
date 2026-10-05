@@ -166,8 +166,8 @@ come from packaged built-ins (`council`, `office-documents`, which tells the age
 that its workspace Python can build a requested Word, Excel or PowerPoint file,
 `charts`, and `skill-creator`), the global root (default `~/.dlightrag/skills`),
 and the owner's own published Skills (default `~/.dlightrag/owner_skills`), in
-that precedence. Research parents may publish and delete their owner's Skills;
-built-in and global Skills are read-only. The image ships the renderer `charts`
+that precedence. Research parents may publish, turn off and delete their owner's
+Skills; built-in and global Skills are read-only. The image ships the renderer `charts`
 calls, `echarts-render` ([Operations](operations.md#agent-chart-rendering)).
 Outside tools come only from the owner's enabled Personal MCP Connections,
 pinned per Run, and the deployment's [Agent Browser](#agent-browser), which no
@@ -269,7 +269,7 @@ queries, and SSE; there is no server-side template UI. In the main document,
 the `dl-app` Shell composes light-DOM Lit Features: chat, conversations,
 workspaces and files, the Inspector, the Artifact Canvas, and Settings (one
 dialog whose pages are elements of their own: Connections, Agent Accounts,
-Profile Memory, Conversation Sessions, and Language). Light DOM is composition;
+Profile Memory, Skills, Conversation Sessions, and Language). Light DOM is composition;
 open Shadow DOM is reserved for design-system primitives with no domain state
 ([ADR 0003](adr/0003-light-composition-shadow-primitives.md)).
 

@@ -599,7 +599,8 @@ Route families cover:
   Artifacts/presentation, and events; and
 - Files/upload and same-origin `/corpus-runs/{run_id}`
   status/events/cancel/resume, workspaces, images, Memory, the owner's Agent Accounts,
-  model catalogue, and `/client-errors`, which logs one uncaught browser error.
+  the Agent Skills the viewer can load and the owner's own, model catalogue, and
+  `/client-errors`, which logs one uncaught browser error.
 
 `/agent-accounts` is an owner's Agent Accounts in Settings. It is Web-only, like Connections:
 owner Settings state has no REST counterpart. `GET /web/api/agent-accounts` answers
@@ -618,6 +619,22 @@ where this owner has none there, another owner's account being as unknown as non
 answers 200 with the fresh view, and none takes an `Idempotency-Key`, since both writes are
 idempotent by key. No answer carries a password,
 envelope, key id, or account id ([Security](security.md#agent-accounts)).
+
+`GET /web/api/skills` is what `/skill:` completion offers: `{"skills": [{"name",
+"description", "source"}]}` for the built-in, global and own Skills the viewer's agent can load.
+An own Skill its owner turned off is not in it, and a same-named Skill of a lower tier is.
+`/skills/mine` is the owner's own Skills in Settings, Web-only like Agent Accounts, and none of it
+takes an `Idempotency-Key`, since each write is idempotent. `GET /web/api/skills/mine` answers
+`{"skills": [{"name", "description", "enabled"}], "limit": <int>}`, the owner's own tier by name
+with those turned off included, and `limit` the quota of Skills an owner may keep.
+`PUT /web/api/skills/mine/{name}/enabled` takes `{"enabled": <bool>}` and answers 200 with the
+updated row. `DELETE /web/api/skills/mine/{name}` answers 204, and
+`GET /web/api/skills/mine/{name}/document` the Skill's `SKILL.md` as `text/plain` with
+`X-Content-Type-Options: nosniff`, whether the Skill is on or off. The three that name a Skill
+answer 404 in the general envelope (`error_type: "not_found"`) where this owner has none: a
+built-in or global Skill, another owner's, and a name that is not kebab-case are as unknown as no
+Skill at all. A `/skill:` request for a Skill the owner turned off, and that no lower tier serves,
+is refused with `invalid_request` and says to turn it on in Settings.
 
 An answer that cites a stored image is projected with that image addressed on
 this origin: `<img src>` is rewritten to the run-resource address when the run

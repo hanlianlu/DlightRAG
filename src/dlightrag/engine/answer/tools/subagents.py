@@ -515,9 +515,10 @@ _SPAWN_DESCRIPTION = (
     "each comes back at once and the children run beside you, in parallel as capacity "
     "allows. A child has your tools except those that spend the Run's authority: "
     "controlling children, changing memory (remember, forget) and publishing "
-    "(attach_artifact, publish_skill, delete_skill). What a child finds becomes citable once "
-    "you read its result with wait_subagent or subagent_status; if you end your turn first, "
-    "the Run stays open and sends you the results when every child of this call has settled."
+    "(attach_artifact, publish_skill, delete_skill, set_skill_enabled). What a child finds "
+    "becomes citable once you read its result with wait_subagent or subagent_status; if you "
+    "end your turn first, the Run stays open and sends you the results when every child of "
+    "this call has settled."
 )
 
 

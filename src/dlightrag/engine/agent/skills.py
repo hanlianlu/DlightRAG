@@ -6,19 +6,22 @@ to read SKILL.md or a relative reference. Skill text is untrusted context: this
 loader never imports or executes Skill code.
 
 Skills merge in three tiers: packaged built-ins, operator-provisioned global
-skills, then per-owner skills. Publication is the only write channel:
+skills, then per-owner skills. Publication is the only way a Skill's content gets in:
 ``publish_skill`` writes into the caller's owner directory through validation,
-quotas, and an atomic swap. Reading is not: a Skill may point at an executable
-asset, so the capability declares the operator-global root and the Run owner's own
-shard to the Execution Environment, which confines every Agent process to the
-Agent Workspace plus those declarations (ADR 0024). Nothing here is ever written
-by an Agent's filesystem tools.
+quotas, and an atomic swap. An owner can also turn one of their own Skills off, which
+keeps it stored behind a ``.disabled`` file in its directory, or delete it; the agent's
+tools and the Web Settings page call the same functions here. Reading is not so
+confined: a Skill may point at an executable asset, so the capability declares the
+operator-global root and the Run owner's own shard to the Execution Environment, which
+confines every Agent process to the Agent Workspace plus those declarations (ADR 0024).
+Nothing here is ever written by an Agent's filesystem tools.
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
 import shutil
 import uuid
@@ -46,10 +49,11 @@ logger = logging.getLogger(__name__)
 
 _MAX_SKILL_FILE_CHARS = 50_000
 _MAX_DESCRIPTION_CHARS = 1024
-_OWNER_MAX_SKILLS = 20
+OWNER_MAX_SKILLS = 20
 _OWNER_MAX_TOTAL_BYTES = 20 * 1024 * 1024
 _SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _SKILL_NAME_MAX_CHARS = 64
+_DISABLED_MARKER = ".disabled"
 
 
 type SkillSource = Literal["builtin", "global", "owner"]
@@ -62,6 +66,15 @@ class SkillMetadata:
     description: str
     root: SkillRoot
     source: SkillSource
+
+
+@dataclass(frozen=True, slots=True)
+class OwnerSkill:
+    """One of an owner's own Skills as that owner sees it, whether or not it is turned on."""
+
+    name: str
+    description: str
+    enabled: bool
 
 
 class LoadSkillInput(BaseModel):
@@ -100,6 +113,13 @@ class DeleteSkillInput(BaseModel):
     name: str = Field(min_length=1, max_length=_SKILL_NAME_MAX_CHARS, description="Skill name.")
 
 
+class SetSkillEnabledInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=_SKILL_NAME_MAX_CHARS, description="Skill name.")
+    enabled: bool = Field(description="True turns the skill on, false turns it off.")
+
+
 def owner_skill_root(base: Path, owner_id: str) -> Path:
     """Resolve one owner's skill directory under the shared owner root.
 
@@ -111,10 +131,18 @@ def owner_skill_root(base: Path, owner_id: str) -> Path:
 
 
 class SkillCatalog:
-    """Merged built-in/global/owner catalog in increasing precedence."""
+    """Merged built-in/global/owner catalog in increasing precedence.
 
-    def __init__(self, skills: tuple[SkillMetadata, ...] = ()) -> None:
+    Only Skills that can be loaded are in it. The owner's Skills that are turned off are
+    left out of the merge, so a lower tier's same-named Skill shows through, and those
+    that no lower tier replaces are kept by name in ``disabled``.
+    """
+
+    def __init__(
+        self, skills: tuple[SkillMetadata, ...] = (), disabled: tuple[str, ...] = ()
+    ) -> None:
         self._skills = {skill.name: skill for skill in skills}
+        self._disabled = disabled
 
     @classmethod
     def discover(
@@ -134,21 +162,35 @@ class SkillCatalog:
             global_root.expanduser() if global_root is not None else None,
             source="global",
         )
-        owner_skills = _discover_root(
+        enabled: list[SkillMetadata] = []
+        turned_off: set[str] = set()
+        for skill in _discover_root(
             owner_root.expanduser() if owner_root is not None else None,
             source="owner",
-        )
+        ):
+            if _is_disabled(skill.root):
+                turned_off.add(skill.name)
+            else:
+                enabled.append(skill)
         merged = {skill.name: skill for skill in builtin_skills}
         merged.update((skill.name, skill) for skill in global_skills)
-        merged.update((skill.name, skill) for skill in owner_skills)
-        return cls(tuple(merged[name] for name in sorted(merged)))
+        merged.update((skill.name, skill) for skill in enabled)
+        return cls(
+            tuple(merged[name] for name in sorted(merged)),
+            disabled=tuple(sorted(turned_off - merged.keys())),
+        )
 
     @property
     def metadata(self) -> tuple[SkillMetadata, ...]:
         return tuple(self._skills.values())
 
+    @property
+    def disabled(self) -> tuple[str, ...]:
+        """Names of the owner's Skills that are turned off and that no tier serves instead."""
+        return self._disabled
+
     def contribution(self) -> ContextContribution | None:
-        if not self._skills:
+        if not self._skills and not self._disabled:
             return None
         lines = [
             "Available Agent Skills (metadata only; load one before following it):",
@@ -156,6 +198,8 @@ class SkillCatalog:
                 f"- {skill.name}: {skill.description} ({skill.source})"
                 for skill in self._skills.values()
             ),
+            # No description, so nothing in a Skill that is off can trigger anything.
+            *(f"- {name}: disabled by its owner, cannot be loaded" for name in self._disabled),
         ]
         return ContextContribution(
             source="agent.skills",
@@ -166,6 +210,8 @@ class SkillCatalog:
     def read(self, name: str, relative_path: str = "SKILL.md") -> str:
         skill = self._skills.get(name)
         if skill is None:
+            if name in self._disabled:
+                raise ValueError(f"Agent Skill '{name}' is disabled by its owner")
             raise ValueError(f"no Agent Skill is named '{name}'")
         parts = _skill_relative_parts(relative_path)
         if isinstance(skill.root, Path):
@@ -248,6 +294,7 @@ class SkillsBundle:
             "load_skill": lambda: load_skill_tool(self._discover),
             "publish_skill": lambda: publish_skill_tool(self._owner_root),
             "delete_skill": lambda: delete_skill_tool(self._owner_root),
+            "set_skill_enabled": lambda: set_skill_enabled_tool(self._owner_root),
         }
         return [
             bindings[declaration.name]()
@@ -262,7 +309,11 @@ def skill_declarations(*, load: bool, publish: bool, child: bool) -> tuple[ToolD
     return (
         *((load_skill_declaration(),) if load else ()),
         *(
-            (publish_skill_declaration(), delete_skill_declaration())
+            (
+                publish_skill_declaration(),
+                delete_skill_declaration(),
+                set_skill_enabled_declaration(),
+            )
             if publish and not child
             else ()
         ),
@@ -385,10 +436,16 @@ def publish_skill_tool(owner_root: Path | None) -> AgentTool:
             return ToolResult.text(f"Skill publication rejected: {exc}", is_error=True)
         except OSError as exc:
             return ToolResult.text(f"Skill publication failed: {exc}", is_error=True)
+        published = f"Published Agent Skill '{args.name}' with {written} file(s) "
+        if _is_disabled(owner_root / args.name):
+            return ToolResult.text(
+                f"{published}into your owner skill directory. It is disabled, so it cannot be "
+                "loaded and the catalog marks it disabled. Turn it on with "
+                f"set_skill_enabled(name='{args.name}', enabled=true) if the user wants it."
+            )
         return ToolResult.text(
-            f"Published Agent Skill '{args.name}' with {written} file(s) "
-            "into your owner skill directory. You can read it with load_skill now; it is "
-            "listed in the catalog from your next answer run."
+            f"{published}into your owner skill directory. You can read it with load_skill now; "
+            "it is listed in the catalog from your next answer run."
         )
 
     return publish_skill_declaration().bind(execute)
@@ -414,7 +471,7 @@ def delete_skill_tool(owner_root: Path | None) -> AgentTool:
         if _SKILL_NAME_PATTERN.fullmatch(args.name) is None:
             return ToolResult.text(f"Invalid Skill name: {args.name}", is_error=True)
         try:
-            removed = _delete_owner_skill(owner_root, args.name)
+            removed = delete_owner_skill(owner_root, args.name)
         except OSError as exc:
             return ToolResult.text(f"Skill deletion failed: {exc}", is_error=True)
         if not removed:
@@ -426,6 +483,135 @@ def delete_skill_tool(owner_root: Path | None) -> AgentTool:
         )
 
     return delete_skill_declaration().bind(execute)
+
+
+def set_skill_enabled_declaration() -> ToolDeclaration:
+    return ToolDeclaration(
+        name="set_skill_enabled",
+        description="Turn one durable Agent Skill owned by the current user on or off without "
+        "deleting it, never a global or built-in one. Idempotent. A skill that is off cannot be "
+        "loaded; a same-named lower-tier skill, if any, takes its place.",
+        input_model=SetSkillEnabledInput,
+        replay_policy="never",
+    )
+
+
+def set_skill_enabled_tool(owner_root: Path | None) -> AgentTool:
+    async def execute(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
+        args = cast(SetSkillEnabledInput, raw)
+        await runtime.emit_update(ToolResult.text("", subject=args.name))
+        if owner_root is None:
+            return ToolResult.text("Skill update is unavailable for this run.", is_error=True)
+        try:
+            skill = set_owner_skill_enabled(owner_root, args.name, args.enabled)
+        except OSError as exc:
+            return ToolResult.text(f"Skill update failed: {exc}", is_error=True)
+        if skill is None:
+            names = ", ".join(own.name for own in list_owner_skills(owner_root)) or "none"
+            return ToolResult.text(
+                f"Agent Skill '{args.name}' is not one of your own skills, and only your own "
+                f"skills can be turned off. Your skills: {names}.",
+                is_error=True,
+            )
+        if not skill.enabled:
+            return ToolResult.text(
+                f"Agent Skill '{args.name}' is now disabled. It can no longer be loaded and the "
+                "catalog marks it disabled from your next answer run; a same-named lower-tier "
+                "skill, if any, takes its place."
+            )
+        return ToolResult.text(
+            f"Agent Skill '{args.name}' is now enabled. It can be loaded again with load_skill "
+            "and the catalog lists it again from your next answer run."
+        )
+
+    return set_skill_enabled_declaration().bind(execute)
+
+
+# ---------------------------------------------------------------------------
+# Management of an owner's own Skills
+# ---------------------------------------------------------------------------
+
+
+def list_owner_skills(owner_root: Path) -> tuple[OwnerSkill, ...]:
+    """One owner's own Skills in name order, the ones turned off included.
+
+    Skills are read exactly as discovery reads them, so one that discovery leaves out
+    (a frontmatter that is not valid, a link in place of its directory) is not listed.
+    """
+    return tuple(
+        OwnerSkill(skill.name, skill.description, enabled=not _is_disabled(skill.root))
+        for skill in sorted(
+            _discover_root(owner_root, source="owner"), key=lambda skill: skill.name
+        )
+    )
+
+
+def set_owner_skill_enabled(owner_root: Path, name: str, enabled: bool) -> OwnerSkill | None:
+    """Turn one of an owner's own Skills on or off, and return it as it now is.
+
+    None when the owner has no such Skill. Idempotent: it creates or removes one file and
+    reads nothing back, so two callers asking for the same state change nothing twice.
+    """
+    skill = _owner_skill(owner_root, name)
+    if skill is None:
+        return None
+    _set_disabled(cast(Path, skill.root), disabled=not enabled)
+    return OwnerSkill(skill.name, skill.description, enabled=enabled)
+
+
+def delete_owner_skill(owner_root: Path, name: str) -> bool:
+    """Remove one of an owner's own Skills with its directory; False when there is none.
+
+    Raises OSError when the name is taken by something that is not a regular Skill directory.
+    """
+    if _SKILL_NAME_PATTERN.fullmatch(name) is None:
+        return False
+    target = owner_root / name
+    if not target.exists():
+        return False
+    if target.is_symlink() or not target.is_dir():
+        raise OSError(f"'{name}' is not a regular skill directory")
+    shutil.rmtree(target)
+    return True
+
+
+def read_owner_skill(owner_root: Path, name: str) -> str | None:
+    """The SKILL.md text of one of an owner's own Skills, on or off; None when there is none."""
+    skill = _owner_skill(owner_root, name)
+    if skill is None:
+        return None
+    try:
+        return SkillCatalog((skill,)).read(name)
+    except FileNotFoundError:
+        # A publish or a delete replaced the Skill between listing it and reading it.
+        return None
+
+
+def _owner_skill(owner_root: Path, name: str) -> SkillMetadata | None:
+    if _SKILL_NAME_PATTERN.fullmatch(name) is None:
+        return None
+    return next(
+        (skill for skill in _discover_root(owner_root, source="owner") if skill.name == name),
+        None,
+    )
+
+
+def _is_disabled(root: SkillRoot) -> bool:
+    """Whether the owner turned a Skill off: a regular file named ``.disabled`` in its directory.
+
+    A link in its place is not the marker, so nothing a link points at decides what is served.
+    """
+    marker = root.joinpath(_DISABLED_MARKER)
+    return marker.is_file() and not (isinstance(marker, Path) and marker.is_symlink())
+
+
+def _set_disabled(directory: Path, *, disabled: bool) -> None:
+    marker = directory / _DISABLED_MARKER
+    if not disabled:
+        marker.unlink(missing_ok=True)
+        return
+    # Creating the file never follows a link in its place, and keeps one that is already there.
+    os.close(os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o644))
 
 
 # ---------------------------------------------------------------------------
@@ -545,6 +731,11 @@ def _publish_owner_skill(owner_root: Path, name: str, files: Mapping[str, str]) 
             backup = owner_root / f".backup-{name}-{uuid.uuid4().hex}"
             target.rename(backup)
         try:
+            if backup is not None and _is_disabled(backup):
+                # Turning a Skill off is the owner's act, not its text's. The marker is read from
+                # the directory moved aside, which a toggle can no longer reach, and written
+                # before the swap, so the replacement is never loadable on its way to being off.
+                _set_disabled(staging, disabled=True)
             staging.rename(target)
         except BaseException:
             if backup is not None and backup.exists() and not target.exists():
@@ -571,8 +762,8 @@ def _enforce_owner_quota(owner_root: Path, staging: Path, name: str) -> None:
             continue
         if child.is_dir() and not child.is_symlink() and (child / "SKILL.md").is_file():
             existing.append(child)
-    if name not in {child.name for child in existing} and len(existing) >= _OWNER_MAX_SKILLS:
-        raise ValueError(f"owner skill quota reached ({_OWNER_MAX_SKILLS} skills)")
+    if name not in {child.name for child in existing} and len(existing) >= OWNER_MAX_SKILLS:
+        raise ValueError(f"owner skill quota reached ({OWNER_MAX_SKILLS} skills)")
     total = _dir_bytes(staging)
     for child in existing:
         if child.name != name:
@@ -587,16 +778,6 @@ def _dir_bytes(root: Path) -> int:
     return sum(
         path.stat().st_size for path in root.rglob("*") if path.is_file() and not path.is_symlink()
     )
-
-
-def _delete_owner_skill(owner_root: Path, name: str) -> bool:
-    target = owner_root / name
-    if not target.exists():
-        return False
-    if target.is_symlink() or not target.is_dir():
-        raise OSError(f"'{name}' is not a regular skill directory")
-    shutil.rmtree(target)
-    return True
 
 
 # ---------------------------------------------------------------------------
@@ -659,17 +840,25 @@ def _frontmatter(path: SkillRoot, *, fallback_name: str) -> tuple[str, str]:
 
 
 __all__ = [
+    "OWNER_MAX_SKILLS",
     "DeleteSkillInput",
     "LoadSkillInput",
+    "OwnerSkill",
     "PublishSkillInput",
+    "SetSkillEnabledInput",
     "SkillCatalog",
     "SkillMetadata",
     "SkillSource",
     "SkillsBundle",
     "SkillsBundleFactory",
     "builtin_skills_root",
+    "delete_owner_skill",
     "delete_skill_tool",
+    "list_owner_skills",
     "load_skill_tool",
     "owner_skill_root",
     "publish_skill_tool",
+    "read_owner_skill",
+    "set_owner_skill_enabled",
+    "set_skill_enabled_tool",
 ]

@@ -27,6 +27,13 @@ stays, as a way to narrow one child, and never fails a spawn. A user's explicit
 children, which keep the Skill catalog while they hold `load_skill`; a child
 narrowed away from it is not shown Skills it cannot load.
 
+Amended 2026-10-05: `set_skill_enabled`, which turns one of an owner's own Skills off
+or on without deleting it, joins `publish_skill` and `delete_skill` in the table
+below. A Skill that is off is not served to any later Run of its owner, so a child
+that turned one off would change what its parent and every Run after it find, which is
+the authority of the Run that owns the answer. The skills bundle still offers a child
+only `load_skill`, and the table keeps a `tools` list from naming the tool back.
+
 The objective prefix is no longer a prefix: [ADR 0015](0015-prompt-prefix-stability-and-cache-anchored-accounting.md)
 moved the child's instructions, the scratch convention among them, into its system
 prompt, so the objective is stated once, by the child's own User Entry, and a steer
@@ -51,8 +58,8 @@ mechanism:
   the Session, and a child's contribution reaching it is the point.
 - **Publication.** `attach_artifact` is not composed at all when the run is a
   child, and the skills bundle offers a child only `load_skill` — never
-  `publish_skill` or `delete_skill`. A product belongs to the Run that owns the
-  answer.
+  `publish_skill`, `delete_skill` or `set_skill_enabled`. A product belongs to the Run
+  that owns the answer.
 
 What the default withholds is capability rather than authority. The default set
 is `search_knowledge_base`, `search_web`, `read`, `view`, `grep`, `find`, `ls`,
@@ -77,7 +84,7 @@ capability one sentence at a time. The rule partitions the tool surface once:
 |---|---|
 | Splitting and the roster | `spawn_agent`, `subagent_status`, `wait_subagent`, `cancel_subagent`, `steer_subagent`, `continue_subagent`, `reply_subagent` |
 | Durable owner memory | `remember`, `forget` |
-| Publication | `attach_artifact`, `publish_skill`, `delete_skill` |
+| Publication | `attach_artifact`, `publish_skill`, `delete_skill`, `set_skill_enabled` |
 
 *Granted by default, because it is capability:* every other tool the parent's
 composition offers — the path tools (`bash`, `write`, `edit`, `read`, `ls`,

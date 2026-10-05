@@ -494,6 +494,7 @@ CHILD_FORBIDDEN_TOOLS = frozenset(
         "attach_artifact",
         "publish_skill",
         "delete_skill",
+        "set_skill_enabled",
     }
 )
 

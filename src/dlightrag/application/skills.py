@@ -33,10 +33,19 @@ def skill_read_layers(config: DlightragConfig, *, owner_id: str) -> tuple[Declar
     return (
         DeclaredLayer(path=agent_skills_root(config), capability="skills (operator-global)"),
         DeclaredLayer(
-            path=owner_skill_root(owner_skills_root(config), owner_id),
+            path=owner_skills_directory(config, owner_id=owner_id),
             capability="skills (this owner)",
         ),
     )
+
+
+def owner_skills_directory(config: DlightragConfig, *, owner_id: str) -> Path:
+    """Return the directory of one owner's own Skills, which their management acts on.
+
+    It is the shard the owner's Agent processes read (``skill_read_layers``), so the Skills a
+    Settings page lists and changes are the ones the Agent finds.
+    """
+    return owner_skill_root(owner_skills_root(config), owner_id)
 
 
 def skill_roots(config: DlightragConfig) -> tuple[tuple[Path, str], ...]:
@@ -78,4 +87,4 @@ def skills_bundle_factory(
     )
 
 
-__all__ = ["skill_read_layers", "skill_roots", "skills_bundle_factory"]
+__all__ = ["owner_skills_directory", "skill_read_layers", "skill_roots", "skills_bundle_factory"]

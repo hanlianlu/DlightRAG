@@ -78,6 +78,7 @@ def test_council_catalog_presence_does_not_widen_child_tools() -> None:
             "attach_artifact",
             "publish_skill",
             "delete_skill",
+            "set_skill_enabled",
         }
         & with_names
     )

@@ -883,8 +883,10 @@ and read-only for the answer agent. The bundled Compose stack keeps
 default container path, refusing to create a missing host source as root; the
 setup wizard prepares the directory, and manual operators create it before
 `docker compose up`. Owners write their own Skills under `owner_skills_root`
-only through the validated `publish_skill` and `delete_skill` tools, within a
-20-skill / 20 MiB quota per owner. Every worker must see the same skill roots.
+only through the validated `publish_skill` tool, within a 20-skill / 20 MiB quota
+per owner, and can turn one off (`set_skill_enabled`) or delete it (`delete_skill`)
+there or in Settings; a Skill that is off still counts toward the quota. Every
+worker must see the same skill roots.
 
 ## Agent Browser
 

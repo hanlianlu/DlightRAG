@@ -4,17 +4,26 @@
 from pathlib import Path
 
 import pytest
+from pydantic import BaseModel
 
 from dlightrag.engine.agent.skills import (
+    OWNER_MAX_SKILLS,
     DeleteSkillInput,
     LoadSkillInput,
     PublishSkillInput,
+    SetSkillEnabledInput,
     SkillCatalog,
     SkillsBundleFactory,
+    builtin_skills_root,
+    delete_owner_skill,
     delete_skill_tool,
+    list_owner_skills,
     load_skill_tool,
     owner_skill_root,
     publish_skill_tool,
+    read_owner_skill,
+    set_owner_skill_enabled,
+    set_skill_enabled_tool,
 )
 from dlightrag.engine.agent.tools import ToolResult
 from tests.tool_helpers import recording_tool_runtime, tool_runtime
@@ -37,6 +46,28 @@ def _skill_files(
     }
     files.update(extra or {})
     return files
+
+
+async def _publish(
+    owner_root: Path, name: str, *, description: str = "owner", body: str = "body"
+) -> ToolResult:
+    return await publish_skill_tool(owner_root).execute(
+        PublishSkillInput(
+            name=name, files=_skill_files(name=name, description=description, body=body)
+        ),
+        tool_runtime(tool_name="publish_skill"),
+    )
+
+
+async def _turn(owner_root: Path, name: str, *, enabled: bool) -> ToolResult:
+    return await set_skill_enabled_tool(owner_root).execute(
+        SetSkillEnabledInput(name=name, enabled=enabled),
+        tool_runtime(tool_name="set_skill_enabled"),
+    )
+
+
+def _states(owner_root: Path) -> list[tuple[str, bool]]:
+    return [(skill.name, skill.enabled) for skill in list_owner_skills(owner_root)]
 
 
 def test_discovery_projects_metadata_only_and_owner_takes_precedence(tmp_path: Path) -> None:
@@ -293,6 +324,10 @@ async def test_publish_enforces_skill_count_quota(tmp_path: Path) -> None:
     assert result.is_error
     assert "quota" in result.text_content
     assert not (owner_root / "overflow").exists()
+    # A Skill that is turned off is still stored, so it keeps its place.
+    await _turn(owner_root, "skill-0", enabled=False)
+    assert len(list_owner_skills(owner_root)) == OWNER_MAX_SKILLS
+    assert (await _publish(owner_root, "overflow")).is_error
 
 
 @pytest.mark.asyncio
@@ -383,13 +418,332 @@ async def test_skill_tools_report_their_subject_live(tmp_path: Path) -> None:
         ),
         recording_tool_runtime(updates, tool_name="publish_skill"),
     )
+    await set_skill_enabled_tool(owner_root).execute(
+        SetSkillEnabledInput(name="weekly-report", enabled=False),
+        recording_tool_runtime(updates, tool_name="set_skill_enabled"),
+    )
     await delete_skill_tool(owner_root).execute(
         DeleteSkillInput(name="weekly-report"),
         recording_tool_runtime(updates, tool_name="delete_skill"),
     )
 
     subjects = [update.subject for update in updates if update.subject]
-    assert subjects == ["review", "weekly-report", "weekly-report"]
+    assert subjects == ["review", "weekly-report", "weekly-report", "weekly-report"]
+
+
+@pytest.mark.asyncio
+async def test_a_disabled_owner_skill_is_not_served_and_the_tier_below_shows_through(
+    tmp_path: Path,
+) -> None:
+    builtin_root = tmp_path / "builtin"
+    global_root = tmp_path / "global"
+    owner_root = tmp_path / "owner"
+    _skill(builtin_root, "review", name="review", description="builtin", body="BUILTIN")
+    _skill(global_root, "triage", name="triage", description="global", body="GLOBAL")
+    for name in ("review", "triage", "weekly-report"):
+        await _publish(owner_root, name, body="OWNER")
+
+    def discover() -> SkillCatalog:
+        return SkillCatalog.discover(
+            builtin_root=builtin_root, global_root=global_root, owner_root=owner_root
+        )
+
+    def sources(catalog: SkillCatalog) -> list[tuple[str, str]]:
+        return [(skill.name, skill.source) for skill in catalog.metadata]
+
+    owner_serves = [("review", "owner"), ("triage", "owner"), ("weekly-report", "owner")]
+    assert sources(discover()) == owner_serves
+
+    for name in ("review", "triage", "weekly-report"):
+        await _turn(owner_root, name, enabled=False)
+    catalog = discover()
+
+    # An override that is off gives its name back to the tier below it.
+    assert sources(catalog) == [("review", "builtin"), ("triage", "global")]
+    assert catalog.read("review").endswith("BUILTIN")
+    assert catalog.read("triage").endswith("GLOBAL")
+    # Only a name that nothing else serves is kept as disabled.
+    assert catalog.disabled == ("weekly-report",)
+
+    for name in ("review", "triage", "weekly-report"):
+        await _turn(owner_root, name, enabled=True)
+    assert sources(discover()) == owner_serves
+    assert discover().disabled == ()
+
+
+@pytest.mark.asyncio
+async def test_a_disabled_skill_nothing_else_serves_is_named_in_the_catalog_and_cannot_be_loaded(
+    tmp_path: Path,
+) -> None:
+    owner_root = tmp_path / "owner"
+    await _publish(owner_root, "review", description="Use when asked to review")
+    await _publish(owner_root, "weekly-report", description="Use when asked for a weekly report")
+    await _turn(owner_root, "weekly-report", enabled=False)
+    catalog = SkillCatalog.discover(owner_root=owner_root)
+
+    contribution = catalog.contribution()
+
+    assert contribution is not None
+    # The enabled lines come first; the disabled Skill is a name with nothing to trigger on.
+    assert str(contribution.messages[0]["content"]).splitlines()[1:] == [
+        "- review: Use when asked to review (owner)",
+        "- weekly-report: disabled by its owner, cannot be loaded",
+    ]
+    load = load_skill_tool(lambda: catalog)
+    disabled = await load.execute(
+        LoadSkillInput(name="weekly-report"), tool_runtime(tool_name="load_skill")
+    )
+    unknown = await load.execute(LoadSkillInput(name="nope"), tool_runtime(tool_name="load_skill"))
+    assert disabled.is_error
+    assert "disabled by its owner" in disabled.text_content
+    assert "no Agent Skill is named" not in disabled.text_content
+    assert "no Agent Skill is named 'nope'" in unknown.text_content
+
+    # A Run is told of a Skill that is off even when nothing else is on; only nothing is silent.
+    await _turn(owner_root, "review", enabled=False)
+    assert SkillCatalog.discover(owner_root=owner_root).contribution() is not None
+    assert SkillCatalog.discover(owner_root=tmp_path / "none").contribution() is None
+
+
+@pytest.mark.asyncio
+async def test_set_skill_enabled_is_idempotent_and_acts_only_on_the_current_owners_own_skills(
+    tmp_path: Path,
+) -> None:
+    global_root = tmp_path / "global"
+    _skill(global_root, "review", name="review", description="global", body="GLOBAL")
+    owners = tmp_path / "owners"
+    factory = SkillsBundleFactory(
+        builtin_root=builtin_skills_root(), global_root=global_root, owner_root=owners
+    )
+    alice, bob = owner_skill_root(owners, "alice"), owner_skill_root(owners, "bob")
+    await _publish(alice, "weekly-report")
+    await _publish(bob, "ledger")
+
+    async def turn(owner: str, name: str, enabled: bool) -> ToolResult:
+        tools = {tool.name: tool for tool in factory(owner).tools(child=False)}
+        return await tools["set_skill_enabled"].execute(
+            SetSkillEnabledInput(name=name, enabled=enabled),
+            tool_runtime(tool_name="set_skill_enabled"),
+        )
+
+    off = await turn("alice", "weekly-report", False)
+    off_again = await turn("alice", "weekly-report", False)
+
+    assert not off.is_error and off_again.text_content == off.text_content
+    assert "can no longer be loaded" in off.text_content
+    assert "marks it disabled from your next answer run" in off.text_content
+    assert _states(alice) == [("weekly-report", False)]
+
+    on = await turn("alice", "weekly-report", True)
+    on_again = await turn("alice", "weekly-report", True)
+
+    assert not on.is_error and on_again.text_content == on.text_content
+    assert "can be loaded again" in on.text_content
+    assert _states(alice) == [("weekly-report", True)]
+
+    # A built-in, a global, an unknown, a malformed and another owner's name are none of the
+    # owner's own Skills: each is refused with a list of the owner's, and nothing is written.
+    for name in ("skill-creator", "review", "nope", "Bad_Name", "ledger"):
+        refused = await turn("alice", name, False)
+        assert refused.is_error
+        assert "only your own skills can be turned off" in refused.text_content
+        assert refused.text_content.endswith("Your skills: weekly-report.")
+    assert (await turn("carol", "weekly-report", False)).text_content.endswith("Your skills: none.")
+    assert _states(bob) == [("ledger", True)]
+    assert list(global_root.rglob(".disabled")) == []
+
+
+@pytest.mark.asyncio
+async def test_a_republished_skill_stays_disabled_and_a_deleted_one_leaves_no_marker_behind(
+    tmp_path: Path,
+) -> None:
+    owner_root = tmp_path / "owner"
+    await _publish(owner_root, "review", body="v1")
+    await _turn(owner_root, "review", enabled=False)
+
+    republished = await _publish(owner_root, "review", body="v2")
+
+    assert not republished.is_error
+    # The new text is the Skill's, but turning it off was the owner's act: it stays off, and
+    # the result says so and how to turn it on.
+    assert "disabled" in republished.text_content
+    assert "set_skill_enabled(name='review', enabled=true)" in republished.text_content
+    assert "load_skill now" not in republished.text_content
+    assert _states(owner_root) == [("review", False)]
+    assert (read_owner_skill(owner_root, "review") or "").endswith("v2")
+    assert [path.name for path in owner_root.iterdir()] == ["review"]
+
+    assert delete_owner_skill(owner_root, "review") is True
+    assert not (await _publish(owner_root, "review")).is_error
+    assert _states(owner_root) == [("review", True)]
+
+
+@pytest.mark.asyncio
+async def test_a_publish_that_cannot_swap_leaves_a_disabled_skill_as_it_was(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    owner_root = tmp_path / "owner"
+    await _publish(owner_root, "review", body="v1")
+    await _turn(owner_root, "review", enabled=False)
+    rename = Path.rename
+
+    def full_disk(self: Path, target: Path) -> Path:
+        if self.name.startswith(".staging-"):
+            raise OSError("no space left on device")
+        return rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", full_disk)
+
+    failed = await _publish(owner_root, "review", body="v2")
+
+    assert failed.is_error and "no space left on device" in failed.text_content
+    assert _states(owner_root) == [("review", False)]
+    assert (read_owner_skill(owner_root, "review") or "").endswith("v1")
+    assert [path.name for path in owner_root.iterdir()] == ["review"]
+
+
+@pytest.mark.asyncio
+async def test_a_skill_turned_off_while_it_is_being_republished_stays_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    owner_root = tmp_path / "owner"
+    await _publish(owner_root, "review", body="v1")
+    rename = Path.rename
+
+    def turned_off_as_the_swap_begins(self: Path, target: Path) -> Path:
+        if self.name == "review":
+            set_owner_skill_enabled(owner_root, "review", False)
+        return rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", turned_off_as_the_swap_begins)
+
+    republished = await _publish(owner_root, "review", body="v2")
+
+    # The owner's switch landed after the publish had begun and before it swapped; it is the
+    # state the new text is installed in, not one the swap overwrites.
+    assert not republished.is_error
+    assert _states(owner_root) == [("review", False)]
+    assert (read_owner_skill(owner_root, "review") or "").endswith("v2")
+
+
+def test_the_owners_own_skills_are_listed_on_or_off_in_name_order_and_a_broken_one_is_left_out(
+    tmp_path: Path,
+) -> None:
+    owner_root = tmp_path / "owner"
+    _skill(owner_root, "zeta", name="zeta", description="Use when Z", body="ZETA")
+    _skill(owner_root, "alpha", name="alpha", description="Use when A", body="ALPHA")
+    broken = owner_root / "broken"
+    broken.mkdir()
+    (broken / "SKILL.md").write_text(
+        "---\nname: broken\ndescription: Use when: asked\n---\nb", encoding="utf-8"
+    )
+
+    turned_off = set_owner_skill_enabled(owner_root, "alpha", False)
+
+    assert turned_off is not None
+    assert (turned_off.name, turned_off.description, turned_off.enabled) == (
+        "alpha",
+        "Use when A",
+        False,
+    )
+    assert [(s.name, s.description, s.enabled) for s in list_owner_skills(owner_root)] == [
+        ("alpha", "Use when A", False),
+        ("zeta", "Use when Z", True),
+    ]
+    # A Skill is off exactly while a `.disabled` file sits in its directory.
+    assert (owner_root / "alpha" / ".disabled").is_file()
+    assert not (owner_root / "zeta" / ".disabled").exists()
+    # Its document is the owner's to read whether it is on or off, and a broken one has none.
+    assert (read_owner_skill(owner_root, "alpha") or "").endswith("ALPHA")
+    assert (read_owner_skill(owner_root, "zeta") or "").endswith("ZETA")
+    assert read_owner_skill(owner_root, "broken") is None
+    assert list_owner_skills(tmp_path / "nobody") == ()
+    # A document past the bound `load_skill` keeps is refused here as it is there.
+    (owner_root / "zeta" / "SKILL.md").write_text(
+        "---\nname: zeta\ndescription: Use when Z\n---\n" + "z" * 50_000, encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="exceeds 50000 characters"):
+        read_owner_skill(owner_root, "zeta")
+
+    set_owner_skill_enabled(owner_root, "alpha", True)
+    assert not (owner_root / "alpha" / ".disabled").exists()
+
+
+def test_a_symlinked_skill_or_marker_is_never_followed(tmp_path: Path) -> None:
+    owner_root = tmp_path / "owner"
+    for name in ("review", "triage"):
+        _skill(owner_root, name, name=name, description="Use when asked", body="b")
+    _skill(tmp_path, "real", name="real", description="Use when asked", body="b")
+    (tmp_path / "somewhere").write_text("keep", encoding="utf-8")
+    try:
+        (owner_root / "linked").symlink_to(tmp_path / "real", target_is_directory=True)
+        (owner_root / "review" / ".disabled").symlink_to(tmp_path / "somewhere")
+        (owner_root / "triage" / ".disabled").symlink_to(tmp_path / "nowhere")
+    except OSError:
+        pytest.skip("symlinks are unavailable")
+
+    # A link in the marker's place is not the marker, whatever it points at, and turning the
+    # Skill off writes nothing through it.
+    assert _states(owner_root) == [("review", True), ("triage", True)]
+    for name in ("review", "triage"):
+        with pytest.raises(OSError):
+            set_owner_skill_enabled(owner_root, name, False)
+    assert (tmp_path / "somewhere").read_text(encoding="utf-8") == "keep"
+    assert not (tmp_path / "nowhere").exists()
+    # A linked Skill directory is none of the owner's, so nothing reaches what it points at.
+    assert set_owner_skill_enabled(owner_root, "linked", False) is None
+    assert read_owner_skill(owner_root, "linked") is None
+    with pytest.raises(OSError):
+        delete_owner_skill(owner_root, "linked")
+    assert (tmp_path / "real" / "SKILL.md").is_file()
+    assert not (tmp_path / "real" / ".disabled").exists()
+
+
+def test_a_name_that_is_not_kebab_case_reaches_no_path(tmp_path: Path) -> None:
+    owners = tmp_path / "owners"
+    alice = owners / "alice"
+    _skill(alice, "review", name="review", description="Use when asked", body="b")
+    _skill(owners, "bob", name="bob", description="Use when asked", body="b")
+
+    for name in ("../bob", "bob/../bob", "review/..", "..", ".", "", "Review", ".staging-1"):
+        assert read_owner_skill(alice, name) is None
+        assert set_owner_skill_enabled(alice, name, False) is None
+        assert delete_owner_skill(alice, name) is False
+
+    assert (owners / "bob" / "SKILL.md").is_file()
+    assert _states(alice) == [("review", True)]
+
+
+@pytest.mark.asyncio
+async def test_a_skill_turned_off_inside_a_run_stops_loading_at_once_and_the_next_run_lists_it(
+    tmp_path: Path,
+) -> None:
+    factory = SkillsBundleFactory(owner_root=tmp_path / "owners")
+    tools = {tool.name: tool for tool in factory("alice").tools(child=False)}
+
+    async def call(tool: str, arguments: BaseModel) -> ToolResult:
+        return await tools[tool].execute(arguments, tool_runtime(tool_name=tool))
+
+    await call(
+        "publish_skill",
+        PublishSkillInput(
+            name="weekly-report",
+            files=_skill_files(name="weekly-report", description="owner", body="WEEKLY"),
+        ),
+    )
+    assert (await call("load_skill", LoadSkillInput(name="weekly-report"))).text_content.endswith(
+        "WEEKLY"
+    )
+
+    await call("set_skill_enabled", SetSkillEnabledInput(name="weekly-report", enabled=False))
+
+    # `load_skill` resolves names as they are when it is called; the next Run's catalog says the
+    # Skill is off.
+    refused = await call("load_skill", LoadSkillInput(name="weekly-report"))
+    assert refused.is_error and "disabled by its owner" in refused.text_content
+    next_run = str(factory("alice").context_contributions(child=False)[0].messages[0]["content"])
+    assert "- weekly-report: disabled by its owner, cannot be loaded" in next_run
+    assert factory("bob").context_contributions(child=False) == ()
 
 
 @pytest.mark.asyncio
