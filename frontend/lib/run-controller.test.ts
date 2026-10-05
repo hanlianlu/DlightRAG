@@ -27,6 +27,7 @@ function stored(status: ConversationTurn['status']): ConversationTurn {
     userText: 'Question',
     assistantText: '',
     userAttachments: [],
+    steeringMessages: [],
     presentation: null,
     usage: {},
     errorKind: null,

@@ -105,6 +105,7 @@ def _turn(presentation: dict[str, object]) -> dict[str, object]:
         "user_text": "Write the report",
         "assistant_text": str(presentation["answer_text"]),
         "user_attachments": [],
+        "steering_messages": [],
         "presentation": presentation,
         "usage": {},
         "error_kind": None,

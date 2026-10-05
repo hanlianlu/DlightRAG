@@ -83,6 +83,7 @@ function storedTurn(): ConversationTurn {
     userText: 'Question',
     assistantText: presentation.answerText,
     userAttachments: [],
+    steeringMessages: [],
     presentation,
     usage: {},
     errorKind: null,
@@ -223,6 +224,7 @@ function turnWire(turn: ConversationTurn): Record<string, unknown> {
     user_text: turn.userText,
     assistant_text: turn.assistantText,
     user_attachments: turn.userAttachments.map(attachmentWire),
+    steering_messages: turn.steeringMessages,
     presentation: turn.presentation === null ? null : presentationWire(turn.presentation),
     usage: turn.usage,
     error_kind: turn.errorKind,
@@ -1838,6 +1840,21 @@ it('Message List bounds steering wrappers within one retained turn', async () =>
   expect(list.textContent?.match(/Steering \d+/g)?.length).to.equal(50);
   expect(list.textContent).not.to.contain('Steering 0');
   expect(list.textContent).to.contain('Steering 50');
+  const lastSteer = [...list.querySelectorAll('[data-steer]')].at(-1)!;
+  const answer = list.querySelector('article[data-run-id="run-steered"]')!;
+  expect(lastSteer.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).to.be.greaterThan(0);
+});
+
+it('a stored turn shows the steering its run received, in order, above the answer', async () => {
+  const list = document.createElement('dl-chat-message-list') as DlChatMessageList;
+  list.turns = [storedTurnView({...storedTurn(), steeringMessages: ['shorter', 'in Chinese']})];
+  document.body.appendChild(list);
+  await list.updateComplete;
+
+  const steers = [...list.querySelectorAll('[data-steer]')];
+  expect(steers.map((steer) => steer.textContent?.trim())).to.deep.equal(['shorter', 'in Chinese']);
+  const answer = list.querySelector('article[data-run-id="run-1"]')!;
+  expect(steers[1]!.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).to.be.greaterThan(0);
 });
 
 it('Message List exposes child-agent progress and roster intent through public state', async () => {

@@ -391,7 +391,7 @@ it('owns Shell message layout while preserving the welcome for an empty conversa
     history: [{
       turnId: 'turn-1', turnNumber: 1, answerRunId: 'run-1', submissionId: 'submission-1',
       status: 'succeeded', cancelRequested: false, userText: 'Question', assistantText: 'Stored answer.',
-      userAttachments: [], presentation: answer, usage: {}, errorKind: null,
+      userAttachments: [], steeringMessages: [], presentation: answer, usage: {}, errorKind: null,
       errorMessage: null, childCount: 0, createdAt: '2026-01-01T00:00:00Z',
     }],
   };

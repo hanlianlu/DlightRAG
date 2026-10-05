@@ -36,6 +36,7 @@ class LinkedTurn:
     #: How many Child Sessions this turn's Run has spawned, so a settled turn can
     #: tell whether it has children to open. A turn just accepted has none.
     child_count: int = 0
+    steering_messages: tuple[str, ...] = ()
 
     @property
     def answer_run_id(self) -> str:
@@ -95,6 +96,8 @@ CONVERSATION_PAGE_DEFAULT_LIMIT = 50
 CONVERSATION_PAGE_MAX_LIMIT = 100
 CONVERSATION_HISTORY_PAGE_DEFAULT_LIMIT = 40
 CONVERSATION_HISTORY_PAGE_MAX_LIMIT = 100
+#: The newest steering messages one turn carries in history; the Web draws no more.
+STEERING_MESSAGES_PER_TURN = 50
 
 
 class ConversationCursorError(ApplicationInputError):
@@ -380,6 +383,7 @@ __all__ = [
     "CONVERSATION_HISTORY_PAGE_MAX_LIMIT",
     "CONVERSATION_PAGE_DEFAULT_LIMIT",
     "CONVERSATION_PAGE_MAX_LIMIT",
+    "STEERING_MESSAGES_PER_TURN",
     "ConversationCursor",
     "ConversationCursorCodec",
     "ConversationCursorError",

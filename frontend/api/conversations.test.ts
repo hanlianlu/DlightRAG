@@ -142,6 +142,7 @@ test('continuation posts one submission id to the selected branch operation', as
         user_text: 'branch',
         assistant_text: '',
         user_attachments: [],
+        steering_messages: [],
         presentation: null,
         usage: {},
         error_kind: null,

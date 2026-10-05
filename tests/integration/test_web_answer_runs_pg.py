@@ -31,6 +31,7 @@ from dlightrag.adapters.postgres.web.web_conversations import (
     PGWebConversationStore,
 )
 from dlightrag.application.web_conversations import (
+    STEERING_MESSAGES_PER_TURN,
     ConversationCursor,
     ConversationHistoryPageRequest,
     ConversationPageRequest,
@@ -1004,6 +1005,73 @@ async def test_a_snapshot_projects_each_turn_from_its_run(
     assert [turn.run.status for turn in page.turns] == ["queued", "succeeded"]
     assert page.turns[0].run.request_input()["query"] == "first"
     assert page.turns[1].run.result == {"answer": "done"}
+
+
+async def _control(
+    pool: Any,
+    run_id: str,
+    sequence: int,
+    *,
+    kind: str = "steer",
+    content: str,
+    origin: str = "user",
+) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO dlightrag_agent_controls "
+            "(owner_id, run_id, control_sequence, kind, content, origin) "
+            "VALUES ($1, $2, $3, $4, $5, $6)",
+            _OWNER,
+            uuid.UUID(run_id),
+            sequence,
+            kind,
+            content,
+            origin,
+        )
+
+
+async def test_a_turn_carries_the_users_steering_in_order_and_only_that(
+    store: PGWebConversationStore, pool: Any
+) -> None:
+    conversation_id = await _conversation(store)
+    steered = await _submit(store, conversation_id, request=_request("first"))
+    plain = await _submit(store, conversation_id, request=_request("second"))
+    assert steered is not None and plain is not None
+    run_id = steered.turn.answer_run_id
+    await _control(pool, run_id, 1, content="shorter")
+    await _control(pool, run_id, 2, kind="follow_up", content="a follow-up")
+    await _control(pool, run_id, 3, content="the parent's own note", origin="parent")
+    await _control(pool, run_id, 4, content="in Chinese")
+
+    page = await store.history_page(
+        _OWNER,
+        conversation_id,
+        page=ConversationHistoryPageRequest(limit=_MAX_TURNS),
+    )
+    by_run = await store.find_turn_by_run(_OWNER, run_id)
+
+    assert page is not None and by_run is not None
+    assert [turn.steering_messages for turn in page.turns] == [("shorter", "in Chinese"), ()]
+    assert by_run.steering_messages == ("shorter", "in Chinese")
+
+
+async def test_a_turn_carries_only_the_newest_steering_up_to_the_cap(
+    store: PGWebConversationStore, pool: Any
+) -> None:
+    conversation_id = await _conversation(store)
+    creation = await _submit(store, conversation_id)
+    assert creation is not None
+    run_id = creation.turn.answer_run_id
+    total = STEERING_MESSAGES_PER_TURN + 3
+    for sequence in range(1, total + 1):
+        await _control(pool, run_id, sequence, content=f"steer {sequence}")
+
+    turn = await store.find_turn_by_run(_OWNER, run_id)
+
+    assert turn is not None
+    assert len(turn.steering_messages) == STEERING_MESSAGES_PER_TURN
+    assert turn.steering_messages[0] == "steer 4"
+    assert turn.steering_messages[-1] == f"steer {total}"
 
 
 async def test_a_turn_counts_the_child_sessions_its_run_spawned(

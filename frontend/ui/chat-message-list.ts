@@ -468,6 +468,11 @@ export class DlChatMessageList extends LightElement {
         ${this.#attachments(turn.userAttachments)}
         <div class=${chatStyles.userMessage}>${turn.userText}</div>
       </div>
+      ${turn.steeringMessages.slice(-MAX_STEERING_MESSAGES).map((message) => html`
+        <div class=${chatStyles.userMessageWrapper} data-steer="true">
+          <div class=${chatStyles.userMessage}>${message}</div>
+        </div>
+      `)}
       <article class=${chatStyles.aiMessage} data-run-id=${turn.runId || nothing}>
         <header class=${chatStyles.aiMessageHeader}>
           <span class=${chatStyles.dot} aria-hidden="true">${icon('status-dot', {size: 'xs'})}</span> DlightRAG
@@ -480,11 +485,6 @@ export class DlChatMessageList extends LightElement {
           <span class="dl-sr-only" role="status" aria-live="polite">${turn.liveStatus}</span>
         ` : nothing}
       </article>
-      ${turn.steeringMessages.slice(-MAX_STEERING_MESSAGES).map((message) => html`
-        <div class=${chatStyles.userMessageWrapper} data-steer="true">
-          <div class=${chatStyles.userMessage}>${message}</div>
-        </div>
-      `)}
     `;
   }
 
@@ -762,7 +762,7 @@ export function storedTurnView(stored: ConversationTurn): ChatTurnView {
     liveStatus: '',
     sawChildren: stored.childCount > 0,
     cancelRequested: stored.cancelRequested,
-    steeringMessages: [],
+    steeringMessages: stored.steeringMessages,
     toolRows: [],
   };
 }

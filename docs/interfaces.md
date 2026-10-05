@@ -678,7 +678,11 @@ The Web event stream follows the same durable sequence as REST but projects a
 typed `AnswerPresentation` (`answer_text`, `parts`, `sources`,
 `evidence_images`, `artifacts`, and `artifact_outcome`). Conversation history
 uses the same shape. Pending, failed, and cancelled turns remain visible;
-only succeeded turns become model history. Each turn carries `child_count`, the
+only succeeded turns become model history. A history turn also carries the
+`steering_messages` its Run received, oldest first and at most the newest 50:
+the owner's own steers of the parent Run, never a Child's targeted control or a
+message the parent wrote itself. The Web draws them under the question, above
+the Run's answer. Each turn also carries `child_count`, the
 number of Child Sessions its Run spawned (0 for none, and for a turn just
 accepted), so a settled turn can tell whether it has children to open.
 

@@ -253,6 +253,7 @@ def test_public_source_link_opens_new_tab_from_source_panel(page):
                             "user_text": "Show the source",
                             "assistant_text": "Cited answer.",
                             "user_attachments": [],
+                            "steering_messages": [],
                             "presentation": presentation_wire,
                             "usage": {},
                             "error_kind": None,
