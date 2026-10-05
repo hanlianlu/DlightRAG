@@ -10,6 +10,7 @@
 import {msg, str} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {keyed} from 'lit/directives/keyed.js';
+import {live} from 'lit/directives/live.js';
 import {repeat} from 'lit/directives/repeat.js';
 import {
   CHILD_TRANSCRIPT_LIMIT,
@@ -254,6 +255,9 @@ export class DlChildSession extends LightElement {
     return this.#drafts.get(key) ?? NO_DRAFT;
   }
 
+  // The page holds what the reader typed and binds it with `live()`, which writes a box only when the
+  // box differs from the draft: writing back text the box already holds, such as an IME's composition,
+  // would interrupt the composition.
   #typed = (event: Event): void => {
     const field = event.currentTarget as HTMLTextAreaElement;
     const key = field.dataset.draft!;
@@ -539,7 +543,7 @@ export class DlChildSession extends LightElement {
             <div class=${styles.field}>
               <textarea rows="1" class=${styles.input} data-reply data-draft=${key}
                         aria-label=${msg('Your answer', {id: 'childSession.answerLabel'})}
-                        .value=${draft.text} ?readonly=${busy}
+                        .value=${live(draft.text)} ?readonly=${busy}
                         @input=${this.#typed} @keydown=${this.#keydown}
                         @beforeinput=${this.#beforeInput} @keyup=${this.#keyup}></textarea>
               ${this.#sendButton(draft.text, busy)}
@@ -724,14 +728,14 @@ export class DlChildSession extends LightElement {
         ${said ? html`<p class=${styles.outcome}>${said}</p>` : nothing}
         ${userCancelled ? html`
           <label class="dl-dialog-checkbox ${styles.reauthorize}">
-            <input type="checkbox" data-draft=${key} .checked=${draft.reauthorize} @change=${this.#reauthorized}>
+            <input type="checkbox" data-draft=${key} .checked=${live(draft.reauthorize)} @change=${this.#reauthorized}>
             ${msg('Reauthorize this user-cancelled work', {id: 'childSession.reauthorize'})}
           </label>
         ` : nothing}
         <div class=${styles.field}>
           <textarea rows="1" class=${styles.input} data-draft=${key} aria-label=${placeholder}
                     aria-describedby="child-session-hint" placeholder=${placeholder}
-                    .value=${draft.text} ?readonly=${busy}
+                    .value=${live(draft.text)} ?readonly=${busy}
                     @input=${this.#typed} @keydown=${this.#keydown}
                     @beforeinput=${this.#beforeInput} @keyup=${this.#keyup}></textarea>
           ${this.#sendButton(draft.text, busy)}

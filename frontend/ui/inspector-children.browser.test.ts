@@ -76,6 +76,29 @@ async function type(dock: DlInspectorChildren, field: HTMLTextAreaElement, text:
   await session(dock).updateComplete;
 }
 
+/** Watch the writes the page makes to a box's value. What the browser itself puts in the box, as an
+ *  IME does while the reader composes, goes through `enter` and is not counted. */
+function watchWrites(field: HTMLTextAreaElement) {
+  const native = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!;
+  const writes: string[] = [];
+  Object.defineProperty(field, 'value', {
+    configurable: true,
+    get: () => native.get!.call(field) as string,
+    set: (value: string) => {
+      writes.push(value);
+      native.set!.call(field, value);
+    },
+  });
+  const enter = (text: string, caret: number, composing: boolean) => {
+    native.set!.call(field, text);
+    field.setSelectionRange(caret, caret);
+    field.dispatchEvent(new InputEvent('input', {
+      inputType: 'insertCompositionText', isComposing: composing, bubbles: true,
+    }));
+  };
+  return {writes, enter};
+}
+
 async function openChild(dock: DlInspectorChildren, id: string): Promise<void> {
   rowFor(dock, id).click();
   await waitFor(() => session(dock).querySelector('[data-draft]') !== null);
@@ -739,6 +762,45 @@ it('sends on Enter, breaks the line on Shift+Enter, and never sends on the Enter
   await sendKeys({press: 'Enter'});
   await waitFor(() => controls.length === 1);
   expect(controls[0]![2]).to.equal('first\nsecond');
+});
+
+it('writes nothing to a box while the reader composes in it, whether the steer box or a reply box', async () => {
+  Date.now = () => NOW;
+  const running = row('a', 'running', {started_at: ago(5), pending_questions: 1});
+  serve({page: () => roster([running]), observe: () => observation(running, {questions: [question('req-a')]})});
+  const dock = await mount(sourceFor().source, 420);
+  await waitFor(() => rows(dock).length === 1);
+  await openChild(dock, 'a');
+  await waitFor(() => button(session(dock), 'Answer instead') !== null);
+  button(session(dock), 'Answer instead')!.click();
+  await waitFor(() => session(dock).querySelector('[data-reply]') !== null);
+  const reply = session(dock).querySelector<HTMLTextAreaElement>('[data-reply]')!;
+
+  for (const field of [composer(dock), reply]) {
+    await type(dock, field, 'ab');
+    const {writes, enter} = watchWrites(field);
+    field.focus();
+    field.setSelectionRange(1, 1);
+
+    // Composing between the two letters: the browser keeps the text and the caret it is composing at.
+    field.dispatchEvent(new CompositionEvent('compositionstart', {bubbles: true}));
+    enter('a\u65e5b', 2, true);
+    await session(dock).updateComplete;
+    expect([field.value, field.selectionStart, field.selectionEnd]).to.deep.equal(['a\u65e5b', 2, 2]);
+    enter('a\u65e5\u672cb', 3, true);
+    await session(dock).updateComplete;
+    expect([field.value, field.selectionStart, field.selectionEnd]).to.deep.equal(['a\u65e5\u672cb', 3, 3]);
+
+    enter('a\u65e5\u672c\u8a9eb', 4, false);
+    field.dispatchEvent(new CompositionEvent('compositionend', {bubbles: true}));
+    await session(dock).updateComplete;
+    expect([field.value, field.selectionStart, field.selectionEnd]).to.deep.equal(['a\u65e5\u672c\u8a9eb', 4, 4]);
+    expect(writes, 'the page never wrote the box while it was composed in').to.deep.equal([]);
+    expect(document.activeElement).to.equal(field);
+    // The page has the text all the same: the Send button took it.
+    const send = field.closest('form')!.querySelector('button[type="submit"]')!;
+    expect(send.hasAttribute('aria-disabled')).to.equal(false);
+  }
 });
 
 it('names each refusal, and says when the child is gone', async () => {
