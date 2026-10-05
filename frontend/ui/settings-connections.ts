@@ -8,7 +8,7 @@
  * `consent_version=1` on every enable.
  */
 
-import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
+import {msg, str} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import {
@@ -73,7 +73,6 @@ export class DlSettingsConnections extends LightElement {
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.view = null;
     this.openCard = null;
     this.editingEndpoint = null;

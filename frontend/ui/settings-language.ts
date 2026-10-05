@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** Settings → Language: follow the browser, or pick English or Chinese. */
 
-import {msg, updateWhenLocaleChanges} from '@lit/localize';
+import {msg} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {currentLanguagePreference, setLanguagePreference} from '../i18n/locale.ts';
 import {type LanguagePreference, parseLanguagePreference} from '../lib/language.ts';
@@ -33,7 +33,6 @@ export class DlSettingsLanguage extends LightElement {
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.preference = currentLanguagePreference();
   }
 

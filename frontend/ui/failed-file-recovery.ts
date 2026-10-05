@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** Workspace-scoped failed-document visibility and durable recovery control. */
 
-import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
+import {msg, str} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import {corpusRunActive} from '../api/corpus-runs.ts';
@@ -93,7 +93,6 @@ export class DlFailedFileRecovery extends LightElement {
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.workspace = '';
     this.active = false;
     this.page = null;

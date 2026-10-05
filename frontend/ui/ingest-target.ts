@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {msg, str, updateWhenLocaleChanges } from '@lit/localize';
+import {msg, str} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import {icon, rovingFocusKeydown} from '../design-system/index.ts';
@@ -31,7 +31,6 @@ export class DlIngestTarget extends LightElement {
 
     constructor() {
         super();
-        updateWhenLocaleChanges(this);
         this.handles = productionHandles();
         this.active = false;
         this.open = false;

@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** One replace-in-place toast Feature with optional asynchronous action. */
 
-import {msg, updateWhenLocaleChanges} from '@lit/localize';
+import {msg} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {LightElement} from '../lib/lit-host.ts';
 
@@ -47,7 +47,6 @@ export class DlToastRegion extends LightElement {
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.shellInert = false;
     this.request = null;
     this.visible = false;

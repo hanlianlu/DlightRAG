@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** Theme Control Feature and document color-mode capability. */
 
-import {msg, updateWhenLocaleChanges} from '@lit/localize';
+import {msg} from '@lit/localize';
 import {html, type TemplateResult} from 'lit';
 import {
   type DlMenu,
@@ -52,7 +52,6 @@ export class DlThemeControl extends LightElement {
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.preference = 'system';
     this.menuOpen = false;
   }

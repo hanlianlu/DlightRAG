@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {msg, updateWhenLocaleChanges} from '@lit/localize';
+import {msg} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {getWebBootstrap, type WebBootstrap} from '../api/bootstrap.ts';
 import type {AnswerArtifact} from '../api/conversations.ts';
@@ -125,7 +125,6 @@ export class DlApp extends LightElement {
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.handles = productionHandles();
     this.bootState = 'loading';
     this.signedOut = false;

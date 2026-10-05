@@ -1,5 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+import {updateWhenLocaleChanges} from '@lit/localize';
 import {LitElement, type ReactiveController, type ReactiveControllerHost} from 'lit';
 import type {SubscribableStore} from '../stores/base.ts';
 
@@ -16,6 +17,12 @@ import type {SubscribableStore} from '../stores/base.ts';
  * shadows the accessor Lit installs on the prototype and updates stop firing.
  */
 export abstract class LightElement extends LitElement {
+    constructor() {
+        super();
+        // Every light element draws words, so none may stay behind when the language changes.
+        updateWhenLocaleChanges(this);
+    }
+
     protected override createRenderRoot(): HTMLElement {
         return this;
     }

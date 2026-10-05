@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {msg, updateWhenLocaleChanges} from '@lit/localize';
+import {msg} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {clearMemory} from '../api/memory.ts';
 import {icon} from '../design-system/index.ts';
@@ -79,7 +79,6 @@ export class DlConversationSidebar extends LightElement {
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.handles = productionHandles();
     this.enabled = false;
     this.chatFeature = null;

@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** Run continuation and child-roster dialogs as first-class Lit components. */
 
-import {msg, updateWhenLocaleChanges, str} from '@lit/localize';
+import {msg, str} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {keyed} from 'lit/directives/keyed.js';
 import {repeat} from 'lit/directives/repeat.js';
@@ -23,11 +23,6 @@ export interface ContinuationResult {
 }
 
 export class DlContinuationDialog extends LightElement {
-  constructor() {
-    super();
-    updateWhenLocaleChanges(this);
-  }
-
   open(): void {
     void this.updateComplete.then(() => {
       const dialog = this.#dialog();
@@ -169,11 +164,6 @@ function editorKind(form: HTMLFormElement): ChildEditorKind | null {
 }
 
 export class DlChildrenRoster extends LightElement {
-  constructor() {
-    super();
-    updateWhenLocaleChanges(this);
-  }
-
   #pageFetcher: ChildRosterPageFetcher | null = null;
   #actions: ChildRosterActions | null = null;
   #entries: ChildRosterEntry[] = [];

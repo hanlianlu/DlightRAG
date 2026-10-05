@@ -7,7 +7,7 @@
  * is open: only then does the page read, list, or report, and closing drops everything it read.
  */
 
-import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
+import {msg, str} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import {
@@ -99,7 +99,6 @@ export class DlSettingsMemory extends LightElement {
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.active = false;
     this.current = false;
     this.memory = null;

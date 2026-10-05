@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {msg, updateWhenLocaleChanges} from '@lit/localize';
+import {msg} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import type {AnswerPresentation} from '../api/conversations.ts';
 import {COMPACT_SHELL_MEDIA} from '../lib/breakpoints.ts';
@@ -54,7 +54,6 @@ export class DlInspector extends LightElement {
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.handles = productionHandles();
     this.kind = null;
     this.presentation = null;

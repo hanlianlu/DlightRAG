@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** Notification Offer Feature and browser Notification lifecycle. */
 
-import {msg, updateWhenLocaleChanges} from '@lit/localize';
+import {msg} from '@lit/localize';
 import {html, type PropertyValues, type TemplateResult} from 'lit';
 import {LightElement} from '../lib/lit-host.ts';
 import {readStored, writeStored} from '../lib/storage.ts';
@@ -40,7 +40,6 @@ export class DlNotificationOffer extends LightElement {
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.running = false;
     this.visible = false;
   }

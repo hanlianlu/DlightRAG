@@ -8,7 +8,7 @@
  * open, so the page reads the view again every few seconds until the dialog closes.
  */
 
-import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
+import {msg, str} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import {
@@ -83,7 +83,6 @@ export class DlSettingsAgentAccounts extends LightElement {
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.view = null;
     this.error = false;
     this.pending = false;

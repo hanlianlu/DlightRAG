@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
+import {msg, str} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {guard} from 'lit/directives/guard.js';
 import {repeat} from 'lit/directives/repeat.js';
@@ -150,7 +150,6 @@ export class DlChatMessageList extends LightElement {
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.view = {kind: 'new'};
     this.turns = [];
     this.scrollRequest = 0;

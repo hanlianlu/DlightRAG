@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** Image Lightbox Feature: gallery navigation, focus, keyboard, and safe URLs. */
 
-import {msg, updateWhenLocaleChanges} from '@lit/localize';
+import {msg} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {icon} from '../design-system/index.ts';
 import {tabbables, wrapTabFocus} from '../lib/dom.ts';
@@ -33,7 +33,6 @@ export class DlImageLightbox extends LightElement {
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.openState = false;
     this.current = '';
     this.gallery = [];

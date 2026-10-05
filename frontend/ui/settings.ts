@@ -13,7 +13,7 @@
  * On a phone the same markup is two levels: the section list, then one page with a Back button.
  */
 
-import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
+import {msg, str} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import type {MemoryOperationEvent} from '../api/memory.ts';
 import {type IconName, icon, rovingFocusKeydown} from '../design-system/index.ts';
@@ -161,7 +161,6 @@ export class DlSettingsDialog extends LightElement {
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.handles = productionHandles();
     this.deleteAllConversations = async () => false;
     this.mounted = false;

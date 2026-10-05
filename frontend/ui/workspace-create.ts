@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {msg, updateWhenLocaleChanges, str} from '@lit/localize';
+import {msg, str} from '@lit/localize';
 import {html, type TemplateResult} from 'lit';
 import {createWorkspaceRequest} from '../api/workspaces.ts';
 import {icon} from '../design-system/index.ts';
@@ -24,7 +24,6 @@ export class DlWorkspaceCreate extends LightElement {
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.handles = productionHandles();
     this.pending = false;
     this.className = 'dl-popover-create';
