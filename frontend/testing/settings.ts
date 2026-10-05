@@ -24,10 +24,7 @@ export function mountSettings(): Mounted {
   const shell = document.createElement('div');
   const toast = document.createElement('dl-toast-region') as DlToastRegion;
   toast.className = 'toast';
-  shell.addEventListener('dl-toast-request', (event: CustomEvent<ToastRequestDetail>) => {
-    if (event.detail.action) toast.showAction(event.detail.message, event.detail.action);
-    else toast.show(event.detail.message, event.detail.duration);
-  });
+  shell.addEventListener('dl-toast-request', (event: CustomEvent<ToastRequestDetail>) => toast.show(event.detail));
   const settings = document.createElement('dl-settings-dialog') as DlSettingsDialog;
   shell.append(toast, settings);
   document.body.appendChild(shell);

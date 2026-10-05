@@ -1,12 +1,12 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {msg, updateWhenLocaleChanges} from '@lit/localize';
+import {msg} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {clearMemory} from '../api/memory.ts';
 import {icon} from '../design-system/index.ts';
 import {DESKTOP_SHELL_MEDIA} from '../lib/breakpoints.ts';
-import {tabbables, wrapTabFocus} from '../lib/dom.ts';
-import {LightElement, StoreController} from '../lib/lit-host.ts';
+import {raise, tabbables, wrapTabFocus} from '../lib/dom.ts';
+import {LightElement, MediaController, StoreController} from '../lib/lit-host.ts';
 import {conversationRoute, newChatRoute, type WebRoute} from '../lib/router.ts';
 import {type AppHandles, productionHandles } from '../stores/app-handles.ts';
 import type {
@@ -57,7 +57,6 @@ export class DlConversationSidebar extends LightElement {
     chatFeature: {attribute: false},
     drawerOpen: {state: true},
     desktopCollapsed: {state: true},
-    desktop: {state: true},
     pendingLifecycleAction: {state: true},
     shellInert: {state: true},
   };
@@ -67,25 +66,22 @@ export class DlConversationSidebar extends LightElement {
   declare chatFeature: ConversationChat | null;
   declare drawerOpen: boolean;
   declare desktopCollapsed: boolean;
-  declare desktop: boolean;
   declare pendingLifecycleAction: boolean;
   declare shellInert: boolean;
 
   #drawerReturnFocus: HTMLElement | null = null;
-  #events: AbortController | null = null;
+  readonly #desktop = new MediaController(this, DESKTOP_SHELL_MEDIA, () => { this.#breakpointCrossed(); });
   #releaseRouter: (() => void) | null = null;
   #renderedViewRevision = -1;
   #stateSignature = '';
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.handles = productionHandles();
     this.enabled = false;
     this.chatFeature = null;
     this.drawerOpen = false;
     this.desktopCollapsed = this.#collapsedPreference();
-    this.desktop = window.matchMedia(DESKTOP_SHELL_MEDIA).matches;
     this.pendingLifecycleAction = false;
     this.shellInert = false;
     /** Store reads: activeConversationId, fallbackConversationId, mutationPending. */
@@ -94,19 +90,12 @@ export class DlConversationSidebar extends LightElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    this.desktop = window.matchMedia(DESKTOP_SHELL_MEDIA).matches;
-    this.requestUpdate();
-    const events = new AbortController();
-    this.#events = events;
-    document.addEventListener('keydown', this.#documentKeydown, {signal: events.signal});
-    window.addEventListener('resize', this.#resize, {signal: events.signal});
-    window.addEventListener('beforeunload', this.#beforeUnload, {signal: events.signal});
+    document.addEventListener('keydown', this.#documentKeydown, {signal: this.lifetime});
+    window.addEventListener('beforeunload', this.#beforeUnload, {signal: this.lifetime});
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
-    this.#events?.abort();
-    this.#events = null;
     this.#releaseRouter?.();
     this.#releaseRouter = null;
     webRouter.setGuard(null);
@@ -118,15 +107,14 @@ export class DlConversationSidebar extends LightElement {
     if (changed.has('chatFeature')) this.#renderedViewRevision = -1;
     this.#startIfReady();
     this.#renderCurrentConversationView();
-    const expanded = this.enabled && (this.desktop ? !this.desktopCollapsed : this.drawerOpen);
-    this.classList.toggle('open', expanded && this.desktop);
+    this.classList.toggle('open', this.#expanded && this.#desktop.matches);
     this.#publishSidebarState();
   }
 
   /** Opens the sidebar and moves focus to its primary action. */
   async open(trigger: HTMLElement | null = null): Promise<boolean> {
     if (!this.enabled) return false;
-    if (this.desktop) {
+    if (this.#desktop.matches) {
       this.desktopCollapsed = false;
       this.#setCollapsedPreference(false);
       await this.updateComplete;
@@ -149,7 +137,7 @@ export class DlConversationSidebar extends LightElement {
 
   /** Closes only the compact drawer; desktop collapse is an explicit user action. */
   async close(restoreFocus = false): Promise<void> {
-    if (this.desktop || !this.drawerOpen) return;
+    if (this.#desktop.matches || !this.drawerOpen) return;
     this.drawerOpen = false;
     await this.updateComplete;
     if (restoreFocus && this.#drawerReturnFocus?.isConnected) {
@@ -181,14 +169,14 @@ export class DlConversationSidebar extends LightElement {
         if (returnFocus?.isConnected && !returnFocus.inert) returnFocus.focus();
         else void this.#focusSurvivingConversation();
       },
-      this.#events?.signal,
+      this.lifetime,
     ) !== 'delete-all') {
       return false;
     }
     if (this.#lifecycleBlocked()) return false;
 
-    const signal = this.#events?.signal;
-    if (!signal || signal.aborted) return false;
+    const signal = this.lifetime;
+    if (signal.aborted) return false;
     const alsoClearMemory = this.querySelector<HTMLInputElement>(
       '#delete-all-also-clear-memory',
     )?.checked;
@@ -203,7 +191,6 @@ export class DlConversationSidebar extends LightElement {
       if (result === 'error') {
         requestToast(this, {
           message: msg('Could not delete conversations.', {id: 'conversationSidebar.deleteAllFailed'}),
-          duration: 3000,
         });
       } else {
         this.chatFeature?.clearDraft();
@@ -216,7 +203,6 @@ export class DlConversationSidebar extends LightElement {
                 message: msg('Conversations deleted; could not clear Profile memory.', {
                   id: 'conversationSidebar.memoryClearFailed',
                 }),
-                duration: 3000,
               });
             }
           }
@@ -315,7 +301,6 @@ export class DlConversationSidebar extends LightElement {
       message: msg('Wait for the current question to be accepted.', {
         id: 'conversationSidebar.waitForAcceptedQuestion',
       }),
-      duration: 3000,
     });
     return true;
   }
@@ -324,7 +309,7 @@ export class DlConversationSidebar extends LightElement {
     if (!this.#hasUnsavedDraft()) return true;
     const dialog = this.#dialog('discard-draft-dialog');
     if (!dialog) return false;
-    return await modalResult(this, dialog, restoreFocus, this.#events?.signal) === 'discard';
+    return await modalResult(this, dialog, restoreFocus, this.lifetime) === 'discard';
   }
 
   async #guardNavigation(next: WebRoute): Promise<boolean> {
@@ -407,49 +392,39 @@ export class DlConversationSidebar extends LightElement {
   }
 
   #announceRouteChange(previous: string | null, next: string | null): void {
-    this.dispatchEvent(new CustomEvent<ConversationRouteChangeDetail>(
-      'dl-conversation-route-change',
-      {
-        bubbles: true,
-        composed: true,
-        detail: {previousConversationId: previous, nextConversationId: next},
-      },
-    ));
+    raise(this, 'dl-conversation-route-change', {
+      previousConversationId: previous,
+      nextConversationId: next,
+    });
+  }
+
+  /** Having chosen where to be, close the drawer and let the reader type. */
+  async #backToComposer(): Promise<void> {
+    await this.close(true);
+    window.requestAnimationFrame(() => this.chatFeature?.focusComposer());
   }
 
   async #requestSelectConversation(conversationId: string): Promise<void> {
-    if (conversationId === this.handles.conversations.activeConversationId) {
-      await this.close(true);
-      window.requestAnimationFrame(() => this.chatFeature?.focusComposer());
-      return;
-    }
-    if (await webRouter.navigate(conversationRoute(conversationId))) {
-      await this.close(true);
-      window.requestAnimationFrame(() => this.chatFeature?.focusComposer());
+    if (conversationId === this.handles.conversations.activeConversationId
+      || await webRouter.navigate(conversationRoute(conversationId))) {
+      await this.#backToComposer();
     }
   }
 
   async #requestNewConversation(): Promise<void> {
-    if (webRouter.current.kind === 'new') {
-      await this.close(true);
-      window.requestAnimationFrame(() => this.chatFeature?.focusComposer());
-      return;
-    }
-    if (await webRouter.navigate(newChatRoute())) {
-      await this.close(true);
-      window.requestAnimationFrame(() => this.chatFeature?.focusComposer());
+    if (webRouter.current.kind === 'new' || await webRouter.navigate(newChatRoute())) {
+      await this.#backToComposer();
     }
   }
 
   async #commitRename(conversationId: string, title: string): Promise<void> {
-    const signal = this.#events?.signal;
-    if (!signal || signal.aborted) return;
+    const signal = this.lifetime;
+    if (signal.aborted) return;
     const result = await this.handles.conversations.rename(conversationId, title, signal);
     if (signal.aborted || result === 'ok') return;
     if (result === 'missing') {
       requestToast(this, {
         message: msg('Conversation unavailable.', {id: 'conversationSidebar.renameMissing'}),
-        duration: 3000,
       });
       return;
     }
@@ -459,7 +434,6 @@ export class DlConversationSidebar extends LightElement {
             id: 'conversationSidebar.renameTooLong',
           })
         : msg('Could not rename the conversation.', {id: 'conversationSidebar.renameFailed'}),
-      duration: 3000,
     });
   }
 
@@ -482,12 +456,12 @@ export class DlConversationSidebar extends LightElement {
       this,
       dialog,
       () => this.#focusConversationActions(conversationId),
-      this.#events?.signal,
+      this.lifetime,
     ) !== 'delete') return;
     if (this.#lifecycleBlocked()) return;
 
-    const signal = this.#events?.signal;
-    if (!signal || signal.aborted) return;
+    const signal = this.lifetime;
+    if (signal.aborted) return;
     let result: ConversationMutationResult = 'error';
     this.pendingLifecycleAction = true;
     try {
@@ -499,7 +473,6 @@ export class DlConversationSidebar extends LightElement {
           message: msg('Could not delete the conversation.', {
             id: 'conversationSidebar.deleteFailed',
           }),
-          duration: 3000,
         });
       } else if (wasActive) {
         this.chatFeature?.clearDraft();
@@ -520,7 +493,7 @@ export class DlConversationSidebar extends LightElement {
 
 
   #toggleSidebar = (): void => {
-    if (this.desktop) {
+    if (this.#desktop.matches) {
       this.desktopCollapsed = true;
       this.#setCollapsedPreference(true);
       void this.updateComplete.then(() => { this.#openButton()?.focus(); });
@@ -530,34 +503,32 @@ export class DlConversationSidebar extends LightElement {
   };
 
   #focusTrap = (event: KeyboardEvent): void => {
-    if (this.desktop || !this.drawerOpen || event.key !== 'Tab') return;
+    if (this.#desktop.matches || !this.drawerOpen || event.key !== 'Tab') return;
     const nav = this.querySelector('nav');
     if (nav) wrapTabFocus(tabbables(nav), event);
   };
 
   #documentKeydown = (event: KeyboardEvent): void => {
-    if (event.key !== 'Escape' || this.desktop || !this.drawerOpen) return;
+    if (event.key !== 'Escape' || this.#desktop.matches || !this.drawerOpen) return;
     if (document.querySelector('dialog[open]') || this.#list()?.menuOpen) return;
     event.preventDefault();
     void this.close(true);
   };
 
-  #resize = (): void => {
-    const desktop = window.matchMedia(DESKTOP_SHELL_MEDIA).matches;
-    if (desktop === this.desktop) return;
+  /** Crossing the breakpoint: the drawer is only for the compact layout, and focus must not be stranded in it. */
+  #breakpointCrossed(): void {
     const navigation = this.querySelector<HTMLElement>('#chat-sidebar');
     const focusWasInNavigation = Boolean(
       document.activeElement instanceof Node && navigation?.contains(document.activeElement),
     );
     this.drawerOpen = false;
     this.#drawerReturnFocus = null;
-    this.desktop = desktop;
     if (focusWasInNavigation) {
       void this.updateComplete.then(() => {
         if (navigation?.inert) this.#openButton()?.focus();
       });
     }
-  };
+  }
 
   #beforeUnload = (event: BeforeUnloadEvent): void => {
     if (!this.#hasUnsavedDraft() && !this.chatFeature?.hasUnresolvedSubmission) return;
@@ -565,16 +536,18 @@ export class DlConversationSidebar extends LightElement {
     event.returnValue = '';
   };
 
+  /** Whether the conversation list shows: the column on desktop unless collapsed, the drawer when compact. */
+  get #expanded(): boolean {
+    return this.enabled && (this.#desktop.matches ? !this.desktopCollapsed : this.drawerOpen);
+  }
+
   #publishSidebarState(): void {
-    const expanded = this.enabled && (this.desktop ? !this.desktopCollapsed : this.drawerOpen);
-    const compact = !this.desktop;
+    const expanded = this.#expanded;
+    const compact = !this.#desktop.matches;
     const signature = `${expanded}:${compact}`;
     if (signature === this.#stateSignature) return;
     this.#stateSignature = signature;
-    this.dispatchEvent(new CustomEvent<ConversationSidebarStateDetail>(
-      'dl-conversation-sidebar-state-change',
-      {bubbles: true, composed: true, detail: {expanded, compact}},
-    ));
+    raise(this, 'dl-conversation-sidebar-state-change', {expanded, compact});
   }
 
   #selectConversation = (event: CustomEvent<ConversationIntentDetail>): void => {
@@ -598,15 +571,12 @@ export class DlConversationSidebar extends LightElement {
   };
 
   #requestSettings = (): void => {
-    this.dispatchEvent(new CustomEvent('dl-settings-request', {
-      bubbles: true,
-      composed: true,
-    }));
+    raise(this, 'dl-settings-request');
   };
 
   protected override render(): TemplateResult {
-    const expanded = this.enabled && (this.desktop ? !this.desktopCollapsed : this.drawerOpen);
-    const modal = this.enabled && !this.desktop && this.drawerOpen;
+    const expanded = this.#expanded;
+    const modal = this.enabled && !this.#desktop.matches && this.drawerOpen;
     return html`
       <nav
         id="chat-sidebar"
@@ -631,7 +601,7 @@ export class DlConversationSidebar extends LightElement {
           <button
             id="conversation-sidebar-toggle"
             type="button"
-            aria-label=${this.desktop
+            aria-label=${this.#desktop.matches
               ? msg('Collapse conversations', {id: 'conversationSidebar.collapseConversations'})
               : msg('Close conversations', {id: 'conversationSidebar.closeConversations'})}
             aria-controls="chat-sidebar"

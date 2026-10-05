@@ -1,5 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+import {raise} from '../lib/dom.ts';
+
 export type FocusRestorer = () => void | Promise<void>;
 
 export interface ModalStateDetail {
@@ -8,11 +10,7 @@ export interface ModalStateDetail {
 
 /** Publish whether any native modal owned by this Feature is open. */
 export function publishModalState(owner: HTMLElement): void {
-  owner.dispatchEvent(new CustomEvent<ModalStateDetail>('dl-modal-state-change', {
-    detail: {open: Boolean(owner.querySelector('dialog[open]'))},
-    bubbles: true,
-    composed: true,
-  }));
+  raise(owner, 'dl-modal-state-change', {open: Boolean(owner.querySelector('dialog[open]'))});
 }
 
 /** Open one native modal and publish its owning Feature's aggregate state. */

@@ -10,6 +10,7 @@ import {
   setLanguagePreference,
 } from '../i18n/locale.ts';
 import {LANGUAGE_STORAGE_KEY} from '../lib/language.ts';
+import {LightElement} from '../lib/lit-host.ts';
 import {radioNamed, waitFor} from '../testing/dom.ts';
 
 class LocaleProbe extends LitElement {
@@ -23,7 +24,15 @@ class LocaleProbe extends LitElement {
   }
 }
 
+// Registers nothing: the base class owns following the language.
+class LightProbe extends LightElement {
+  protected override render(): unknown {
+    return html`<p>${msg('Loading DlightRAG…', {id: 'bootstrap.loading'})}</p>`;
+  }
+}
+
 customElements.define('dl-locale-probe', LocaleProbe);
+customElements.define('dl-light-probe', LightProbe);
 
 beforeEach(() => {
   window.localStorage.removeItem(LANGUAGE_STORAGE_KEY);
@@ -55,6 +64,17 @@ it('resolves a stored zh preference and renders localized content', async () => 
   await probe.updateComplete;
 
   expect(probe.shadowRoot?.textContent).to.contain('正在加载 DlightRAG…');
+});
+
+it('a light element redraws in the new language without registering for it', async () => {
+  const probe = new LightProbe();
+  document.body.appendChild(probe);
+  await probe.updateComplete;
+  expect(probe.textContent).to.contain('Loading DlightRAG…');
+
+  await setLanguagePreference('zh');
+
+  await waitFor(() => probe.textContent!.includes('正在加载 DlightRAG…'));
 });
 
 it('switching back restores source strings and clears the stored preference', async () => {

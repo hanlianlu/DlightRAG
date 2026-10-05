@@ -127,34 +127,30 @@ function desktopOpen(state: SplitState): boolean {
   return state.panel.classList.contains('open');
 }
 
+/** Whether the split shows its panel beside the chat: the Canvas always does, the rest unless it covers them. */
+function splitOpen(state: SplitState, drawer: boolean, overlayCanvas: boolean): boolean {
+  const open = desktopOpen(state);
+  if (isConversation(state)) return open && !drawer && !overlayCanvas;
+  return state.widthVar === '--artifact-canvas-width' ? open : open && !overlayCanvas;
+}
+
 export function syncPanelSplitState(): void {
   const drawer = window.matchMedia(COMPACT_SHELL_MEDIA).matches;
   const wideCanvas = document.body.classList.contains('artifact-canvas-wide');
   const overlayCanvas = document.body.classList.contains('artifact-canvas-overlay');
   for (const state of states) {
-    const open = desktopOpen(state);
+    const open = splitOpen(state, drawer, overlayCanvas);
     const canvasState = state.widthVar === '--artifact-canvas-width';
-    const splitOpen = isConversation(state)
-      ? open && !drawer && !overlayCanvas
-      : canvasState
-        ? open
-        : open && !overlayCanvas;
-    state.split.disabled = drawer || !splitOpen || (canvasState && (wideCanvas || overlayCanvas));
-    state.split.toggleAttribute('data-open', splitOpen);
-    state.split.size = splitOpen ? state.preferred : 0;
+    state.split.disabled = drawer || !open || (canvasState && (wideCanvas || overlayCanvas));
+    state.split.toggleAttribute('data-open', open);
+    state.split.size = open ? state.preferred : 0;
   }
   // Bounds depend on the other split's rendered size, so clamp only after both
   // open/closed positions have been projected in the first pass.
   updateMaximums();
   for (const state of states) {
-    const open = desktopOpen(state);
+    if (!splitOpen(state, drawer, overlayCanvas)) continue;
     const canvasState = state.widthVar === '--artifact-canvas-width';
-    const splitOpen = isConversation(state)
-      ? open && !drawer && !overlayCanvas
-      : canvasState
-        ? open
-        : open && !overlayCanvas;
-    if (!splitOpen) continue;
     state.split.size = canvasState && (wideCanvas || overlayCanvas)
       ? state.split.max
       : Math.min(state.preferred, state.split.max);

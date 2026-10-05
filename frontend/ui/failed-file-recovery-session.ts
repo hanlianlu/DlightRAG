@@ -22,17 +22,14 @@ export class FailedFileRecoverySession {
     return controller;
   }
 
+  /** Cancelling the context drops the mutation, so a mutation that is still held belongs to this one. */
   isMutationCurrent(
     controller: AbortController,
     workspace: string,
     currentWorkspace: string,
-    generation: number,
     active: boolean,
   ): boolean {
-    return this.#mutation === controller
-      && workspace === currentWorkspace
-      && generation === this.#contextGeneration
-      && active;
+    return this.#mutation === controller && workspace === currentWorkspace && active;
   }
 
   finishMutation(controller: AbortController): boolean {

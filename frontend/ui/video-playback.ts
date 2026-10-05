@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
+import {msg, str} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {styleMap} from 'lit/directives/style-map.js';
 import {resolveVideoPlayback, type VideoPlaybackLink} from '../api/video-playback.ts';
@@ -28,7 +28,6 @@ export class DlVideoPlayback extends LightElement {
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.link = null;
     this.preview = null;
     this.cover = '';
@@ -39,11 +38,10 @@ export class DlVideoPlayback extends LightElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    this.ownerDocument.addEventListener(ACTIVATE, this.#anotherPlayer);
+    this.ownerDocument.addEventListener(ACTIVATE, this.#anotherPlayer, {signal: this.lifetime});
   }
 
   override disconnectedCallback(): void {
-    this.ownerDocument.removeEventListener(ACTIVATE, this.#anotherPlayer);
     this.#stop();
     super.disconnectedCallback();
   }

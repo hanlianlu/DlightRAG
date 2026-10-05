@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** Theme Control Feature and document color-mode capability. */
 
-import {msg, updateWhenLocaleChanges} from '@lit/localize';
+import {msg} from '@lit/localize';
 import {html, type TemplateResult} from 'lit';
 import {
   type DlMenu,
@@ -9,7 +9,6 @@ import {
   type IconName,
   menuButtonFocus,
   type MenuDismissDetail,
-  type MenuFocus,
 } from '../design-system/index.ts';
 import {
   parseThemePreference,
@@ -17,8 +16,8 @@ import {
   THEME_STORAGE_KEY,
   type ThemePreference,
 } from '../lib/theme.ts';
-import {LightElement} from '../lib/lit-host.ts';
-import {createAutoDismiss} from '../lib/popover.ts';
+import {LightElement, MediaController} from '../lib/lit-host.ts';
+import {TriggerPopover} from '../lib/popover.ts';
 import {isLocalStorageEvent, readStored, writeStored} from '../lib/storage.ts';
 
 function readPreference(): ThemePreference {
@@ -34,53 +33,30 @@ function writePreference(preference: ThemePreference): void {
 
 /** Owns theme preference, menu accessibility, persistence, and system changes. */
 export class DlThemeControl extends LightElement {
-  static properties = {
-    preference: {state: true},
-    menuOpen: {state: true},
-  };
+  static properties = {preference: {state: true}};
 
   declare preference: ThemePreference;
-  declare menuOpen: boolean;
 
-  #events: AbortController | null = null;
-  #media: MediaQueryList | null = null;
-  readonly #dismiss = createAutoDismiss({
-    getAnchor: () => this,
-    isOpen: () => this.menuOpen,
-    onDismiss: (reason) => this.#close(reason === 'escape'),
+  readonly #dark = new MediaController(this, '(prefers-color-scheme: dark)');
+  readonly #menu = new TriggerPopover(this, {
+    trigger: () => this.querySelector<HTMLButtonElement>('#theme-trigger'),
+    enter: (which) => { this.querySelector<DlMenu>('#theme-menu')?.focusItem(which); },
   });
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.preference = 'system';
-    this.menuOpen = false;
   }
 
   override connectedCallback(): void {
     super.connectedCallback();
     this.preference = readPreference();
-    this.#media = window.matchMedia('(prefers-color-scheme: dark)');
-    this.#media.addEventListener('change', this.#mediaChanged);
-    const events = new AbortController();
-    this.#events = events;
-    window.addEventListener('storage', this.#storageChanged, {signal: events.signal});
+    window.addEventListener('storage', this.#storageChanged, {signal: this.lifetime});
     this.#apply();
-  }
-
-  override disconnectedCallback(): void {
-    this.#events?.abort();
-    this.#events = null;
-    this.#media?.removeEventListener('change', this.#mediaChanged);
-    this.#media = null;
-    this.#dismiss.deactivate();
-    super.disconnectedCallback();
   }
 
   protected override updated(): void {
     this.#apply();
-    if (this.menuOpen) this.#dismiss.activate();
-    else this.#dismiss.deactivate();
   }
 
   protected override render(): TemplateResult {
@@ -88,13 +64,13 @@ export class DlThemeControl extends LightElement {
     return html`
       <button id="theme-trigger" type="button" aria-label=${appearance} title=${appearance}
               aria-haspopup="menu" aria-controls="theme-menu"
-              aria-expanded=${this.menuOpen ? 'true' : 'false'}
-              @click=${this.#triggerClick} @keydown=${this.#triggerKeydown}>
+              aria-expanded=${this.#menu.open ? 'true' : 'false'}
+              @click=${this.#menu.toggle} @keydown=${this.#triggerKeydown}>
         ${icon('moon', {size: 'sm', className: 'theme-icon theme-icon-moon'})}
         ${icon('sun', {size: 'sm', className: 'theme-icon theme-icon-sun'})}
       </button>
       <dl-menu id="theme-menu" class="dl-anchored dl-anchored--end" role="menu" aria-label=${appearance}
-           ?hidden=${!this.menuOpen} @dl-menu-dismiss=${this.#menuDismissed}>
+           ?hidden=${!this.#menu.open} @dl-menu-dismiss=${this.#menuDismissed}>
         ${this.#option('system', msg('System', {id: 'theme.system'}), 'system')}
         ${this.#option('light', msg('Light', {id: 'theme.light'}), 'sun')}
         ${this.#option('dark', msg('Dark', {id: 'theme.dark'}), 'moon')}
@@ -118,51 +94,27 @@ export class DlThemeControl extends LightElement {
   #apply(): void {
     // Theme is an approved top-level browser capability; the root is its interface.
     const root = document.documentElement;
-    const colorMode = resolveColorMode(this.preference, this.#media?.matches ?? false);
+    const colorMode = resolveColorMode(this.preference, this.#dark.matches);
     root.setAttribute('data-theme', this.preference);
     root.setAttribute('data-color-mode', colorMode);
     root.style.colorScheme = colorMode;
   }
 
-  #open(focus: MenuFocus): void {
-    this.menuOpen = true;
-    void this.updateComplete.then(() => {
-      this.querySelector<DlMenu>('#theme-menu')?.focusItem(focus);
-    });
-  }
-
-  #close(restoreFocus: boolean): void {
-    if (!this.menuOpen) return;
-    this.menuOpen = false;
-    if (restoreFocus) {
-      window.requestAnimationFrame(() => this.querySelector<HTMLButtonElement>('#theme-trigger')?.focus());
-    }
-  }
-
   #select(preference: ThemePreference): void {
     this.preference = preference;
     writePreference(preference);
-    this.#close(true);
+    this.#menu.close(true);
   }
-
-  #triggerClick = (): void => {
-    if (this.menuOpen) this.#close(false);
-    else this.#open('first');
-  };
 
   #triggerKeydown = (event: KeyboardEvent): void => {
     const focus = menuButtonFocus(event);
     if (!focus) return;
     event.preventDefault();
-    this.#open(focus);
+    this.#menu.show(focus);
   };
 
   #menuDismissed = (event: CustomEvent<MenuDismissDetail>): void => {
-    this.#close(event.detail.restoreFocus);
-  };
-
-  #mediaChanged = (): void => {
-    if (this.preference === 'system') this.#apply();
+    this.#menu.close(event.detail.restoreFocus);
   };
 
   #storageChanged = (event: StorageEvent): void => {

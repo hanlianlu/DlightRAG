@@ -1,6 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {expect} from '@esm-bundle/chai';
+import {setViewport} from '@web/test-runner-commands';
 import type {ConversationSummary} from '../api/conversations.ts';
 import {defineDesignSystemElements} from '../design-system/index.ts';
 import {conversationRoute, newChatRoute} from '../lib/router.ts';
@@ -346,8 +347,7 @@ it('owns compact modality, a cancelable open command, focus wrapping, and Escape
 });
 
 it('normalizes drawer state and focus across compact and desktop breakpoints', async () => {
-  let desktop = false;
-  window.matchMedia = (query) => media(desktop)(query);
+  await setViewport({width: 800, height: 900});
   const sidebar = document.createElement('dl-conversation-sidebar') as DlConversationSidebar;
   sidebar.enabled = true;
   let state: ConversationSidebarStateDetail | null = null;
@@ -360,8 +360,8 @@ it('normalizes drawer state and focus across compact and desktop breakpoints', a
   expect(await sidebar.open(conversationsOpenButton())).to.equal(true);
   expect(document.activeElement).to.equal(button(sidebar, 'New chat'));
 
-  desktop = true;
-  window.dispatchEvent(new Event('resize'));
+  await setViewport({width: 1400, height: 900});
+  await waitFor(() => state?.compact === false);
   await sidebar.updateComplete;
   const navigation = sidebar.querySelector<HTMLElement>('nav[aria-label="Conversations"]')!;
   expect(state).to.deep.equal({expanded: true, compact: false});
@@ -369,8 +369,8 @@ it('normalizes drawer state and focus across compact and desktop breakpoints', a
   expect(navigation.hasAttribute('aria-modal')).to.equal(false);
   expect(document.activeElement).to.equal(button(sidebar, 'New chat'));
 
-  desktop = false;
-  window.dispatchEvent(new Event('resize'));
+  await setViewport({width: 800, height: 900});
+  await waitFor(() => state?.compact === true);
   await sidebar.updateComplete;
   expect(state).to.deep.equal({expanded: false, compact: true});
   expect(navigation.inert).to.equal(true);

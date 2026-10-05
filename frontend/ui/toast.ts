@@ -1,28 +1,23 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** One replace-in-place toast Feature with optional asynchronous action. */
 
-import {msg, updateWhenLocaleChanges} from '@lit/localize';
+import {msg} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {LightElement} from '../lib/lit-host.ts';
 
-const MAX_TOAST_DURATION = 3000;
+/** How long a receipt stays, not counting the time it is paused. */
+const TOAST_DURATION = 3000;
 
 export interface ActionToastOptions {
   actionLabel: string;
   onAction: () => Promise<string | undefined>;
-  duration?: number;
   /** Move focus to the action once it shows: for a command whose own control has just gone away. */
   focus?: boolean;
 }
 
-export type ToastRequestDetail =
-  | {message: string; duration?: number; action?: never}
-  | {message: string; action: ActionToastOptions; duration?: never};
-
-interface ToastRequest {
+export interface ToastRequestDetail {
   message: string;
-  duration: number;
-  action: ActionToastOptions | null;
+  action?: ActionToastOptions;
 }
 
 /** Accessible toast state, timer lifecycle, and asynchronous action ownership. */
@@ -35,7 +30,7 @@ export class DlToastRegion extends LightElement {
   };
 
   declare shellInert: boolean;
-  declare request: ToastRequest | null;
+  declare request: ToastRequestDetail | null;
   declare visible: boolean;
   declare pending: boolean;
 
@@ -47,15 +42,10 @@ export class DlToastRegion extends LightElement {
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.shellInert = false;
     this.request = null;
     this.visible = false;
     this.pending = false;
-  }
-
-  override connectedCallback(): void {
-    super.connectedCallback();
     this.addEventListener('mouseenter', this.#pointerEntered);
     this.addEventListener('mouseleave', this.#pointerLeft);
     this.addEventListener('focusin', this.#focusEntered);
@@ -63,10 +53,6 @@ export class DlToastRegion extends LightElement {
   }
 
   override disconnectedCallback(): void {
-    this.removeEventListener('mouseenter', this.#pointerEntered);
-    this.removeEventListener('mouseleave', this.#pointerLeft);
-    this.removeEventListener('focusin', this.#focusEntered);
-    this.removeEventListener('focusout', this.#focusLeft);
     this.#stopTimer();
     this.request = null;
     this.visible = false;
@@ -76,23 +62,13 @@ export class DlToastRegion extends LightElement {
     super.disconnectedCallback();
   }
 
-  /** Replace the current receipt with a plain status message. */
-  show(message: string, duration = 3000): void {
-    this.#show({
-      message,
-      duration,
-      action: null,
-    });
-  }
-
-  /** Replace the current receipt with one asynchronous action. */
-  showAction(message: string, options: ActionToastOptions): void {
-    this.#show({
-      message,
-      duration: options.duration ?? MAX_TOAST_DURATION,
-      action: options,
-    });
-    if (options.focus) void this.#focusAction();
+  /** Replace the current receipt with a `dl-toast-request`: a plain message, or one with an asynchronous action. */
+  show(request: ToastRequestDetail): void {
+    this.request = request;
+    this.visible = true;
+    this.pending = false;
+    this.#startTimer();
+    if (request.action?.focus) void this.#focusAction();
   }
 
   protected override updated(changed: PropertyValues<this>): void {
@@ -123,17 +99,6 @@ export class DlToastRegion extends LightElement {
     if (this.request === request) this.querySelector<HTMLElement>('.toast-action')?.focus();
   }
 
-  #show(request: ToastRequest): void {
-    const bounded = {
-      ...request,
-      duration: Math.min(request.duration, MAX_TOAST_DURATION),
-    };
-    this.request = bounded;
-    this.visible = true;
-    this.pending = false;
-    this.#startTimer(bounded.duration);
-  }
-
   #hide(): void {
     this.#stopTimer();
     this.request = null;
@@ -147,9 +112,9 @@ export class DlToastRegion extends LightElement {
     this.#timer = null;
   }
 
-  #startTimer(duration: number): void {
+  #startTimer(): void {
     this.#stopTimer();
-    this.#remaining = duration;
+    this.#remaining = TOAST_DURATION;
     this.#resume();
   }
 
@@ -200,23 +165,20 @@ export class DlToastRegion extends LightElement {
     this.#stopTimer();
     this.pending = true;
     let message: string;
-    let duration: number;
     try {
       message = await request.action.onAction()
         || msg('Change undone.', {id: 'toast.changeUndone'});
-      duration = 3000;
     } catch {
       message = msg('Could not undo the change.', {id: 'toast.undoFailed'});
-      duration = 3000;
     }
     if (this.request !== request) return;
-    const settled: ToastRequest = {message, duration, action: null};
+    const settled: ToastRequestDetail = {message};
     this.request = settled;
     this.pending = false;
     await this.updateComplete;
     if (this.request !== settled) return;
     this.#focused = this.contains(document.activeElement);
-    this.#startTimer(duration);
+    this.#startTimer();
   };
 }
 

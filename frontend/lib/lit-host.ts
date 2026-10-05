@@ -1,5 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+import {updateWhenLocaleChanges} from '@lit/localize';
 import {LitElement, type ReactiveController, type ReactiveControllerHost} from 'lit';
 import type {SubscribableStore} from '../stores/base.ts';
 
@@ -16,6 +17,37 @@ import type {SubscribableStore} from '../stores/base.ts';
  * shadows the accessor Lit installs on the prototype and updates stop firing.
  */
 export abstract class LightElement extends LitElement {
+    #lifetime = new AbortController();
+
+    constructor() {
+        super();
+        // Every light element draws words, so none may stay behind when the language changes.
+        updateWhenLocaleChanges(this);
+        // Not connected yet, so nothing may start: the signal is spent until the first connect.
+        this.#lifetime.abort();
+    }
+
+    /**
+     * Aborts when this element leaves the document, so a request or a listener bound to it ends
+     * with it. A new signal starts each time the element connects, and one that is not connected
+     * holds a signal already aborted: work that checks `aborted` before it starts never starts.
+     * Read it after `super.connectedCallback()`: before that the element is connected but the
+     * signal is still the aborted one, and a listener registered with it silently does nothing.
+     */
+    protected get lifetime(): AbortSignal {
+        return this.#lifetime.signal;
+    }
+
+    override connectedCallback(): void {
+        this.#lifetime = new AbortController();
+        super.connectedCallback();
+    }
+
+    override disconnectedCallback(): void {
+        this.#lifetime.abort();
+        super.disconnectedCallback();
+    }
+
     protected override createRenderRoot(): HTMLElement {
         return this;
     }
@@ -44,15 +76,20 @@ export class StoreController implements ReactiveController {
     }
 }
 
-/** Re-renders its host when a media query starts or stops matching. */
+/**
+ * Re-renders its host when a media query starts or stops matching, then calls `onChange`, so the
+ * host's `updateComplete` there is the render that answers the change.
+ */
 export class MediaController implements ReactiveController {
     readonly #host: ReactiveControllerHost;
     readonly #query: string;
+    readonly #onChange: (() => void) | undefined;
     #list: MediaQueryList | null = null;
 
-    constructor(host: ReactiveControllerHost, query: string) {
+    constructor(host: ReactiveControllerHost, query: string, onChange?: () => void) {
         this.#host = host;
         this.#query = query;
+        this.#onChange = onChange;
         host.addController(this);
     }
 
@@ -71,7 +108,10 @@ export class MediaController implements ReactiveController {
         this.#list = null;
     }
 
-    readonly #changed = (): void => { this.#host.requestUpdate(); };
+    readonly #changed = (): void => {
+        this.#host.requestUpdate();
+        this.#onChange?.();
+    };
 }
 
 /**

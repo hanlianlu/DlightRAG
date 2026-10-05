@@ -5,7 +5,6 @@ import assert from 'node:assert/strict';
 
 import {
   AGENT_EFFORT_STORAGE_KEY,
-  displayedAgentEffort,
   isAgentEffort,
   offeredLevels,
   storeAgentEffort,
@@ -50,13 +49,4 @@ test('a stored choice counts only while the deployment still offers it', () => {
   assert.equal(storedAgentEffort({levels: ['high'], default: null}), null);
   storeAgentEffort(null);
   assert.equal(localStorage.getItem(AGENT_EFFORT_STORAGE_KEY), null);
-});
-
-test('the shown level is the stored choice, else the deployment default', () => {
-  localStorage.removeItem(AGENT_EFFORT_STORAGE_KEY);
-  assert.equal(displayedAgentEffort(offer), 'high');
-  assert.equal(displayedAgentEffort({levels: ['low', 'high', 'max'], default: null}), null);
-  storeAgentEffort('low');
-  assert.equal(displayedAgentEffort(offer), 'low');
-  storeAgentEffort(null);
 });

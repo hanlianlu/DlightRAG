@@ -6,6 +6,7 @@
  * data behind it changes, and the dialog keeps the latest one per section and finds the words.
  */
 
+import {raise} from '../lib/dom.ts';
 import type {LanguagePreference} from '../lib/language.ts';
 
 export type SettingsSection =
@@ -25,11 +26,7 @@ export type SettingsSummary =
 
 /** Tell the dialog what this page's navigation row should say now. */
 export function reportSettingsSummary(host: HTMLElement, summary: SettingsSummary): void {
-  host.dispatchEvent(new CustomEvent<SettingsSummary>('dl-settings-summary', {
-    detail: summary,
-    bubbles: true,
-    composed: true,
-  }));
+  raise(host, 'dl-settings-summary', summary);
 }
 
 declare global {

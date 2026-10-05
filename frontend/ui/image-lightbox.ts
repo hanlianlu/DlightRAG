@@ -1,10 +1,10 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** Image Lightbox Feature: gallery navigation, focus, keyboard, and safe URLs. */
 
-import {msg, updateWhenLocaleChanges} from '@lit/localize';
+import {msg} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {icon} from '../design-system/index.ts';
-import {tabbables, wrapTabFocus} from '../lib/dom.ts';
+import {focusedElement, raise, tabbables, wrapTabFocus} from '../lib/dom.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {safeImageSrc} from '../lib/urls.ts';
 import lightboxStyles from '../styles/lightbox.module.css';
@@ -13,6 +13,10 @@ export interface ImageOpenDetail {
   src: string;
   gallery: readonly string[];
   returnFocus: HTMLElement;
+}
+
+export interface ImageLightboxStateDetail {
+  open: boolean;
 }
 
 /** Owns the modal image viewer and its document-level keyboard lifecycle. */
@@ -28,12 +32,10 @@ export class DlImageLightbox extends LightElement {
   declare gallery: readonly string[];
 
   #returnFocus: HTMLElement | null = null;
-  #events: AbortController | null = null;
   #focusGeneration = 0;
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.openState = false;
     this.current = '';
     this.gallery = [];
@@ -45,17 +47,12 @@ export class DlImageLightbox extends LightElement {
     this.classList.add(lightboxStyles.imageLightbox);
     this.setAttribute('role', 'dialog');
     this.setAttribute('aria-modal', 'true');
-    this.setAttribute('aria-label', msg('Image viewer', {id: 'imageLightbox.ariaLabel'}));
     this.tabIndex = -1;
-    const events = new AbortController();
-    this.#events = events;
-    document.addEventListener('keydown', this.#keydown, {capture: true, signal: events.signal});
+    document.addEventListener('keydown', this.#keydown, {capture: true, signal: this.lifetime});
     this.#syncHost();
   }
 
   override disconnectedCallback(): void {
-    this.#events?.abort();
-    this.#events = null;
     this.#focusGeneration += 1;
     super.disconnectedCallback();
   }
@@ -72,9 +69,7 @@ export class DlImageLightbox extends LightElement {
     const safeGallery = [...new Set(gallery.map(safeImageSrc).filter(Boolean))];
     this.gallery = safeGallery.includes(current) ? safeGallery : [current, ...safeGallery];
     this.current = current;
-    this.#returnFocus = returnFocus ?? (
-      document.activeElement instanceof HTMLElement ? document.activeElement : null
-    );
+    this.#returnFocus = returnFocus ?? focusedElement();
     this.openState = true;
     this.#syncHost();
     this.#publishState();
@@ -94,7 +89,7 @@ export class DlImageLightbox extends LightElement {
     this.#returnFocus = null;
     window.requestAnimationFrame(() => {
       if (focusGeneration !== this.#focusGeneration || this.openState) return;
-      if (returnFocus?.isConnected && !returnFocus.inert) returnFocus.focus();
+      returnFocus?.focus();
     });
   }
 
@@ -116,7 +111,9 @@ export class DlImageLightbox extends LightElement {
     `;
   }
 
+  /** The host's own state, drawn on every update so that the name follows a language change. */
   #syncHost(): void {
+    this.setAttribute('aria-label', msg('Image viewer', {id: 'imageLightbox.ariaLabel'}));
     this.classList.toggle(lightboxStyles.open, this.openState);
     this.setAttribute('aria-hidden', this.openState ? 'false' : 'true');
     this.inert = !this.openState;
@@ -130,11 +127,7 @@ export class DlImageLightbox extends LightElement {
   }
 
   #publishState(): void {
-    this.dispatchEvent(new CustomEvent<{open: boolean}>('dl-image-lightbox-state-change', {
-      bubbles: true,
-      composed: true,
-      detail: {open: this.openState},
-    }));
+    raise(this, 'dl-image-lightbox-state-change', {open: this.openState});
   }
 
   #backdropClick = (event: Event): void => {
@@ -191,6 +184,6 @@ declare global {
 
   interface HTMLElementEventMap {
     'dl-image-open': CustomEvent<ImageOpenDetail>;
-    'dl-image-lightbox-state-change': CustomEvent<{open: boolean}>;
+    'dl-image-lightbox-state-change': CustomEvent<ImageLightboxStateDetail>;
   }
 }

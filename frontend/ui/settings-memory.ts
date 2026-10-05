@@ -7,7 +7,7 @@
  * is open: only then does the page read, list, or report, and closing drops everything it read.
  */
 
-import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
+import {msg, str} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import {
@@ -88,7 +88,6 @@ export class DlSettingsMemory extends LightElement {
   declare pending: boolean;
   declare records: MemoryRecord[] | null;
 
-  #events: AbortController | null = null;
   readonly #seenOperations = new Set<string>();
   #readGeneration = 0;
   readonly #pager = new KeysetPager<MemoryPage>(
@@ -99,7 +98,6 @@ export class DlSettingsMemory extends LightElement {
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.active = false;
     this.current = false;
     this.memory = null;
@@ -108,14 +106,7 @@ export class DlSettingsMemory extends LightElement {
     this.records = null;
   }
 
-  override connectedCallback(): void {
-    super.connectedCallback();
-    this.#events = new AbortController();
-  }
-
   override disconnectedCallback(): void {
-    this.#events?.abort();
-    this.#events = null;
     this.#invalidateReads();
     super.disconnectedCallback();
   }
@@ -163,16 +154,15 @@ export class DlSettingsMemory extends LightElement {
     this.#seenOperations.add(identity);
     const message = memorySummary(event);
     if (event.outcome !== 'changed' || !event.changeId) {
-      requestToast(this, {message, duration: 3000});
+      requestToast(this, {message});
       return;
     }
     const changeId = event.changeId;
-    const signal = this.#events?.signal;
+    const signal = this.lifetime;
     requestToast(this, {
       message,
       action: {
         actionLabel: msg('Undo', {id: 'settings.memory.undo'}),
-        duration: 3000,
         focus: takeFocus,
         onAction: async () => {
           if (this.pending) throw new Error('Memory operation in progress');
@@ -182,7 +172,7 @@ export class DlSettingsMemory extends LightElement {
             const receipt = await undoMemoryChange(changeId, signal);
             if (receipt.outcome !== 'changed') throw new Error('Memory undo conflicted');
           } catch (error) {
-            if (!signal?.aborted) requestToast(this, {
+            if (!signal.aborted) requestToast(this, {
               message: msg('Could not undo the change.', {id: 'toast.undoFailed'}),
             });
             throw error;
@@ -190,7 +180,7 @@ export class DlSettingsMemory extends LightElement {
             this.pending = false;
             void this.#refresh();
           }
-          if (!signal?.aborted) requestToast(this, {
+          if (!signal.aborted) requestToast(this, {
             message: msg('Profile Memory change undone.', {id: 'settings.memory.changeUndone'}),
           });
           return msg('Profile Memory change undone.', {id: 'settings.memory.changeUndone'});
@@ -318,9 +308,9 @@ export class DlSettingsMemory extends LightElement {
   }
 
   #toggle = async (event: Event): Promise<void> => {
-    const signal = this.#events?.signal;
+    const signal = this.lifetime;
     const toggle = event.currentTarget as HTMLElement;
-    if (!signal || signal.aborted || this.pending || !this.memory) return;
+    if (signal.aborted || this.pending || !this.memory) return;
     const requested = !this.memory.enabled;
     const focused = document.activeElement === toggle;
     this.pending = true;
@@ -332,7 +322,6 @@ export class DlSettingsMemory extends LightElement {
       if (!signal.aborted) {
         requestToast(this, {
           message: msg('Could not save memory settings.', {id: 'settings.memorySaveFailed'}),
-          duration: 3000,
         });
       }
     } finally {
@@ -347,10 +336,10 @@ export class DlSettingsMemory extends LightElement {
   };
 
   #clear = async (event: Event): Promise<void> => {
-    const signal = this.#events?.signal;
+    const signal = this.lifetime;
     const button = event.currentTarget as HTMLButtonElement;
     const confirm = this.querySelector<HTMLDialogElement>('#clear-memory-dialog');
-    if (!signal || signal.aborted || !confirm || this.pending) return;
+    if (signal.aborted || !confirm || this.pending) return;
     if (await modalResult(this, confirm, () => button.focus(), signal) !== 'clear') return;
     this.pending = true;
     this.#invalidateReads();
@@ -359,14 +348,12 @@ export class DlSettingsMemory extends LightElement {
       if (!signal.aborted) {
         requestToast(this, {
           message: msg('Memory cleared.', {id: 'settings.memoryCleared'}),
-          duration: 3000,
         });
       }
     } catch {
       if (!signal.aborted) {
         requestToast(this, {
           message: msg('Could not clear memory.', {id: 'settings.memoryClearFailedToast'}),
-          duration: 3000,
         });
       }
     } finally {
@@ -403,8 +390,8 @@ export class DlSettingsMemory extends LightElement {
   }
 
   async #forget(record: MemoryRecord): Promise<void> {
-    const signal = this.#events?.signal;
-    if (!signal || signal.aborted || this.pending || this.loading) return;
+    const signal = this.lifetime;
+    if (signal.aborted || this.pending || this.loading) return;
     this.pending = true;
     this.#invalidateReads();
     // The row the reader is on is about to go: the Undo that replaces it takes focus, or the list's
@@ -420,7 +407,7 @@ export class DlSettingsMemory extends LightElement {
       }, undoable);
     } catch {
       if (!signal.aborted) requestToast(this, {
-        message: msg('Could not forget this memory.', {id: 'settings.memory.forgetFailed'}), duration: 3000,
+        message: msg('Could not forget this memory.', {id: 'settings.memory.forgetFailed'}),
       });
     } finally {
       if (!signal.aborted) {
@@ -440,8 +427,8 @@ export class DlSettingsMemory extends LightElement {
   }
 
   async #read(): Promise<MemoryReadResult> {
-    const signal = this.#events?.signal;
-    if (!signal || signal.aborted) return 'stale';
+    const signal = this.lifetime;
+    if (signal.aborted) return 'stale';
     const generation = ++this.#readGeneration;
     try {
       const memory = await getMemorySettings(signal);

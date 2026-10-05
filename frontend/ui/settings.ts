@@ -13,11 +13,12 @@
  * On a phone the same markup is two levels: the section list, then one page with a Back button.
  */
 
-import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
+import {msg, str} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import type {MemoryOperationEvent} from '../api/memory.ts';
 import {type IconName, icon, rovingFocusKeydown} from '../design-system/index.ts';
 import {PHONE_DIALOG_MEDIA} from '../lib/breakpoints.ts';
+import {focusedElement} from '../lib/dom.ts';
 import {LightElement, MediaController} from '../lib/lit-host.ts';
 import {type AppHandles, productionHandles} from '../stores/app-handles.ts';
 import styles from '../styles/settings-dialog.module.css';
@@ -155,13 +156,11 @@ export class DlSettingsDialog extends LightElement {
   declare level: 'list' | 'page';
   declare summaries: Partial<Record<SettingsSection, SettingsSummary>>;
 
-  #events: AbortController | null = null;
   #returnFocus: HTMLElement | null = null;
   readonly #phone = new MediaController(this, PHONE_DIALOG_MEDIA);
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.handles = productionHandles();
     this.deleteAllConversations = async () => false;
     this.mounted = false;
@@ -170,14 +169,7 @@ export class DlSettingsDialog extends LightElement {
     this.summaries = {};
   }
 
-  override connectedCallback(): void {
-    super.connectedCallback();
-    this.#events = new AbortController();
-  }
-
   override disconnectedCallback(): void {
-    this.#events?.abort();
-    this.#events = null;
     document.body.classList.remove('settings-open');
     super.disconnectedCallback();
   }
@@ -189,11 +181,9 @@ export class DlSettingsDialog extends LightElement {
 
   /** Open Settings on a page. A page that is named opens on a phone too; otherwise a phone opens on the list. */
   async open(returnFocus?: HTMLElement | null, page?: SettingsSection): Promise<void> {
-    const signal = this.#events?.signal;
-    if (!signal || signal.aborted) return;
-    this.#returnFocus = returnFocus ?? (
-      document.activeElement instanceof HTMLElement ? document.activeElement : null
-    );
+    const signal = this.lifetime;
+    if (signal.aborted) return;
+    this.#returnFocus = returnFocus ?? focusedElement();
     if (this.mounted && this.#dialog()?.open === false) {
       // The last session closed and its close event is still on its way: end it here, so this
       // one reads on pages of its own and not on the ones the last left behind.
@@ -354,8 +344,7 @@ export class DlSettingsDialog extends LightElement {
     const toast = this.#dialog()?.open ? this.querySelector('dl-toast-region') : null;
     if (!toast) return;
     event.stopPropagation();
-    if (event.detail.action) toast.showAction(event.detail.message, event.detail.action);
-    else toast.show(event.detail.message, event.detail.duration);
+    toast.show(event.detail);
   };
 
   #closed = (): void => {
@@ -375,7 +364,7 @@ export class DlSettingsDialog extends LightElement {
     document.body.classList.remove('settings-open');
     const returnFocus = this.#returnFocus;
     this.#returnFocus = null;
-    if (returnFocus?.isConnected && !returnFocus.inert) returnFocus.focus();
+    returnFocus?.focus();
   };
 
   /** Deleting every conversation is the sidebar's command; Settings has nothing left to show once it ran. */

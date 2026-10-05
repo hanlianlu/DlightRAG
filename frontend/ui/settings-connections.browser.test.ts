@@ -3,9 +3,12 @@ import {expect} from '@esm-bundle/chai';
 import {setViewport} from '@web/test-runner-commands';
 import './settings-connections.ts';
 import {buttonNamed, fieldNamed, linkNamed, linkStyles, waitFor} from '../testing/dom.ts';
+import {memorySettings, mountSettings, openSettings, settingsClosed, wire} from '../testing/settings.ts';
 import type {SettingsSummary} from './settings-summary.ts';
 
 const originalFetch = window.fetch;
+const originalSetTimeout = window.setTimeout;
+const originalClearTimeout = window.clearTimeout;
 
 /** A draft as the projection really reports it: never probed, so `disabled` with no catalogue. */
 const draft = {
@@ -69,6 +72,8 @@ async function openCard(feature: Feature, connectionId: string): Promise<void> {
 
 afterEach(() => {
   window.fetch = originalFetch;
+  window.setTimeout = originalSetTimeout;
+  window.clearTimeout = originalClearTimeout;
   document.body.replaceChildren();
 });
 
@@ -358,5 +363,154 @@ describe('laid out as a page', () => {
     const label = fieldNamed(feature, 'Label')!.getBoundingClientRect();
     const endpoint = feature.querySelector('[class*=endpointRow]')!.getBoundingClientRect();
     expect(endpoint.top).to.be.at.least(label.bottom);
+  });
+});
+
+describe('while Settings stays open', () => {
+  const enabled = {...draft, enabled: true, status: 'ready'};
+  const disabled = {...draft, enabled: false, status: 'disabled'};
+  let now = 0;
+  let timers: Map<number, {due: number; handler: () => void}>;
+
+  /** The page's timers run on a clock that only `pass` turns, and a timer that is cleared never fires. */
+  function startClock(): void {
+    now = 0;
+    timers = new Map();
+    let ids = 0;
+    window.setTimeout = ((handler: TimerHandler, delay = 0) => {
+      ids += 1;
+      timers.set(ids, {due: now + delay, handler: handler as () => void});
+      return ids;
+    }) as typeof window.setTimeout;
+    window.clearTimeout = ((id?: number) => { timers.delete(id!); }) as typeof window.clearTimeout;
+  }
+
+  /** Let the answers to what the page asked for land. */
+  async function quiet(): Promise<void> {
+    for (let turn = 0; turn < 5; turn += 1) await new Promise((resolve) => originalSetTimeout(resolve, 0));
+  }
+
+  /** Let `ms` go by: each timer that falls due fires in its turn, and its read answers before the next. */
+  async function pass(ms: number): Promise<void> {
+    const end = now + ms;
+    for (;;) {
+      const next = [...timers].filter(([, timer]) => timer.due <= end).sort(([, a], [, b]) => a.due - b.due)[0];
+      if (!next) break;
+      timers.delete(next[0]);
+      now = next[1].due;
+      next[1].handler();
+      await quiet();
+    }
+    now = end;
+  }
+
+  const toggle = (feature: Feature): HTMLButtonElement => feature.querySelector<HTMLButtonElement>('[data-switch="fixture"]')!;
+
+  /** A page whose second read is held until `release`, and whose command turns the Connection off. */
+  async function overtaken(): Promise<{feature: Feature; release: () => void; reads: () => number}> {
+    startClock();
+    let reads = 0;
+    let release = (): void => {};
+    window.fetch = async (_url, init) => {
+      if (init?.method) return Response.json({revision: '2', connections: [disabled], presets: []});
+      reads += 1;
+      // Sent before the command, the second read answers after it, with what was true before.
+      if (reads === 2) await new Promise<void>((resolve) => { release = resolve; });
+      return Response.json({revision: '1', connections: [enabled], presets: []});
+    };
+    const feature = mount();
+    await loaded(feature);
+    await pass(5000);
+    await waitFor(() => reads === 2);
+    toggle(feature).click();
+    await waitFor(() => toggle(feature).getAttribute('aria-checked') === 'false' && !feature.busy);
+    return {feature, release: () => release(), reads: () => reads};
+  }
+
+  it('reads again every five seconds, so a change made elsewhere shows up', async () => {
+    startClock();
+    let reads = 0;
+    window.fetch = async () => Response.json({revision: String(++reads), connections: [draft], presets: []});
+    const feature = mount();
+    await loaded(feature);
+    expect(reads).to.equal(1);
+
+    await pass(4999);
+    expect(reads).to.equal(1);
+    await pass(1);
+    expect(reads).to.equal(2);
+    await pass(5000);
+    expect(reads).to.equal(3);
+  });
+
+  it('does not read while a command runs, and reads again once it has answered', async () => {
+    startClock();
+    let reads = 0;
+    let answer = (): void => {};
+    window.fetch = async (_url, init) => {
+      if (!init?.method) {
+        reads += 1;
+        return Response.json({revision: '1', connections: [enabled], presets: []});
+      }
+      await new Promise<void>((resolve) => { answer = resolve; });
+      return Response.json({revision: '2', connections: [disabled], presets: []});
+    };
+    const feature = mount();
+    await loaded(feature);
+    toggle(feature).click();
+    await waitFor(() => feature.busy);
+
+    await pass(20_000);
+    expect(reads).to.equal(1);
+
+    answer();
+    await waitFor(() => !feature.busy);
+    await pass(5000);
+    expect(reads).to.equal(2);
+  });
+
+  it('lets no read that a command overtook undo what the command answered', async () => {
+    const {feature, release} = await overtaken();
+
+    release();
+    await quiet();
+
+    expect(toggle(feature).getAttribute('aria-checked')).to.equal('false');
+  });
+
+  it('reads once per interval after a read that a command overtook', async () => {
+    const {release, reads} = await overtaken();
+    release();
+    await quiet();
+
+    const before = reads();
+    await pass(30_000);
+
+    expect(reads() - before).to.equal(6);
+  });
+
+  it('stops reading when Settings closes', async () => {
+    startClock();
+    let reads = 0;
+    const api = wire({
+      'GET /web/api/connections/mcp': () => {
+        reads += 1;
+        return Response.json({revision: '1', connections: [draft], presets: []});
+      },
+      'GET /web/api/memory/settings': () => memorySettings(false),
+    });
+    window.fetch = api.fetch;
+    const {settings} = mountSettings();
+    const dialog = await openSettings(settings, 'connections');
+    await loaded(settings.querySelector('dl-settings-connections')!);
+    expect(reads).to.equal(1);
+    await pass(5000);
+    expect(reads).to.equal(2);
+
+    dialog.close();
+    await waitFor(settingsClosed);
+    await pass(30_000);
+
+    expect(reads).to.equal(2);
   });
 });

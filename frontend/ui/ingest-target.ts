@@ -1,11 +1,11 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {msg, str, updateWhenLocaleChanges } from '@lit/localize';
+import {msg, str} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import {icon, rovingFocusKeydown} from '../design-system/index.ts';
 import {LightElement, StoreController} from '../lib/lit-host.ts';
-import {createAutoDismiss} from '../lib/popover.ts';
+import {TriggerPopover} from '../lib/popover.ts';
 import {type AppHandles, productionHandles } from '../stores/app-handles.ts';
 import type {WorkspaceRecord} from '../stores/workspace-store.ts';
 import './workspace-create.ts';
@@ -14,47 +14,34 @@ import ingestStyles from '../styles/ingest-target.module.css';
 /** Picks which workspace an upload lands in; shown only while Files is open. */
 export class DlIngestTarget extends LightElement {
     static properties = {
-    handles: {attribute: false},
+        handles: {attribute: false},
         active: {attribute: false},
-        open: {state: true},
     };
 
     declare handles: AppHandles;
     declare active: boolean;
-    declare open: boolean;
 
-    readonly #dismiss = createAutoDismiss({
-        getAnchor: () => this,
-        isOpen: () => this.open,
-        onDismiss: (reason) => { this.#dismissPopover(reason === 'escape'); },
+    readonly #popup = new TriggerPopover(this, {
+        trigger: () => this.querySelector<HTMLButtonElement>('#ingest-target-trigger'),
+        enter: () => {
+            const choice = '[data-ingest-workspace-choice]';
+            (this.querySelector<HTMLButtonElement>(`${choice}[aria-pressed="true"]`)
+                ?? this.querySelector<HTMLButtonElement>(choice))?.focus();
+        },
+        showing: () => this.active,
     });
 
     constructor() {
         super();
-        updateWhenLocaleChanges(this);
         this.handles = productionHandles();
         this.active = false;
-        this.open = false;
         /** Store reads: workspaces.records, ingest.workspace. */
         new StoreController(this, this.handles.workspaces, this.handles.ingest);
     }
 
-    override disconnectedCallback(): void {
-        this.open = false;
-        this.#dismiss.deactivate();
-        super.disconnectedCallback();
-    }
-
-    close(): void {
-        this.open = false;
-    }
-
     protected override updated(): void {
         this.classList.add(ingestStyles['ingest-target']);
-        const showing = this.active && this.open;
-        this.classList.toggle(ingestStyles.open, showing);
-        if (showing) this.#dismiss.activate();
-        else this.#dismiss.deactivate();
+        this.classList.toggle(ingestStyles.open, this.active && this.#popup.open);
     }
 
     get #displayName(): string {
@@ -73,9 +60,8 @@ export class DlIngestTarget extends LightElement {
                 aria-pressed=${selected ? 'true' : 'false'}
                 @click=${(event: Event) => {
                     event.stopPropagation();
-                    this.open = false;
                     this.handles.ingest.set(record.workspace);
-                    void this.updateComplete.then(() => { this.#trigger()?.focus(); });
+                    this.#popup.close(true);
                 }}
             >
                 <span class=${`${ingestStyles['ingest-target-popover-radio']}${selected ? ` ${ingestStyles.on}` : ''}`}></span>
@@ -93,7 +79,7 @@ export class DlIngestTarget extends LightElement {
                 id="ingest-target-popover"
                 role="dialog"
                 aria-label=${msg('Select ingest workspace', {id: 'ingestTarget.selectWorkspaceAria'})}
-                ?hidden=${!this.active || !this.open}
+                ?hidden=${!this.active || !this.#popup.open}
                 @keydown=${(event: KeyboardEvent) => {
                     const popover = event.currentTarget as HTMLElement;
                     rovingFocusKeydown(
@@ -103,7 +89,7 @@ export class DlIngestTarget extends LightElement {
                 }}
             >
                 ${repeat(sorted, (record) => record.workspace, (record) => this.#renderOption(record))}
-                <dl-workspace-create .handles=${this.handles} @dl-workspace-created=${this.#workspaceCreated}></dl-workspace-create>
+                <dl-workspace-create .handles=${this.handles} @dl-workspace-created=${() => this.#popup.close(true)}></dl-workspace-create>
             </div>
         `;
     }
@@ -119,9 +105,9 @@ export class DlIngestTarget extends LightElement {
                     type="button"
                     aria-label=${msg(str`Files in ${displayName}; choose file workspace`, {id: 'ingestTarget.filesInAria'})}
                     aria-haspopup="dialog"
-                    aria-expanded=${this.open ? 'true' : 'false'}
+                    aria-expanded=${this.#popup.open ? 'true' : 'false'}
                     aria-controls="ingest-target-popover"
-                    @click=${this.#togglePopover}
+                    @click=${this.#popup.toggle}
                 >
                     <span class=${ingestStyles['ingest-target-dot']}></span>
                     <span class=${ingestStyles['ingest-target-name']} data-ingest-name>${displayName}</span>
@@ -133,43 +119,6 @@ export class DlIngestTarget extends LightElement {
             ${this.#renderPopover()}
         `;
     }
-
-    #trigger(): HTMLButtonElement | null {
-        return this.querySelector<HTMLButtonElement>('#ingest-target-trigger');
-    }
-
-    #togglePopover = (event: Event): void => {
-        event.stopPropagation();
-        if (this.open) {
-            this.open = false;
-            return;
-        }
-        this.open = true;
-        void this.updateComplete.then(() => {
-            const selected = this.querySelector<HTMLButtonElement>(
-                '[data-ingest-workspace-choice][aria-pressed="true"]',
-            );
-            (selected ?? this.querySelector<HTMLButtonElement>(
-                '[data-ingest-workspace-choice]',
-            ))?.focus();
-        });
-    };
-
-    #dismissPopover(restoreFocus: boolean): void {
-        this.open = false;
-        if (restoreFocus) {
-            void this.updateComplete.then(() => { this.#trigger()?.focus(); });
-        }
-    }
-
-    #workspaceCreated = (): void => {
-        const active = document.activeElement;
-        const restoreFocus = active === document.body || this.contains(active);
-        this.open = false;
-        if (restoreFocus) {
-            void this.updateComplete.then(() => { this.#trigger()?.focus(); });
-        }
-    };
 }
 
 customElements.define('dl-ingest-target', DlIngestTarget);

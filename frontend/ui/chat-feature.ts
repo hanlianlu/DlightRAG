@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {msg, updateWhenLocaleChanges} from '@lit/localize';
+import {msg} from '@lit/localize';
 import {html, type PropertyValues, type TemplateResult} from 'lit';
 import {waitFor} from 'xstate';
 import {BrowserAnswerSubmissionAdapter} from '../api/answer-submission.ts';
@@ -13,10 +13,10 @@ import {
   getAnswerRunChildrenPage,
   replyAnswerChild,
   steerAnswerRun,
-  type ConversationAttachmentReference,
   type ConversationTurn,
 } from '../api/conversations.ts';
 import {ApiError} from '../api/wire.ts';
+import {raise} from '../lib/dom.ts';
 import {isAbortError} from '../lib/errors.ts';
 import {conversationRoute} from '../lib/router.ts';
 import {localizedErrorKind} from '../lib/run-errors.ts';
@@ -28,6 +28,7 @@ import {
 } from '../lib/run-controller.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
+import type {PendingAttachment} from '../stores/attachment-store.ts';
 import type {AgentEffort, AgentEffortOffer} from '../lib/agent-effort.ts';
 import {EMPTY_AGENT_EFFORT_OFFER} from '../lib/agent-effort.ts';
 import {AnswerSubmissionController} from '../stores/answer-submission-controller.ts';
@@ -97,15 +98,26 @@ function childCommandAmbiguous(error: unknown): boolean {
   return true;
 }
 
+/** The turn as the reader sees it the moment they send it, before the server has accepted anything. */
 function optimisticTurn(
   submissionId: string,
   query: string,
-  attachments: readonly ConversationAttachmentReference[],
+  attachments: readonly PendingAttachment[],
 ): ChatTurnView {
   return {
     id: `local-${submissionId}`,
     userText: query,
-    userAttachments: attachments,
+    userAttachments: attachments.map((item, index) => ({
+      attachmentId: item.id,
+      ordinal: index + 1,
+      kind: item.kind,
+      filename: item.file.name,
+      mimeType: item.file.type,
+      byteSize: item.file.size,
+      url: item.objectUrl,
+      thumbnailUrl: item.objectUrl,
+      label: item.file.name,
+    })),
     runId: '',
     state: 'pending',
     streamText: '',
@@ -158,7 +170,6 @@ export class DlChatFeature extends LightElement {
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.handles = productionHandles();
     this.view = {kind: 'new'};
     this.attachmentPolicy = null;
@@ -270,21 +281,18 @@ export class DlChatFeature extends LightElement {
       ? current.submissionId
       : crypto.randomUUID();
     this.#childSubmissions.set(slot, {fingerprint, submissionId});
+    let ambiguous = false;
     try {
-      const result = await send(submissionId);
+      return await send(submissionId);
+    } catch (error) {
+      ambiguous = childCommandAmbiguous(error);
+      throw error;
+    } finally {
+      // Only an outcome the reader cannot know keeps its id, so a retry is the same command.
       const retained = this.#childSubmissions.get(slot);
-      if (retained?.fingerprint === fingerprint && retained.submissionId === submissionId) {
+      if (!ambiguous && retained?.fingerprint === fingerprint && retained.submissionId === submissionId) {
         this.#childSubmissions.delete(slot);
       }
-      return result;
-    } catch (error) {
-      if (!childCommandAmbiguous(error)) {
-        const retained = this.#childSubmissions.get(slot);
-        if (retained?.fingerprint === fingerprint && retained.submissionId === submissionId) {
-          this.#childSubmissions.delete(slot);
-        }
-      }
-      throw error;
     }
   }
 
@@ -312,7 +320,6 @@ export class DlChatFeature extends LightElement {
             error,
             msg('The continuation could not be started.', {id: 'chatFeature.continuationFailed'}),
           ),
-          duration: 3000,
         });
       }
     } finally {
@@ -377,11 +384,7 @@ export class DlChatFeature extends LightElement {
     const hasMessages = this.turns.length > 0;
     if (hasMessages !== this.#announcedHasMessages) {
       this.#announcedHasMessages = hasMessages;
-      this.dispatchEvent(new CustomEvent<ChatContentChangeDetail>('dl-chat-content-change', {
-        bubbles: true,
-        composed: true,
-        detail: {hasMessages},
-      }));
+      raise(this, 'dl-chat-content-change', {hasMessages});
     }
     if (!changed.has('view') || !this.#pendingResume) return;
     const pending = this.#pendingResume;
@@ -457,18 +460,7 @@ export class DlChatFeature extends LightElement {
     const snapshot = answerSubmissionSnapshot(actor);
     if (['accepted', 'handedOff', 'edited', 'discarded'].includes(snapshot.status)) return null;
     const {intent, lease} = actor.getSnapshot().context;
-    const attachments: ConversationAttachmentReference[] = lease.items.map((item, index) => ({
-      attachmentId: item.id,
-      ordinal: index + 1,
-      kind: item.kind,
-      filename: item.file.name,
-      mimeType: item.file.type,
-      byteSize: item.file.size,
-      url: item.objectUrl,
-      thumbnailUrl: item.objectUrl,
-      label: item.file.name,
-    }));
-    const turn = optimisticTurn(intent.submissionId, intent.query, attachments);
+    const turn = optimisticTurn(intent.submissionId, intent.query, lease.items);
     if (snapshot.status === 'submitting' || snapshot.status === 'reconciling') return turn;
     return {
       ...turn,
@@ -483,11 +475,7 @@ export class DlChatFeature extends LightElement {
     const active = this.#runController.active || this.submissionPending;
     if (active === this.#announcedActive) return;
     this.#announcedActive = active;
-    this.dispatchEvent(new CustomEvent<ChatRunningChangeDetail>('dl-chat-running-change', {
-      bubbles: true,
-      composed: true,
-      detail: {active},
-    }));
+    raise(this, 'dl-chat-running-change', {active});
   }
 
   #composer(): DlChatComposer | null {
@@ -544,25 +532,13 @@ export class DlChatFeature extends LightElement {
         message: msg('Conversation service is unavailable. Please retry loading the conversation.', {
           id: 'chatFeature.conversationUnavailable',
         }),
-        duration: 3000,
       });
       return;
     }
     const conversationId = this.handles.conversations.answerConversationId;
     const lease = this.handles.attachments.leaseAll();
-    const liveAttachmentRefs: ConversationAttachmentReference[] = lease.items.map((item, index) => ({
-      attachmentId: item.id,
-      ordinal: index + 1,
-      kind: item.kind,
-      filename: item.file.name,
-      mimeType: item.file.type,
-      byteSize: item.file.size,
-      url: item.objectUrl,
-      thumbnailUrl: item.objectUrl,
-      label: item.file.name,
-    }));
     const submissionId = crypto.randomUUID();
-    const turn = optimisticTurn(submissionId, query, liveAttachmentRefs);
+    const turn = optimisticTurn(submissionId, query, lease.items);
     const actor = this.#submissionController.start({
       query,
       mode,
@@ -753,7 +729,6 @@ export class DlChatFeature extends LightElement {
       if (!signal.aborted && this.#runController.runId === runId) {
         requestToast(this, {
           message: msg('This run can no longer be steered.', {id: 'chatFeature.steerUnavailable'}),
-          duration: 3000,
         });
       }
       return;
@@ -774,10 +749,7 @@ export class DlChatFeature extends LightElement {
     const turn = this.turns[turnIndex];
     for (const event of events) {
       if (event.kind === 'memory') {
-        this.dispatchEvent(new CustomEvent<MemoryOperationEvent>(
-          'dl-chat-memory-operation',
-          {bubbles: true, composed: true, detail: event.operation},
-        ));
+        raise(this, 'dl-chat-memory-operation', event.operation);
       }
     }
     if (!turn) return;
@@ -806,11 +778,7 @@ export class DlChatFeature extends LightElement {
   }
 
   #announceChildActivity(runId: string): void {
-    this.dispatchEvent(new CustomEvent<ChatChildActivityDetail>('dl-child-activity', {
-      bubbles: true,
-      composed: true,
-      detail: {runId},
-    }));
+    raise(this, 'dl-child-activity', {runId});
   }
 
   /** A child can finish without any event on the parent's stream, so while
@@ -866,5 +834,12 @@ customElements.define('dl-chat-feature', DlChatFeature);
 declare global {
   interface HTMLElementTagNameMap {
     'dl-chat-feature': DlChatFeature;
+  }
+
+  interface HTMLElementEventMap {
+    'dl-chat-content-change': CustomEvent<ChatContentChangeDetail>;
+    'dl-chat-running-change': CustomEvent<ChatRunningChangeDetail>;
+    'dl-chat-memory-operation': CustomEvent<MemoryOperationEvent>;
+    'dl-child-activity': CustomEvent<ChatChildActivityDetail>;
   }
 }

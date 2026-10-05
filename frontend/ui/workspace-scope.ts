@@ -1,12 +1,12 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {msg, str, updateWhenLocaleChanges } from '@lit/localize';
+import {msg, str} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import {icon, rovingFocusKeydown} from '../design-system/index.ts';
 import {LightElement, StoreController} from '../lib/lit-host.ts';
 import type {PageLoadState} from '../lib/paged.ts';
-import {createAutoDismiss} from '../lib/popover.ts';
+import {TriggerPopover} from '../lib/popover.ts';
 import {type AppHandles, productionHandles } from '../stores/app-handles.ts';
 import type {WorkspaceRecord} from '../stores/workspace-store.ts';
 import workspaceStyles from '../styles/workspaces.module.css';
@@ -15,40 +15,27 @@ import './workspace-create.ts';
 
 /** Search-scope selection and popover lifecycle. */
 export class DlWorkspaceScope extends LightElement {
-  static properties = {
-    handles: {attribute: false},
-    open: {state: true},
-  };
+  static properties = {handles: {attribute: false}};
 
   declare handles: AppHandles;
-  declare open: boolean;
 
   #restoreLoadMoreFocus = false;
   #settledFocusRestore = false;
   #lastLoadMoreState: PageLoadState = 'idle';
-  readonly #dismiss = createAutoDismiss({
-    getAnchor: () => this,
-    isOpen: () => this.open,
-    onDismiss: (reason) => { this.#dismissPopover(reason === 'escape'); },
+  readonly #popup = new TriggerPopover(this, {
+    trigger: () => this.querySelector<HTMLButtonElement>('#workspace-trigger'),
+    enter: () => {
+      const choice = '[data-workspace-choice]';
+      (this.querySelector<HTMLButtonElement>(`${choice}[aria-pressed="true"]`)
+        ?? this.querySelector<HTMLButtonElement>(choice))?.focus();
+    },
   });
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.handles = productionHandles();
-    this.open = false;
     /** Store reads: records, active, primary. */
     new StoreController(this, this.handles.workspaces);
-  }
-
-  override disconnectedCallback(): void {
-    this.open = false;
-    this.#dismiss.deactivate();
-    super.disconnectedCallback();
-  }
-
-  close(): void {
-    this.open = false;
   }
 
   protected override willUpdate(_changed: PropertyValues<this>): void {
@@ -58,9 +45,7 @@ export class DlWorkspaceScope extends LightElement {
   }
 
   protected override updated(): void {
-    this.classList.toggle('open', this.open);
-    if (this.open) this.#dismiss.activate();
-    else this.#dismiss.deactivate();
+    this.classList.toggle('open', this.#popup.open);
     if (this.#settledFocusRestore) {
       this.#settledFocusRestore = false;
       if (this.#restoreLoadMoreFocus) {
@@ -77,8 +62,8 @@ export class DlWorkspaceScope extends LightElement {
       <button class="workspace-selector-trigger" id="workspace-trigger" type="button"
               aria-label=${msg('Choose search workspaces', {id: 'workspaceScope.chooseSearchWorkspaces'})}
               aria-haspopup="dialog"
-              aria-expanded=${this.open ? 'true' : 'false'} aria-controls="workspace-popover"
-              @click=${this.#togglePopover}>
+              aria-expanded=${this.#popup.open ? 'true' : 'false'} aria-controls="workspace-popover"
+              @click=${this.#popup.toggle}>
         <span class="workspace-dot${multi ? ' multi' : ''}" id="workspace-dot">${multi
           ? html`<span class="workspace-pip"></span><span class="workspace-pip"></span
             ><span class="workspace-pip"></span>` : nothing}</span>
@@ -87,31 +72,6 @@ export class DlWorkspaceScope extends LightElement {
       </button>
       ${this.#popover()}
     `;
-  }
-
-  #trigger(): HTMLButtonElement | null {
-    return this.querySelector<HTMLButtonElement>('#workspace-trigger');
-  }
-
-  #togglePopover = (): void => {
-    if (this.open) {
-      this.open = false;
-      return;
-    }
-    this.open = true;
-    void this.updateComplete.then(() => {
-      const selected = this.querySelector<HTMLButtonElement>(
-        '[data-workspace-choice][aria-pressed="true"]',
-      );
-      (selected ?? this.querySelector<HTMLButtonElement>('[data-workspace-choice]'))?.focus();
-    });
-  };
-
-  #dismissPopover(restoreFocus: boolean): void {
-    this.open = false;
-    if (restoreFocus) {
-      void this.updateComplete.then(() => { this.#trigger()?.focus(); });
-    }
   }
 
   get #allSelected(): boolean {
@@ -145,12 +105,12 @@ export class DlWorkspaceScope extends LightElement {
     return html`
       <div class="dl-popover dl-popover--workspace dl-anchored" id="workspace-popover"
            role="dialog" aria-label=${msg('Workspaces', {id: 'workspaceScope.workspacesAria'})}
-           ?hidden=${!this.open}
+           ?hidden=${!this.#popup.open}
            @keydown=${(event: KeyboardEvent) => {
              const popover = event.currentTarget as HTMLElement;
              rovingFocusKeydown(event, [...popover.querySelectorAll<HTMLElement>('[data-workspace-choice]')]);
            }}
-           @dl-workspace-created=${this.#workspaceCreated}>
+           @dl-workspace-created=${() => this.#popup.close(true)}>
         ${this.#allOption()}
         ${repeat(sorted, (record) => record.workspace, (record) => this.#option(record))}
         ${loadOlderControl({
@@ -207,17 +167,6 @@ export class DlWorkspaceScope extends LightElement {
       </div>
     `;
   }
-
-  #workspaceCreated = (): void => {
-    const active = document.activeElement;
-    const restoreFocus = active === document.body || this.contains(active);
-    this.open = false;
-    if (restoreFocus) {
-      void this.updateComplete.then(() => { this.#trigger()?.focus(); });
-    }
-  };
-
-
 }
 
 customElements.define('dl-workspace-scope', DlWorkspaceScope);

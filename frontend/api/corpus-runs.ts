@@ -4,20 +4,20 @@ import * as v from 'valibot';
 import {csrfHeaders} from './csrf.ts';
 import {ApiError, parseWire} from './wire.ts';
 
-export const corpusRunReceipt = v.pipe(
-  v.object({
-    run_id: v.string(),
-    run_kind: v.literal('corpus_mutation'),
-    lane: v.literal('corpus_mutation'),
-    status: v.picklist(['queued', 'running', 'succeeded', 'failed', 'cancelled']),
-    status_url: v.string(),
-    events_url: v.string(),
-    cancel_url: v.string(),
-    resume_url: v.string(),
-    workspace: v.string(),
-    file_count: v.optional(v.nullable(v.number())),
-  }),
-  v.transform((wire) => ({
+/** What a Corpus Run's receipt and its status both say about the Run itself. */
+const run = {
+  run_id: v.string(),
+  run_kind: v.literal('corpus_mutation'),
+  lane: v.literal('corpus_mutation'),
+  status: v.picklist(['queued', 'running', 'succeeded', 'failed', 'cancelled']),
+  status_url: v.string(),
+  events_url: v.string(),
+  cancel_url: v.string(),
+  resume_url: v.string(),
+};
+
+function runOf(wire: v.InferOutput<v.ObjectSchema<typeof run, undefined>>) {
+  return {
     runId: wire.run_id,
     runKind: wire.run_kind,
     lane: wire.lane,
@@ -26,6 +26,17 @@ export const corpusRunReceipt = v.pipe(
     eventsUrl: wire.events_url,
     cancelUrl: wire.cancel_url,
     resumeUrl: wire.resume_url,
+  };
+}
+
+export const corpusRunReceipt = v.pipe(
+  v.object({
+    ...run,
+    workspace: v.string(),
+    file_count: v.optional(v.nullable(v.number())),
+  }),
+  v.transform((wire) => ({
+    ...runOf(wire),
     workspace: wire.workspace,
     fileCount: wire.file_count ?? null,
   })),
@@ -34,14 +45,7 @@ export type WebCorpusRunReceipt = v.InferOutput<typeof corpusRunReceipt>;
 
 const corpusRunStatus = v.pipe(
   v.object({
-    run_id: v.string(),
-    run_kind: v.literal('corpus_mutation'),
-    lane: v.literal('corpus_mutation'),
-    status: v.picklist(['queued', 'running', 'succeeded', 'failed', 'cancelled']),
-    status_url: v.string(),
-    events_url: v.string(),
-    cancel_url: v.string(),
-    resume_url: v.string(),
+    ...run,
     result: v.optional(v.nullable(v.record(v.string(), v.unknown()))),
     phase: v.optional(v.nullable(v.string())),
     error_kind: v.optional(v.nullable(v.string())),
@@ -50,14 +54,7 @@ const corpusRunStatus = v.pipe(
     repair_remedy: v.optional(v.nullable(v.string())),
   }),
   v.transform((wire) => ({
-    runId: wire.run_id,
-    runKind: wire.run_kind,
-    lane: wire.lane,
-    status: wire.status,
-    statusUrl: wire.status_url,
-    eventsUrl: wire.events_url,
-    cancelUrl: wire.cancel_url,
-    resumeUrl: wire.resume_url,
+    ...runOf(wire),
     result: wire.result ?? null,
     phase: wire.phase ?? null,
     errorKind: wire.error_kind ?? null,

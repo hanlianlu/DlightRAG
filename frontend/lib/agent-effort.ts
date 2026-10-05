@@ -53,8 +53,3 @@ export function storedAgentEffort(offer: AgentEffortOffer): AgentEffort | null {
 export function storeAgentEffort(effort: AgentEffort | null): void {
     writeStored(AGENT_EFFORT_STORAGE_KEY, effort);
 }
-
-/** The level the composer shows: the stored override, else the deployment default. */
-export function displayedAgentEffort(offer: AgentEffortOffer): AgentEffort | null {
-    return storedAgentEffort(offer) ?? offer.default;
-}

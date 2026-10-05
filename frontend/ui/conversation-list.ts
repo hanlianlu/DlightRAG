@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {msg, str, updateWhenLocaleChanges } from '@lit/localize';
+import {msg, str} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import type {ConversationSummary} from '../api/conversations.ts';
@@ -10,6 +10,7 @@ import {
   type MenuDismissDetail,
   type MenuFocus,
 } from '../design-system/index.ts';
+import {raise} from '../lib/dom.ts';
 import {LightElement, StoreController} from '../lib/lit-host.ts';
 import {type AppHandles, productionHandles } from '../stores/app-handles.ts';
 import {loadOlderControl} from './load-older.ts';
@@ -46,11 +47,8 @@ export class DlConversationList extends LightElement {
   declare openMenuId: string | null;
   declare renameId: string | null;
 
-  #dismiss: AbortController | null = null;
-
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.handles = productionHandles();
     this.busy = false;
     this.openMenuId = null;
@@ -61,19 +59,11 @@ export class DlConversationList extends LightElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    const dismiss = new AbortController();
-    this.#dismiss = dismiss;
     document.addEventListener('click', (event) => {
       if (!this.openMenuId || !(event.target instanceof Node)) return;
       if (this.#row(this.openMenuId)?.contains(event.target)) return;
       this.openMenuId = null;
-    }, {signal: dismiss.signal});
-  }
-
-  override disconnectedCallback(): void {
-    super.disconnectedCallback();
-    this.#dismiss?.abort();
-    this.#dismiss = null;
+    }, {signal: this.lifetime});
   }
 
   get menuOpen(): boolean {
@@ -109,10 +99,6 @@ export class DlConversationList extends LightElement {
     return true;
   }
 
-  #emit<D>(type: string, detail: D): void {
-    this.dispatchEvent(new CustomEvent<D>(type, {detail, bubbles: true, composed: true}));
-  }
-
   #openMenu(conversationId: string, focus: MenuFocus = 'first'): void {
     this.openMenuId = conversationId;
     this.renameId = null;
@@ -133,7 +119,7 @@ export class DlConversationList extends LightElement {
     if (event.detail >= 2) return;
     const conversationId = this.#rowIdFromEvent(event);
     if (!conversationId) return;
-    this.#emit<ConversationIntentDetail>('dl-conversation-select', {conversationId});
+    raise(this, 'dl-conversation-select', {conversationId});
   };
 
   #renameFromPointer = (event: MouseEvent): void => {
@@ -156,7 +142,7 @@ export class DlConversationList extends LightElement {
     this.renameId = null;
     const title = input.value.trim();
     if (!title || title === (conversation.title ?? '').trim()) return;
-    this.#emit<ConversationRenameDetail>('dl-conversation-rename', {
+    raise(this, 'dl-conversation-rename', {
       conversationId: conversation.conversationId,
       title,
     });
@@ -181,7 +167,7 @@ export class DlConversationList extends LightElement {
       <div class="conversation-list-status" role="status">
         <span>${message}</span>
         <button type="button" @click=${() => {
-          this.#emit<ConversationRetryDetail>('dl-conversation-retry', {kind});
+          raise(this, 'dl-conversation-retry', {kind});
         }}>${retryLabel}</button>
       </div>
     `;
@@ -244,7 +230,7 @@ export class DlConversationList extends LightElement {
           aria-disabled=${this.busy ? 'true' : nothing}
           @click=${() => {
             this.openMenuId = null;
-            this.#emit<ConversationIntentDetail>('dl-conversation-delete', {conversationId});
+            raise(this, 'dl-conversation-delete', {conversationId});
           }}
         >${msg('Delete', {id: 'conversationList.delete'})}</button>
       </dl-menu>

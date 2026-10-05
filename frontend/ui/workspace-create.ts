@@ -1,9 +1,10 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {msg, updateWhenLocaleChanges, str} from '@lit/localize';
+import {msg, str} from '@lit/localize';
 import {html, type TemplateResult} from 'lit';
 import {createWorkspaceRequest} from '../api/workspaces.ts';
 import {icon} from '../design-system/index.ts';
+import {raise} from '../lib/dom.ts';
 import {apiErrorMessage} from '../lib/errors.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
@@ -20,24 +21,14 @@ export class DlWorkspaceCreate extends LightElement {
   declare handles: AppHandles;
   declare pending: boolean;
 
-  #lifecycle: AbortController | null = null;
-
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.handles = productionHandles();
     this.pending = false;
     this.className = 'dl-popover-create';
   }
 
-  override connectedCallback(): void {
-    super.connectedCallback();
-    this.#lifecycle = new AbortController();
-  }
-
   override disconnectedCallback(): void {
-    this.#lifecycle?.abort();
-    this.#lifecycle = null;
     this.pending = false;
     super.disconnectedCallback();
   }
@@ -45,39 +36,30 @@ export class DlWorkspaceCreate extends LightElement {
   async #submit(): Promise<void> {
     const input = this.querySelector('input');
     const displayName = input?.value.trim();
-    const lifecycle = this.#lifecycle;
-    if (!input || !displayName || !lifecycle || this.pending) return;
+    const signal = this.lifetime;
+    if (!input || !displayName || signal.aborted || this.pending) return;
     this.pending = true;
     try {
-      const created = await createWorkspaceRequest(displayName, lifecycle.signal);
-      if (
-        lifecycle.signal.aborted || this.#lifecycle !== lifecycle || !this.isConnected
-      ) return;
+      const created = await createWorkspaceRequest(displayName, signal);
+      if (signal.aborted) return;
       this.handles.workspaces.add(created);
       this.handles.ingest.set(created.workspace);
       input.value = '';
       requestToast(this, {
         message: msg(str`Workspace ${created.displayName} created.`, {id: 'workspaceCreate.created'}),
       });
-      this.dispatchEvent(new CustomEvent<WorkspaceCreatedDetail>('dl-workspace-created', {
-        detail: {workspace: created.workspace},
-        bubbles: true,
-        composed: true,
-      }));
+      raise(this, 'dl-workspace-created', {workspace: created.workspace});
     } catch (error) {
-      if (
-        !lifecycle.signal.aborted && this.#lifecycle === lifecycle && this.isConnected
-      ) {
+      if (!signal.aborted) {
         requestToast(this, {
           message: apiErrorMessage(
             error,
             msg('Failed to create workspace', {id: 'workspaceCreate.failed'}),
           ),
-          duration: 3000,
         });
       }
     } finally {
-      if (this.#lifecycle === lifecycle) this.pending = false;
+      if (!signal.aborted) this.pending = false;
     }
   }
 

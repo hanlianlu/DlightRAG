@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** Notification Offer Feature and browser Notification lifecycle. */
 
-import {msg, updateWhenLocaleChanges} from '@lit/localize';
+import {msg} from '@lit/localize';
 import {html, type PropertyValues, type TemplateResult} from 'lit';
 import {LightElement} from '../lib/lit-host.ts';
 import {readStored, writeStored} from '../lib/storage.ts';
@@ -36,31 +36,19 @@ export class DlNotificationOffer extends LightElement {
   declare visible: boolean;
 
   #missedAnswer = false;
-  #events: AbortController | null = null;
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.running = false;
     this.visible = false;
   }
 
   override connectedCallback(): void {
     super.connectedCallback();
-    const events = new AbortController();
-    this.#events = events;
-    window.addEventListener('blur', this.#leftPage, {signal: events.signal});
-    window.addEventListener('focus', this.#cameBack, {signal: events.signal});
-    document.addEventListener('visibilitychange', this.#visibilityChanged, {
-      signal: events.signal,
-    });
+    window.addEventListener('blur', this.#leftPage, {signal: this.lifetime});
+    window.addEventListener('focus', this.#cameBack, {signal: this.lifetime});
+    document.addEventListener('visibilitychange', this.#visibilityChanged, {signal: this.lifetime});
     this.#syncHost();
-  }
-
-  override disconnectedCallback(): void {
-    this.#events?.abort();
-    this.#events = null;
-    super.disconnectedCallback();
   }
 
   protected override updated(changed: PropertyValues<this>): void {

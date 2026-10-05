@@ -711,6 +711,48 @@ it('Composer owns draft, attachment, mode, and typed submission intent', async (
   expect(document.activeElement).to.equal(composer.querySelector('[aria-label="Message"]'));
 });
 
+it('Composer hears the page only while it is connected, each time it connects', async () => {
+  const composer = document.createElement('dl-chat-composer') as DlChatComposer;
+  composer.attachmentPolicy = policy;
+  document.body.appendChild(composer);
+  await composer.updateComplete;
+  // The first connection's listeners ended with it, so a second connection must bind its own.
+  composer.remove();
+  document.body.appendChild(composer);
+  await composer.updateComplete;
+
+  const overlay = composer.querySelector('.drop-overlay')!;
+  const files = new DataTransfer();
+  files.items.add(new File(['notes'], 'notes.md', {type: 'text/markdown'}));
+  document.dispatchEvent(new DragEvent('dragenter', {dataTransfer: files, cancelable: true}));
+  await composer.updateComplete;
+  expect(overlay.classList.contains('active')).to.equal(true);
+  document.dispatchEvent(new DragEvent('drop', {dataTransfer: files, cancelable: true}));
+  await composer.updateComplete;
+  expect(overlay.classList.contains('active')).to.equal(false);
+
+  const paste = new Event('paste');
+  const clipboard = new DataTransfer();
+  clipboard.items.add(new File(['png'], 'shot.png', {type: 'image/png'}));
+  Object.defineProperty(paste, 'clipboardData', {value: clipboard});
+  document.dispatchEvent(paste);
+  await composer.updateComplete;
+  expect(composer.querySelector('.thumbnail-strip img')?.getAttribute('alt')).to.equal('shot.png');
+
+  const menu = composer.querySelector('#composer-mode-menu')!;
+  composer.querySelector<HTMLButtonElement>('.composer-mode-trigger')!.click();
+  await composer.updateComplete;
+  expect(menu.hasAttribute('hidden')).to.equal(false);
+  document.body.click();
+  await composer.updateComplete;
+  expect(menu.hasAttribute('hidden')).to.equal(true);
+
+  composer.remove();
+  document.dispatchEvent(new DragEvent('dragenter', {dataTransfer: files, cancelable: true}));
+  await composer.updateComplete;
+  expect(overlay.classList.contains('active')).to.equal(false);
+});
+
 it('Composer offers only bootstrap levels, remembers the choice, and hides effort for fast', async () => {
   localStorage.removeItem(AGENT_EFFORT_STORAGE_KEY);
   const composer = document.createElement('dl-chat-composer') as DlChatComposer;

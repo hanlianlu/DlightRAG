@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
+import {msg, str} from '@lit/localize';
 import {html, nothing, type PropertyValues, render, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import type {
@@ -10,11 +10,11 @@ import type {
   PresentationPart,
 } from '../api/conversations.ts';
 import {icon} from '../design-system/index.ts';
+import {raise} from '../lib/dom.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {safeExternalHttpHref, safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
 import answerStyles from '../styles/answer-presentation.module.css';
 import chatStyles from '../styles/chat.module.css';
-import type {ImageOpenDetail} from './image-lightbox.ts';
 import {artifactDownloadLink} from './artifact-download.ts';
 import {mountRichHtml, typesetRichContent} from './rich-rendering.ts';
 import './video-playback.ts';
@@ -50,7 +50,6 @@ export class AnswerPresentationElement extends LightElement {
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.presentation = null;
     this.referencesExpanded = false;
   }
@@ -321,31 +320,23 @@ export class AnswerPresentationElement extends LightElement {
     if (source && this.contains(source) && presentation) {
       event.preventDefault();
       event.stopPropagation();
-      this.dispatchEvent(new CustomEvent<AnswerSourceOpenDetail>('dl-answer-source-open', {
-        bubbles: true,
-        composed: true,
-        detail: {
-          presentation,
-          referenceId: source.dataset.ref || '',
-          ...(source.dataset.chunk ? {chunkId: source.dataset.chunk} : {}),
-          returnFocus: source,
-        },
-      }));
+      raise(this, 'dl-answer-source-open', {
+        presentation,
+        referenceId: source.dataset.ref || '',
+        ...(source.dataset.chunk ? {chunkId: source.dataset.chunk} : {}),
+        returnFocus: source,
+      });
       return;
     }
     const image = target.closest<HTMLElement>('[data-answer-image][data-src]');
     if (!image || !this.contains(image)) return;
     event.preventDefault();
     event.stopPropagation();
-    this.dispatchEvent(new CustomEvent<ImageOpenDetail>('dl-image-open', {
-      bubbles: true,
-      composed: true,
-      detail: {
-        src: image.dataset.src || '',
-        gallery: this.#galleryImages(),
-        returnFocus: image,
-      },
-    }));
+    raise(this, 'dl-image-open', {
+      src: image.dataset.src || '',
+      gallery: this.#galleryImages(),
+      returnFocus: image,
+    });
   };
 
   #galleryImages(): string[] {
@@ -374,11 +365,7 @@ export class AnswerPresentationElement extends LightElement {
   };
 
   #openArtifact(artifact: AnswerArtifact, returnFocus: HTMLElement): void {
-    this.dispatchEvent(new CustomEvent<ArtifactOpenDetail>('dl-artifact-open', {
-      bubbles: true,
-      composed: true,
-      detail: {artifact, returnFocus},
-    }));
+    raise(this, 'dl-artifact-open', {artifact, returnFocus});
   }
 }
 

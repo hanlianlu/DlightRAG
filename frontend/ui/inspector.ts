@@ -1,11 +1,11 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {msg, updateWhenLocaleChanges} from '@lit/localize';
+import {msg} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import type {AnswerPresentation} from '../api/conversations.ts';
 import {COMPACT_SHELL_MEDIA} from '../lib/breakpoints.ts';
-import {tabbables, wrapTabFocus} from '../lib/dom.ts';
-import {LightElement} from '../lib/lit-host.ts';
+import {focusedElement, raise, tabbables, wrapTabFocus} from '../lib/dom.ts';
+import {LightElement, MediaController} from '../lib/lit-host.ts';
 import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
 import type {DlInspectorFiles} from './inspector-files.ts';
 import './inspector-files.ts';
@@ -47,14 +47,12 @@ export class DlInspector extends LightElement {
   declare shellInert: boolean;
 
   #returnFocus: HTMLElement | null = null;
-  #events: AbortController | null = null;
-  #compactMedia: MediaQueryList | null = null;
+  readonly #compact = new MediaController(this, COMPACT_SHELL_MEDIA, () => { this.#compactChanged(); });
   #stateSignature = '';
   #focusGeneration = 0;
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.handles = productionHandles();
     this.kind = null;
     this.presentation = null;
@@ -65,18 +63,11 @@ export class DlInspector extends LightElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    const events = new AbortController();
-    this.#events = events;
-    document.addEventListener('keydown', this.#documentKeydown, {signal: events.signal});
-    this.#compactMedia = window.matchMedia(COMPACT_SHELL_MEDIA);
-    this.#compactMedia.addEventListener('change', this.#compactChanged, {signal: events.signal});
+    document.addEventListener('keydown', this.#documentKeydown, {signal: this.lifetime});
     this.#syncHostState();
   }
 
   override disconnectedCallback(): void {
-    this.#events?.abort();
-    this.#events = null;
-    this.#compactMedia = null;
     this.#focusGeneration += 1;
     this.#files()?.pause();
     this.#stateSignature = '';
@@ -161,7 +152,7 @@ export class DlInspector extends LightElement {
     if (restoreFocus) {
       window.requestAnimationFrame(() => {
         if (focusGeneration !== this.#focusGeneration || this.open) return;
-        if (returnFocus?.isConnected && !returnFocus.inert) returnFocus.focus();
+        returnFocus?.focus();
       });
     }
   }
@@ -175,7 +166,7 @@ export class DlInspector extends LightElement {
 
   protected override render(): TemplateResult {
     const open = this.open;
-    const compact = this.#isCompact();
+    const compact = this.#compact.matches;
     const files = this.kind === 'files';
     const sources = this.kind === 'sources';
     return html`
@@ -233,9 +224,7 @@ export class DlInspector extends LightElement {
     if (!this.dispatchEvent(event)) return false;
     this.#focusGeneration += 1;
     if (returnFocus) this.#returnFocus = returnFocus;
-    else if (!this.open && document.activeElement instanceof HTMLElement) {
-      this.#returnFocus = document.activeElement;
-    }
+    else if (!this.open) this.#returnFocus = focusedElement();
     this.kind = kind;
     this.#syncHostState();
     return true;
@@ -273,20 +262,16 @@ export class DlInspector extends LightElement {
     const detail: InspectorStateDetail = {
       open: this.open,
       kind: this.kind,
-      compact: this.#isCompact(),
+      compact: this.#compact.matches,
     };
     const signature = `${detail.open}:${detail.kind ?? ''}:${detail.compact}`;
     if (signature === this.#stateSignature) return;
     this.#stateSignature = signature;
-    this.dispatchEvent(new CustomEvent<InspectorStateDetail>('dl-inspector-state-change', {
-      bubbles: true,
-      composed: true,
-      detail,
-    }));
+    raise(this, 'dl-inspector-state-change', detail);
   }
 
   async #focusOnCompact(): Promise<void> {
-    if (!this.#isCompact()) return;
+    if (!this.#compact.matches) return;
     await this.updateComplete;
     this.querySelector<HTMLElement>('#panel-close-btn')?.focus();
   }
@@ -297,17 +282,12 @@ export class DlInspector extends LightElement {
     return tabbables(panel);
   }
 
-  #isCompact(): boolean {
-    return this.#compactMedia?.matches ?? window.matchMedia(COMPACT_SHELL_MEDIA).matches;
-  }
-
-  #compactChanged = (): void => {
-    this.requestUpdate();
+  #compactChanged(): void {
     this.#publishState();
-    if (this.open && this.#isCompact() && !this.contains(document.activeElement)) {
+    if (this.open && this.#compact.matches && !this.contains(document.activeElement)) {
       void this.#focusOnCompact();
     }
-  };
+  }
 
   #documentKeydown = (event: KeyboardEvent): void => {
     if (!this.open || event.key !== 'Escape' || event.defaultPrevented) return;
@@ -317,7 +297,7 @@ export class DlInspector extends LightElement {
   };
 
   #panelKeydown = (event: KeyboardEvent): void => {
-    if (event.key === 'Tab' && this.#isCompact()) {
+    if (event.key === 'Tab' && this.#compact.matches) {
       wrapTabFocus(this.#focusableElements(), event);
     }
   };

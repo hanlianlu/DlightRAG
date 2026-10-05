@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** Workspace-scoped failed-document visibility and durable recovery control. */
 
-import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
+import {msg, str} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import {corpusRunActive} from '../api/corpus-runs.ts';
@@ -12,6 +12,7 @@ import {
 } from '../api/files.ts';
 import {ApiError} from '../api/wire.ts';
 import {CorpusRunTracker, type TrackedCorpusRun} from '../lib/corpus-run-tracker.ts';
+import {raise} from '../lib/dom.ts';
 import {isAbortError} from '../lib/errors.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {KeysetPager} from '../lib/paged.ts';
@@ -93,7 +94,6 @@ export class DlFailedFileRecovery extends LightElement {
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.workspace = '';
     this.active = false;
     this.page = null;
@@ -350,20 +350,18 @@ export class DlFailedFileRecovery extends LightElement {
     const workspace = this.workspace;
     if (!workspace || this.recoveryPending || this.#tracker.active) return;
     const controller = this.#session.startMutation();
-    const generation = this.#session.contextGeneration;
     this.recoveryPending = true;
     try {
       const run = await startFailedFileRetry(workspace, controller.signal);
-      if (!this.#session.isMutationCurrent(controller, workspace, this.workspace, generation, this.active)) return;
+      if (!this.#session.isMutationCurrent(controller, workspace, this.workspace, this.active)) return;
       this.#tracker.follow(run);
       if (corpusRunActive(run)) {
         requestToast(this, {
           message: msg('Document recovery started.', {id: 'inspectorFiles.recovery.started'}),
-          duration: 3000,
         });
       }
     } catch (error) {
-      if (isAbortError(error) || !this.#session.isMutationCurrent(controller, workspace, this.workspace, generation, this.active)) return;
+      if (isAbortError(error) || !this.#session.isMutationCurrent(controller, workspace, this.workspace, this.active)) return;
       requestToast(this, {
         message: recoveryRequestError(
           error,
@@ -371,7 +369,6 @@ export class DlFailedFileRecovery extends LightElement {
             id: 'inspectorFiles.recovery.startFailed',
           }),
         ),
-        duration: 3000,
       });
     } finally {
       if (this.#session.finishMutation(controller)) this.recoveryPending = false;
@@ -381,7 +378,7 @@ export class DlFailedFileRecovery extends LightElement {
   async #resumeRepair(): Promise<void> {
     const outcome = await this.#tracker.resume();
     if (outcome === 'stale') return;
-    requestToast(this, {message: resumeRepairResult(outcome), duration: 3000});
+    requestToast(this, {message: resumeRepairResult(outcome)});
   }
 
   async #settleRecovery(run: TrackedCorpusRun): Promise<void> {
@@ -394,22 +391,18 @@ export class DlFailedFileRecovery extends LightElement {
       || !this.active
       || !this.isConnected
     ) return;
-    this.dispatchEvent(new CustomEvent('dl-failed-file-recovery-complete', {
-      bubbles: true,
-      composed: true,
-    }));
+    raise(this, 'dl-failed-file-recovery-complete');
     requestToast(this, {
       message: run.status === 'succeeded'
         ? msg('Document recovery finished.', {id: 'inspectorFiles.recovery.finished'})
         : msg('Document recovery failed.', {id: 'inspectorFiles.recovery.failed'}),
-      duration: 3000,
     });
   }
 
   #restoreRetryFocus(): void {
     const trigger = this.#retryTrigger;
     this.#retryTrigger = null;
-    if (trigger?.isConnected) trigger.focus();
+    trigger?.focus();
   }
 
   #confirmDialog(): TemplateResult {
@@ -445,5 +438,9 @@ customElements.define('dl-failed-file-recovery', DlFailedFileRecovery);
 declare global {
   interface HTMLElementTagNameMap {
     'dl-failed-file-recovery': DlFailedFileRecovery;
+  }
+
+  interface HTMLElementEventMap {
+    'dl-failed-file-recovery-complete': CustomEvent<void>;
   }
 }

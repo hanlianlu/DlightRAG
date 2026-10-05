@@ -8,7 +8,7 @@
  * open, so the page reads the view again every few seconds until the dialog closes.
  */
 
-import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
+import {msg, str} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import {
@@ -74,7 +74,6 @@ export class DlSettingsAgentAccounts extends LightElement {
   /** The website the remove dialog is asking about, so its copy can name it. */
   declare removing: string | null;
 
-  #events: AbortController | null = null;
   #timer: ReturnType<typeof setTimeout> | undefined;
   /** Counts reads and commands, so a read that a later one overtook changes nothing when it lands. */
   #generation = 0;
@@ -83,7 +82,6 @@ export class DlSettingsAgentAccounts extends LightElement {
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.view = null;
     this.error = false;
     this.pending = false;
@@ -92,13 +90,10 @@ export class DlSettingsAgentAccounts extends LightElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    this.#events = new AbortController();
     void this.#load();
   }
 
   override disconnectedCallback(): void {
-    this.#events?.abort();
-    this.#events = null;
     clearTimeout(this.#timer);
     super.disconnectedCallback();
   }
@@ -112,8 +107,8 @@ export class DlSettingsAgentAccounts extends LightElement {
   /** Read the view, then read it again after a while; a read or command that overtakes this one
    * takes over the schedule too. */
   async #load(): Promise<void> {
-    const signal = this.#events?.signal;
-    if (!signal || signal.aborted) return;
+    const signal = this.lifetime;
+    if (signal.aborted) return;
     const generation = this.#supersede();
     try {
       const view = await getAgentAccounts(signal);
@@ -144,10 +139,10 @@ export class DlSettingsAgentAccounts extends LightElement {
   };
 
   #toggleRegistration = async (event: Event): Promise<void> => {
-    const signal = this.#events?.signal;
+    const signal = this.lifetime;
     const view = this.view;
     const toggle = event.currentTarget as HTMLElement;
-    if (!signal || signal.aborted || !view || this.pending) return;
+    if (signal.aborted || !view || this.pending) return;
     const focused = document.activeElement === toggle;
     this.#supersede();
     this.pending = true;
@@ -156,7 +151,7 @@ export class DlSettingsAgentAccounts extends LightElement {
       if (!signal.aborted) this.view = fresh;
     } catch {
       if (!signal.aborted) {
-        requestToast(this, {message: msg('Could not save the sign-up setting.', {id: 'agentAccounts.saveFailed'}), duration: 3000});
+        requestToast(this, {message: msg('Could not save the sign-up setting.', {id: 'agentAccounts.saveFailed'})});
       }
     } finally {
       if (!signal.aborted) {
@@ -170,9 +165,9 @@ export class DlSettingsAgentAccounts extends LightElement {
   };
 
   async #remove(account: AgentAccount, trigger: HTMLElement): Promise<void> {
-    const signal = this.#events?.signal;
+    const signal = this.lifetime;
     const dialog = this.querySelector<HTMLDialogElement>('#agent-accounts-remove');
-    if (!signal || signal.aborted || !dialog || this.pending) return;
+    if (signal.aborted || !dialog || this.pending) return;
     this.removing = account.site;
     await this.updateComplete;
     const outcome = await modalResult(this, dialog, () => trigger.focus(), signal);
@@ -187,7 +182,7 @@ export class DlSettingsAgentAccounts extends LightElement {
       if (signal.aborted) return;
       // The account is already gone, here or in another tab: the fresh view says so.
       if (error instanceof ApiError && error.status === 404) await this.#load();
-      else requestToast(this, {message: msg('Could not remove the account.', {id: 'agentAccounts.removeFailed'}), duration: 3000});
+      else requestToast(this, {message: msg('Could not remove the account.', {id: 'agentAccounts.removeFailed'})});
     } finally {
       if (!signal.aborted) {
         this.pending = false;

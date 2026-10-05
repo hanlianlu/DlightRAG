@@ -5,7 +5,7 @@
  * it to, and reports the count the store already holds.
  */
 
-import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
+import {msg, str} from '@lit/localize';
 import {html, type PropertyValues, type TemplateResult} from 'lit';
 import {PHONE_DIALOG_MEDIA} from '../lib/breakpoints.ts';
 import {LightElement, MediaController, StoreController} from '../lib/lit-host.ts';
@@ -29,7 +29,6 @@ export class DlSettingsConversations extends LightElement {
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.handles = productionHandles();
     this.deleteAll = async () => false;
     /** Store reads: conversations.length. */

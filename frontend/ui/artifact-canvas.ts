@@ -1,16 +1,15 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
+import {msg, str} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {type AnswerArtifact, type AnswerPresentation, getArtifactPresentationAt } from '../api/conversations.ts';
 import {apiError} from '../api/wire.ts';
 import {COMPACT_SHELL_MEDIA, MOBILE_MEDIA} from '../lib/breakpoints.ts';
-import {tabbables, wrapTabFocus} from '../lib/dom.ts';
-import {LightElement} from '../lib/lit-host.ts';
+import {focusedElement, raise, tabbables, wrapTabFocus} from '../lib/dom.ts';
+import {LightElement, MediaController} from '../lib/lit-host.ts';
 import {safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
 import canvasStyles from '../styles/artifact-canvas.module.css';
 import type {DlActiveArtifactFrame} from './active-artifact-frame.ts';
-import type {ImageOpenDetail} from './image-lightbox.ts';
 import {artifactDownloadLink} from './artifact-download.ts';
 import './active-artifact-frame.ts';
 import './answer-presentation.ts';
@@ -47,12 +46,11 @@ export class DlArtifactCanvas extends LightElement {
 
   #controller: AbortController | null = null;
   #returnFocus: HTMLElement | null = null;
-  #compactMedia: MediaQueryList | null = null;
+  readonly #compact = new MediaController(this, COMPACT_SHELL_MEDIA, () => { this.#compactLayoutChanged(); });
   #focusGeneration = 0;
 
   constructor() {
     super();
-    updateWhenLocaleChanges(this);
     this.activePreviewEnabled = true;
     this.canvasState = 'idle';
     this.layout = 'side';
@@ -68,13 +66,9 @@ export class DlArtifactCanvas extends LightElement {
       this.inert = true;
       this.setAttribute('aria-hidden', 'true');
     }
-    this.#compactMedia = window.matchMedia(COMPACT_SHELL_MEDIA);
-    this.#compactMedia.addEventListener('change', this.#compactLayoutChanged);
   }
 
   override disconnectedCallback(): void {
-    this.#compactMedia?.removeEventListener('change', this.#compactLayoutChanged);
-    this.#compactMedia = null;
     this.#focusGeneration += 1;
     this.#destroyPreview();
     this.#controller?.abort();
@@ -86,11 +80,7 @@ export class DlArtifactCanvas extends LightElement {
     const entering = !this.classList.contains('open');
     this.#controller?.abort();
     this.#destroyPreview();
-    if (entering) {
-      this.#returnFocus = returnFocus ?? (
-        document.activeElement instanceof HTMLElement ? document.activeElement : null
-      );
-    }
+    if (entering) this.#returnFocus = returnFocus ?? focusedElement();
     this.artifact = artifact;
     this.canvasState = 'loading';
     this.#setLayout(this.#suggestedLayout(artifact));
@@ -110,7 +100,7 @@ export class DlArtifactCanvas extends LightElement {
   /** Make the Inspector reachable and return focus owned by a closed compact Canvas. */
   prepareForInspector(): HTMLElement | null {
     if (!this.classList.contains('open')) return null;
-    if (this.#compactMedia?.matches ?? window.matchMedia(COMPACT_SHELL_MEDIA).matches) {
+    if (this.#compact.matches) {
       const returnFocus = this.#returnFocus;
       this.close(false);
       return returnFocus;
@@ -142,10 +132,10 @@ export class DlArtifactCanvas extends LightElement {
     if (restoreFocus) {
       window.requestAnimationFrame(() => {
         if (focusGeneration !== this.#focusGeneration || this.classList.contains('open')) return;
-        if (returnFocus?.isConnected && !returnFocus.inert) returnFocus.focus();
+        returnFocus?.focus();
       });
-    } else if (focusedInside && document.activeElement instanceof HTMLElement) {
-      document.activeElement.blur();
+    } else if (focusedInside) {
+      focusedElement()?.blur();
     }
   }
 
@@ -305,28 +295,17 @@ export class DlArtifactCanvas extends LightElement {
   }
 
   #openImage(src: string, returnFocus: HTMLElement): void {
-    this.dispatchEvent(new CustomEvent<ImageOpenDetail>('dl-image-open', {
-      bubbles: true,
-      composed: true,
-      detail: {src, gallery: [src], returnFocus},
-    }));
+    raise(this, 'dl-image-open', {src, gallery: [src], returnFocus});
   }
 
   #stateChanged(): void {
     const open = this.classList.contains('open');
-    this.dispatchEvent(new CustomEvent<ArtifactCanvasStateDetail>(
-      'dl-artifact-canvas-state-change',
-      {
-        bubbles: true,
-        composed: true,
-        detail: {
-          open,
-          modal: this.#isModal(),
-          overlay: open && this.layout === 'fullscreen',
-          wide: open && this.layout === 'wide' && !this.#compactMatches(),
-        },
-      },
-    ));
+    raise(this, 'dl-artifact-canvas-state-change', {
+      open,
+      modal: this.#isModal(),
+      overlay: open && this.layout === 'fullscreen',
+      wide: open && this.layout === 'wide' && !this.#compact.matches,
+    });
   }
 
   #setLayout(layout: CanvasLayout): void {
@@ -336,20 +315,16 @@ export class DlArtifactCanvas extends LightElement {
     this.#syncModalState();
   }
 
-  #compactLayoutChanged = (): void => {
+  #compactLayoutChanged(): void {
     this.#syncModalState();
     if (this.#isModal() && !this.contains(document.activeElement)) {
       this.querySelector<HTMLButtonElement>('[data-action="close"]')?.focus();
     }
-  };
+  }
 
   #isModal(): boolean {
     return this.classList.contains('open')
-      && (this.layout === 'fullscreen' || this.#compactMatches());
-  }
-
-  #compactMatches(): boolean {
-    return this.#compactMedia?.matches ?? window.matchMedia(COMPACT_SHELL_MEDIA).matches;
+      && (this.layout === 'fullscreen' || this.#compact.matches);
   }
 
   #syncModalState(): void {
