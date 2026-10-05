@@ -46,6 +46,8 @@ const STORAGE_KEY = 'dlightrag.answerMode';
 const MODES = ['auto', 'fast', 'research'] as const satisfies readonly AnswerMode[];
 export type {AnswerMode} from '../lib/answer-request.ts';
 
+type Picker = 'mode' | 'effort';
+
 /** One glyph per level: the lucide dial with its needle at that level's stop.
 
  * The needle carries no accessible meaning, the label and aria do, so a level the
@@ -97,9 +99,8 @@ export class DlChatComposer extends LightElement {
     agentEffortOffer: {attribute: false},
     draft: {state: true},
     mode: {state: true},
-    modeOpen: {state: true},
     effort: {state: true},
-    effortOpen: {state: true},
+    picker: {state: true},
     multiline: {state: true},
     dragActive: {state: true},
     attachments: {state: true},
@@ -118,9 +119,9 @@ export class DlChatComposer extends LightElement {
   declare agentEffortOffer: AgentEffortOffer;
   declare draft: string;
   declare mode: AnswerMode;
-  declare modeOpen: boolean;
   declare effort: AgentEffort | null;
-  declare effortOpen: boolean;
+  /** The one menu of the two beside the box that is open, if any. */
+  declare picker: Picker | null;
   declare multiline: boolean;
   declare dragActive: boolean;
   declare attachments: readonly PendingAttachment[];
@@ -135,6 +136,8 @@ export class DlChatComposer extends LightElement {
   #requestMode: AnswerMode | null;
   #requestEffort: AgentEffort | null = null;
   #effortInitialized = false;
+  readonly #modeButton = this.#buttonFor('mode');
+  readonly #effortButton = this.#buttonFor('effort');
 
   constructor() {
     super();
@@ -147,9 +150,8 @@ export class DlChatComposer extends LightElement {
     this.draft = '';
     this.#requestMode = storedMode();
     this.mode = this.#requestMode ?? 'auto';
-    this.modeOpen = false;
     this.effort = null;
-    this.effortOpen = false;
+    this.picker = null;
     this.agentEffortOffer = EMPTY_AGENT_EFFORT_OFFER;
     this.multiline = false;
     this.dragActive = false;
@@ -224,8 +226,7 @@ export class DlChatComposer extends LightElement {
     this.draft = requestedSkill ? `/skill:${requestedSkill} ${query}` : query;
     this.#requestMode = requestMode;
     this.mode = requestMode ?? 'auto';
-    this.modeOpen = false;
-    this.effortOpen = false;
+    this.picker = null;
     this.#effortInitialized = true;
     this.#requestEffort = requestEffort;
     this.effort = requestEffort ?? this.agentEffortOffer.default;
@@ -298,14 +299,14 @@ export class DlChatComposer extends LightElement {
             <div class="composer-mode">
               <button type="button" class="composer-mode-trigger" id="composer-mode"
                       aria-haspopup="menu" aria-controls="composer-mode-menu"
-                      aria-expanded=${String(this.modeOpen)}
+                      aria-expanded=${String(this.picker === 'mode')}
                       aria-label=${msg(str`Answer mode: ${MODE_LABELS[this.mode]}`, {id: `chatComposer.modeAria.${this.mode}`})}
-                      @click=${this.#toggleModeMenu} @keydown=${this.#modeTriggerKeydown}>
+                      @click=${this.#modeButton.toggle} @keydown=${this.#modeButton.keydown}>
                 ${msg(MODE_LABELS[this.mode], {id: `chatComposer.mode.${this.mode}`})}
               </button>
               <dl-menu class="composer-mode-menu dl-anchored dl-anchored--above dl-anchored--end"
                    id="composer-mode-menu" role="menu" aria-label=${msg('Answer mode', {id: 'chatComposer.modeMenuAria'})}
-                   ?hidden=${!this.modeOpen} @dl-menu-dismiss=${this.#modeDismissed}>
+                   ?hidden=${this.picker !== 'mode'} @dl-menu-dismiss=${this.#modeButton.dismissed}>
                 ${MODES.map((mode) => html`
                   <button type="button" role="menuitemradio" data-mode=${mode}
                           aria-checked=${String(this.mode === mode)} tabindex="-1"
@@ -373,7 +374,7 @@ export class DlChatComposer extends LightElement {
     this.skillNotice = false;
     const skillMenuOpen = skillDirectiveState(this.draft) !== null;
     const menuOpening = skillMenuOpen && !this.skillMenuOpen;
-    if (skillMenuOpen) this.#closePickers('skill');
+    if (skillMenuOpen) this.picker = null;
     this.skillMenuOpen = skillMenuOpen;
     this.skillActive = -1;
     // A Skill published or deleted since the menu last opened shows up when it opens again.
@@ -581,11 +582,11 @@ export class DlChatComposer extends LightElement {
       <div class="composer-effort">
         <button type="button" class="composer-effort-trigger" id="composer-effort"
                 aria-haspopup="menu" aria-controls="composer-effort-menu"
-                aria-expanded=${String(this.effortOpen)}
+                aria-expanded=${String(this.picker === 'effort')}
                 aria-label=${displayed
                   ? msg(str`Agent effort: ${EFFORT_LABELS[displayed]}`, {id: `chatComposer.effortAria.${displayed}`})
                   : msg('Agent effort', {id: 'chatComposer.effortAria'})}
-                @click=${this.#toggleEffortMenu} @keydown=${this.#effortTriggerKeydown}>
+                @click=${this.#effortButton.toggle} @keydown=${this.#effortButton.keydown}>
           ${icon(displayed ? EFFORT_ICONS[displayed] : 'effort', {size: 'sm', className: 'composer-effort-icon'})}
           <span class="composer-effort-label">${displayed
             ? msg(EFFORT_LABELS[displayed], {id: `chatComposer.effort.${displayed}`})
@@ -594,7 +595,7 @@ export class DlChatComposer extends LightElement {
         <dl-menu class="composer-effort-menu dl-anchored dl-anchored--above dl-anchored--end"
              id="composer-effort-menu" role="menu"
              aria-label=${msg('Agent effort', {id: 'chatComposer.effortMenuAria'})}
-             ?hidden=${!this.effortOpen} @dl-menu-dismiss=${this.#effortDismissed}>
+             ?hidden=${this.picker !== 'effort'} @dl-menu-dismiss=${this.#effortButton.dismissed}>
           ${levels.map((level) => html`
             <button type="button" role="menuitemradio" data-effort=${level}
                     aria-checked=${String(displayed === level)} tabindex="-1"
@@ -616,81 +617,63 @@ export class DlChatComposer extends LightElement {
     return this.effort && levels.includes(this.effort) ? this.effort : null;
   }
 
-  #toggleEffortMenu = (event: Event): void => {
-    event.stopPropagation();
-    if (this.effortOpen) this.#closePickers(null);
-    else this.#openPicker('effort', 'first');
-  };
-
   #selectEffort(level: AgentEffort): void {
     this.#effortInitialized = true;
     this.#requestEffort = level;
     this.effort = level;
-    this.effortOpen = false;
+    this.picker = null;
     storeAgentEffort(level);
     this.focusInput();
   }
 
-  #effortTriggerKeydown = (event: KeyboardEvent): void => {
-    const focus = menuButtonFocus(event);
-    if (!focus) return;
-    event.preventDefault();
-    this.#openPicker('effort', focus);
-  };
+  /** The three answers a menu button's owner gives, the same for each of the two pickers. */
+  #buttonFor(picker: Picker) {
+    return {
+      toggle: (event: Event): void => {
+        event.stopPropagation();
+        if (this.picker === picker) this.#closePickers();
+        else this.#openPicker(picker, 'first');
+      },
+      keydown: (event: KeyboardEvent): void => {
+        const focus = menuButtonFocus(event);
+        if (!focus) return;
+        event.preventDefault();
+        this.#openPicker(picker, focus);
+      },
+      dismissed: (event: CustomEvent<MenuDismissDetail>): void => {
+        if (this.picker === picker) this.picker = null;
+        if (event.detail.restoreFocus) this.querySelector<HTMLButtonElement>(`.composer-${picker}-trigger`)?.focus();
+      },
+    };
+  }
 
-  #effortDismissed = (event: CustomEvent<MenuDismissDetail>): void => {
-    this.effortOpen = false;
-    if (event.detail.restoreFocus) this.querySelector<HTMLButtonElement>('.composer-effort-trigger')?.focus();
-  };
-
-  #toggleModeMenu = (event: Event): void => {
-    event.stopPropagation();
-    if (this.modeOpen) this.#closePickers(null);
-    else this.#openPicker('mode', 'first');
-  };
-
-  /** Open one picker menu, closing the others, with focus where its button asked. */
-  #openPicker(picker: 'mode' | 'effort', focus: MenuFocus): void {
-    this.#closePickers(picker);
-    if (picker === 'mode') this.modeOpen = true;
-    else this.effortOpen = true;
+  /** Open one picker menu, closing every other popup, with focus where its button asked. */
+  #openPicker(picker: Picker, focus: MenuFocus): void {
+    this.picker = picker;
+    this.skillMenuOpen = false;
+    this.skillActive = -1;
     void this.updateComplete.then(() => {
       this.querySelector<DlMenu>(`#composer-${picker}-menu`)?.focusItem(focus);
     });
   }
 
-  /** One composer popup at a time: opening or closing one settles the others. */
-  #closePickers(keep: 'mode' | 'effort' | 'skill' | null): void {
-    if (keep !== 'mode') this.modeOpen = false;
-    if (keep !== 'effort') this.effortOpen = false;
-    if (keep !== 'skill') {
-      this.skillMenuOpen = false;
-      this.skillActive = -1;
-    }
+  /** One composer popup at a time: a click elsewhere settles them all. */
+  #closePickers(): void {
+    this.picker = null;
+    this.skillMenuOpen = false;
+    this.skillActive = -1;
   }
 
   #selectMode(mode: AnswerMode): void {
     this.mode = mode;
     this.#requestMode = mode;
-    this.modeOpen = false;
+    this.picker = null;
     writeStored(STORAGE_KEY, mode);
     this.focusInput();
   }
 
-  #modeTriggerKeydown = (event: KeyboardEvent): void => {
-    const focus = menuButtonFocus(event);
-    if (!focus) return;
-    event.preventDefault();
-    this.#openPicker('mode', focus);
-  };
-
-  #modeDismissed = (event: CustomEvent<MenuDismissDetail>): void => {
-    this.modeOpen = false;
-    if (event.detail.restoreFocus) this.querySelector<HTMLButtonElement>('.composer-mode-trigger')?.focus();
-  };
-
   #closeMenus = (): void => {
-    this.#closePickers(null);
+    this.#closePickers();
   };
 
   #dragEnter = (event: DragEvent): void => {
