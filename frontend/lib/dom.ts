@@ -2,6 +2,28 @@
 
 /** Shared DOM helpers used across the UI modules. */
 
+/** The names in HTMLElementEventMap whose events are custom events. */
+type CustomEventName = {
+    [K in keyof HTMLElementEventMap]: HTMLElementEventMap[K] extends CustomEvent ? K : never;
+}[keyof HTMLElementEventMap];
+
+/** What the custom event `K` declares as its detail. */
+type DetailOf<K extends CustomEventName> = HTMLElementEventMap[K] extends CustomEvent<infer D> ? D : never;
+
+/**
+ * Tell whoever listens above `host`: the event bubbles through the page, shadow roots included.
+ * `type` is a custom event declared in HTMLElementEventMap and `detail` the type it declares, so a
+ * raise and its declaration cannot drift. A listener bound in a Lit template is not checked, and
+ * an event a listener may cancel is dispatched by hand, since its sender needs the answer.
+ */
+export function raise<K extends CustomEventName>(
+    host: EventTarget,
+    type: K,
+    ...detail: undefined extends DetailOf<K> ? [detail?: DetailOf<K>] : [detail: DetailOf<K>]
+): void {
+    host.dispatchEvent(new CustomEvent(type, {detail: detail[0], bubbles: true, composed: true}));
+}
+
 /** The element that holds focus, when it is one the page can give focus back to. */
 export function focusedElement(): HTMLElement | null {
     const element = document.activeElement;

@@ -4,7 +4,7 @@
 import {msg} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {icon} from '../design-system/index.ts';
-import {focusedElement, tabbables, wrapTabFocus} from '../lib/dom.ts';
+import {focusedElement, raise, tabbables, wrapTabFocus} from '../lib/dom.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {safeImageSrc} from '../lib/urls.ts';
 import lightboxStyles from '../styles/lightbox.module.css';
@@ -13,6 +13,10 @@ export interface ImageOpenDetail {
   src: string;
   gallery: readonly string[];
   returnFocus: HTMLElement;
+}
+
+export interface ImageLightboxStateDetail {
+  open: boolean;
 }
 
 /** Owns the modal image viewer and its document-level keyboard lifecycle. */
@@ -122,11 +126,7 @@ export class DlImageLightbox extends LightElement {
   }
 
   #publishState(): void {
-    this.dispatchEvent(new CustomEvent<{open: boolean}>('dl-image-lightbox-state-change', {
-      bubbles: true,
-      composed: true,
-      detail: {open: this.openState},
-    }));
+    raise(this, 'dl-image-lightbox-state-change', {open: this.openState});
   }
 
   #backdropClick = (event: Event): void => {
@@ -183,6 +183,6 @@ declare global {
 
   interface HTMLElementEventMap {
     'dl-image-open': CustomEvent<ImageOpenDetail>;
-    'dl-image-lightbox-state-change': CustomEvent<{open: boolean}>;
+    'dl-image-lightbox-state-change': CustomEvent<ImageLightboxStateDetail>;
   }
 }

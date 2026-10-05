@@ -13,6 +13,7 @@ import {
 } from '../design-system/index.ts';
 import {listSkills, type SkillSummary} from '../api/skills.ts';
 import type {AnswerMode} from '../lib/answer-request.ts';
+import {raise} from '../lib/dom.ts';
 import {formatFileSize} from '../lib/file-size.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
@@ -468,11 +469,7 @@ export class DlChatComposer extends LightElement {
     const query = this.draft.trim();
     if (this.running) {
       if (query) {
-        this.dispatchEvent(new CustomEvent<ComposerSteerDetail>('dl-composer-steer', {
-          bubbles: true,
-          composed: true,
-          detail: {query},
-        }));
+        raise(this, 'dl-composer-steer', {query});
       } else {
         this.#cancelIntent();
       }
@@ -494,17 +491,13 @@ export class DlChatComposer extends LightElement {
     this.skillNotice = false;
     this.skillMenuOpen = false;
     this.skillActive = -1;
-    this.dispatchEvent(new CustomEvent<ComposerSubmitDetail>('dl-composer-submit', {
-      bubbles: true,
-      composed: true,
-      detail: {
-        query: submitQuery,
-        mode: this.#requestMode,
-        requestedSkill,
-        // Fast answers run no agent turns, so they never carry an effort.
-        effort: this.mode === 'fast' ? null : this.#requestEffort,
-      },
-    }));
+    raise(this, 'dl-composer-submit', {
+      query: submitQuery,
+      mode: this.#requestMode,
+      requestedSkill,
+      // Fast answers run no agent turns, so they never carry an effort.
+      effort: this.mode === 'fast' ? null : this.#requestEffort,
+    });
     void this.updateComplete.then(() => this.#resize());
   }
 
@@ -544,10 +537,7 @@ export class DlChatComposer extends LightElement {
   }
 
   #cancelIntent(): void {
-    this.dispatchEvent(new CustomEvent('dl-composer-cancel', {
-      bubbles: true,
-      composed: true,
-    }));
+    raise(this, 'dl-composer-cancel');
   }
 
   #openAttachmentPicker = (): void => {
@@ -702,13 +692,7 @@ export class DlChatComposer extends LightElement {
     if (!items || items.length === 0) return;
     void detectDropItems(items, (image) => this.#addAttachment(image)).then((result) => {
       if (result.files.length === 0) return;
-      this.dispatchEvent(
-        new CustomEvent<ComposerWorkspaceDropDetail>('dl-composer-workspace-drop', {
-          bubbles: true,
-          composed: true,
-          detail: result,
-        }),
-      );
+      raise(this, 'dl-composer-workspace-drop', result);
     });
   };
 
@@ -728,5 +712,12 @@ customElements.define('dl-chat-composer', DlChatComposer);
 declare global {
   interface HTMLElementTagNameMap {
     'dl-chat-composer': DlChatComposer;
+  }
+
+  interface HTMLElementEventMap {
+    'dl-composer-submit': CustomEvent<ComposerSubmitDetail>;
+    'dl-composer-steer': CustomEvent<ComposerSteerDetail>;
+    'dl-composer-cancel': CustomEvent<void>;
+    'dl-composer-workspace-drop': CustomEvent<ComposerWorkspaceDropDetail>;
   }
 }

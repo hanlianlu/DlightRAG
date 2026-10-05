@@ -2,6 +2,7 @@
 
 import {msg, updateWhenLocaleChanges} from '@lit/localize';
 import {css, html, LitElement, nothing, type TemplateResult} from 'lit';
+import {raise} from '../lib/dom.ts';
 
 const PERMISSIONS = [
   'accelerometer', 'ambient-light-sensor', 'autoplay', 'battery', 'camera',
@@ -118,10 +119,7 @@ export class DlActiveArtifactFrame extends LitElement {
       !iframe || event.source !== iframe.contentWindow || !payload
       || payload.type !== ESCAPE_MESSAGE || payload.token !== this.#escapeToken
     ) return;
-    this.dispatchEvent(new CustomEvent('dl-artifact-frame-escape', {
-      bubbles: true,
-      composed: true,
-    }));
+    raise(this, 'dl-artifact-frame-escape');
   };
 }
 

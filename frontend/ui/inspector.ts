@@ -4,7 +4,7 @@ import {msg} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import type {AnswerPresentation} from '../api/conversations.ts';
 import {COMPACT_SHELL_MEDIA} from '../lib/breakpoints.ts';
-import {focusedElement, tabbables, wrapTabFocus} from '../lib/dom.ts';
+import {focusedElement, raise, tabbables, wrapTabFocus} from '../lib/dom.ts';
 import {LightElement, MediaController} from '../lib/lit-host.ts';
 import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
 import type {DlInspectorFiles} from './inspector-files.ts';
@@ -267,11 +267,7 @@ export class DlInspector extends LightElement {
     const signature = `${detail.open}:${detail.kind ?? ''}:${detail.compact}`;
     if (signature === this.#stateSignature) return;
     this.#stateSignature = signature;
-    this.dispatchEvent(new CustomEvent<InspectorStateDetail>('dl-inspector-state-change', {
-      bubbles: true,
-      composed: true,
-      detail,
-    }));
+    raise(this, 'dl-inspector-state-change', detail);
   }
 
   async #focusOnCompact(): Promise<void> {

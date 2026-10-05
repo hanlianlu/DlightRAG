@@ -35,7 +35,7 @@ import type {
   DlChatFeature,
 } from './chat-feature.ts';
 import './chat-feature.ts';
-import type {DlImageLightbox, ImageOpenDetail } from './image-lightbox.ts';
+import type {DlImageLightbox, ImageLightboxStateDetail, ImageOpenDetail} from './image-lightbox.ts';
 import './image-lightbox.ts';
 import type {DlInspector, InspectorStateDetail} from './inspector.ts';
 import './inspector.ts';
@@ -425,7 +425,7 @@ export class DlApp extends LightElement {
     this.#syncShellState();
   }
 
-  #lightboxStateChanged(event: CustomEvent<{open: boolean}>): void {
+  #lightboxStateChanged(event: CustomEvent<ImageLightboxStateDetail>): void {
     this.lightboxOpen = event.detail.open;
   }
 

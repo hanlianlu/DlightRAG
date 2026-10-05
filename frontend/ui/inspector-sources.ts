@@ -5,10 +5,10 @@ import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import type {PresentationSource} from '../api/conversations.ts';
 import {icon} from '../design-system/index.ts';
+import {raise} from '../lib/dom.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {safeExternalHttpHref, safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
 import sourceStyles from '../styles/inspector-sources.module.css';
-import type {ImageOpenDetail} from './image-lightbox.ts';
 import {mountRichHtml, typesetRichContent} from './rich-rendering.ts';
 
 export interface InspectorSourcesStateDetail {
@@ -104,17 +104,10 @@ export class DlInspectorSources extends LightElement {
         target.scrollIntoView({behavior: 'auto', block: 'nearest', inline: 'nearest'});
       }
     }
-    this.dispatchEvent(new CustomEvent<InspectorSourcesStateDetail>(
-      'dl-inspector-sources-state-change',
-      {
-        bubbles: true,
-        composed: true,
-        detail: {
-          hasSources: this.sources.length > 0,
-          fullyExpanded: this.fullyExpanded,
-        },
-      },
-    ));
+    raise(this, 'dl-inspector-sources-state-change', {
+      hasSources: this.sources.length > 0,
+      fullyExpanded: this.fullyExpanded,
+    });
   }
 
   #chunkKey(chunkIndex: number | null, fallback: number): string {
@@ -222,11 +215,7 @@ export class DlInspectorSources extends LightElement {
     const gallery = this.sources.flatMap((source) => source.chunks)
       .map((chunk) => safeImageSrc(chunk.imageUrl || chunk.thumbnailUrl))
       .filter(Boolean);
-    this.dispatchEvent(new CustomEvent<ImageOpenDetail>('dl-image-open', {
-      bubbles: true,
-      composed: true,
-      detail: {src, gallery: [...new Set(gallery)], returnFocus},
-    }));
+    raise(this, 'dl-image-open', {src, gallery: [...new Set(gallery)], returnFocus});
   }
 
 }

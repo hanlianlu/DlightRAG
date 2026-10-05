@@ -5,7 +5,7 @@ import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {clearMemory} from '../api/memory.ts';
 import {icon} from '../design-system/index.ts';
 import {DESKTOP_SHELL_MEDIA} from '../lib/breakpoints.ts';
-import {tabbables, wrapTabFocus} from '../lib/dom.ts';
+import {raise, tabbables, wrapTabFocus} from '../lib/dom.ts';
 import {LightElement, MediaController, StoreController} from '../lib/lit-host.ts';
 import {conversationRoute, newChatRoute, type WebRoute} from '../lib/router.ts';
 import {type AppHandles, productionHandles } from '../stores/app-handles.ts';
@@ -392,14 +392,10 @@ export class DlConversationSidebar extends LightElement {
   }
 
   #announceRouteChange(previous: string | null, next: string | null): void {
-    this.dispatchEvent(new CustomEvent<ConversationRouteChangeDetail>(
-      'dl-conversation-route-change',
-      {
-        bubbles: true,
-        composed: true,
-        detail: {previousConversationId: previous, nextConversationId: next},
-      },
-    ));
+    raise(this, 'dl-conversation-route-change', {
+      previousConversationId: previous,
+      nextConversationId: next,
+    });
   }
 
   /** Having chosen where to be, close the drawer and let the reader type. */
@@ -551,10 +547,7 @@ export class DlConversationSidebar extends LightElement {
     const signature = `${expanded}:${compact}`;
     if (signature === this.#stateSignature) return;
     this.#stateSignature = signature;
-    this.dispatchEvent(new CustomEvent<ConversationSidebarStateDetail>(
-      'dl-conversation-sidebar-state-change',
-      {bubbles: true, composed: true, detail: {expanded, compact}},
-    ));
+    raise(this, 'dl-conversation-sidebar-state-change', {expanded, compact});
   }
 
   #selectConversation = (event: CustomEvent<ConversationIntentDetail>): void => {
@@ -578,10 +571,7 @@ export class DlConversationSidebar extends LightElement {
   };
 
   #requestSettings = (): void => {
-    this.dispatchEvent(new CustomEvent('dl-settings-request', {
-      bubbles: true,
-      composed: true,
-    }));
+    raise(this, 'dl-settings-request');
   };
 
   protected override render(): TemplateResult {

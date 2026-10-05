@@ -5,12 +5,11 @@ import {html, nothing, type TemplateResult} from 'lit';
 import {type AnswerArtifact, type AnswerPresentation, getArtifactPresentationAt } from '../api/conversations.ts';
 import {apiError} from '../api/wire.ts';
 import {COMPACT_SHELL_MEDIA, MOBILE_MEDIA} from '../lib/breakpoints.ts';
-import {focusedElement, tabbables, wrapTabFocus} from '../lib/dom.ts';
+import {focusedElement, raise, tabbables, wrapTabFocus} from '../lib/dom.ts';
 import {LightElement, MediaController} from '../lib/lit-host.ts';
 import {safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
 import canvasStyles from '../styles/artifact-canvas.module.css';
 import type {DlActiveArtifactFrame} from './active-artifact-frame.ts';
-import type {ImageOpenDetail} from './image-lightbox.ts';
 import {artifactDownloadLink} from './artifact-download.ts';
 import './active-artifact-frame.ts';
 import './answer-presentation.ts';
@@ -296,28 +295,17 @@ export class DlArtifactCanvas extends LightElement {
   }
 
   #openImage(src: string, returnFocus: HTMLElement): void {
-    this.dispatchEvent(new CustomEvent<ImageOpenDetail>('dl-image-open', {
-      bubbles: true,
-      composed: true,
-      detail: {src, gallery: [src], returnFocus},
-    }));
+    raise(this, 'dl-image-open', {src, gallery: [src], returnFocus});
   }
 
   #stateChanged(): void {
     const open = this.classList.contains('open');
-    this.dispatchEvent(new CustomEvent<ArtifactCanvasStateDetail>(
-      'dl-artifact-canvas-state-change',
-      {
-        bubbles: true,
-        composed: true,
-        detail: {
-          open,
-          modal: this.#isModal(),
-          overlay: open && this.layout === 'fullscreen',
-          wide: open && this.layout === 'wide' && !this.#compact.matches,
-        },
-      },
-    ));
+    raise(this, 'dl-artifact-canvas-state-change', {
+      open,
+      modal: this.#isModal(),
+      overlay: open && this.layout === 'fullscreen',
+      wide: open && this.layout === 'wide' && !this.#compact.matches,
+    });
   }
 
   #setLayout(layout: CanvasLayout): void {

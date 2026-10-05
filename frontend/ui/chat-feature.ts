@@ -17,6 +17,7 @@ import {
   type ConversationTurn,
 } from '../api/conversations.ts';
 import {ApiError} from '../api/wire.ts';
+import {raise} from '../lib/dom.ts';
 import {isAbortError} from '../lib/errors.ts';
 import {conversationRoute} from '../lib/router.ts';
 import {localizedErrorKind} from '../lib/run-errors.ts';
@@ -375,11 +376,7 @@ export class DlChatFeature extends LightElement {
     const hasMessages = this.turns.length > 0;
     if (hasMessages !== this.#announcedHasMessages) {
       this.#announcedHasMessages = hasMessages;
-      this.dispatchEvent(new CustomEvent<ChatContentChangeDetail>('dl-chat-content-change', {
-        bubbles: true,
-        composed: true,
-        detail: {hasMessages},
-      }));
+      raise(this, 'dl-chat-content-change', {hasMessages});
     }
     if (!changed.has('view') || !this.#pendingResume) return;
     const pending = this.#pendingResume;
@@ -481,11 +478,7 @@ export class DlChatFeature extends LightElement {
     const active = this.#runController.active || this.submissionPending;
     if (active === this.#announcedActive) return;
     this.#announcedActive = active;
-    this.dispatchEvent(new CustomEvent<ChatRunningChangeDetail>('dl-chat-running-change', {
-      bubbles: true,
-      composed: true,
-      detail: {active},
-    }));
+    raise(this, 'dl-chat-running-change', {active});
   }
 
   #composer(): DlChatComposer | null {
@@ -770,10 +763,7 @@ export class DlChatFeature extends LightElement {
     const turn = this.turns[turnIndex];
     for (const event of events) {
       if (event.kind === 'memory') {
-        this.dispatchEvent(new CustomEvent<MemoryOperationEvent>(
-          'dl-chat-memory-operation',
-          {bubbles: true, composed: true, detail: event.operation},
-        ));
+        raise(this, 'dl-chat-memory-operation', event.operation);
       }
     }
     if (!turn) return;
@@ -802,11 +792,7 @@ export class DlChatFeature extends LightElement {
   }
 
   #announceChildActivity(runId: string): void {
-    this.dispatchEvent(new CustomEvent<ChatChildActivityDetail>('dl-child-activity', {
-      bubbles: true,
-      composed: true,
-      detail: {runId},
-    }));
+    raise(this, 'dl-child-activity', {runId});
   }
 
   /** A child can finish without any event on the parent's stream, so while
@@ -862,5 +848,12 @@ customElements.define('dl-chat-feature', DlChatFeature);
 declare global {
   interface HTMLElementTagNameMap {
     'dl-chat-feature': DlChatFeature;
+  }
+
+  interface HTMLElementEventMap {
+    'dl-chat-content-change': CustomEvent<ChatContentChangeDetail>;
+    'dl-chat-running-change': CustomEvent<ChatRunningChangeDetail>;
+    'dl-chat-memory-operation': CustomEvent<MemoryOperationEvent>;
+    'dl-child-activity': CustomEvent<ChatChildActivityDetail>;
   }
 }

@@ -10,6 +10,7 @@ import type {
 } from '../api/conversations.ts';
 import {icon} from '../design-system/index.ts';
 import {isTerminalTurnState, type ChatTurnView} from '../lib/chat-views.ts';
+import {raise} from '../lib/dom.ts';
 import {formatFileSize} from '../lib/file-size.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import type {KeysetPagerStatus} from '../lib/paged.ts';
@@ -19,7 +20,6 @@ import {TURN_PLACEHOLDER_MIN_PX, visibleTurnWindow} from '../lib/turn-window.ts'
 import {safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
 import chatStyles from '../styles/chat.module.css';
 import './answer-presentation.ts';
-import type {ImageOpenDetail} from './image-lightbox.ts';
 import {loadOlderControl} from './load-older.ts';
 
 const NO_OLDER_PAGES: KeysetPagerStatus = {state: 'idle', starting: false, hasOlder: false, outcome: null};
@@ -396,10 +396,7 @@ export class DlChatMessageList extends LightElement {
       }
     }
     this.#restoreOlderFocus = document.activeElement === button;
-    this.dispatchEvent(new CustomEvent<void>('dl-chat-load-older', {
-      bubbles: true,
-      composed: true,
-    }));
+    raise(this, 'dl-chat-load-older');
   };
 
   #showWelcome(): boolean {
@@ -635,11 +632,7 @@ export class DlChatMessageList extends LightElement {
       .filter((attachment) => attachment.kind === 'image')
       .map((attachment) => safeImageSrc(attachment.url))
       .filter(Boolean);
-    this.dispatchEvent(new CustomEvent<ImageOpenDetail>('dl-image-open', {
-      bubbles: true,
-      composed: true,
-      detail: {src: source, gallery: [...new Set(gallery)], returnFocus},
-    }));
+    raise(this, 'dl-image-open', {src: source, gallery: [...new Set(gallery)], returnFocus});
   }
 
   #finishImage(id: string): void {
@@ -678,34 +671,19 @@ export class DlChatMessageList extends LightElement {
       'button, a[href], input, textarea, select, summary, [contenteditable="true"], '
       + '[role="button"], [role="link"], [role="menuitem"], [role="option"]',
     )) return;
-    this.dispatchEvent(new CustomEvent<void>('dl-chat-background-click', {
-      bubbles: true,
-      composed: true,
-    }));
+    raise(this, 'dl-chat-background-click');
   };
 
   #runAction(action: ChatRunActionDetail['action'], runId: string): void {
-    this.dispatchEvent(new CustomEvent<ChatRunActionDetail>('dl-chat-run-action', {
-      bubbles: true,
-      composed: true,
-      detail: {action, runId},
-    }));
+    raise(this, 'dl-chat-run-action', {action, runId});
   }
 
   #reconnect(runId: string): void {
-    this.dispatchEvent(new CustomEvent<ChatReconnectDetail>('dl-chat-reconnect', {
-      bubbles: true,
-      composed: true,
-      detail: {runId},
-    }));
+    raise(this, 'dl-chat-reconnect', {runId});
   }
 
   #viewAction(action: ChatViewActionDetail['action']): void {
-    this.dispatchEvent(new CustomEvent<ChatViewActionDetail>('dl-chat-view-action', {
-      bubbles: true,
-      composed: true,
-      detail: {action},
-    }));
+    raise(this, 'dl-chat-view-action', {action});
   }
 
   #toolTrace(turn: ChatTurnView): TemplateResult {
@@ -744,6 +722,10 @@ declare global {
 
   interface HTMLElementEventMap {
     'dl-chat-background-click': CustomEvent<void>;
+    'dl-chat-load-older': CustomEvent<void>;
+    'dl-chat-run-action': CustomEvent<ChatRunActionDetail>;
+    'dl-chat-reconnect': CustomEvent<ChatReconnectDetail>;
+    'dl-chat-view-action': CustomEvent<ChatViewActionDetail>;
   }
 }
 

@@ -9,6 +9,7 @@ import type {
   ChildControlReceipt,
   ChildObservation,
 } from '../api/conversations.ts';
+import {raise} from '../lib/dom.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {isAbortError} from '../lib/errors.ts';
 import {KeysetPager} from '../lib/paged.ts';
@@ -71,15 +72,9 @@ export class DlContinuationDialog extends LightElement {
     publishModalState(this);
     const dialog = this.#dialog();
     const value = dialog?.returnValue;
-    this.dispatchEvent(
-      new CustomEvent<ContinuationResult>('dl-continuation-result', {
-        detail: {
-          query: value === 'continue' ? (this.#input()?.value.trim() ?? null) : null,
-        },
-        bubbles: true,
-        composed: true,
-      }),
-    );
+    raise(this, 'dl-continuation-result', {
+      query: value === 'continue' ? (this.#input()?.value.trim() ?? null) : null,
+    });
   }
 }
 
@@ -918,6 +913,10 @@ declare global {
   interface HTMLElementTagNameMap {
     'dl-continuation-dialog': DlContinuationDialog;
     'dl-children-roster': DlChildrenRoster;
+  }
+
+  interface HTMLElementEventMap {
+    'dl-continuation-result': CustomEvent<ContinuationResult>;
   }
 }
 

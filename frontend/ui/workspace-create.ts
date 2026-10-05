@@ -4,6 +4,7 @@ import {msg, str} from '@lit/localize';
 import {html, type TemplateResult} from 'lit';
 import {createWorkspaceRequest} from '../api/workspaces.ts';
 import {icon} from '../design-system/index.ts';
+import {raise} from '../lib/dom.ts';
 import {apiErrorMessage} from '../lib/errors.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
@@ -47,11 +48,7 @@ export class DlWorkspaceCreate extends LightElement {
       requestToast(this, {
         message: msg(str`Workspace ${created.displayName} created.`, {id: 'workspaceCreate.created'}),
       });
-      this.dispatchEvent(new CustomEvent<WorkspaceCreatedDetail>('dl-workspace-created', {
-        detail: {workspace: created.workspace},
-        bubbles: true,
-        composed: true,
-      }));
+      raise(this, 'dl-workspace-created', {workspace: created.workspace});
     } catch (error) {
       if (!signal.aborted) {
         requestToast(this, {

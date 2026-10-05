@@ -12,6 +12,7 @@ import {
 } from '../api/files.ts';
 import {ApiError} from '../api/wire.ts';
 import {CorpusRunTracker, type TrackedCorpusRun} from '../lib/corpus-run-tracker.ts';
+import {raise} from '../lib/dom.ts';
 import {isAbortError} from '../lib/errors.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {KeysetPager} from '../lib/paged.ts';
@@ -390,10 +391,7 @@ export class DlFailedFileRecovery extends LightElement {
       || !this.active
       || !this.isConnected
     ) return;
-    this.dispatchEvent(new CustomEvent('dl-failed-file-recovery-complete', {
-      bubbles: true,
-      composed: true,
-    }));
+    raise(this, 'dl-failed-file-recovery-complete');
     requestToast(this, {
       message: run.status === 'succeeded'
         ? msg('Document recovery finished.', {id: 'inspectorFiles.recovery.finished'})
@@ -440,5 +438,9 @@ customElements.define('dl-failed-file-recovery', DlFailedFileRecovery);
 declare global {
   interface HTMLElementTagNameMap {
     'dl-failed-file-recovery': DlFailedFileRecovery;
+  }
+
+  interface HTMLElementEventMap {
+    'dl-failed-file-recovery-complete': CustomEvent<void>;
   }
 }
