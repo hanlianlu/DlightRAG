@@ -166,6 +166,10 @@ export class DlChildSession extends LightElement {
   /** The reader has scrolled a running child's page to its bottom and is still there, so the page keeps
    * its bottom in view as steps arrive. Only the reader's own scrolling sets it: opening a child never jumps. */
   #following = false;
+  /** Measures the title's clamp again whenever the title is resized: a settled child has no clock to redraw
+   * the page, and the dock can be narrowed at any time. */
+  readonly #titleSize = new ResizeObserver(() => { this.#measureTitle(); });
+  #watched: HTMLElement | null = null;
 
   constructor() {
     super();
@@ -181,6 +185,14 @@ export class DlChildSession extends LightElement {
     this.objectiveOpen = false;
     this.confirming = false;
     this.answering = null;
+  }
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.lifetime.addEventListener('abort', () => {
+      this.#titleSize.disconnect();
+      this.#watched = null;
+    }, {once: true});
   }
 
   /** Give the title focus: where a reader who has opened this child belongs. */
@@ -222,16 +234,26 @@ export class DlChildSession extends LightElement {
   }
 
   protected override updated(changed: PropertyValues<this>): void {
-    // The toggle shows only where the title is cut off, or has been opened.
+    this.#measureTitle();
     const title = this.querySelector<HTMLElement>('[data-title]');
-    const more = this.querySelector<HTMLElement>('[data-more]');
-    if (title && more) more.hidden = !this.objectiveOpen && title.scrollHeight <= title.clientHeight + 1;
+    if (title !== this.#watched) {
+      this.#titleSize.disconnect();
+      this.#watched = title;
+      if (title) this.#titleSize.observe(title);
+    }
     for (const field of this.querySelectorAll<HTMLTextAreaElement>('textarea')) this.#fit(field);
     const page = this.#page();
     if (!page) return;
     // A child opens on its title, and a page that is followed keeps its bottom in view.
     if (changed.has('source') || changed.has('childSessionId')) page.scrollTop = 0;
     else if (this.#following) page.scrollTop = page.scrollHeight;
+  }
+
+  /** The toggle shows only where the title is cut off, or has been opened. */
+  #measureTitle(): void {
+    const title = this.querySelector<HTMLElement>('[data-title]');
+    const more = this.querySelector<HTMLElement>('[data-more]');
+    if (title && more) more.hidden = !this.objectiveOpen && title.scrollHeight <= title.clientHeight + 1;
   }
 
   #page(): HTMLElement | null {

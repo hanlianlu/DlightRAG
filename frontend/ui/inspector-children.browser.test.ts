@@ -1199,9 +1199,9 @@ it('names a child by its id when it has no objective', async () => {
   expect(rows(dock)[0]!.text).to.equal('a Running');
 });
 
-// ── The live edge of a child's activity ──
+// ── A child's page, laid out ──
 
-describe('the page of a running child', () => {
+describe('the page of a child', () => {
   let unlink: () => void;
   before(async () => {
     // Scrolling needs the page laid out as the product lays it out.
@@ -1318,6 +1318,25 @@ describe('the page of a running child', () => {
     await waitFor(() => shown(dock).includes('Step 33'));
 
     expect(box.scrollTop, 'a reader who is no longer at the bottom is not pulled back to it').to.equal(stood);
+  });
+
+  it('offers the whole objective when the dock is narrowed until the title is cut off', async () => {
+    const objective = 'Make the strongest case for terminating the Northwind supply agreement early, citing the notice clause and its penalty';
+    const settled = row('a', 'succeeded', {objective, started_at: ago(9), finished_at: ago(1)});
+    serve({page: () => roster([settled]), observe: () => observation(settled)});
+    // A narrow dock either way, so nothing but the width changes: a settled child has no clock to redraw it.
+    const dock = await mount(sourceFor().source, 620);
+    await waitFor(() => rows(dock).length === 1);
+    await openChild(dock, 'a');
+    const more = session(dock).querySelector<HTMLElement>('[data-more]')!;
+    expect(more.hidden, 'the objective fits at first').to.equal(true);
+
+    dock.style.width = '300px';
+    await waitFor(() => !more.hidden);
+    expect(more.textContent!.trim()).to.equal('Show full objective');
+
+    dock.style.width = '620px';
+    await waitFor(() => more.hidden === true);
   });
 
   it('does not follow a child that has settled', async () => {
