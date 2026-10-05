@@ -37,6 +37,7 @@ from dlightrag.adapters.postgres.runtime.run_store import (
 )
 from dlightrag.application.runs import RunView
 from dlightrag.application.web_conversations import (
+    STEERING_MESSAGES_PER_TURN,
     AnswerTurnCreation,
     CarriedAttachment,
     ConversationCursor,
@@ -373,6 +374,25 @@ t.conversation_id::text AS turn_conversation_id,
 t.created_at AS turn_created_at
 """
 
+#: The user's own steering of one run, oldest first: the parent's inbox entries, not
+#: a Child's targeted control nor a message the parent wrote itself.
+_STEERING_COLUMN = f"""
+(
+    SELECT array_agg(s.content ORDER BY s.control_sequence)
+    FROM (
+        SELECT c.content, c.control_sequence
+        FROM dlightrag_agent_controls AS c
+        WHERE c.owner_id = r.owner_id
+          AND c.run_id = r.run_id
+          AND c.kind = 'steer'
+          AND c.origin = 'user'
+          AND c.target_session_id IS NULL
+        ORDER BY c.control_sequence DESC
+        LIMIT {STEERING_MESSAGES_PER_TURN}
+    ) AS s
+) AS steering_messages
+"""  # noqa: S608 - interpolates only a trusted integer constant
+
 _TURN_CONVERSATION_SUMMARY_COLUMNS = """
 c.conversation_id::text AS conversation_id,
 c.title,
@@ -393,7 +413,8 @@ WITH selected_turns AS (
 )
 SELECT
 {_TURN_COLUMNS},
-{run_columns("r")}
+{run_columns("r")},
+{_STEERING_COLUMN}
 FROM selected_turns AS t
 JOIN dlightrag_runs AS r
   ON r.owner_id = t.principal_id
@@ -441,6 +462,7 @@ SELECT
 {_TURN_COLUMNS},
 r.request_fingerprint,
 {run_columns("r")},
+{_STEERING_COLUMN},
 {_TURN_CONVERSATION_SUMMARY_COLUMNS}
 FROM web_conversation_turns AS t
 JOIN dlightrag_runs AS r
@@ -456,7 +478,8 @@ WHERE t.principal_id = $1
 _GET_TURN_BY_RUN = f"""
 SELECT
 {_TURN_COLUMNS},
-{run_columns("r")}
+{run_columns("r")},
+{_STEERING_COLUMN}
 FROM web_conversation_turns AS t
 JOIN dlightrag_runs AS r
   ON r.owner_id = t.principal_id
@@ -552,6 +575,7 @@ def _linked_turn(row: Any) -> LinkedTurn:
         created_at=row["turn_created_at"],
         run=RunView.from_runtime(run_record(row)),
         conversation_id=str(row["turn_conversation_id"]),
+        steering_messages=tuple(row["steering_messages"] or ()),
     )
 
 

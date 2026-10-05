@@ -131,6 +131,7 @@ def project_conversation_turn(
             _attachment_reference(run.run_id, turn.turn_number, attachment)
             for attachment in request.attachments
         ],
+        steering_messages=list(turn.steering_messages),
         presentation=presentation,
         usage=dict((run.result or {}).get("usage") or {}),
         error_kind=run.error_kind,

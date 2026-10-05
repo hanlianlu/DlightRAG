@@ -761,7 +761,7 @@ export function storedTurnView(stored: ConversationTurn): ChatTurnView {
     liveStatus: '',
     sawChildren: false,
     cancelRequested: stored.cancelRequested,
-    steeringMessages: [],
+    steeringMessages: stored.steeringMessages,
     toolRows: [],
   };
 }

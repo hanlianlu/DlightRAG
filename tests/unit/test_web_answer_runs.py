@@ -10,6 +10,7 @@ keys, retention, and concurrency live in the PostgreSQL integration suite.
 import asyncio
 import datetime
 import json
+from dataclasses import replace
 from functools import partial
 from types import SimpleNamespace
 from typing import Any, cast
@@ -1754,6 +1755,16 @@ async def test_the_live_done_frame_and_the_history_carry_one_presentation_wire(
 # ---------------------------------------------------------------------------
 # Turn projection
 # ---------------------------------------------------------------------------
+
+
+def test_a_turn_carries_the_steering_its_run_received_in_order() -> None:
+    turn = project_conversation_turn(
+        replace(
+            linked_turn(answer_run(status="running")), steering_messages=("shorter", "in Chinese")
+        )
+    )
+
+    assert turn.steering_messages == ["shorter", "in Chinese"]
 
 
 @pytest.mark.parametrize("status", ["queued", "running"])

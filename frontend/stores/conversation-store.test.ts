@@ -40,6 +40,7 @@ function turn(number: number) {
     userText: `Question ${number}`,
     assistantText: `Answer ${number}`,
     userAttachments: [],
+    steeringMessages: [],
     presentation: null,
     usage: {},
     errorKind: null,

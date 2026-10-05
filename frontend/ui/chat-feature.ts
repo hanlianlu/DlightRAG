@@ -802,11 +802,7 @@ export class DlChatFeature extends LightElement {
   }
 
   #replaceStoredTurn(turnId: string, stored: ConversationTurn): void {
-    this.#updateTurn(turnId, (turn) => ({
-      ...storedTurnView(stored),
-      id: turnId,
-      steeringMessages: turn.steeringMessages,
-    }));
+    this.#updateTurn(turnId, () => ({...storedTurnView(stored), id: turnId}));
   }
 
   #setTurnError(turnId: string, message: string): void {
