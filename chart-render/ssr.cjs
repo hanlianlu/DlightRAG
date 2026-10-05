@@ -18,17 +18,19 @@ function loadEcharts() {
   throw new Error('echarts.min.js is missing: run `npm ci` in chart-render');
 }
 
+let chart;
 try {
   const echarts = loadEcharts();
   const {option, width, height, mode = 'light'} = JSON.parse(readFileSync(0, 'utf8'));
   const {name, option: picked} = Theme.pick(option);
   echarts.registerTheme('dlight', Theme.build(structure, palette[mode])[name]);
-  const chart = echarts.init(null, 'dlight', {renderer: 'svg', ssr: true, width, height});
+  chart = echarts.init(null, 'dlight', {renderer: 'svg', ssr: true, width, height});
   chart.setOption(Theme.decorate(picked, name));
   process.stdout.write(chart.renderToSVGString());
-  // Without dispose, zrender's timer keeps node alive.
-  chart.dispose();
 } catch (error) {
   process.stderr.write(String(error?.message ?? error));
   process.exitCode = 1;
+} finally {
+  // Without dispose, zrender's timer keeps node alive, an option that throws included.
+  chart?.dispose();
 }

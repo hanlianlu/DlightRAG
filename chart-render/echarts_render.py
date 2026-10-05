@@ -150,12 +150,16 @@ def _draw(option: dict[str, Any], width: int, height: int) -> str:
     # A toolbox's buttons do nothing in a picture.
     picture = {key: value for key, value in option.items() if key != "toolbox"}
     request = {"option": {**picture, "animation": False}, "width": width, "height": height}
-    drawn = subprocess.run(  # noqa: S603 - argv list, no shell, a fixed executable
-        ["node", str(_HERE / "ssr.cjs")],  # noqa: S607 - node is on the image's PATH
-        input=json.dumps(request),
-        capture_output=True,
-        text=True,
-    )
+    try:
+        drawn = subprocess.run(  # noqa: S603 - argv list, no shell, a fixed executable
+            ["node", str(_HERE / "ssr.cjs")],  # noqa: S607 - node is on the image's PATH
+            input=json.dumps(request),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        _fail("ECharts took more than two minutes to draw this option; it is too large")
     if drawn.returncode or not drawn.stdout.startswith("<svg"):
         _fail(f"ECharts could not draw this option: {drawn.stderr.strip()[:300] or 'no output'}")
     return drawn.stdout

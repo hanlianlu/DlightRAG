@@ -41,12 +41,12 @@
   --radius-pill: 999px;
 
   /* Tags: the categorical marks of the chart palette, one per tone. */
-  --tone-1: #003e83; /* azurite */
-  --tone-2: #015d58; /* malachite */
-  --tone-3: #8a50ad; /* amethyst */
-  --tone-4: #2d85a8; /* aquamarine */
-  --tone-5: #903763; /* rhodonite */
-  --tone-6: #992413; /* cinnabar */
+  --tone-1: #003c7f; /* azurite */
+  --tone-2: #186964; /* malachite */
+  --tone-3: #8951ac; /* amethyst */
+  --tone-4: #2e85a8; /* aquamarine */
+  --tone-5: #972312; /* cinnabar */
+  --tone-6: #2e3540; /* slate */
   --tone-ink: 40%; /* how much of the text colour a tag's label takes */
   --tone-tint: 14%; /* how much of its tone a tag's background takes */
 
@@ -88,8 +88,8 @@
     --tone-2: #09b4a9;
     --tone-3: #c899f0;
     --tone-4: #7dcae6;
-    --tone-5: #e08098;
-    --tone-6: #b95a4a;
+    --tone-5: #b95a4a;
+    --tone-6: #737b83;
     --tone-ink: 36%;
     --tone-tint: 18%;
   }

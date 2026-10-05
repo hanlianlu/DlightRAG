@@ -36,6 +36,11 @@ _SERIES = echarts_render.SERIES
 _TIDY_SERIES = frozenset({"bar", "line", "scatter", "effectScatter", "pie", "funnel"})
 _VOID = frozenset("area base br col embed hr img input link meta param source track wbr".split())
 _HIDDEN_TEXT = frozenset({"script", "style", "title", "template", "noscript", "head"})
+# Elements that end a line of text; an inline element, such as <b>, does not split a phrase.
+_BLOCKS = frozenset(
+    "address article aside blockquote br dd details div dl dt figcaption figure footer h1 h2 h3 h4 h5 h6 "
+    "header hr li main nav ol p pre section summary table tbody td tfoot th thead tr ul".split()
+)
 _FORBIDDEN_ELEMENTS = {
     "link": "a <link> cannot load anything in the sandbox",
     "iframe": "a nested frame cannot load in the sandbox",
@@ -219,6 +224,8 @@ class _Parser(HTMLParser):
             self._pages.append((len(self._stack), page))
         if tag == "h1" and not self.found.h1:
             self._h1_open = True
+        if tag in _BLOCKS:
+            self.found.text.append(("\n", element.line))
         if tag not in _VOID:
             self._stack.append(element)
 
@@ -234,6 +241,8 @@ class _Parser(HTMLParser):
             self.found.styles.append(("".join(self._style_text), self._style_line))
         elif tag == "h1":
             self._h1_open = False
+        if tag in _BLOCKS:
+            self.found.text.append(("\n", self.getpos()[0]))
         for depth in range(len(self._stack) - 1, -1, -1):
             if self._stack[depth].tag == tag:
                 del self._stack[depth:]
@@ -421,6 +430,14 @@ def _read_blocks(report: _Report) -> None:
         chart.block_line = block.line
         try:
             spec = json.loads(fragment.block_text[id(block)], parse_constant=_reject_constant)
+        except json.JSONDecodeError as error:
+            # The error counts lines from the first character after the script tag.
+            where = f"line {block.line + error.lineno - 1}, column {error.colno}"
+            report.error(
+                f'chart "{chart_id}" ({where}): the JSON block is not valid ({error.msg}); '
+                "JSON allows no comments, trailing commas, NaN or functions"
+            )
+            continue
         except ValueError as error:
             report.error(
                 f'chart "{chart_id}" (line {block.line}): the JSON block is not valid ({error}); '
@@ -779,7 +796,7 @@ def _check_boilerplate(report: _Report) -> None:
     starts: list[tuple[int, int]] = []
     for text, line in report.fragment.text:
         starts.append((len(joined), line))
-        joined += text + "\n"
+        joined += text
     for family, rule in _BOILERPLATE_RULES:
         for match in rule.finditer(joined):
             line = next((ln for at, ln in reversed(starts) if at <= match.start()), 0)
@@ -822,9 +839,14 @@ def _node(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
             input=json.dumps({"jobs": jobs}),
             capture_output=True,
             text=True,
+            timeout=300,
         )
     except FileNotFoundError as error:
         raise ReportError("node is not on PATH, and the charts are checked with it") from error
+    except subprocess.TimeoutExpired as error:
+        raise ReportError(
+            "drawing the charts took more than five minutes; cut their rows"
+        ) from error
     if drawn.returncode:
         raise ReportError(f"the chart renderer failed: {drawn.stderr.strip()[:300]}")
     return json.loads(drawn.stdout)
@@ -914,7 +936,8 @@ def _runtime() -> str:
 
 def _document(fragment: str, found: _Fragment, title: str | None) -> str:
     visible = "".join(text for text, _ in found.text)
-    chinese = len(_CJK.findall(visible)) > max(8, len(visible) * 0.02)
+    han, latin = len(_CJK.findall(visible)), len(re.findall(r"[A-Za-z]", visible))
+    chinese = han >= 2 and han >= 0.15 * (han + latin)
     try:
         library = _escape_script(echarts_render.echarts_library().read_text(encoding="utf-8"))
     except echarts_render.RenderError as error:

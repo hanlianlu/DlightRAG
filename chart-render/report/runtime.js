@@ -430,8 +430,9 @@ function setupPages() {
   sections.forEach((section, index) => {
     const id = section.getAttribute('data-page') || `page-${index + 1}`;
     const title = section.getAttribute('data-title') || id;
-    const tab = el('button', {type: 'button', role: 'tab', id: `tab-${id}`, class: 'tab', 'aria-selected': 'false', tabindex: '-1', text: title, 'data-label': title});
-    tab.dataset.page = id;
+    if (!section.id) section.id = `page-${id}`;
+    const tab = el('button', {type: 'button', role: 'tab', id: `tab-${id}`, class: 'tab', 'aria-selected': 'false', 'aria-controls': section.id, tabindex: '-1', text: title, 'data-label': title});
+    tab.dataset.tab = id;
     section.setAttribute('role', 'tabpanel');
     section.setAttribute('aria-labelledby', tab.id);
     section.classList.add('page');
@@ -501,8 +502,8 @@ function labelCallouts() {
   for (const callout of doc.querySelectorAll('.callout[data-kind]')) {
     const kind = callout.getAttribute('data-kind');
     if (!text[kind] || callout.querySelector('.callout-label')) continue;
-    const glyph = {insight: '◆', caution: '▲', risk: '■', note: '●'}[kind];
-    callout.prepend(el('span', {class: 'callout-label'}, [el('i', {'aria-hidden': 'true', text: glyph}), doc.createTextNode(text[kind])]));
+    // The glyph is a shape the stylesheet draws, so it holds no text a reader or a checker could meet.
+    callout.prepend(el('span', {class: 'callout-label'}, [el('i', {'aria-hidden': 'true'}), doc.createTextNode(text[kind])]));
   }
 }
 

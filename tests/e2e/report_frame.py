@@ -111,9 +111,15 @@ class ReportPage:
         width: int,
         height: int = 900,
         scheme: Literal["light", "dark"] = "light",
+        touch: bool = False,
+        ready: bool = True,
     ) -> None:
         self.context = browser.new_context(
-            viewport={"width": width, "height": height}, color_scheme=scheme, device_scale_factor=1
+            viewport={"width": width, "height": height},
+            color_scheme=scheme,
+            device_scale_factor=1,
+            has_touch=touch,
+            is_mobile=touch,
         )
         self.context.add_init_script(_VIOLATIONS)
         self.page: Page = self.context.new_page()
@@ -138,9 +144,10 @@ class ReportPage:
         if frame is None:
             raise RuntimeError("the artifact iframe did not open")
         self.frame: Frame = frame
-        self.frame.wait_for_function(
-            "() => document.documentElement.dataset.reportReady === 'true'"
-        )
+        if ready:
+            self.frame.wait_for_function(
+                "() => document.documentElement.dataset.reportReady === 'true'"
+            )
 
     def _console(self, message: ConsoleMessage) -> None:
         # The host page's own ``allow`` attribute lists features this Chromium does not know.
