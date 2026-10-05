@@ -5,6 +5,7 @@ import test from 'node:test';
 import {AnswerSubmissionError} from './web-command-error.ts';
 import {ApiError} from './wire.ts';
 import {
+  CHILD_TRANSCRIPT_LIMIT,
   ChildControlRejectedError,
   forkAnswerRun,
   controlAnswerChild,
@@ -98,6 +99,26 @@ test('history pages encode cursor and limit, normalize rollback payloads, and pa
   );
   assert.equal(seenSignal, controller.signal);
   assert.equal(result.nextCursor, null);
+});
+
+test('a stored turn reports how many children its Run started, and none when the server says nothing', async () => {
+  const turn = (count: Record<string, number>) => ({
+    turn_id: 'turn-1', turn_number: 1, answer_run_id: 'run-1', submission_id: 'submission-1',
+    status: 'succeeded', cancel_requested: false, user_text: 'question', assistant_text: '',
+    user_attachments: [], presentation: null, usage: {}, error_kind: null, error_message: null,
+    created_at: '2026-08-23T00:00:00Z', ...count,
+  });
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    conversation: {
+      conversation_id: 'conversation-1', title: null,
+      created_at: '2026-08-23T00:00:00Z', updated_at: '2026-08-23T00:00:00Z',
+    },
+    turns: [turn({child_count: 3}), turn({})],
+  }), {headers: {'Content-Type': 'application/json'}});
+
+  const history = await getConversationHistory('conversation-1');
+
+  assert.deepEqual(history.turns.map((stored) => stored.childCount), [3, 0]);
 });
 
 test('continuation posts one submission id to the selected branch operation', async () => {
@@ -206,7 +227,10 @@ test('child roster pages encode the opaque cursor and normalize the continuation
       }));
     }
     return new Response(JSON.stringify({
-      children: [{child_session_id: 'child-1', status: 'running'}],
+      children: [{
+        child_session_id: 'child-1', status: 'running',
+        started_at: '2026-10-05T12:00:00Z', finished_at: null, pending_questions: 2,
+      }],
       next_cursor: 'opaque-token',
     }));
   };
@@ -215,10 +239,19 @@ test('child roster pages encode the opaque cursor and normalize the continuation
   assert.deepEqual(first.children.map((child) => child.childSessionId), ['child-1']);
   assert.equal(first.nextCursor, 'opaque-token');
   assert.equal(requests[0], 'http://localhost/web/api/answer/run-1/children');
+  assert.deepEqual(
+    [first.children[0]?.startedAt, first.children[0]?.finishedAt, first.children[0]?.pendingQuestions],
+    ['2026-10-05T12:00:00Z', null, 2],
+  );
 
   const older = await getAnswerRunChildrenPage('run-1', 'opaque-token');
   assert.deepEqual(older.children.map((child) => child.childSessionId), ['child-2']);
   assert.equal(older.nextCursor, null);
+  // A server that sends no timing or question count still reads: nothing known, nothing waiting.
+  assert.deepEqual(
+    [older.children[0]?.startedAt, older.children[0]?.finishedAt, older.children[0]?.pendingQuestions],
+    [null, null, 0],
+  );
   assert.equal(
     requests[1],
     'http://localhost/web/api/answer/run-1/children?cursor=opaque-token',
@@ -226,23 +259,35 @@ test('child roster pages encode the opaque cursor and normalize the continuation
 });
 
 test('child observation normalizes transcript, controls, and questions', async () => {
-  globalThis.fetch = async () => new Response(JSON.stringify({
-    run_id: 'run-1',
-    child: {child_session_id: 'child-1', status: 'running', result_handles: ['ev-1']},
-    transcript: [{role: 'user', content: 'inspect'}],
-    controls: [{
-      control_sequence: 3, kind: 'steer', content: 'focus', origin: 'user',
-      consumed: false, consumed_at: null,
-    }],
-    questions: [{request_id: 'req-1', question: 'Which source?', status: 'pending'}],
-    result: {status: 'running', summary: 'working', handles: ['ev-1']},
-  }));
+  let requested = '';
+  globalThis.fetch = async (input) => {
+    requested = String(input);
+    return new Response(JSON.stringify({
+      run_id: 'run-1',
+      child: {child_session_id: 'child-1', status: 'running', result_handles: ['ev-1']},
+      transcript: [
+        {role: 'user', content: 'inspect'},
+        {role: 'assistant', content: '', tool_calls: [{id: 'call-1', name: 'search_knowledge_base'}, {}]},
+      ],
+      controls: [{
+        control_sequence: 3, kind: 'steer', content: 'focus', origin: 'user',
+        consumed: false, consumed_at: null,
+      }],
+      questions: [{request_id: 'req-1', question: 'Which source?', status: 'pending'}],
+      result: {status: 'running', summary: 'working', handles: ['ev-1']},
+    }));
+  };
 
   const observation = await getAnswerRunChild('run-1', 'child/1');
 
+  assert.equal(requested, `/web/api/answer/run-1/children/child%2F1?limit=${CHILD_TRANSCRIPT_LIMIT}`);
   assert.equal(observation.child.childSessionId, 'child-1');
   assert.deepEqual(observation.child.resultHandles, ['ev-1']);
   assert.equal(observation.transcript[0]?.content, 'inspect');
+  assert.deepEqual(observation.transcript[1]?.toolCalls, [
+    {id: 'call-1', name: 'search_knowledge_base'},
+    {id: '', name: ''},
+  ]);
   assert.equal(observation.controls[0]?.consumed, false);
   assert.equal(observation.questions[0]?.requestId, 'req-1');
   assert.deepEqual(observation.result?.handles, ['ev-1']);

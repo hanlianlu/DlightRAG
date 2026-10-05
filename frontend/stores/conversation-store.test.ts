@@ -44,6 +44,7 @@ function turn(number: number) {
     usage: {},
     errorKind: null,
     errorMessage: null,
+    childCount: 0,
     createdAt: '2026-08-20T00:00:00Z',
   };
 }
