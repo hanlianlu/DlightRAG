@@ -52,6 +52,22 @@ def test_every_gate_runs_on_each_push_and_pull_request_and_cannot_pass_by_skippi
         assert gate in fast, gate
 
 
+def test_the_chart_tests_run_where_resvg_and_the_font_are_installed() -> None:
+    """The PNG tests fail, not skip, in CI; the jobs that run them must provide what they need."""
+    steps = _job("fast")["steps"]
+    runs = [step.get("run", "") for step in steps]
+    install = next(i for i, run in enumerate(runs) if "scripts/install-chart-tools.sh" in run)
+
+    assert "GITHUB_PATH" in runs[install]
+    assert "ECHARTS_RENDER_FONT_DIR" in runs[install]
+    assert install < runs.index("make chart-render-test") < runs.index("make test-unit")
+
+    # The browser job builds real reports with the CLI, which draws with the installed ECharts.
+    browser = [step.get("run", "") for step in _job("browser-e2e")["steps"]]
+    tests = next(i for i, run in enumerate(browser) if "pytest tests/e2e" in run)
+    assert "make chart-render-install" in browser[:tests]
+
+
 def test_every_postgresql_suite_runs_in_ci_or_says_why_not() -> None:
     command = _named_step(_job("integration"), _PG_TESTS)["run"]
     selected = set(re.findall(r"tests/integration/test_\w+\.py", command))
