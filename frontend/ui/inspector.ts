@@ -119,10 +119,12 @@ export class DlInspector extends LightElement {
     await this.#focusOnCompact();
   }
 
-  /** Open one Run's Child agents. */
+  /** Open one Run's Child agents. Asked for the Run the dock already shows, it keeps its source, and
+   * so the child the reader has open and what they have typed. */
   async openChildren(source: ChildrenSource, returnFocus?: HTMLElement | null): Promise<void> {
+    const showing = this.kind === 'children' && this.childrenSource?.runId === source.runId;
     if (!this.#beginOpen('children', returnFocus)) return;
-    this.childrenSource = source;
+    if (!showing) this.childrenSource = source;
     await this.updateComplete;
     await this.#focusOnCompact();
   }
