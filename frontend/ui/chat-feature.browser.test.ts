@@ -1830,6 +1830,9 @@ it('Message List bounds steering wrappers within one retained turn', async () =>
   expect(list.textContent?.match(/Steering \d+/g)?.length).to.equal(50);
   expect(list.textContent).not.to.contain('Steering 0');
   expect(list.textContent).to.contain('Steering 50');
+  const lastSteer = [...list.querySelectorAll('[data-steer]')].at(-1)!;
+  const answer = list.querySelector('article[data-run-id="run-steered"]')!;
+  expect(lastSteer.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).to.be.greaterThan(0);
 });
 
 it('Message List exposes child-agent progress and roster intent through public state', async () => {
