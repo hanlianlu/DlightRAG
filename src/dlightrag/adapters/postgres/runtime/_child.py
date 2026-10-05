@@ -171,7 +171,20 @@ WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
 RETURNING 1
 """
 
-_SELECT_CHILD_SESSION = """
+# What a roster row says about time and waiting beyond the Child's own columns: when the
+# latest Operation began and last changed, and how many of the Child's questions to the
+# parent still wait. Every statement below binds the owner as $1 and the run as $2 and
+# aliases the child table `child` and its latest Operation `operation`.
+_CHILD_TIMING_COLUMNS = """operation.created_at AS operation_created_at,
+       operation.updated_at AS operation_updated_at,
+       (SELECT count(*)::int
+        FROM dlightrag_answer_child_guidance AS guidance
+        WHERE guidance.owner_id = $1 AND guidance.run_id = $2
+          AND guidance.child_session_id = child.child_session_id
+          AND guidance.status = 'pending' AND guidance.expires_at > NOW()
+       ) AS pending_questions"""
+
+_SELECT_CHILD_SESSION = f"""
 SELECT child.child_session_id, child.parent_session_id, child.parent_call_id,
        child.status, child.cancel_requested_at, child.summary, child.parent_intent_id,
        child.objective, child.context_mode, child.model_role, child.tools_json, child.usage_json,
@@ -184,6 +197,7 @@ SELECT child.child_session_id, child.parent_session_id, child.parent_call_id,
        operation.origin AS operation_origin,
        operation.status AS operation_status,
        operation.cancellation_origin,
+       {_CHILD_TIMING_COLUMNS},
        (SELECT jsonb_agg(history.usage_json ORDER BY history.operation_sequence)
         FROM dlightrag_answer_child_operations AS history
         WHERE history.owner_id = child.owner_id AND history.run_id = child.run_id
@@ -197,9 +211,9 @@ LEFT JOIN LATERAL (
     ORDER BY operation.operation_sequence DESC LIMIT 1
 ) AS operation ON TRUE
 WHERE child.owner_id = $1 AND child.run_id = $2 AND child.child_session_id = $3
-"""
+"""  # noqa: S608 - interpolates only the trusted column constant
 
-_SELECT_CHILD_SESSIONS = """
+_SELECT_CHILD_SESSIONS = f"""
 SELECT child.child_session_id, child.parent_session_id, child.parent_call_id,
        child.parent_intent_id, child.status, child.cancel_requested_at, child.summary,
        child.objective, child.context_mode, child.model_role, child.tools_json, child.usage_json,
@@ -212,6 +226,7 @@ SELECT child.child_session_id, child.parent_session_id, child.parent_call_id,
        operation.origin AS operation_origin,
        operation.status AS operation_status,
        operation.cancellation_origin,
+       {_CHILD_TIMING_COLUMNS},
        (SELECT jsonb_agg(history.usage_json ORDER BY history.operation_sequence)
         FROM dlightrag_answer_child_operations AS history
         WHERE history.owner_id = child.owner_id AND history.run_id = child.run_id
@@ -226,7 +241,7 @@ LEFT JOIN LATERAL (
 ) AS operation ON TRUE
 WHERE child.owner_id = $1 AND child.run_id = $2
 ORDER BY child.created_at, child.child_session_id
-"""
+"""  # noqa: S608 - interpolates only the trusted column constant
 
 _CHILD_ROSTER_COLUMNS = """
 child_session_id, parent_session_id, parent_call_id, parent_intent_id,
@@ -239,7 +254,8 @@ _SELECT_CHILD_SESSIONS_FIRST_PAGE = f"""
 SELECT child.*, operation.operation_sequence, operation.operation_id,
        operation.idempotency_key AS operation_key,
        operation.content AS operation_content, operation.origin AS operation_origin,
-       operation.status AS operation_status, operation.cancellation_origin
+       operation.status AS operation_status, operation.cancellation_origin,
+       {_CHILD_TIMING_COLUMNS}
 FROM (
     SELECT {_CHILD_ROSTER_COLUMNS}
     FROM dlightrag_answer_child_sessions
@@ -260,7 +276,8 @@ _SELECT_CHILD_SESSIONS_AFTER = f"""
 SELECT child.*, operation.operation_sequence, operation.operation_id,
        operation.idempotency_key AS operation_key,
        operation.content AS operation_content, operation.origin AS operation_origin,
-       operation.status AS operation_status, operation.cancellation_origin
+       operation.status AS operation_status, operation.cancellation_origin,
+       {_CHILD_TIMING_COLUMNS}
 FROM (
     SELECT {_CHILD_ROSTER_COLUMNS}
     FROM dlightrag_answer_child_sessions
@@ -634,6 +651,7 @@ def _child_roster_row(row: Any) -> dict[str, Any]:
         "budget": _json_value(row["budget_json"]),
         "host_state": _json_value(row["host_state_json"]),
         "fencing_epoch": int(row["fencing_epoch"]),
+        "pending_questions": int(row["pending_questions"]),
         **(
             {
                 "operation_sequence": int(row["operation_sequence"]),
@@ -642,6 +660,8 @@ def _child_roster_row(row: Any) -> dict[str, Any]:
                 "operation_input": row["operation_content"],
                 "operation_origin": row["operation_origin"],
                 "operation_status": row["operation_status"],
+                "operation_created_at": row["operation_created_at"],
+                "operation_updated_at": row["operation_updated_at"],
                 "cancellation_origin": row["cancellation_origin"],
                 **(
                     {"operation_usage": _json_value(row["operation_usage_jsons"] or [])}
@@ -917,8 +937,13 @@ class ChildRunStoreMixin:
                 "operation_input": row["operation_content"],
                 "operation_origin": row["operation_origin"],
                 "operation_status": row["operation_status"],
+                "operation_created_at": row["operation_created_at"],
+                "operation_updated_at": row["operation_updated_at"],
                 "cancellation_origin": row["cancellation_origin"],
                 "operation_usage": _json_value(row["operation_usage_jsons"] or []),
+                "pending_questions": int(row["pending_questions"]),
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
             }
 
         return await self._run_read(_operation)

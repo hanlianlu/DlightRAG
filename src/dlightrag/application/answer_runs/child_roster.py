@@ -154,13 +154,31 @@ def child_result_lineage(row: Mapping[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def stamp(value: Any) -> str | None:
+    """Format one stored timestamp as the ISO-8601 UTC text every public record carries."""
+    if value is None:
+        return None
+    isoformat = getattr(value, "isoformat", None)
+    if callable(isoformat):
+        return str(isoformat()).replace("+00:00", "Z")
+    text = str(value).strip()
+    return text or None
+
+
 def public_child_status(row: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the Web/REST child projection without private runtime envelopes."""
+    """Return the Web/REST child projection without private runtime envelopes.
+
+    ``started_at`` is when the Child's current Operation began and ``finished_at``
+    when it settled, so a client can show how long it has run or took. A Child
+    whose row carries no Operation falls back to its own creation and update time.
+    """
     lineage = child_result_lineage(row)
     usage = row.get("usage")
+    status = str(row.get("status") or "")
+    has_operation = row.get("operation_created_at") is not None
     return {
         "child_session_id": str(row.get("child_session_id") or ""),
-        "status": str(row.get("status") or ""),
+        "status": status,
         "objective": row.get("objective"),
         "model_role": row.get("model_role"),
         "usage": dict(usage) if isinstance(usage, Mapping) else None,
@@ -174,6 +192,15 @@ def public_child_status(row: Mapping[str, Any]) -> dict[str, Any]:
             else (None if lineage is None else lineage.get("summary") or None)
         ),
         "result_handles": list(lineage["handles"]) if lineage is not None else [],
+        "started_at": stamp(
+            row.get("operation_created_at") if has_operation else row.get("created_at")
+        ),
+        "finished_at": (
+            None
+            if status == "running"
+            else stamp(row.get("operation_updated_at") if has_operation else row.get("updated_at"))
+        ),
+        "pending_questions": int(row.get("pending_questions") or 0),
     }
 
 
@@ -194,4 +221,5 @@ __all__ = [
     "ChildRosterRowPage",
     "child_result_lineage",
     "public_child_status",
+    "stamp",
 ]

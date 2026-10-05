@@ -177,7 +177,7 @@ A first-class Agent Session inside one parent Answer Run. `spawn_agent` durably 
 _Avoid_: child run, detached job, mission, background swarm
 
 **Subagent Roster**:
-The owner-visible status, observation, targeted steer/continue/cancel, and guidance-question projection for Child Sessions created by `spawn_agent`. Children run asynchronously after dispatch; Child Evidence is admitted into the parent ledger before the parent effect settles.
+The owner-visible status, observation, targeted steer/continue/cancel, and guidance-question projection for Child Sessions created by `spawn_agent`. It carries when each Child's current Operation started and finished and how many of its questions still wait. Children run asynchronously after dispatch; Child Evidence is admitted into the parent ledger before the parent effect settles.
 _Avoid_: Delegate Research, workflow engine, child queue
 
 **Prepared Input**:
