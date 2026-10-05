@@ -293,8 +293,14 @@ export class DlChildSession extends LightElement {
     return this.missing || this.entry === null;
   }
 
-  #draftKey(mode: 'steer' | 'continue' | 'reply', scope: string | null): string {
-    return `${this.childSessionId}:${mode}:${scope ?? ''}`;
+  /** The box of a child's Operation. It steers the Operation while the child runs and continues it once the
+   * child settles, so what was typed stays with the Operation when the child settles under the reader. */
+  #composerKey(operationId: string | null): string {
+    return `${this.childSessionId}:${operationId ?? ''}`;
+  }
+
+  #replyKey(requestId: string): string {
+    return `${this.childSessionId}:reply:${requestId}`;
   }
 
   #draft(key: string): Draft {
@@ -352,7 +358,7 @@ export class DlChildSession extends LightElement {
     const child = this.#child();
     if (!child) return;
     const action = child.status === 'running' ? 'steer' : 'continue';
-    const key = this.#draftKey(action, child.operationId);
+    const key = this.#composerKey(child.operationId);
     const {text, reauthorize} = this.#draft(key);
     const content = text.trim();
     if (!content) return;
@@ -372,7 +378,7 @@ export class DlChildSession extends LightElement {
   #submitReply = (event: Event): void => {
     event.preventDefault();
     const requestId = (event.currentTarget as HTMLFormElement).dataset.request!;
-    const key = this.#draftKey('reply', requestId);
+    const key = this.#replyKey(requestId);
     const content = this.#draft(key).text.trim();
     if (!content) return;
     void this.#execute('reply', requestId, key, (source) => source.reply(requestId, content));
@@ -578,7 +584,7 @@ export class DlChildSession extends LightElement {
     const label = question.expiresAt === null
       ? msg('Asking the parent', {id: 'childSession.asking'})
       : msg(str`Asking the parent · expires in ${minutes} min`, {id: 'childSession.askingExpires'});
-    const key = this.#draftKey('reply', question.requestId);
+    const key = this.#replyKey(question.requestId);
     const draft = this.#draft(key);
     const busy = this.#sendingNow('reply', question.requestId);
     return html`
@@ -766,7 +772,7 @@ export class DlChildSession extends LightElement {
 
   #composer(child: AgentChildStatus, running: boolean): TemplateResult {
     const mode = running ? 'steer' : 'continue';
-    const key = this.#draftKey(mode, child.operationId);
+    const key = this.#composerKey(child.operationId);
     const draft = this.#draft(key);
     const busy = this.#sendingNow(mode);
     const userCancelled = !running && child.status === 'cancelled' && child.cancellationOrigin === 'user';

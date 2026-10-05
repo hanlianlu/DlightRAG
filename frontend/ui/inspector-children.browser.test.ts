@@ -1042,6 +1042,32 @@ it('keeps what the reader typed across refreshes and across children, for each O
   await waitFor(() => composer(dock).value === 'for A, first Operation');
 });
 
+it('keeps what was typed for a running child when it settles under the reader, and starts a new Operation empty', async () => {
+  immediateFollowRefreshes();
+  let status = 'running';
+  let operation = 'op-a';
+  const current = () => row('a', status, {
+    operation_id: operation, started_at: ago(5), finished_at: status === 'running' ? null : ago(0),
+  });
+  serve({page: () => roster([current()]), observe: () => observation(current())});
+  const dock = await mount(sourceFor().source, 420);
+  await waitFor(() => rows(dock).length === 1);
+  await openChild(dock, 'a');
+  await type(dock, composer(dock), 'one more thing');
+  expect(composer(dock).placeholder).to.equal('Steer this child…');
+
+  status = 'succeeded';
+  dock.refreshIfFollowing('run-1');
+  await waitFor(() => composer(dock).placeholder === 'Continue this child…');
+  expect(composer(dock).value, 'the text stays with the Operation it was typed for').to.equal('one more thing');
+
+  operation = 'op-a2';
+  status = 'running';
+  dock.refreshIfFollowing('run-1');
+  await waitFor(() => composer(dock).placeholder === 'Steer this child…');
+  expect(composer(dock).value, 'a new Operation has a box of its own').to.equal('');
+});
+
 it('reads a running child again after each roster refresh, and a settled one only when its row changed', async () => {
   immediateFollowRefreshes();
   const stateOf = {a: row('a', 'running', {started_at: ago(5)}), b: row('b', 'succeeded', {started_at: ago(9), finished_at: ago(1)})};
