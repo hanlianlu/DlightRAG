@@ -105,8 +105,8 @@ test('a stored turn reports how many children its Run started, and none when the
   const turn = (count: Record<string, number>) => ({
     turn_id: 'turn-1', turn_number: 1, answer_run_id: 'run-1', submission_id: 'submission-1',
     status: 'succeeded', cancel_requested: false, user_text: 'question', assistant_text: '',
-    user_attachments: [], presentation: null, usage: {}, error_kind: null, error_message: null,
-    created_at: '2026-08-23T00:00:00Z', ...count,
+    user_attachments: [], steering_messages: [], presentation: null, usage: {}, error_kind: null,
+    error_message: null, created_at: '2026-08-23T00:00:00Z', ...count,
   });
   globalThis.fetch = async () => new Response(JSON.stringify({
     conversation: {
