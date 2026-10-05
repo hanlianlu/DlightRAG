@@ -31,8 +31,8 @@ it('keeps a receipt for three seconds, and the answer to its Undo as long', asyn
     return originalSetTimeout(handler, 0);
   }) as typeof window.setTimeout;
 
-  toast.show('Plain receipt');
-  toast.showAction('Undo available', {actionLabel: 'Undo', onAction: async () => {}});
+  toast.show({message: 'Plain receipt'});
+  toast.show({message: 'Undo available', action: {actionLabel: 'Undo', onAction: async () => {}}});
   await toast.updateComplete;
   toast.querySelector<HTMLButtonElement>('button')!.click();
   await new Promise((resolve) => originalSetTimeout(resolve, 0));
@@ -43,19 +43,19 @@ it('keeps a receipt for three seconds, and the answer to its Undo as long', asyn
 it('puts focus on the action when the receipt asks for it, and only then', async () => {
   const toast = mountToast();
 
-  toast.showAction('Plain change', {actionLabel: 'Undo', onAction: async () => {}});
+  toast.show({message: 'Plain change', action: {actionLabel: 'Undo', onAction: async () => {}}});
   await toast.updateComplete;
   expect(document.activeElement).to.equal(document.body);
 
-  toast.showAction('Forgot: one', {actionLabel: 'Undo', onAction: async () => {}, focus: true});
+  toast.show({message: 'Forgot: one', action: {actionLabel: 'Undo', onAction: async () => {}, focus: true}});
   await toast.updateComplete;
   expect(document.activeElement).to.equal(toast.querySelector('.toast-action'));
   expect(toast.inert).to.equal(false);
 
   // A receipt that replaced it first has nothing of the earlier one's to focus.
   (document.activeElement as HTMLElement).blur();
-  toast.showAction('Asked to focus', {actionLabel: 'Undo', onAction: async () => {}, focus: true});
-  toast.show('Replaced at once');
+  toast.show({message: 'Asked to focus', action: {actionLabel: 'Undo', onAction: async () => {}, focus: true}});
+  toast.show({message: 'Replaced at once'});
   await toast.updateComplete;
   expect(document.activeElement).to.equal(document.body);
 });
@@ -63,11 +63,14 @@ it('puts focus on the action when the receipt asks for it, and only then', async
 it('renders escaped text and settles an asynchronous public Undo command in place', async () => {
   const toast = mountToast();
   let calls = 0;
-  toast.showAction('<img src=x> Remembered', {
-    actionLabel: 'Undo',
-    onAction: async () => {
-      calls += 1;
-      return 'Profile Memory change undone.';
+  toast.show({
+    message: '<img src=x> Remembered',
+    action: {
+      actionLabel: 'Undo',
+      onAction: async () => {
+        calls += 1;
+        return 'Profile Memory change undone.';
+      },
     },
   });
   await toast.updateComplete;
@@ -85,16 +88,19 @@ it('renders escaped text and settles an asynchronous public Undo command in plac
 
 it('uses domain-neutral fallbacks when an action supplies no receipt', async () => {
   const toast = mountToast();
-  toast.showAction('First change', {actionLabel: 'Undo', onAction: async () => {}});
+  toast.show({message: 'First change', action: {actionLabel: 'Undo', onAction: async () => {}}});
   await toast.updateComplete;
   toast.querySelector<HTMLButtonElement>('button')?.click();
   await new Promise((resolve) => setTimeout(resolve, 0));
   await toast.updateComplete;
   expect(toast.textContent?.trim()).to.equal('Change undone.');
 
-  toast.showAction('Second change', {
-    actionLabel: 'Undo',
-    onAction: async () => { throw new Error('conflict'); },
+  toast.show({
+    message: 'Second change',
+    action: {
+      actionLabel: 'Undo',
+      onAction: async () => { throw new Error('conflict'); },
+    },
   });
   await toast.updateComplete;
   toast.querySelector<HTMLButtonElement>('button')?.click();
@@ -105,8 +111,8 @@ it('uses domain-neutral fallbacks when an action supplies no receipt', async () 
 
 it('replaces an actionable receipt with a plain command without stale controls', async () => {
   const toast = mountToast();
-  toast.showAction('Remembered', {actionLabel: 'Undo', onAction: async () => {}});
-  toast.show('Already remembered.');
+  toast.show({message: 'Remembered', action: {actionLabel: 'Undo', onAction: async () => {}}});
+  toast.show({message: 'Already remembered.'});
   await toast.updateComplete;
 
   expect(toast.textContent?.trim()).to.equal('Already remembered.');
@@ -116,7 +122,7 @@ it('replaces an actionable receipt with a plain command without stale controls',
 it('does not resume while hover ends but keyboard focus remains inside', async () => {
   const toast = mountToast();
   receiptsExpireAtOnce();
-  toast.showAction('Remembered', {actionLabel: 'Undo', onAction: async () => {}});
+  toast.show({message: 'Remembered', action: {actionLabel: 'Undo', onAction: async () => {}}});
   await toast.updateComplete;
   const action = toast.querySelector<HTMLButtonElement>('button')!;
 
@@ -137,7 +143,7 @@ it('does not resume while hover ends but keyboard focus remains inside', async (
 it('pauses an actionable receipt while Shell modality makes it unreachable', async () => {
   const toast = mountToast();
   receiptsExpireAtOnce();
-  toast.showAction('Remembered', {actionLabel: 'Undo', onAction: async () => {}});
+  toast.show({message: 'Remembered', action: {actionLabel: 'Undo', onAction: async () => {}}});
   await toast.updateComplete;
   expect(toast.inert).to.equal(false);
 

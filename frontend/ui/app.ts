@@ -354,10 +354,7 @@ export class DlApp extends LightElement {
   }
 
   #toastRequested(event: CustomEvent<ToastRequestDetail>): void {
-    const toast = this.#toast();
-    if (!toast) return;
-    if (event.detail.action) toast.showAction(event.detail.message, event.detail.action);
-    else toast.show(event.detail.message);
+    this.#toast()?.show(event.detail);
   }
 
   #runningChanged(event: CustomEvent<ChatRunningChangeDetail>): void {
@@ -385,11 +382,11 @@ export class DlApp extends LightElement {
     if (!inspector?.open) return;
     if (inspector.hasActiveFileMutation) {
       event.preventDefault();
-      this.#toast()?.show(
-        msg('Wait for the file change to finish before opening conversations.', {
+      this.#toast()?.show({
+        message: msg('Wait for the file change to finish before opening conversations.', {
           id: 'app.waitForFileChange',
         }),
-      );
+      });
       return;
     }
     inspector.close();

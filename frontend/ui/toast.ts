@@ -62,15 +62,13 @@ export class DlToastRegion extends LightElement {
     super.disconnectedCallback();
   }
 
-  /** Replace the current receipt with a plain status message. */
-  show(message: string): void {
-    this.#show({message});
-  }
-
-  /** Replace the current receipt with one asynchronous action. */
-  showAction(message: string, options: ActionToastOptions): void {
-    this.#show({message, action: options});
-    if (options.focus) void this.#focusAction();
+  /** Replace the current receipt with a `dl-toast-request`: a plain message, or one with an asynchronous action. */
+  show(request: ToastRequestDetail): void {
+    this.request = request;
+    this.visible = true;
+    this.pending = false;
+    this.#startTimer();
+    if (request.action?.focus) void this.#focusAction();
   }
 
   protected override updated(changed: PropertyValues<this>): void {
@@ -99,13 +97,6 @@ export class DlToastRegion extends LightElement {
     const request = this.request;
     await this.updateComplete;
     if (this.request === request) this.querySelector<HTMLElement>('.toast-action')?.focus();
-  }
-
-  #show(request: ToastRequestDetail): void {
-    this.request = request;
-    this.visible = true;
-    this.pending = false;
-    this.#startTimer();
   }
 
   #hide(): void {

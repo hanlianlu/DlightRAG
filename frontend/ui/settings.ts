@@ -344,8 +344,7 @@ export class DlSettingsDialog extends LightElement {
     const toast = this.#dialog()?.open ? this.querySelector('dl-toast-region') : null;
     if (!toast) return;
     event.stopPropagation();
-    if (event.detail.action) toast.showAction(event.detail.message, event.detail.action);
-    else toast.show(event.detail.message);
+    toast.show(event.detail);
   };
 
   #closed = (): void => {

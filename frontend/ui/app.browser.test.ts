@@ -193,7 +193,7 @@ it('keeps the composed compact conversation modal interactive and inerts sibling
   expect(topbar.inert).to.equal(false);
   expect(chat.inert).to.equal(true);
   expect(offer.inert).to.equal(true);
-  toast.showAction('Composed receipt', {actionLabel: 'Undo', onAction: async () => {}});
+  toast.show({message: 'Composed receipt', action: {actionLabel: 'Undo', onAction: async () => {}}});
   await toast.updateComplete;
   expect(toast.textContent).to.contain('Composed receipt');
   expect(toast.inert).to.equal(true);
@@ -221,7 +221,7 @@ it('pauses an actionable receipt while the Image Lightbox makes the app inert', 
 
   const toast = app.querySelector<DlToastRegion>('dl-toast-region')!;
   pageTimersRunFast();
-  toast.showAction('Undo available', {actionLabel: 'Undo', onAction: async () => {}});
+  toast.show({message: 'Undo available', action: {actionLabel: 'Undo', onAction: async () => {}}});
   const returnFocus = Array.from(app.querySelectorAll<HTMLButtonElement>('button'))
     .find((button) => button.textContent?.trim() === 'Files')!;
   returnFocus.dispatchEvent(new CustomEvent<ImageOpenDetail>('dl-image-open', {
