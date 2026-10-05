@@ -87,6 +87,7 @@ function storedTurn(): ConversationTurn {
     usage: {},
     errorKind: null,
     errorMessage: null,
+    childCount: 0,
     createdAt: '2026-01-01T00:00:00Z',
   };
 }
@@ -226,6 +227,7 @@ function turnWire(turn: ConversationTurn): Record<string, unknown> {
     usage: turn.usage,
     error_kind: turn.errorKind,
     error_message: turn.errorMessage,
+    child_count: turn.childCount,
     created_at: turn.createdAt,
   };
 }
@@ -284,7 +286,7 @@ it('composes stored history through public properties and AnswerPresentation pro
   expect(action).to.deep.equal({action: 'fork', runId: 'run-1'});
 });
 
-it('offers Fork on every settled turn and no per-turn Follow-Up control', async () => {
+it('offers Fork on every settled turn, Child agents on those whose Run had children, and no per-turn Follow-Up control', async () => {
   const feature = document.createElement('dl-chat-feature') as DlChatFeature;
   feature.view = {
     kind: 'ready',
@@ -298,6 +300,7 @@ it('offers Fork on every settled turn and no per-turn Follow-Up control', async 
         turnNumber: 2,
         answerRunId: 'run-2',
         submissionId: 'submission-2',
+        childCount: 2,
       },
     ],
   };
@@ -311,20 +314,25 @@ it('offers Fork on every settled turn and no per-turn Follow-Up control', async 
   // Fork branches from the turn it names, so every settled turn offers it. A
   // Follow-Up appends to the Lane tip, which the composer already owns, so the
   // Web offers no per-turn control for it.
-  expect(labels('turn-1')).to.contain('Fork');
-  expect(labels('turn-1')).to.not.contain('Follow up');
-  expect(labels('turn-2')).to.contain('Fork');
-  expect(labels('turn-2')).to.not.contain('Follow up');
+  expect(labels('turn-1')).to.deep.equal(['Fork']);
+  // A settled turn reaches its children once the server says it had any, and the entry comes first.
+  expect(labels('turn-2')).to.deep.equal(['Child agents', 'Fork']);
 
   const actions: ChatRunActionDetail[] = [];
   feature.addEventListener('dl-chat-run-action', (event) => {
     actions.push((event as CustomEvent<ChatRunActionDetail>).detail);
   });
-  const fork = Array.from(
+  const turn2 = (name: string) => Array.from(
     feature.querySelectorAll<HTMLButtonElement>('[data-turn-id="turn-2"] button'),
-  ).find((button) => button.textContent?.trim() === 'Fork');
-  fork?.click();
-  expect(actions).to.deep.equal([{action: 'fork', runId: 'run-2'}]);
+  ).find((button) => button.textContent?.trim() === name);
+  turn2('Fork')?.click();
+  turn2('Child agents')?.click();
+  expect(actions).to.deep.equal([
+    {action: 'fork', runId: 'run-2'},
+    {action: 'children', runId: 'run-2'},
+  ]);
+  // Only a Run that is still going shows the live dot beside the words.
+  expect(turn2('Child agents')?.querySelectorAll('svg')).to.have.length(1);
 });
 
 it('raises background intent without treating interactive message controls as background', async () => {
@@ -1871,6 +1879,8 @@ it('Message List exposes child-agent progress and roster intent through public s
     (button) => button.textContent?.trim() === 'Child agents',
   );
   expect(actions.length).to.equal(1);
+  // The live Run's entry carries a dot that its settled form does not, and both a chevron.
+  expect(actions[0].querySelectorAll('svg')).to.have.length(2);
   actions[0].click();
   expect(action).to.deep.equal({action: 'children', runId: 'run-with-child'});
 });

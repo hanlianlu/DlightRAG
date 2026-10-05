@@ -37,14 +37,13 @@ import type {
 import './chat-feature.ts';
 import type {DlImageLightbox, ImageLightboxStateDetail, ImageOpenDetail} from './image-lightbox.ts';
 import './image-lightbox.ts';
-import type {DlInspector, InspectorStateDetail} from './inspector.ts';
+import type {DlInspector, InspectorKind, InspectorStateDetail} from './inspector.ts';
 import './inspector.ts';
 import type {ModalStateDetail} from './modal.ts';
 import type {DlSettingsDialog} from './settings.ts';
 import './settings.ts';
 import type {
   ContinuationResult,
-  DlChildrenRoster,
   DlContinuationDialog,
 } from './run-dialogs.ts';
 import {syncPanelSplitState} from './split-panel.ts';
@@ -105,7 +104,7 @@ export class DlApp extends LightElement {
   declare conversationExpanded: boolean;
   declare conversationCompact: boolean;
   declare inspectorOpen: boolean;
-  declare inspectorKind: 'files' | 'sources' | null;
+  declare inspectorKind: InspectorKind | null;
   declare inspectorCompact: boolean;
   declare canvasOpen: boolean;
   declare canvasModal: boolean;
@@ -168,6 +167,7 @@ export class DlApp extends LightElement {
       'conversation-drawer-open',
       'files-panel-open',
       'sources-panel-open',
+      'children-panel-open',
       'artifact-canvas-open',
       'artifact-canvas-overlay',
       'artifact-canvas-wide',
@@ -440,6 +440,7 @@ export class DlApp extends LightElement {
     );
     document.body.classList.toggle('files-panel-open', this.inspectorKind === 'files');
     document.body.classList.toggle('sources-panel-open', this.inspectorKind === 'sources');
+    document.body.classList.toggle('children-panel-open', this.inspectorKind === 'children');
     document.body.classList.toggle('artifact-canvas-open', this.canvasOpen);
     document.body.classList.toggle('artifact-canvas-overlay', this.canvasOverlay);
     document.body.classList.toggle('artifact-canvas-wide', this.canvasWide);
@@ -449,7 +450,8 @@ export class DlApp extends LightElement {
   #chatBackgroundClick = (): void => {
     if (document.body.hasAttribute('data-resizing')) return;
     if (!this.inspectorOpen && !this.canvasOpen) return;
-    this.#inspector()?.close();
+    // Child agents are watched beside the chat, so a click in the chat leaves them open.
+    if (this.inspectorKind !== 'children') this.#inspector()?.close();
     this.#canvas()?.close(false);
   };
 
@@ -507,19 +509,19 @@ export class DlApp extends LightElement {
     if (!chat) return;
     if (event.detail.action === 'children') {
       const runId = event.detail.runId;
-      this.querySelector<DlChildrenRoster>('dl-children-roster')?.open(
-        (cursor, signal) => chat.loadRunChildrenPage(runId, cursor, signal),
-        {
-          runId,
-          observe: (childSessionId, signal) => chat.loadRunChild(runId, childSessionId, signal),
-          control: (childSessionId, action, content, reauthorize, operationId, signal) => (
-            chat.controlRunChild(
-              runId, childSessionId, action, content, reauthorize, operationId, signal,
-            )
-          ),
-          reply: (requestId, content, signal) => chat.replyRunChild(runId, requestId, content, signal),
-        },
-      );
+      const trigger = focusedElement();
+      this.#canvas()?.close(false);
+      void this.#inspector()?.openChildren({
+        runId,
+        page: (cursor, signal) => chat.loadRunChildrenPage(runId, cursor, signal),
+        observe: (childSessionId, signal) => chat.loadRunChild(runId, childSessionId, signal),
+        control: (childSessionId, action, content, reauthorize, operationId, signal) => (
+          chat.controlRunChild(
+            runId, childSessionId, action, content, reauthorize, operationId, signal,
+          )
+        ),
+        reply: (requestId, content, signal) => chat.replyRunChild(runId, requestId, content, signal),
+      }, trigger);
       return;
     }
     this.#pendingFork = event.detail.runId;
@@ -527,8 +529,7 @@ export class DlApp extends LightElement {
   }
 
   #childActivity(event: CustomEvent<ChatChildActivityDetail>): void {
-    this.querySelector<DlChildrenRoster>('dl-children-roster')
-      ?.refreshIfFollowing(event.detail.runId);
+    this.#inspector()?.refreshChildrenIfFollowing(event.detail.runId);
   }
 
   #continuationResult(event: CustomEvent<ContinuationResult>): void {
@@ -574,7 +575,6 @@ export class DlApp extends LightElement {
     return html`
       <dl-continuation-dialog
         @dl-continuation-result=${this.#continuationResult}></dl-continuation-dialog>
-      <dl-children-roster></dl-children-roster>
     `;
   }
 }

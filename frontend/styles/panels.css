@@ -113,13 +113,29 @@ dl-icon-button.panel-close {
 }
 
 dl-inspector-sources,
-dl-inspector-files {
+dl-inspector-files,
+dl-inspector-children {
     display: block;
 }
 
 dl-inspector-sources[hidden],
-dl-inspector-files[hidden] {
+dl-inspector-files[hidden],
+dl-inspector-children[hidden] {
     display: none;
+}
+
+/* Child agents lays out its own list, child, and docked composer, so the panel's padding and scroll
+   give way to it. */
+.panel[data-panel-kind='children'] .panel-content {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 0;
+}
+
+.panel[data-panel-kind='children'] dl-inspector-children {
+    flex: 1;
+    min-height: 0;
 }
 
 @media (height <= 640px) and (width < 1200px) {

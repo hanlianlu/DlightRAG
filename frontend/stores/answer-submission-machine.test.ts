@@ -18,7 +18,7 @@ const accepted = {
     turnId: 't1', turnNumber: 1, answerRunId: 'run-1', submissionId: 'submission-1',
     status: 'queued' as const, cancelRequested: false, userText: 'Question', assistantText: '',
     userAttachments: [], presentation: null, usage: {},
-    errorKind: null, errorMessage: null, createdAt: '',
+    errorKind: null, errorMessage: null, childCount: 0, createdAt: '',
   },
 } as AcceptedAnswer;
 const intent = {

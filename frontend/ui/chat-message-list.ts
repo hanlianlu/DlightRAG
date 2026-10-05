@@ -532,20 +532,21 @@ export class DlChatMessageList extends LightElement {
     if (!turn.runId) return nothing;
     const terminal = isTerminalTurnState(turn.state);
     if (!terminal && !turn.sawChildren) return nothing;
-    if (!terminal) {
-      return html`
-        <div class=${chatStyles.runActions}>
-          <button type="button" @click=${() => this.#runAction('children', turn.runId)}>
-            ${msg('Child agents', {id: 'chatMessageList.childAgents'})}
-          </button>
-        </div>
-      `;
-    }
+    const children = turn.sawChildren ? html`
+      <button type="button" class=${chatStyles.childAgents}
+              @click=${() => this.#runAction('children', turn.runId)}>
+        ${terminal ? nothing : html`<span class=${chatStyles.childLive} aria-hidden="true">${icon('status-dot', {size: 'xs'})}</span>`}
+        ${msg('Child agents', {id: 'chatMessageList.childAgents'})}
+        ${icon('next', {size: 'xs'})}
+      </button>
+    ` : nothing;
+    if (!terminal) return html`<div class=${chatStyles.runActions}>${children}</div>`;
     const sourceCount = turn.presentation?.sources.length ?? 0;
     const usageDetails = turn.usage.usage_details as Record<string, unknown> | undefined;
     const tokenCount = Number(usageDetails?.total_tokens || 0);
     return html`
       <div class=${chatStyles.runActions}>
+        ${children}
         <button type="button" @click=${() => this.#runAction('fork', turn.runId)}>${msg('Fork', {id: 'chatMessageList.fork'})}</button>
         ${sourceCount > 0 ? html`
           <span class=${chatStyles.runSummary}
@@ -759,7 +760,7 @@ export function storedTurnView(stored: ConversationTurn): ChatTurnView {
     progress: (stored.status === 'queued' || stored.status === 'running')
       && stored.cancelRequested ? msg('Stopping...', {id: 'chatFeature.stopping'}) : '',
     liveStatus: '',
-    sawChildren: false,
+    sawChildren: stored.childCount > 0,
     cancelRequested: stored.cancelRequested,
     steeringMessages: [],
     toolRows: [],

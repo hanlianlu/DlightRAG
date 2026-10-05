@@ -99,6 +99,20 @@
   text-underline-offset: 0.2em;
 }
 
+/* The way into a turn's child agents: a chevron after the words, and while the Run lives a dot
+   that pulses like the other progress dots. */
+.runActions .childAgents {
+  align-items: center;
+  display: inline-flex;
+  gap: var(--space-inline);
+}
+
+.childLive {
+  animation: pulse 1.2s ease-in-out infinite;
+  color: var(--color-progress-fill);
+  display: inline-flex;
+}
+
 
 .runSummary {
   color: var(--color-text-muted);

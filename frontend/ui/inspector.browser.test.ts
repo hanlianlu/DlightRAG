@@ -8,6 +8,7 @@ import './inspector.ts';
 
 defineDesignSystemElements();
 import type {DlInspector, InspectorStateDetail} from './inspector.ts';
+import type {ChildrenSource} from './inspector-children.ts';
 import {buttonNamed, waitFor} from '../testing/dom.ts';
 import {DEFAULT_CHANGES, EVERY_CHANGE} from '../testing/workspaces.ts';
 
@@ -273,4 +274,82 @@ it('activates and pauses typed Files content without a legacy element alias', as
   await files.updateComplete;
   expect(files.active).to.equal(false);
   expect(customElements.get('file-panel')).to.equal(undefined);
+});
+
+/** One Run whose children are not the subject here: the roster is empty. */
+function childrenOf(runId: string): ChildrenSource {
+  const unused = async (): Promise<never> => { throw new Error('no child is opened in this test'); };
+  return {runId, page: async () => ({children: [], nextCursor: null}), observe: unused, control: unused, reply: unused};
+}
+
+it('shows a Run\'s Child agents beside Files and Sources and switches between the three cleanly', async () => {
+  window.matchMedia = media(false);
+  window.fetch = async () => new Response(JSON.stringify({workspace: 'default', files: [], next_cursor: null}), {
+    status: 200, headers: {'Content-Type': 'application/json'},
+  });
+  const inspector = document.createElement('dl-inspector') as DlInspector;
+  document.body.appendChild(inspector);
+  const dock = () => inspector.querySelector('dl-inspector-children')!;
+  const title = () => inspector.querySelector('#panel-title')!.textContent;
+  const first = childrenOf('run-1');
+
+  await inspector.openChildren(first);
+  expect(inspector.kind).to.equal('children');
+  expect(title()).to.equal('Child agents');
+  expect([dock().hidden, dock().active, dock().source]).to.deep.equal([false, true, first]);
+  expect(inspector.querySelector<HTMLElement>('dl-inspector-sources')!.hidden).to.equal(true);
+  expect(inspector.querySelector<HTMLElement>('dl-inspector-files')!.hidden).to.equal(true);
+  expect(inspector.querySelector('aside')!.getAttribute('data-panel-kind')).to.equal('children');
+
+  await inspector.openSources(presentation);
+  expect(title()).to.equal('Sources');
+  expect([dock().hidden, dock().active]).to.deep.equal([true, false]);
+
+  await inspector.openFiles();
+  expect(title()).to.equal('Files');
+  expect(dock().hidden).to.equal(true);
+
+  // Another Run's children replace the first's.
+  const second = childrenOf('run-2');
+  await inspector.openChildren(second);
+  expect(title()).to.equal('Child agents');
+  expect([dock().hidden, dock().active, dock().source]).to.deep.equal([false, true, second]);
+
+  inspector.close(false);
+  await inspector.updateComplete;
+  expect(dock().source, 'a closed panel keeps no Run').to.equal(null);
+  expect(dock().active).to.equal(false);
+});
+
+it('closes Child agents with their conversation and leaves workspace Files open', async () => {
+  window.matchMedia = media(false);
+  window.fetch = async () => new Response(JSON.stringify({workspace: 'default', files: [], next_cursor: null}), {
+    status: 200, headers: {'Content-Type': 'application/json'},
+  });
+  const inspector = document.createElement('dl-inspector') as DlInspector;
+  document.body.appendChild(inspector);
+
+  await inspector.openChildren(childrenOf('run-1'));
+  inspector.closeConversationContent();
+  await inspector.updateComplete;
+  expect(inspector.open).to.equal(false);
+
+  await inspector.openFiles();
+  inspector.closeConversationContent();
+  expect(inspector.open).to.equal(true);
+});
+
+it('keeps the panel open for the Escape that cancels an IME composition', async () => {
+  window.matchMedia = media(false);
+  const inspector = document.createElement('dl-inspector') as DlInspector;
+  document.body.appendChild(inspector);
+  await inspector.openChildren(childrenOf('run-1'));
+  const pressEscape = (isComposing: boolean) => document.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'Escape', isComposing, bubbles: true, cancelable: true,
+  }));
+
+  pressEscape(true);
+  expect(inspector.open).to.equal(true);
+  pressEscape(false);
+  expect(inspector.open).to.equal(false);
 });

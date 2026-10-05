@@ -24,84 +24,13 @@ button[data-load-older][aria-disabled='true'] {
 }
 
 
-/* Child-agent roster list inside a confirm dialog. */
-.confirm-dialog.roster-dialog {
-    max-height: 80dvh;
-    max-width: min(var(--layout-chat-min-width), calc(100vw - var(--space-layout)));
-    overflow: auto;
-    width: min(var(--layout-chat-min-width), calc(100vw - var(--space-layout)));
-}
-
-.roster-list {
-    list-style: none;
-    margin: var(--space-component) 0;
-}
-
-.roster-list li {
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-detail);
-    /* stylelint-disable-next-line declaration-property-value-disallowed-list */
-    line-height: 1.5;
-    padding-block: var(--space-inline);
-}
-
-.roster-child-select {
-    background: none;
-    border: 0;
-    color: inherit;
-    cursor: pointer;
-    font: inherit;
-    padding: 0;
-    text-align: start;
-}
-
-.roster-child-select[aria-current='true'] {
-    color: var(--color-text-primary);
-    font-weight: 600;
-}
-
-.roster-observation {
-    border-top: 1px solid var(--color-border-subtle);
-    margin-top: var(--space-component);
-    padding-top: var(--space-component);
-}
-
-.roster-observation h3,
-.roster-observation h4 {
-    color: var(--color-text-primary);
-    font-size: var(--font-size-detail);
-    font-weight: 600;
-    margin: var(--space-tight) 0;
-}
-
-.roster-lineage {
-    margin: 0 0 var(--space-component);
-    padding-inline-start: var(--space-related);
-}
-
-.roster-observation fieldset {
-    border: 0;
-    margin: 0 0 var(--space-component);
-    min-inline-size: 0;
-    padding: 0;
-}
-
-.roster-observation legend {
-    color: var(--color-text-primary);
-    font-size: var(--font-size-detail);
-    font-weight: 600;
-    padding: 0;
-}
-
-.workspace-actions,
-.roster-execution-details {
+.workspace-actions {
     border-top: 1px solid var(--color-border-subtle);
     margin-top: var(--space-section);
     padding-top: var(--space-component);
 }
 
-.workspace-actions summary,
-.roster-execution-details summary {
+.workspace-actions summary {
     border-radius: var(--radius-control);
     color: var(--color-text-secondary);
     cursor: pointer;
@@ -110,13 +39,11 @@ button[data-load-older][aria-disabled='true'] {
     width: fit-content;
 }
 
-.workspace-actions summary:hover,
-.roster-execution-details summary:hover {
+.workspace-actions summary:hover {
     color: var(--color-text-primary);
 }
 
-.workspace-actions summary:focus-visible,
-.roster-execution-details summary:focus-visible {
+.workspace-actions summary:focus-visible {
     outline: 2px solid var(--color-control-ring);
     outline-offset: 2px;
 }

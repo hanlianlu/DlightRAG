@@ -12,7 +12,6 @@ const APP = join(dirname(fileURLToPath(import.meta.url)), 'app.ts');
 const FEATURE_TAGS = new Set([
   'dl-artifact-canvas',
   'dl-chat-feature',
-  'dl-children-roster',
   'dl-continuation-dialog',
   'dl-conversation-sidebar',
   'dl-image-lightbox',

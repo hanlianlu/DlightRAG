@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {capitalized, recentDay, shortDate} from './date-format.ts';
+import {capitalized, elapsed, recentDay, shortDate} from './date-format.ts';
 
 /** The reader's noon on a local calendar day: the tests never depend on the machine's time zone. */
 function day(year: number, month: number, date: number, hour = 12): Date {
@@ -45,4 +45,15 @@ test('a phrase stands on its own with its first letter raised', () => {
   assert.equal(capitalized('3 days ago', 'en'), '3 days ago');
   assert.equal(capitalized('今天', 'zh'), '今天');
   assert.equal(capitalized('', 'en'), '');
+});
+
+test('a span reads in the two largest units the reader\'s locale abbreviates, and never as negative time', () => {
+  assert.equal(elapsed(41_000, 'en'), '41s');
+  assert.equal(elapsed(134_000, 'en'), '2m 14s');
+  assert.equal(elapsed(120_000, 'en'), '2m 0s');
+  assert.equal(elapsed((63 * 60 + 40) * 1000, 'en'), '1h 3m');
+  assert.equal(elapsed(134_000, 'zh'), '2分钟14秒');
+  assert.equal(elapsed(999, 'en'), '0s');
+  assert.equal(elapsed(-5_000, 'en'), '0s');
+  assert.equal(elapsed(Number.NaN, 'en'), '0s');
 });

@@ -253,6 +253,9 @@ const agentChildStatus = v.pipe(
     cancellation_origin: v.optional(v.nullable(v.string())),
     summary: v.optional(v.nullable(v.string())),
     result_handles: v.optional(v.array(v.string())),
+    started_at: v.optional(v.nullable(v.string())),
+    finished_at: v.optional(v.nullable(v.string())),
+    pending_questions: v.optional(v.nullable(v.number())),
   }),
   v.transform((w) => ({
     childSessionId: w.child_session_id,
@@ -266,6 +269,11 @@ const agentChildStatus = v.pipe(
     cancellationOrigin: w.cancellation_origin ?? null,
     summary: w.summary ?? null,
     resultHandles: w.result_handles ?? [],
+    /** When the child's current operation started and (once it has settled) finished, ISO-8601 UTC. */
+    startedAt: w.started_at ?? null,
+    finishedAt: w.finished_at ?? null,
+    /** Questions to the parent that are still waiting and not yet expired. */
+    pendingQuestions: w.pending_questions ?? 0,
   })),
 );
 export type AgentChildStatus = v.InferOutput<typeof agentChildStatus>;
@@ -296,11 +304,20 @@ const childControlReceipt = v.pipe(
 );
 export type ChildControlReceipt = v.InferOutput<typeof childControlReceipt>;
 
+/** One tool call of a child's assistant message: the server sends its id and name, never its arguments. */
+const childToolCall = v.pipe(
+  v.object({
+    id: v.optional(v.nullable(v.string())),
+    name: v.optional(v.nullable(v.string())),
+  }),
+  v.transform((w) => ({id: w.id ?? '', name: w.name ?? ''})),
+);
+
 const childTranscriptMessage = v.pipe(
   v.object({
     role: v.string(),
     content: v.optional(v.unknown()),
-    tool_calls: v.optional(v.array(v.unknown())),
+    tool_calls: v.optional(v.array(childToolCall)),
     tool_call_id: v.optional(v.string()),
     name: v.optional(v.string()),
     is_error: v.optional(v.boolean()),
@@ -315,6 +332,9 @@ const childTranscriptMessage = v.pipe(
   })),
 );
 export type ChildTranscriptMessage = v.InferOutput<typeof childTranscriptMessage>;
+
+/** How many of a child's latest transcript messages one observation carries. */
+export const CHILD_TRANSCRIPT_LIMIT = 20;
 
 const childControlRecord = v.pipe(
   v.object({
@@ -412,6 +432,7 @@ const conversationTurn = v.pipe(
     usage: v.record(v.string(), v.unknown()),
     error_kind: v.nullable(v.string()),
     error_message: v.nullable(v.string()),
+    child_count: v.optional(v.number(), 0),
     created_at: v.string(),
   }),
   v.transform((w) => ({
@@ -428,6 +449,8 @@ const conversationTurn = v.pipe(
     usage: w.usage,
     errorKind: w.error_kind,
     errorMessage: w.error_message,
+    /** How many Child Sessions the turn's Run started. */
+    childCount: w.child_count,
     createdAt: w.created_at,
   })),
 );
@@ -600,7 +623,10 @@ export async function getAnswerRunChild(
 ): Promise<ChildObservation> {
   const run = encodeURIComponent(runId);
   const child = encodeURIComponent(childSessionId);
-  const response = await fetch(`/web/api/answer/${run}/children/${child}`, {signal});
+  const response = await fetch(
+    `/web/api/answer/${run}/children/${child}?limit=${CHILD_TRANSCRIPT_LIMIT}`,
+    {signal},
+  );
   return parseWire(response, childObservation);
 }
 
