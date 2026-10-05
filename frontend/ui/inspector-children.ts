@@ -19,7 +19,8 @@ import {icon} from '../design-system/index.ts';
 import {LightElement, NarrowController} from '../lib/lit-host.ts';
 import {KeysetPager} from '../lib/paged.ts';
 import styles from '../styles/inspector-children.module.css';
-import {childElapsed, childGlyph, childStateText} from './child-session.ts';
+import './child-session.ts';
+import {childElapsed, childGlyph, childStateText} from './child-status.ts';
 import {loadOlderControl} from './load-older.ts';
 
 /** A followed roster refetches at most this often while its run streams child activity. */
