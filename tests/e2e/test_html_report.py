@@ -9,12 +9,14 @@ import itertools
 import json
 import os
 from collections.abc import Iterator
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
 import echarts_render
 import html_report
 import pytest
+from PIL import Image
 from playwright.sync_api import Browser
 
 from tests.e2e import report_probe as probe
@@ -32,6 +34,7 @@ _SCHEMES = ("light", "dark")
 _CHARTS = {
     "brief": {"trend": (2, "line")},
     "dashboard": {"trend": (4, "line"), "product": (2, "bar"), "mix": (1, "pie")},
+    "scenario": {"path": (4, "line")},
     "multipage": {
         "total": (2, "bar"),
         "flows": (2, "line"),
@@ -234,7 +237,7 @@ def test_text_marks_cards_and_focus_meet_the_mineral_floors(
 
 @pytest.mark.parametrize("scheme", _SCHEMES)
 @pytest.mark.parametrize("width", (390, 1280))
-@pytest.mark.parametrize("example", ["dashboard", "multipage"])
+@pytest.mark.parametrize("example", ["dashboard", "multipage", "scenario"])
 def test_every_control_shows_a_two_pixel_ring_two_pixels_off_in_the_ring_colour(
     built: dict[str, Path], open_report, example: str, width: int, scheme: str
 ) -> None:
@@ -458,6 +461,231 @@ def test_a_slicer_of_many_values_is_a_select_and_a_multi_slicer_toggles(
     page.frame.click('[data-slicer=many] button.chip[data-value="城1"]')
     settle(page)
     assert page.eval("() => Report.slicer('many').value()") == ["城5"]
+
+
+# ---- sliders and the scenario page --------------------------------------------------------------
+
+
+def spread(page: ReportPage) -> Any:
+    return page.frame.locator("[data-slicer=spread] input[type=range]")
+
+
+def pixel_at(page: ReportPage, x: float, y: float) -> tuple[int, int, int]:
+    """The colour painted at a point of the page, read from a screenshot."""
+    png = page.page.screenshot(clip={"x": x - 1, "y": y - 1, "width": 3, "height": 3})
+    return Image.open(BytesIO(png)).convert("RGB").getpixel((1, 1))  # type: ignore[return-value]
+
+
+def ratio_of(page: ReportPage) -> float:
+    return float(
+        page.eval(
+            "() => document.querySelector('[data-slicer=spread] input').style.getPropertyValue('--ratio')"
+        )
+    )
+
+
+@pytest.mark.parametrize("scheme", _SCHEMES)
+@pytest.mark.parametrize("width", (360, 1280))
+def test_a_slider_is_a_real_range_input_with_its_value_and_its_ends_shown(
+    built: dict[str, Path], open_report, width: int, scheme: str
+) -> None:
+    page = open_report(built["scenario"], width, scheme=scheme)  # type: ignore[arg-type]
+
+    facts = page.eval(
+        """() => {
+      const input = document.querySelector('[data-slicer=spread] input');
+      const box = (el) => { const b = el.getBoundingClientRect(); return [b.left, b.right, b.top, b.height]; };
+      const root = document.querySelector('[data-slicer=spread]');
+      const value = root.querySelector('.slicer-value');
+      return {
+        type: input.type, min: input.min, max: input.max, step: input.step, number: input.valueAsNumber,
+        valuetext: input.getAttribute('aria-valuetext'),
+        label: document.getElementById(input.getAttribute('aria-labelledby')).textContent,
+        shown: value.textContent, ends: [...root.querySelectorAll('.slicer-ends span')].map((n) => n.textContent),
+        figures: getComputedStyle(value).fontVariantNumeric,
+        label_box: box(root.querySelector('.slicer-label')), value_box: box(value), input_box: box(input),
+        api: [typeof Report.slicer('spread').value(), Report.slicer('spread').value()],
+      };
+    }"""
+    )
+
+    assert (facts["type"], facts["min"], facts["max"], facts["step"], facts["number"]) == (
+        "range", "-1", "2", "0.25", 0.5,
+    )  # fmt: skip
+    assert facts["valuetext"] == facts["shown"] == "+0.50pp"
+    assert facts["label"] == "利差变化（瑞典减中国）"
+    assert facts["ends"] == ["-1.00pp", "+2.00pp"]
+    assert "tabular-nums" in facts["figures"]
+    assert facts["api"] == ["number", 0.5]
+    # The label sits on the left and the value on the right, over a track as wide as the slicer.
+    assert facts["label_box"][0] < facts["value_box"][0]
+    assert abs(facts["value_box"][1] - facts["input_box"][1]) <= 1
+    assert facts["input_box"][2] > facts["value_box"][2]
+    # A thumb a finger can find: 44px tall on a phone, and the thumb itself holds 3:1 on its card.
+    assert facts["input_box"][3] >= (44 if width < 720 else 36)
+    tokens = probe.tokens(page, ["--color-bg-surface", "--color-accent-action"])
+    surface, accent = (
+        colour.parse(tokens[n]) for n in ("--color-bg-surface", "--color-accent-action")
+    )
+    box = spread(page).bounding_box()
+    centre = pixel_at(
+        page, box["x"] + 10 + (box["width"] - 20) * ratio_of(page), box["y"] + box["height"] / 2
+    )
+    assert colour.parse(f"rgb({centre[0]} {centre[1]} {centre[2]})") == pytest.approx(
+        accent, abs=0.02
+    )  # type: ignore[comparison-overlap]
+    assert colour.contrast(accent, surface) >= 3
+    assert probe.failing_text(page) == []
+    assert page.observed.clean() and page.violations() == []
+
+
+@pytest.mark.parametrize("scheme", _SCHEMES)
+@pytest.mark.parametrize("width", (360, 1280))
+def test_a_slider_moves_by_arrow_key_and_by_tap_and_shows_each_value(
+    built: dict[str, Path], open_report, width: int, scheme: str
+) -> None:
+    page = open_report(built["scenario"], width, scheme=scheme, touch=True)  # type: ignore[arg-type]
+    shown = "() => document.querySelector('[data-slicer=spread] .slicer-value').textContent"
+    valuetext = (
+        "() => document.querySelector('[data-slicer=spread] input').getAttribute('aria-valuetext')"
+    )
+
+    spread(page).focus()
+    page.page.keyboard.press("ArrowRight")
+    assert page.eval("() => Report.slicer('spread').value()") == 0.75
+    assert page.eval(shown) == page.eval(valuetext) == "+0.75pp"
+    page.page.keyboard.press("ArrowLeft")
+    page.page.keyboard.press("ArrowLeft")
+    assert page.eval(shown) == "+0.25pp"
+    page.page.keyboard.press("Home")
+    assert (page.eval(shown), ratio_of(page)) == ("-1.00pp", 0)
+    page.page.keyboard.press("End")
+    assert (page.eval(shown), ratio_of(page)) == ("+2.00pp", 1)
+
+    box = spread(page).bounding_box()
+    thumb = 20
+    page.page.touchscreen.tap(
+        box["x"] + thumb / 2 + (box["width"] - thumb) * 0.75, box["y"] + box["height"] / 2
+    )
+    page.page.wait_for_timeout(100)
+    assert abs(page.eval("() => Report.slicer('spread').value()") - 1.25) <= 0.25
+    assert page.eval("() => Report.slicer('spread').value() % 0.25") == 0, "a tap lands on a notch"
+    assert abs(ratio_of(page) - 0.75) <= 0.1
+
+
+def test_a_slider_event_goes_out_once_a_frame_with_the_latest_number(
+    built: dict[str, Path], open_report
+) -> None:
+    page = open_report(built["scenario"], 1280)
+    page.eval(
+        "() => { window.__events = []; document.addEventListener('report:slicer', (e) => window.__events.push(e.detail)); }"
+    )
+
+    page.eval(
+        "() => { const s = Report.slicer('spread'); s.set(0); s.set(0.3); s.set(0.8); s.set(99); }"
+    )
+    page.page.wait_for_timeout(120)
+    assert page.eval("() => window.__events") == [{"id": "spread", "value": 2}]
+
+    # A value that is no number is refused, and the one a slider already holds says nothing.
+    page.eval("() => { const s = Report.slicer('spread'); s.set('x'); s.set(2); s.set(''); }")
+    page.page.wait_for_timeout(120)
+    assert page.eval("() => window.__events") == [{"id": "spread", "value": 2}]
+    assert page.eval("() => Report.slicer('spread').value()") == 2
+    # Snapped to the step, and held to the range.
+    page.eval("() => Report.slicer('spread').set(-7)")
+    assert page.eval("() => Report.slicer('spread').value()") == -1
+    page.eval("() => Report.slicer('spread').set(0.6)")
+    assert page.eval("() => Report.slicer('spread').value()") == 0.5
+    # A chip of a filter slicer still answers at once, and only for a choice it offers.
+    page.eval("() => { window.__events.length = 0; Report.slicer('scenario').set('乐观'); }")
+    assert page.eval("() => window.__events") == [{"id": "scenario", "value": "乐观"}]
+    page.eval("() => Report.slicer('scenario').set('不存在')")
+    assert page.eval("() => Report.slicer('scenario').value()") == "乐观"
+
+
+def path_rows(page: ReportPage) -> list[dict[str, Any]]:
+    return page.eval("() => Report.chart('path').rows()")
+
+
+@pytest.mark.parametrize("width", (360, 1280))
+def test_the_scenario_script_redraws_the_band_and_the_numbers_when_a_control_moves(
+    built: dict[str, Path], open_report, width: int
+) -> None:
+    page = open_report(built["scenario"], width)
+    say = lambda name: page.eval("(id) => document.getElementById(id).textContent", name)  # noqa: E731
+    subtitle = "() => document.querySelector('figure[data-chart=path] .chart-subtitle').textContent"
+
+    assert (say("mid"), say("range"), say("change")) == ("0.665", "0.606–0.725", "-0.3%")
+    assert "利差 +0.50pp，通胀预期 2.00%" in page.eval(subtitle)
+
+    spread(page).focus()
+    page.page.keyboard.press("End")
+    settle(page)
+    rows = path_rows(page)
+    assert rows[12]["mid"] == pytest.approx(0.6903, abs=1e-4)
+    assert (say("mid"), say("range"), say("change")) == ("0.690", "0.628–0.752", "+3.5%")
+    assert "利差 +2.00pp，通胀预期 2.00%" in page.eval(subtitle)
+    drawn = probe.chart_facts(page, "path")
+    assert drawn is not None and drawn["series"][0]["data"][12] == rows[12]["mid"]
+
+    # A chip presets both sliders, and the sliders go on to move the chart from there.
+    page.frame.click("[data-slicer=scenario] button.chip[data-value='乐观']")
+    settle(page)
+    both = "() => [Report.slicer('spread').value(), Report.slicer('inflation').value()]"
+    assert page.eval(both) == [1.5, 1.5]
+    assert say("change") == "+2.7%" and path_rows(page)[12]["mid"] == pytest.approx(
+        0.6853, abs=1e-4
+    )
+    page.frame.click("[data-slicer=scenario] button.chip[data-value='悲观']")
+    settle(page)
+    assert page.eval(both) == [-0.5, 3]
+    assert say("change") == "-3.7%" and "通胀预期 3.00%" in page.eval(subtitle)
+    assert page.observed.clean()
+
+
+@pytest.mark.parametrize("scheme", _SCHEMES)
+def test_the_band_is_two_stacked_areas_under_the_central_line_and_only_the_line_has_a_legend(
+    built: dict[str, Path], open_report, scheme: str
+) -> None:
+    page = open_report(built["scenario"], 1280, scheme=scheme)  # type: ignore[arg-type]
+
+    option = page.eval(
+        "() => Report.chart('path').instance.getOption().series.map((s) => ({name: s.name, stack: s.stack || null, fill: (s.areaStyle || {}).opacity ?? null, line: (s.lineStyle || {}).opacity ?? null, z: s.z}))"
+    )
+    assert [o["name"] for o in option] == ["中位路径", "区间下限", "不确定区间", "区间上限"]
+    assert [o["stack"] for o in option] == [None, "band", "band", None]
+    assert option[1]["fill"] == 0 and option[2]["fill"] == pytest.approx(0.28)
+    assert option[1]["line"] == option[2]["line"] == option[3]["line"] == 0
+    assert option[0]["z"] > option[2]["z"]
+    # Every month the band sits around the path: low, mid, high.
+    for row in path_rows(page):
+        assert row["low"] <= row["mid"] <= row["high"]
+        assert row["low"] + row["width"] == pytest.approx(row["high"], abs=2e-4)
+    # The shaded area is drawn, wide, and the legend names the line and the band only.
+    area = page.eval(
+        """() => {
+      const plot = document.querySelector('figure[data-chart=path] .chart-body svg');
+      const filled = [...plot.querySelectorAll('path')].filter((p) => Math.abs(parseFloat(p.getAttribute('fill-opacity') ?? '1') - 0.28) < 0.01);
+      const box = filled.map((p) => p.getBoundingClientRect()).sort((a, b) => b.width - a.width)[0];
+      return {count: filled.length, width: box ? box.width : 0, height: box ? box.height : 0, plot: plot.getBoundingClientRect().width,
+        words: [...plot.querySelectorAll('text')].map((t) => t.textContent)};
+    }"""
+    )
+    assert area["count"] >= 1 and area["width"] >= 0.7 * area["plot"] and area["height"] > 40
+    assert "中位路径" in area["words"] and "不确定区间" in area["words"]
+    assert not {"区间下限", "区间上限"} & set(area["words"])
+    # Hovering reads the path and both ends of the band, not the band's width.
+    page.eval(
+        "() => Report.chart('path').instance.dispatchAction({type: 'showTip', seriesIndex: 0, dataIndex: 6})"
+    )
+    page.page.wait_for_timeout(250)
+    tip = page.eval(
+        "() => [...document.querySelectorAll('figure[data-chart=path] .chart-body div')]"
+        ".filter((d) => d.style.position === 'absolute' && !d.querySelector('svg')).map((d) => d.innerText).join('|')"
+    )
+    assert all(name in tip for name in ("中位路径", "区间下限", "区间上限"))
+    assert "不确定区间" not in tip
 
 
 # ---- pages --------------------------------------------------------------------------------------

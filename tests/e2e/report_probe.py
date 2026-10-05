@@ -109,7 +109,7 @@ _FOCUS = (
   const style = getComputedStyle(el);
   return {
     behind: behind(el.parentElement || el),
-    index: [...document.querySelectorAll('button, select, a[href], [tabindex]')].indexOf(el),
+    index: [...document.querySelectorAll('button, select, input, a[href], [tabindex]')].indexOf(el),
     tag: el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (el.className ? '.' + String(el.className).split(' ')[0] : ''),
     style: style.outlineStyle,
     width: parseFloat(style.outlineWidth),
