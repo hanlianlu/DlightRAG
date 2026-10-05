@@ -327,8 +327,10 @@ export class DlInspector extends LightElement {
   }
 
   #documentKeydown = (event: KeyboardEvent): void => {
-    // An Escape that cancels an IME composition belongs to the composition, not to the panel.
-    if (!this.open || event.key !== 'Escape' || event.defaultPrevented || event.isComposing) return;
+    // An Escape that cancels an IME composition belongs to the composition, not to the panel. WebKit
+    // delivers the IME's keydown after `compositionend`, where `isComposing` is false and `keyCode` is 229.
+    const composing = event.isComposing || event.keyCode === 229;
+    if (!this.open || event.key !== 'Escape' || event.defaultPrevented || composing) return;
     if (document.querySelector('dialog[open]')) return;
     event.preventDefault();
     this.close();

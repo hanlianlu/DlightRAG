@@ -376,11 +376,14 @@ it('keeps the panel open for the Escape that cancels an IME composition', async 
   const inspector = document.createElement('dl-inspector') as DlInspector;
   document.body.appendChild(inspector);
   await inspector.openChildren(childrenOf('run-1'));
-  const pressEscape = (isComposing: boolean) => document.dispatchEvent(new KeyboardEvent('keydown', {
-    key: 'Escape', isComposing, bubbles: true, cancelable: true,
+  const pressEscape = (isComposing: boolean, keyCode = 27) => document.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'Escape', isComposing, keyCode, bubbles: true, cancelable: true,
   }));
 
   pressEscape(true);
+  expect(inspector.open).to.equal(true);
+  // WebKit reports the IME's own keydown after the composition has ended, as keyCode 229.
+  pressEscape(false, 229);
   expect(inspector.open).to.equal(true);
   pressEscape(false);
   expect(inspector.open).to.equal(false);
