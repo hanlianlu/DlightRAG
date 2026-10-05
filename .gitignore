@@ -77,3 +77,6 @@ htmlcov/
 .coverage
 coverage.xml
 ragas_eval_results/
+
+# The chart renderer's resvg and font, installed by scripts/install-chart-tools.sh
+.chart-tools/

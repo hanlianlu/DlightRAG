@@ -1,0 +1,112 @@
+<!-- Scenario page: three chips preset two sliders; a short script recomputes the rows and calls Report.chart(id).setRows, and {spread} and {inflation}
+     fill the chart's subtitle. The band is two stacked areas (an invisible base plus the width) under the central line; legend.data and tooltip.show hide the helpers. -->
+<header class="report-head">
+  <h1>瑞典克朗兑人民币：十二个月情景推演</h1>
+  <p class="lede">把利差和瑞典通胀预期各拨到量程的两端，十二个月后的中位值最多移动约 6%，而不确定区间的半宽约 9%：情景之间的差别，比不确定性本身小。</p>
+  <p class="meta">示意推演 · 起点 0.667 元/克朗为假设值 · 公式是本页的设定，不是数据支持的预测</p>
+</header>
+
+<main>
+  <div class="card">
+    <div class="slicer" data-slicer="scenario" data-label="情景" data-all="false" data-values='["基准","乐观","悲观"]'></div>
+    <div class="grid">
+      <div class="slicer" data-slicer="spread" data-type="slider" data-label="利差变化（瑞典减中国）" data-min="-1" data-max="2" data-step="0.25" data-value="0.5" data-unit="pp"></div>
+      <div class="slicer" data-slicer="inflation" data-type="slider" data-label="瑞典通胀预期" data-min="0" data-max="4" data-step="0.25" data-value="2" data-unit="%"></div>
+    </div>
+    <p class="note">情景只是起点：选一个，两个滑块跳到它的假设，再按需要微调。</p>
+  </div>
+
+  <section class="kpis">
+    <div class="kpi"><b id="mid">0.665</b><span>十二个月后，中位（元/克朗）</span><small>区间 <span id="range">0.606–0.725</span></small></div>
+    <div class="kpi"><b id="change">-0.3%</b><span>较起点 0.667 的变化</span></div>
+  </section>
+
+  <figure class="chart wide" data-chart="path"></figure>
+
+  <h2>这条路径靠哪些假设</h2>
+  <table>
+    <thead><tr><th>假设</th><th>取值</th><th>怎么用</th></tr></thead>
+    <tbody>
+      <tr><td>起点</td><td class="num">0.667 元/克朗</td><td>示意取值，接近 2026 年 10 月初的折算价</td></tr>
+      <tr><td>利差</td><td class="num">每高 1pp：+2.5%</td><td>十二个月后的中位值随“利差变化”移动；系数为设定</td></tr>
+      <tr><td>通胀预期</td><td class="num">每高 1pp：−1.0%</td><td>瑞典通胀预期高出中国（设为 0.5%）的部分压低克朗；系数为设定</td></tr>
+      <tr><td>波动</td><td class="num">年化 9%</td><td>区间半宽 = 中位值 × 9% × √(月数 ÷ 12)</td></tr>
+      <tr><td>路径</td><td class="num">匀速移动</td><td>十二个月内按直线漂移，不含事件冲击</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout" data-kind="caution">
+    <p>这是两个设定系数加一个波动假设算出来的示意，不是数据支持的预测。区间按 ±1 个标准差画，按这组假设只覆盖约三分之二的情形；两个控件拨到量程两端，也最多把十二个月后的中位值推开约 6%，小于区间半宽（约 9%）。情景之间的差别，淹没在不确定性里。</p>
+  </div>
+</main>
+
+<script type="application/json" id="chart-path">
+{
+  "option": {
+    "palette": "highlight",
+    "title": {"text": "SEK/CNY 十二个月路径", "subtext": "利差 {spread}，通胀预期 {inflation} · 单位：元/克朗 · 来源：本页设定的公式，不是预测"},
+    "legend": {"data": ["中位路径", "不确定区间"]},
+    "dataset": {"source": [
+      {"month":"起点","mid":0.667,"low":0.667,"width":0.0,"high":0.667},
+      {"month":"+1月","mid":0.6669,"low":0.6495,"width":0.0347,"high":0.6842},
+      {"month":"+2月","mid":0.6667,"low":0.6422,"width":0.049,"high":0.6912},
+      {"month":"+3月","mid":0.6666,"low":0.6366,"width":0.06,"high":0.6966},
+      {"month":"+4月","mid":0.6664,"low":0.6318,"width":0.0693,"high":0.7011},
+      {"month":"+5月","mid":0.6663,"low":0.6276,"width":0.0774,"high":0.705},
+      {"month":"+6月","mid":0.6662,"low":0.6238,"width":0.0848,"high":0.7086},
+      {"month":"+7月","mid":0.666,"low":0.6202,"width":0.0916,"high":0.7118},
+      {"month":"+8月","mid":0.6659,"low":0.617,"width":0.0979,"high":0.7148},
+      {"month":"+9月","mid":0.6657,"low":0.6139,"width":0.1038,"high":0.7176},
+      {"month":"+10月","mid":0.6656,"low":0.6109,"width":0.1094,"high":0.7203},
+      {"month":"+11月","mid":0.6655,"low":0.6081,"width":0.1147,"high":0.7228},
+      {"month":"+12月","mid":0.6653,"low":0.6055,"width":0.1198,"high":0.7252}
+    ]},
+    "xAxis": {"type": "category"},
+    "yAxis": {"type": "value", "scale": true},
+    "series": [
+      {"type": "line", "name": "中位路径", "z": 4, "symbol": "none", "encode": {"x": "month", "y": "mid"}},
+      {"type": "line", "name": "区间下限", "stack": "band", "symbol": "none", "silent": true,
+       "lineStyle": {"opacity": 0}, "areaStyle": {"opacity": 0}, "encode": {"x": "month", "y": "low"}},
+      {"type": "line", "name": "不确定区间", "stack": "band", "symbol": "none", "tooltip": {"show": false},
+       "lineStyle": {"opacity": 0}, "areaStyle": {"opacity": 0.28}, "encode": {"x": "month", "y": "width"}},
+      {"type": "line", "name": "区间上限", "symbol": "none", "silent": true,
+       "lineStyle": {"opacity": 0}, "encode": {"x": "month", "y": "high"}}
+    ]
+  }
+}
+</script>
+
+<script>
+// The whole model: a twelve-month drift from the two controls, and a band that widens with the square root of time.
+const START = 0.667;
+const PRESETS = {基准: {spread: 0.5, inflation: 2}, 乐观: {spread: 1.5, inflation: 1.5}, 悲观: {spread: -0.5, inflation: 3}};
+const round = (x) => Math.round(x * 10000) / 10000;
+
+function path(spread, inflation) {
+  const drift = (2.5 * spread - 1.0 * (inflation - 0.5)) / 100;
+  return Array.from({length: 13}, (_, month) => {
+    const mid = START * (1 + (drift * month) / 12);
+    const half = mid * 0.09 * Math.sqrt(month / 12);
+    return {month: month ? `+${month}月` : '起点', mid: round(mid), low: round(mid - half), width: round(2 * half), high: round(mid + half)};
+  });
+}
+
+Report.ready(() => {
+  const [spread, inflation] = ['spread', 'inflation'].map((id) => Report.slicer(id));
+  const say = (id, text) => { document.getElementById(id).textContent = text; };
+  const draw = () => {
+    const rows = path(spread.value(), inflation.value());
+    const end = rows[12];
+    Report.chart('path').setRows(rows);
+    say('mid', end.mid.toFixed(3));
+    say('range', `${end.low.toFixed(3)}–${end.high.toFixed(3)}`);
+    say('change', `${end.mid >= START ? '+' : ''}${((end.mid / START - 1) * 100).toFixed(1)}%`);
+  };
+  document.addEventListener('report:slicer', (event) => {
+    const preset = event.detail.id === 'scenario' && PRESETS[event.detail.value];
+    if (preset) { spread.set(preset.spread); inflation.set(preset.inflation); }
+    draw();
+  });
+  draw();
+});
+</script>

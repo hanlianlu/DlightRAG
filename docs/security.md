@@ -454,12 +454,16 @@ Execution modes:
   the shell gains no credential and no route to the Blob plane. The copy is untrusted
   content, like any file Bash fetches.
 
-The chart renderer the image ships
-([Operations](operations.md#agent-chart-rendering)) sits under `/usr`, which the
-allow-list already grants read-only, so its executables run inside the same
-confinement, declare no layer, and reach nothing new. The HTML it can write is an
-Artifact like any other: active HTML, inert until the reader activates it under
-the [browser boundary](#answer-artifact-browser-boundary).
+The chart renderers the image ships, `echarts-render` and `html-report`
+([Operations](operations.md#agent-chart-rendering)), sit under `/usr`, which the
+allow-list already grants read-only, so their executables run inside the same
+confinement, declare no layer, and reach nothing new. The HTML they can write is
+an Artifact like any other: active HTML, inert until the reader activates it
+under the [browser boundary](#answer-artifact-browser-boundary). `html-report`
+inlines its own runtime and ECharts, so a report needs no network, and its build
+refuses markup and script the sandbox would refuse anyway; that spares the
+author a blank chart and is not a boundary, which stays the sandboxed frame and
+its CSP.
 
 Root checks are not a shell sandbox. Research reaches outside tools only through
 its owner's Personal MCP Connections, pinned per Run and gated per effect, with

@@ -12,7 +12,7 @@ LANGFUSE_BOOTSTRAP = $(PYTHON) scripts/langfuse/headless.py --langfuse-env "$(LA
 PYTHON_LINT_PATHS = packages/ src/ tests/ scripts/ chart-render/ prerequisite_setup.py
 PYTHON_SECURITY_PATHS = packages/ src/ scripts/ chart-render/ prerequisite_setup.py
 
-.PHONY: mineru-install mineru-api mineru-gradio mineru-title-aided mineru-service-install mineru-service-start mineru-service-stop mineru-service-status mineru-service-logs mineru-service-uninstall langfuse-stack langfuse-bootstrap langfuse-up langfuse-down langfuse-reset langfuse-restart langfuse-status langfuse-logs langfuse-health hooks sync-dev lint lint-security format-check typecheck architecture-check shellcheck-all frontend-install frontend-typecheck frontend-lint frontend-test frontend-browser-install frontend-browser-test frontend-build frontend-audit frontend-ci release-check workspace-wheels test-unit runtime-faults runtime-pg18 load-runtime validate-runtime ci ci-full test-e2e ci-e2e dev-reset
+.PHONY: mineru-install mineru-api mineru-gradio mineru-title-aided mineru-service-install mineru-service-start mineru-service-stop mineru-service-status mineru-service-logs mineru-service-uninstall langfuse-stack langfuse-bootstrap langfuse-up langfuse-down langfuse-reset langfuse-restart langfuse-status langfuse-logs langfuse-health hooks sync-dev lint lint-security format-check typecheck architecture-check shellcheck-all frontend-install frontend-typecheck frontend-lint frontend-test frontend-browser-install frontend-browser-test frontend-build frontend-audit frontend-ci chart-render-install chart-render-test release-check workspace-wheels test-unit runtime-faults runtime-pg18 load-runtime validate-runtime ci ci-full test-e2e ci-e2e dev-reset
 
 mineru-install:
 	scripts/mineru/install.sh
@@ -151,7 +151,14 @@ workspace-wheels: frontend-build
 	uv build --all-packages --no-sources --out-dir dist
 	uv run python scripts/verify_workspace_wheels.py --dist dist --smoke-installed
 
-test-unit:
+# The chart renderer's one dependency, ECharts: the report toolkit's tests build with it.
+chart-render-install:
+	npm --prefix chart-render ci --no-audit --no-fund
+
+chart-render-test: chart-render-install
+	node --test "chart-render/test/*.test.cjs"
+
+test-unit: chart-render-install
 	uv run pytest tests/unit -q --tb=short
 
 # RunRuntime fault-injection matrix. PostgreSQL must be reachable;
@@ -182,7 +189,7 @@ dev-reset:
 	uv run scripts/reset_development.py --mode docker $(ARGS)
 
 # Pull-request gate: static analysis, frontend checks, isolated wheels, and unit tests.
-ci: sync-dev lint lint-security format-check typecheck architecture-check shellcheck-all release-check frontend-ci workspace-wheels test-unit
+ci: sync-dev lint lint-security format-check typecheck architecture-check shellcheck-all release-check frontend-ci chart-render-test workspace-wheels test-unit
 	@echo "CI (fast) passed."
 
 # Full local: includes integration tests (needs PostgreSQL + pgvector)
@@ -193,7 +200,7 @@ ci-full: ci
 # ─────────────────────────────────────────────────────────────────
 # Playwright E2E UI tests (headless)
 # The bundle is gitignored, so these would otherwise run against a missing UI.
-test-e2e: frontend-build
+test-e2e: frontend-build chart-render-install
 	uv run pytest tests/e2e/ -v -m e2e --tb=short
 
 # Full + E2E: needs PostgreSQL 18; model calls are faked in tests

@@ -1,0 +1,102 @@
+<!-- One page: region chips and a metric switch drive a line, a bar and a pie chart ("filters" and the {metric} token); all three read
+     one shared dataset block (dataset.from). The table below does not react. -->
+<header class="report-head">
+  <h1>2023 年分地区销售看板</h1>
+  <p class="lede">全年销售额 7,904 万元、利润 1,492 万元（利润率 18.9%）；华东与华南合计占 58.6%，西南体量最小，但逐季增长。</p>
+  <p class="meta">2023 年第一至第四季度 · 来源：内部销售数据</p>
+</header>
+
+<div class="slicer" data-slicer="region" data-field="region" data-label="地区"></div>
+<div class="slicer" data-slicer="metric" data-type="metric" data-label="指标"
+     data-options='[{"label":"销售额","y":"revenue"},{"label":"利润","y":"profit"}]'></div>
+
+<main>
+  <div class="grid">
+    <figure class="chart wide" data-chart="trend"></figure>
+    <figure class="chart" data-chart="product"></figure>
+    <figure class="chart" data-chart="mix"></figure>
+  </div>
+
+  <h2>各地区全年合计</h2>
+  <table>
+    <thead><tr><th>地区</th><th class="num">销售额（万元）</th><th class="num">利润（万元）</th><th class="num">利润率</th></tr></thead>
+    <tbody>
+      <tr><td>华东</td><td class="num">2,376</td><td class="num">471</td><td class="num">19.8%</td></tr>
+      <tr><td>华北</td><td class="num">2,054</td><td class="num">367</td><td class="num">17.9%</td></tr>
+      <tr><td>华南</td><td class="num">2,252</td><td class="num">454</td><td class="num">20.2%</td></tr>
+      <tr><td>西南</td><td class="num">1,222</td><td class="num">200</td><td class="num">16.4%</td></tr>
+      <tr><td><b>合计</b></td><td class="num"><b>7,904</b></td><td class="num"><b>1,492</b></td><td class="num"><b>18.9%</b></td></tr>
+    </tbody>
+  </table>
+  <div class="callout" data-kind="note">
+    <p>图表随上方的地区与指标联动；表格是各地区的全年合计，不随筛选变化。</p>
+  </div>
+</main>
+
+<script type="application/json" id="data-sales">
+[
+  {"region":"华东","quarter":"2023Q1","product":"A","revenue":320,"profit":64},
+  {"region":"华东","quarter":"2023Q1","product":"B","revenue":210,"profit":38},
+  {"region":"华东","quarter":"2023Q2","product":"A","revenue":345,"profit":70},
+  {"region":"华东","quarter":"2023Q2","product":"B","revenue":230,"profit":41},
+  {"region":"华东","quarter":"2023Q3","product":"A","revenue":360,"profit":75},
+  {"region":"华东","quarter":"2023Q3","product":"B","revenue":244,"profit":45},
+  {"region":"华东","quarter":"2023Q4","product":"A","revenue":402,"profit":88},
+  {"region":"华东","quarter":"2023Q4","product":"B","revenue":265,"profit":50},
+  {"region":"华北","quarter":"2023Q1","product":"A","revenue":280,"profit":50},
+  {"region":"华北","quarter":"2023Q1","product":"B","revenue":190,"profit":30},
+  {"region":"华北","quarter":"2023Q2","product":"A","revenue":290,"profit":53},
+  {"region":"华北","quarter":"2023Q2","product":"B","revenue":205,"profit":34},
+  {"region":"华北","quarter":"2023Q3","product":"A","revenue":305,"profit":58},
+  {"region":"华北","quarter":"2023Q3","product":"B","revenue":214,"profit":36},
+  {"region":"华北","quarter":"2023Q4","product":"A","revenue":340,"profit":66},
+  {"region":"华北","quarter":"2023Q4","product":"B","revenue":230,"profit":40},
+  {"region":"华南","quarter":"2023Q1","product":"A","revenue":250,"profit":48},
+  {"region":"华南","quarter":"2023Q1","product":"B","revenue":260,"profit":52},
+  {"region":"华南","quarter":"2023Q2","product":"A","revenue":262,"profit":51},
+  {"region":"华南","quarter":"2023Q2","product":"B","revenue":281,"profit":57},
+  {"region":"华南","quarter":"2023Q3","product":"A","revenue":270,"profit":53},
+  {"region":"华南","quarter":"2023Q3","product":"B","revenue":300,"profit":63},
+  {"region":"华南","quarter":"2023Q4","product":"A","revenue":298,"profit":60},
+  {"region":"华南","quarter":"2023Q4","product":"B","revenue":331,"profit":70},
+  {"region":"西南","quarter":"2023Q1","product":"A","revenue":150,"profit":24},
+  {"region":"西南","quarter":"2023Q1","product":"B","revenue":120,"profit":18},
+  {"region":"西南","quarter":"2023Q2","product":"A","revenue":162,"profit":27},
+  {"region":"西南","quarter":"2023Q2","product":"B","revenue":131,"profit":20},
+  {"region":"西南","quarter":"2023Q3","product":"A","revenue":171,"profit":29},
+  {"region":"西南","quarter":"2023Q3","product":"B","revenue":140,"profit":22},
+  {"region":"西南","quarter":"2023Q4","product":"A","revenue":190,"profit":34},
+  {"region":"西南","quarter":"2023Q4","product":"B","revenue":158,"profit":26}
+]
+</script>
+
+<script type="application/json" id="chart-trend">
+{ "filters": ["region", "metric"],
+  "option": {
+    "title": {"text": "季度{metric}", "subtext": "单位：万元 · 来源：内部销售数据"},
+    "dataset": {"from": "sales"},
+    "xAxis": {"type": "category"},
+    "yAxis": {"type": "value"},
+    "series": [{"type": "line", "seriesBy": "region", "encode": {"x": "quarter", "y": "{metric}"}}]
+  } }
+</script>
+
+<script type="application/json" id="chart-product">
+{ "filters": ["region", "metric"],
+  "option": {
+    "title": {"text": "各产品季度{metric}", "subtext": "单位：万元 · 来源：内部销售数据"},
+    "dataset": {"from": "sales"},
+    "xAxis": {"type": "category"},
+    "yAxis": {"type": "value"},
+    "series": [{"type": "bar", "seriesBy": "product", "encode": {"x": "quarter", "y": "{metric}"}}]
+  } }
+</script>
+
+<script type="application/json" id="chart-mix">
+{ "filters": ["region", "metric"],
+  "option": {
+    "title": {"text": "产品构成（{metric}）", "subtext": "占比 · 来源：内部销售数据"},
+    "dataset": {"from": "sales"},
+    "series": [{"type": "pie", "encode": {"itemName": "product", "value": "{metric}"}}]
+  } }
+</script>

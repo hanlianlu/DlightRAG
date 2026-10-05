@@ -1,6 +1,7 @@
 {
   "include": ["src", "packages", "tests", "scripts", "chart-render", "prerequisite_setup.py"],
   "exclude": ["**/__pycache__", "**/node_modules", "**/.*", ".venv"],
+  "extraPaths": ["src", "chart-render"],
   "venvPath": ".",
   "venv": ".venv",
   "pythonVersion": "3.14",
