@@ -1379,12 +1379,15 @@ describe('the page of a child', () => {
     const more = session(dock).querySelector<HTMLElement>('[data-more]')!;
     expect(more.hidden, 'the objective fits at first').to.equal(true);
 
+    // The observer reports in the next frame's rendering step, so frames are what is waited for.
     dock.style.width = '300px';
-    await waitFor(() => !more.hidden);
+    await frames();
+    expect(more.hidden, 'the title is cut off at 300px').to.equal(false);
     expect(more.textContent!.trim()).to.equal('Show full objective');
 
     dock.style.width = '620px';
-    await waitFor(() => more.hidden === true);
+    await frames();
+    expect(more.hidden, 'and whole again at 620px').to.equal(true);
   });
 
   it('does not follow a child that has settled', async () => {
