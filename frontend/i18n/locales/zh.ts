@@ -430,6 +430,7 @@ export const templates: Record<
   'childSession.steerHint': '将在子代理的下一个安全检查点送达。',
   'childSession.continuePlaceholder': '继续这个子代理…',
   'childSession.continueHint': '在该子代理上开始一个新操作。',
+  'childSession.finished': '该回答已结束，其子代理不能再被引导或继续。',
   'childSession.reauthorize': '重新授权此用户取消的工作',
   'childSession.loading': '正在加载子代理详情…',
   'childSession.loadFailed': '无法加载子代理详情。',

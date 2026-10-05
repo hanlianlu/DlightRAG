@@ -696,6 +696,71 @@ it('drops the question about cancelling a child that settles before the reader a
   expect(button(session(dock), 'Cancel child')).to.equal(null);
 });
 
+const FINISHED_NOTE = 'This answer has finished, so its child agents can no longer be steered or continued.';
+
+it('offers a box and a Cancel only while the Run can take what they send', async () => {
+  const cases: [string | null, boolean][] = [
+    [null, true], ['queued', true], ['running', true],
+    ['succeeded', false], ['failed', false], ['cancelled', false],
+    ['a-status-the-server-adds-later', true],
+  ];
+  for (const [runStatus, commandable] of cases) {
+    serve({
+      page: () => roster([
+        row('a', 'running', {started_at: ago(5)}),
+        row('b', 'succeeded', {started_at: ago(9), finished_at: ago(1), summary: 'A summary.'}),
+      ], null, runStatus),
+      observe: (id) => observation(id === 'a'
+        ? row('a', 'running', {started_at: ago(5)})
+        : row('b', 'succeeded', {started_at: ago(9), finished_at: ago(1), summary: 'A summary.'})),
+    });
+    const dock = await mount(sourceFor().source, 800);
+    await waitFor(() => rows(dock).length === 2);
+    for (const id of ['a', 'b']) {
+      rowFor(dock, id).click();
+      await waitFor(() => title(dock) === `objective ${id}` && shown(dock).includes('Activity'));
+
+      const where = `a ${id === 'a' ? 'running' : 'settled'} child of a Run that is ${runStatus ?? 'not said to be anything'}`;
+      expect(session(dock).querySelector('form') !== null, `${where}: its box`).to.equal(commandable);
+      expect(button(session(dock), 'Cancel child') !== null, `${where}: its Cancel`).to.equal(commandable && id === 'a');
+      expect(shown(dock).includes(FINISHED_NOTE), `${where}: the note`).to.equal(!commandable);
+      // Opening on a Run that is over says nothing out loud: only its ending under the reader does.
+      expect(session(dock).querySelector('[role="status"]')!.textContent!.trim()).to.equal('');
+    }
+    dock.remove();
+  }
+});
+
+it('puts a note where the box was when the Run ends under a reader, and keeps what the child did', async () => {
+  immediateFollowRefreshes();
+  let runStatus = 'running';
+  const running = row('a', 'running', {started_at: ago(5)});
+  const requests = serve({
+    page: () => roster([running], null, runStatus),
+    observe: () => observation(running, {
+      transcript: [{role: 'assistant', content: 'Checking the amendment.', tool_calls: []}],
+    }),
+  });
+  const dock = await mount(sourceFor().source, 420);
+  await waitFor(() => rows(dock).length === 1);
+  await openChild(dock, 'a');
+  await waitFor(() => shown(dock).includes('Checking the amendment.'));
+  await type(dock, composer(dock), 'one more thing');
+  button(session(dock), 'Cancel child')!.click();
+  await waitFor(() => shown(dock).includes('Cancel this child?'));
+
+  runStatus = 'succeeded';
+  dock.refreshIfFollowing('run-1');
+  await waitFor(() => shown(dock).includes(FINISHED_NOTE));
+
+  expect(session(dock).querySelector('form')).to.equal(null);
+  expect(button(session(dock), 'Cancel child')).to.equal(null);
+  expect(shown(dock), 'the question about cancelling lapses with the Run').to.not.contain('Cancel this child?');
+  expect(shown(dock)).to.contain('Checking the amendment.');
+  expect(session(dock).querySelector('[role="status"]')!.textContent!.trim()).to.equal(FINISHED_NOTE);
+  expect(requests.filter((request) => request.method === 'POST'), 'nothing was sent').to.have.length(0);
+});
+
 it('answers a question for the parent through a box the reader opens', async () => {
   const running = row('a', 'running', {started_at: ago(5), pending_questions: 1});
   const requests = serve({

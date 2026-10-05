@@ -280,7 +280,7 @@ it('activates and pauses typed Files content without a legacy element alias', as
 /** One Run whose children are not the subject here: the roster is empty. */
 function childrenOf(runId: string): ChildrenSource {
   const unused = async (): Promise<never> => { throw new Error('no child is opened in this test'); };
-  return {runId, page: async () => ({children: [], nextCursor: null}), observe: unused, control: unused, reply: unused};
+  return {runId, page: async () => ({children: [], nextCursor: null, runStatus: null}), observe: unused, control: unused, reply: unused};
 }
 
 it('shows a Run\'s Child agents beside Files and Sources and switches between the three cleanly', async () => {

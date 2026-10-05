@@ -485,8 +485,14 @@ const agentChildRosterPage = v.pipe(
   v.object({
     children: v.array(agentChildStatus),
     next_cursor: v.optional(v.nullable(v.string())),
+    // Where the Run stands: queued, running, succeeded, failed or cancelled; absent from an older server.
+    run_status: v.optional(v.nullable(v.string())),
   }),
-  v.transform((w) => ({children: w.children, nextCursor: w.next_cursor ?? null})),
+  v.transform((w) => ({
+    children: w.children,
+    nextCursor: w.next_cursor ?? null,
+    runStatus: w.run_status ?? null,
+  })),
 );
 export type AgentChildRosterPage = v.InferOutput<typeof agentChildRosterPage>;
 

@@ -89,6 +89,11 @@ function outcomeText(code: string): string {
   }
 }
 
+/** What a Run that is over says in the place of the box that would steer or continue its children. */
+function finishedText(): string {
+  return msg('This answer has finished, so its child agents can no longer be steered or continued.', {id: 'childSession.finished'});
+}
+
 function senderText(origin: string | null): string {
   switch (origin) {
     case 'user': return msg('You', {id: 'childSession.you'});
@@ -112,6 +117,7 @@ export class DlChildSession extends LightElement {
     childSessionId: {attribute: false},
     entry: {attribute: false},
     now: {attribute: false},
+    commandable: {attribute: false},
     observation: {state: true},
     failed: {state: true},
     missing: {state: true},
@@ -129,6 +135,9 @@ export class DlChildSession extends LightElement {
   declare entry: AgentChildStatus | null;
   /** The roster's clock, in epoch milliseconds. */
   declare now: number;
+  /** Whether the Run can still be steered. Once it is over the page has no box and no Cancel: the server
+   * would refuse what they send. */
+  declare commandable: boolean;
   declare observation: ChildObservation | null;
   /** The first observation of this child failed, so there is nothing to show yet. */
   declare failed: boolean;
@@ -144,6 +153,8 @@ export class DlChildSession extends LightElement {
   readonly #drafts = new Map<string, Draft>();
   readonly #sending = new Set<string>();
   #allowNextLineBreak = false;
+  /** The Run ended while this page was open to its children, which the page says out loud. */
+  #runEnded = false;
 
   constructor() {
     super();
@@ -151,6 +162,7 @@ export class DlChildSession extends LightElement {
     this.childSessionId = '';
     this.entry = null;
     this.now = Date.now();
+    this.commandable = true;
     this.observation = null;
     this.failed = false;
     this.missing = false;
@@ -184,8 +196,12 @@ export class DlChildSession extends LightElement {
       const before = changed.get('entry') as AgentChildStatus | null | undefined;
       if (this.entry.status === 'running' || rowChanged(before, this.entry)) this.#reobserve();
     }
-    // Only a running child can be cancelled, so a question about it lapses when it settles.
-    if (this.confirming && this.#child()?.status !== 'running') this.confirming = false;
+    // The Run ending under a reader who has its children open is said once; opening a child of a Run
+    // that is already over says nothing, since the note on the page is there to read.
+    if (changed.has('commandable')) this.#runEnded = !this.commandable && changed.get('commandable') === true;
+    // Only a running child of a Run that is still going can be cancelled, so a question about it lapses
+    // when either ends.
+    if (this.confirming && (!this.commandable || this.#child()?.status !== 'running')) this.confirming = false;
   }
 
   protected override updated(): void {
@@ -401,6 +417,7 @@ export class DlChildSession extends LightElement {
   /** What the page says out loud: that the child is gone, else the latest answer to a command. */
   #announcement(): string {
     if (this.#gone()) return msg('That child is no longer available.', {id: 'childSession.gone'});
+    if (this.#runEnded) return finishedText();
     const outcome = this.outcome;
     const shown = outcome
       && outcome.childSessionId === this.childSessionId
@@ -471,7 +488,7 @@ export class DlChildSession extends LightElement {
             ${this.observation ? this.#history(this.observation) : nothing}
           `)}
         </div>
-        ${this.#composer(child, running)}
+        ${this.commandable ? this.#composer(child, running) : this.#finished()}
       </section>
     `;
   }
@@ -498,7 +515,7 @@ export class DlChildSession extends LightElement {
         ${childGlyph(child)}
         <b class=${styles.state}>${childStateText(child)}</b>
         <span>${meta}</span>
-        ${running && !this.confirming ? html`
+        ${running && this.commandable && !this.confirming ? html`
           <button type="button" class="dl-btn dl-btn-danger-text ${styles.cancel}" data-cancel
                   @click=${this.#askConfirmation}>${msg('Cancel child', {id: 'childSession.cancel'})}</button>
         ` : nothing}
@@ -711,6 +728,10 @@ export class DlChildSession extends LightElement {
         ${question.reply ? html`<p class=${styles.toldText}>${question.reply}</p>` : nothing}
       </li>
     `;
+  }
+
+  #finished(): TemplateResult {
+    return html`<p class=${styles.finished}>${finishedText()}</p>`;
   }
 
   #composer(child: AgentChildStatus, running: boolean): TemplateResult {
