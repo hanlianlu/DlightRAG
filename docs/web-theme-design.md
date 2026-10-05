@@ -202,6 +202,14 @@ Opening an Artifact citation is Shell-mediated. On desktop, Side remains Side,
 Wide remains Wide, and Fullscreen reduces only to Wide while Sources opens. On
 compact screens, the Canvas closes and Sources opens in the Inspector drawer.
 
+The Inspector shows one content at a time: Files, Sources, or one Run's Child
+agents. Child agents is the content the reader watches beside the chat, so a
+click in the chat leaves it open where it would close Files or Sources (a Canvas
+still closes); Escape and its close button close it. It measures its own pane
+rather than the viewport: narrower than 40rem it shows the list of children or
+one child, and from 40rem the list beside the newest child. On a phone it is
+the Inspector's full-bleed sheet.
+
 Below 1200px resizing is disabled and the panel is an overlay: the primary app
 remains full viewport width under the scrim, while modal focus, inert state,
 Escape, and focus restoration remain native DlightRAG behavior. At phone widths
