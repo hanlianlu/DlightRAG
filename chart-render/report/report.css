@@ -121,13 +121,65 @@ body {
   font-size: var(--font-size-body);
   line-height: 1.65;
   -webkit-font-smoothing: antialiased;
-  overflow-wrap: break-word;
+}
+
+html,
+body,
+main {
+  max-width: 100%;
+  min-width: 0;
 }
 
 .report {
   max-width: 1120px;
   margin: 0 auto;
   padding: 20px var(--gutter) 48px;
+}
+
+/* Nothing an author writes may make the page wider than the screen. A long word breaks where it
+   must (`anywhere`, unlike `break-word`, also counts in the width a grid track, a flex item or a
+   table column asks for, so a long string cannot widen what holds it), normal wrapping at spaces is
+   untouched, and hyphenation stays manual. Every grid and flex child may shrink below its content.
+   What is wide on purpose (a table, code, the tabs, the chips) scrolls inside itself, and media never
+   outgrow their container. There is deliberately no overflow-x: hidden or clip on the page: it would
+   cut off what the reader then cannot reach, and blind the scrollWidth checks that find the cause. */
+.report {
+  hyphens: manual;
+  overflow-wrap: anywhere;
+}
+
+:where(.report, .report *) {
+  min-width: 0;
+}
+
+.report :where(img, video, canvas, picture) {
+  height: auto;
+  max-width: 100%;
+}
+
+.report svg:not(.chart-body svg) {
+  max-width: 100%;
+}
+
+.report pre {
+  background: var(--color-bg-hover);
+  border-radius: var(--radius-control);
+  font-size: var(--font-size-detail);
+  line-height: 1.55;
+  margin: 1rem 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-wrap: normal;
+  padding: 12px 14px;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.report pre code {
+  background: none;
+  border-radius: 0;
+  font-size: inherit;
+  padding: 0;
 }
 
 @media (min-width: 720px) {
@@ -278,8 +330,10 @@ figure.chart,
 }
 
 .kpi {
+  align-content: start;
   display: grid;
   gap: 2px;
+  grid-template-columns: minmax(0, 1fr);
   padding: 14px 16px;
 }
 
@@ -427,9 +481,11 @@ figure.chart[data-profile='narrow'] .chart-title {
   flex: none;
   font: inherit;
   font-size: 0.875rem;
+  max-width: 100%;
   min-height: 44px;
   padding: 0 14px;
   position: relative;
+  white-space: normal;
 }
 
 /* The bold label's width is reserved, so choosing a tab never moves its neighbours. */
@@ -489,11 +545,14 @@ figure.chart[data-profile='narrow'] .chart-title {
   }
 }
 
+/* A label keeps the room its words need and wraps only past half the row, so a row of chips never
+   squeezes it. */
 .slicer-label {
   color: var(--color-text-muted);
   flex: none;
   font-size: var(--font-size-detail);
   font-weight: 500;
+  max-width: 50%;
 }
 
 .slicer-control {
@@ -535,9 +594,11 @@ figure.chart[data-profile='narrow'] .chart-title {
   flex: none;
   font: inherit;
   font-size: 0.8125rem;
+  line-height: 1.3;
+  max-width: 100%;
   min-height: 36px;
-  padding: 0 14px;
-  white-space: nowrap;
+  padding: 6px 14px;
+  white-space: normal;
 }
 
 .chip:hover {
@@ -562,6 +623,7 @@ figure.chart[data-profile='narrow'] .chart-title {
   max-width: 100%;
   min-height: 36px;
   padding: 0 10px;
+  text-overflow: ellipsis;
 }
 
 .slicer-reset {
@@ -595,33 +657,36 @@ figure.chart[data-profile='narrow'] .chart-title {
 .slicer[data-type='slider'] {
   --thumb: 20px;
   --ratio: 0;
-  column-gap: 8px;
   display: grid;
-  grid-template-areas:
-    'label reset value'
-    'range range range'
-    'ends ends ends';
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   width: 100%;
 }
 
-.slicer[data-type='slider'] .slicer-label {
-  grid-area: label;
+.slicer-head {
+  align-items: baseline;
+  display: flex;
+  gap: 4px 8px;
 }
 
-.slicer[data-type='slider'] .slicer-reset {
-  grid-area: reset;
-  justify-self: start;
+.slicer-head .slicer-reset {
   margin-left: 0;
+}
+
+/* In the head the label and the value share one line with nothing but the small reset beside them,
+   so they shrink and wrap together when both are long. */
+.slicer-head > .slicer-label,
+.slicer-head > .slicer-value {
+  flex: 0 1 auto;
 }
 
 .slicer-value {
   color: var(--color-text-primary);
+  flex: none;
   font-variant-numeric: tabular-nums;
   font-weight: 600;
-  grid-area: value;
+  margin-left: auto;
+  max-width: 50%;
   text-align: right;
-  white-space: nowrap;
 }
 
 .slicer-range {
@@ -629,7 +694,6 @@ figure.chart[data-profile='narrow'] .chart-title {
   background: transparent;
   border-radius: var(--radius-control);
   cursor: pointer;
-  grid-area: range;
   height: 44px;
   margin: 0;
   width: 100%;
@@ -684,9 +748,13 @@ figure.chart[data-profile='narrow'] .chart-title {
   display: flex;
   font-size: var(--font-size-caption);
   font-variant-numeric: tabular-nums;
-  grid-area: ends;
+  gap: 8px;
   justify-content: space-between;
   margin-top: -8px;
+}
+
+.slicer-ends > span {
+  max-width: 48%;
 }
 
 /* ---- tables ------------------------------------------------------------------------------------ */
@@ -769,6 +837,7 @@ figure.chart[data-profile='narrow'] .chart-title {
 .timeline > li {
   display: grid;
   gap: 2px;
+  grid-template-columns: minmax(0, 1fr);
   margin: 0;
   padding: 0 0 20px 26px;
   position: relative;
@@ -866,9 +935,9 @@ figure.chart[data-profile='narrow'] .chart-title {
   font-size: var(--font-size-caption);
   font-weight: 500;
   gap: 6px;
-  line-height: 1;
-  padding: 4px 9px;
-  white-space: nowrap;
+  line-height: 1.25;
+  max-width: 100%;
+  padding: 3px 9px;
 }
 
 .tag[data-tone] {
@@ -919,6 +988,7 @@ figure.chart[data-profile='narrow'] .chart-title {
   font-variant-numeric: tabular-nums;
   font-weight: 600;
   gap: 5px;
+  max-width: 100%;
 }
 
 .delta::before {
@@ -984,6 +1054,7 @@ figure.chart[data-profile='narrow'] .chart-title {
   gap: 6px;
   line-height: 1;
   margin-bottom: 8px;
+  max-width: 100%;
   padding: 4px 10px 4px 8px;
   width: fit-content;
 }
@@ -1036,6 +1107,11 @@ figure.chart[data-profile='narrow'] .chart-title {
   .table-wrap {
     max-height: none;
     overflow: visible;
+  }
+
+  .report pre {
+    overflow: visible;
+    white-space: pre-wrap;
   }
 }
 

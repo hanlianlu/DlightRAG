@@ -423,6 +423,19 @@ def test_choosing_a_chip_moves_nothing(built: dict[str, Path], open_report) -> N
     assert before == after
 
 
+@pytest.mark.parametrize("width", (360, 1280))
+@pytest.mark.parametrize("example", ["dashboard", "multipage", "scenario"])
+def test_an_ordinary_slicer_label_keeps_one_line_beside_a_row_of_chips(
+    built: dict[str, Path], open_report, example: str, width: int
+) -> None:
+    page = open_report(built[example], width)
+
+    lines = page.eval(
+        "() => [...document.querySelectorAll('.slicer-label')].map((n) => Math.round(n.getBoundingClientRect().height / parseFloat(getComputedStyle(n).lineHeight)))"
+    )
+    assert lines and set(lines) == {1}, f"{example}@{width}: {lines}"
+
+
 def test_a_slicer_of_many_values_is_a_select_and_a_multi_slicer_toggles(
     tmp_path: Path, open_report
 ) -> None:
@@ -605,8 +618,11 @@ def test_a_slider_event_goes_out_once_a_frame_with_the_latest_number(
     page.eval("() => Report.slicer('spread').set(0.6)")
     assert page.eval("() => Report.slicer('spread').value()") == 0.5
     # A chip of a filter slicer still answers at once, and only for a choice it offers.
-    page.eval("() => { window.__events.length = 0; Report.slicer('scenario').set('乐观'); }")
-    assert page.eval("() => window.__events") == [{"id": "scenario", "value": "乐观"}]
+    # (Read in the same task: the example's script answers by moving the two sliders, and theirs wait a frame.)
+    at_once = page.eval(
+        "() => { window.__events.length = 0; Report.slicer('scenario').set('乐观'); return [...window.__events]; }"
+    )
+    assert at_once == [{"id": "scenario", "value": "乐观"}]
     page.eval("() => Report.slicer('scenario').set('不存在')")
     assert page.eval("() => Report.slicer('scenario').value()") == "乐观"
 
@@ -693,6 +709,185 @@ def test_the_band_is_two_stacked_areas_under_the_central_line_and_only_the_line_
     )
     assert all(name in tip for name in ("中位路径", "区间下限", "区间上限"))
     assert "不确定区间" not in tip
+
+
+# ---- hostile text: nothing an author writes widens the page ------------------------------------
+
+_NUMBER = "".join(str((n * 7 + 3) % 10) for n in range(60))  # 60 digits, no space
+_URL = ("https://example.com/" + "path-segment-" * 12)[:120]  # a 120-character token
+_HEADING = "瑞典与中国在新能源汽车半导体生物医药工业机器人新型显示航空航天等重点产业的长期合作与竞争格局变化趋势研究报告摘要要点"
+_TAG = "ScandinaviaChinaCooperationFrameworkAgmt"  # 40 characters, no space or hyphen
+_IDENTIFIER = "ID" + "ABCDEFGHIJ" * 8 + "XY"  # 90 characters
+_SLIDER_LABEL = "AnnualisedNominalPolicyRateDifferenceBetweenSwedenAndChinaOverTheYear"
+_SLIDER_UNIT = "PercentagePointsPerAnnum"
+_SLICER_LABEL = "按省份与销售渠道拆分的全年营业收入口径说明与数据范围的完整标签"
+_CHIP = "NorthernEuropeanRegionalGroup"
+_PIXEL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+
+
+def _hostile_chart(title: str, subtext: str, series_name: str = "数量") -> str:
+    rows = [
+        {"area": a, "q": q, "v": n + i}
+        for i, q in enumerate(("Q1", "Q2", "Q3"))
+        for n, a in enumerate(("华东", "华北", _CHIP))
+    ]
+    option = {
+        "title": {"text": title, "subtext": subtext},
+        "dataset": {"source": rows},
+        "xAxis": {"type": "category"},
+        "yAxis": {"type": "value"},
+        "series": [
+            {"type": "bar", "name": series_name, "seriesBy": "area", "encode": {"x": "q", "y": "v"}}
+        ],
+    }
+    return json.dumps({"filters": ["area"], "option": option}, ensure_ascii=False)
+
+
+def _hostile_fragment() -> str:
+    """A report whose every text container holds a string with nowhere to break."""
+    chips = json.dumps(["华东", "华北", _CHIP], ensure_ascii=False)
+    return f"""
+<header class="report-head">
+  <h1>{_HEADING}</h1>
+  <p class="lede">{_URL}</p>
+  <p class="meta">{_NUMBER} {_URL}</p>
+</header>
+<div class="slicer" data-slicer="area" data-field="area" data-label="{_SLICER_LABEL}" data-values='{chips}'></div>
+<main>
+  <section data-page="one" data-title="{_HEADING[:30]}{_NUMBER[:30]}">
+    <section class="kpis">
+      <div class="kpi"><b id="value">{_NUMBER}</b><span>{_URL}</span><small><span class="delta up">{_NUMBER[:30]}</span> {_NUMBER}</small></div>
+      <div class="kpi"><b>12.5%</b><span>增长</span><small>同比</small></div>
+      <div class="kpi"><b>3</b><span>项</span><small>个</small></div>
+      <div class="kpi"><b>8</b><span>家</span><small>个</small></div>
+    </section>
+    <h2>{_HEADING}</h2>
+    <h3>{_NUMBER}</h3>
+    <h4>{_URL}</h4>
+    <p>正文里夹着一个很长的标识 {_IDENTIFIER} 和一个网址 <a href="#end">{_URL}</a>，还有标签 <span class="tag" data-tone="2">{_TAG}</span> 与 <span class="tag">{_TAG}</span>。</p>
+    <ul>
+      <li>{_URL} <span class="tag" data-tone="3">{_TAG}</span></li>
+      <li>{_HEADING}</li>
+    </ul>
+    <div class="callout" data-kind="caution"><p>{_URL}{_NUMBER}</p></div>
+    <pre><code>{_URL}{_URL}{_URL}</code></pre>
+    <p>内联代码 <code>{_URL}</code> 在句中。</p>
+    <img alt="" width="2000" height="1000" src="{_PIXEL}">
+    <svg width="900" height="30" viewBox="0 0 900 30" role="img" aria-label="一条线"><rect width="900" height="30" fill="currentColor" opacity=".2"/></svg>
+    <ol class="timeline">
+      <li data-tone="1"><time>{_NUMBER[:40]}</time><b>{_HEADING}</b><p>{_URL}</p><span class="tag" data-tone="1">{_TAG}</span></li>
+      <li data-tone="2"><time>2024</time><b>{_NUMBER}</b><p>普通的一句话。</p></li>
+    </ol>
+    <table>
+      <thead><tr><th>标识</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>{_IDENTIFIER}</td><td>{_URL}</td></tr>
+        <tr><td>普通</td><td class="num">123</td></tr>
+      </tbody>
+    </table>
+    <div class="slicer" data-slicer="spread" data-type="slider" data-label="{_SLIDER_LABEL}" data-min="-1" data-max="2" data-step="0.25" data-value="0.5" data-unit="{_SLIDER_UNIT}"></div>
+    <div class="grid">
+      <figure class="chart" data-chart="hostile"></figure>
+      <figure class="chart" data-chart="plain"></figure>
+      <figure class="chart wide" data-chart="tip"></figure>
+    </div>
+  </section>
+  <section data-page="two" data-title="第二页">
+    <p>{_URL}</p>
+  </section>
+</main>
+<script type="application/json" id="chart-hostile">{_hostile_chart(_NUMBER + _URL, _URL)}</script>
+<script type="application/json" id="chart-plain">{_hostile_chart("普通标题", "单位：个 · 来源：测试数据")}</script>
+<script type="application/json" id="chart-tip">{_hostile_chart("鼠标提示", "单位：个 · 来源：测试数据", series_name=_URL)}</script>
+<script>Report.ready(() => Report.slicer('spread'));</script>
+<span id="end"></span>
+"""
+
+
+@pytest.fixture(scope="module")
+def hostile(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    folder = tmp_path_factory.mktemp("hostile")
+    source, out = folder / "hostile.src.html", folder / "hostile.html"
+    source.write_text(_hostile_fragment(), encoding="utf-8")
+    assert html_report.main(["build", str(source), str(out)]) == 0
+    return out
+
+
+@pytest.mark.parametrize("scheme", _SCHEMES)
+@pytest.mark.parametrize("width", (360, 1280))
+def test_text_with_nowhere_to_break_never_widens_the_page_or_spills_out_of_what_holds_it(
+    hostile: Path, open_report, width: int, scheme: str
+) -> None:
+    page = open_report(hostile, width, scheme=scheme)  # type: ignore[arg-type]
+    label = f"{width}/{scheme}"
+
+    assert probe.spills(page) == [], label
+    # The KPI value is whole, in its card, large, and wrapped rather than shrunk or cut.
+    value = page.eval(
+        """() => {
+      const el = document.getElementById('value'), card = el.closest('.kpi');
+      const box = el.getBoundingClientRect(), edge = card.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      return {text: el.textContent, size: parseFloat(style.fontSize), lines: Math.round(box.height / parseFloat(style.lineHeight)),
+        inside: box.left >= edge.left - 1 && box.right <= edge.right + 1, whole: el.scrollWidth <= el.clientWidth + 1};
+    }"""
+    )
+    assert value["text"] == _NUMBER and value["inside"] and value["whole"], label
+    assert value["size"] >= 20 and value["lines"] >= 2, f"{label}: {value}"
+    assert probe.failing_text(page) == [], label
+    # The table fits its wrapper with the identifier wrapped, so it needs no sideways scroll at all.
+    table = page.eval(
+        """() => {
+      const wrap = document.querySelector('.table-wrap'), cell = wrap.querySelector('td');
+      return {scroll: wrap.scrollWidth - wrap.clientWidth, lines: Math.round(cell.getBoundingClientRect().height / parseFloat(getComputedStyle(cell).lineHeight))};
+    }"""
+    )
+    assert table["scroll"] <= 1 and table["lines"] >= 2, f"{label}: {table}"
+    # A tab, a chip and a slider label that are too long wrap inside the width they have.
+    fit = page.eval(
+        """() => {
+      const within = (el, host) => el.getBoundingClientRect().width <= host.clientWidth + 1;
+      const tabs = document.querySelector('.tabs'), tab = document.getElementById('tab-one');
+      const chips = document.querySelector('.chips'), chip = [...chips.children].at(-1);
+      const slider = document.querySelector('[data-slicer=spread]');
+      return {tab: within(tab, tabs), chip: within(chip, chips), slider: slider.scrollWidth <= slider.clientWidth + 1,
+        value: document.querySelector('[data-slicer=spread] .slicer-value').textContent};
+    }"""
+    )
+    assert fit["tab"] and fit["chip"] and fit["slider"], f"{label}: {fit}"
+    assert fit["value"].endswith(_SLIDER_UNIT), label
+    # A caption that is a wall of text leaves the plot where an ordinary caption leaves it.
+    hostile_plot, plain_plot = (probe.chart_facts(page, c) for c in ("hostile", "plain"))
+    assert hostile_plot and plain_plot and hostile_plot["plot"] and plain_plot["plot"]
+    assert hostile_plot["plot"][0] == pytest.approx(plain_plot["plot"][0], abs=1), label
+    assert hostile_plot["width"] == plain_plot["width"], label
+    if width == 360:
+        assert hostile_plot["plot"][0] >= 0.55 * hostile_plot["width"], label
+    # A tooltip with a very long series name wraps inside the screen.
+    page.eval(
+        "() => Report.chart('tip').instance.dispatchAction({type: 'showTip', seriesIndex: 0, dataIndex: 1})"
+    )
+    page.page.wait_for_timeout(250)
+    tooltip = page.eval(
+        """() => {
+      const tip = [...document.querySelectorAll('figure[data-chart=tip] .chart-body div')].find((d) => d.style.position === 'absolute' && d.innerText.includes('Q2'));
+      const box = tip.getBoundingClientRect();
+      return {left: box.left, right: box.right, width: box.width, vw: document.documentElement.clientWidth};
+    }"""
+    )
+    assert (
+        tooltip["left"] >= -1 and tooltip["right"] <= tooltip["vw"] + 1 and tooltip["width"] <= 322
+    ), label
+    # Choosing the long chip, moving the slider and opening the other page keep it all inside.
+    page.frame.click(".chips .chip:last-child")
+    page.eval("() => Report.slicer('spread').set(2)")
+    settle(page)
+    assert probe.spills(page) == [], label
+    page.frame.click("#tab-two")
+    page.page.wait_for_timeout(300)
+    assert probe.spills(page) == [], label
+    assert page.observed.clean() and page.violations() == [], label
+    shoot(page, f"hostile-{scheme}-{width}")
 
 
 # ---- pages --------------------------------------------------------------------------------------

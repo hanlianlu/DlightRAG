@@ -120,6 +120,41 @@ _FOCUS = (
 """
 )
 
+# Everything that sticks out: the page itself, any element whose box passes its container's content
+# edge, and any block whose text spills past its own edge. What scrolls on purpose (a table's wrapper,
+# the tabs, the chips, code) is left alone, and so are the insides of an ECharts drawing.
+_SPILLS = """
+() => {
+  const vw = document.documentElement.clientWidth;
+  const scrolls = (el) => ['auto', 'scroll'].includes(getComputedStyle(el).overflowX);
+  const inScroller = (el) => { for (let n = el.parentElement; n; n = n.parentElement) if (scrolls(n)) return true; return false; };
+  const name = (el) => el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (typeof el.className === 'string' && el.className ? '.' + el.className.trim().split(/\\s+/)[0] : '');
+  const found = [];
+  const root = document.documentElement;
+  if (root.scrollWidth > vw) found.push(`the page scrolls sideways: ${root.scrollWidth} > ${vw}`);
+  for (const el of document.body.querySelectorAll('*')) {
+    if (el.closest('svg') && el.tagName.toLowerCase() !== 'svg') continue;
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || ['absolute', 'fixed'].includes(style.position)) continue;
+    if (inScroller(el)) continue;
+    const box = el.getBoundingClientRect();
+    if (box.width === 0 && box.height === 0) continue;
+    const parent = el.parentElement;
+    const own = getComputedStyle(parent);
+    const edge = el.matches('.tabs, .slicer-bar')
+      ? vw
+      : parent.getBoundingClientRect().right - parseFloat(own.paddingRight) - parseFloat(own.borderRightWidth);
+    if (box.right > edge + 1) found.push(`${name(el)} ends at ${Math.round(box.right)}, past its container's ${Math.round(edge)}`);
+    // The sticky bars bleed to the screen's edges on purpose, and widen what holds them by the gutter.
+    const bleeds = el.querySelector(':scope > .tabs, :scope > .slicer-bar');
+    if (!bleeds && !scrolls(el) && el.clientWidth > 0 && el.scrollWidth > el.clientWidth + 1) {
+      found.push(`${name(el)} holds text ${el.scrollWidth}px wide in ${el.clientWidth}px`);
+    }
+  }
+  return found;
+}
+"""
+
 _TOKENS = """
 (names) => {
   const style = getComputedStyle(document.documentElement);
@@ -152,6 +187,11 @@ def failing_text(page: ReportPage) -> list[str]:
         for i in text_scan(page)
         if contrast_of(i) < (3 if is_large(i) else 4.5)
     ]
+
+
+def spills(page: ReportPage) -> list[str]:
+    """Every way something sticks out of the page or of what holds it, described."""
+    return page.eval(_SPILLS)
 
 
 def chart_facts(page: ReportPage, chart_id: str) -> dict[str, Any] | None:

@@ -193,7 +193,7 @@ function buildSlider(node, def) {
   ]);
   input.addEventListener('input', () => setSlicer(def.id, input.valueAsNumber));
   reset.addEventListener('click', () => setSlicer(def.id, Core.slicerDefault(def)));
-  node.append(label, reset, shown, input, ends);
+  node.append(el('div', {class: 'slicer-head'}, [label, reset, shown]), input, ends);
   const entry = {
     def,
     el: node,

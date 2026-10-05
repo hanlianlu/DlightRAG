@@ -724,7 +724,8 @@ function themes(structure, colors) {
       pie: {label: {fontSize: 12}},
       tooltip: {
         padding: [8, 10],
-        extraCssText: `border-radius:10px;box-shadow:0 12px 34px ${roles.tooltipShadow};`,
+        // A tooltip wraps a long name inside the screen; it never widens the page.
+        extraCssText: `border-radius:10px;box-shadow:0 12px 34px ${roles.tooltipShadow};max-width:min(320px,calc(100vw - 24px));white-space:normal;overflow-wrap:anywhere;`,
         textStyle: {fontSize: 12},
       },
     });
