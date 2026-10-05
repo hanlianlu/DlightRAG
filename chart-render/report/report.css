@@ -590,6 +590,105 @@ figure.chart[data-profile='narrow'] .chart-title {
   color: var(--color-text-primary);
 }
 
+/* A slider is a real range input: a hairline track that fills with gold up to a gold thumb, the label
+   on the left, the current value on the right, the two ends in muted text underneath. */
+.slicer[data-type='slider'] {
+  --thumb: 20px;
+  --ratio: 0;
+  column-gap: 8px;
+  display: grid;
+  grid-template-areas:
+    'label reset value'
+    'range range range'
+    'ends ends ends';
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  width: 100%;
+}
+
+.slicer[data-type='slider'] .slicer-label {
+  grid-area: label;
+}
+
+.slicer[data-type='slider'] .slicer-reset {
+  grid-area: reset;
+  justify-self: start;
+  margin-left: 0;
+}
+
+.slicer-value {
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  grid-area: value;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.slicer-range {
+  appearance: none;
+  background: transparent;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+  grid-area: range;
+  height: 44px;
+  margin: 0;
+  width: 100%;
+}
+
+@media (min-width: 720px) {
+  .slicer-range {
+    height: 36px;
+  }
+}
+
+.slicer-range::-webkit-slider-runnable-track {
+  background: linear-gradient(
+    to right,
+    var(--color-accent-action) calc(var(--thumb) / 2 + (100% - var(--thumb)) * var(--ratio)),
+    var(--color-border-strong) 0
+  );
+  border-radius: 1px;
+  height: 2px;
+}
+
+.slicer-range::-moz-range-track {
+  background: linear-gradient(
+    to right,
+    var(--color-accent-action) calc(var(--thumb) / 2 + (100% - var(--thumb)) * var(--ratio)),
+    var(--color-border-strong) 0
+  );
+  border-radius: 1px;
+  height: 2px;
+}
+
+.slicer-range::-webkit-slider-thumb {
+  appearance: none;
+  background: var(--color-accent-action);
+  border: 0;
+  border-radius: 50%;
+  height: var(--thumb);
+  margin-top: calc((2px - var(--thumb)) / 2);
+  width: var(--thumb);
+}
+
+.slicer-range::-moz-range-thumb {
+  background: var(--color-accent-action);
+  border: 0;
+  border-radius: 50%;
+  height: var(--thumb);
+  width: var(--thumb);
+}
+
+.slicer-ends {
+  color: var(--color-text-muted);
+  display: flex;
+  font-size: var(--font-size-caption);
+  font-variant-numeric: tabular-nums;
+  grid-area: ends;
+  justify-content: space-between;
+  margin-top: -8px;
+}
+
 /* ---- tables ------------------------------------------------------------------------------------ */
 
 .table-wrap {

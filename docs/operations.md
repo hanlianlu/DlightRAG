@@ -108,7 +108,8 @@ slicers, pages, and one JSON block per chart) into one self-contained report
 for an Artifact: the build checks the fragment, and writes a document that
 carries the full ECharts build, the stylesheet and the runtime, so it needs no
 network. The runtime lays each chart out for the width it has, applies the
-slicers, and follows the reader's light or dark scheme. The build refuses what
+slicers (filters, a metric switch, numeric sliders), and follows the reader's
+light or dark scheme. The build refuses what
 the Artifact sandbox would refuse anyway (a remote URL, a frame, a form,
 `localStorage`, `fetch`) and warns about what makes a report worse: a chart
 without a title or a subtitle that gives the unit and the source, more series

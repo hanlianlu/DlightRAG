@@ -50,9 +50,36 @@ function parseAspect(aspect) {
 
 // ---- slicers ----------------------------------------------------------------------------------
 
+const decimalsOf = (n) => {
+  const [mantissa, exponent = '0'] = String(n).split('e');
+  return Math.min(6, Math.max(0, (mantissa.split('.')[1] ?? '').length - Number(exponent)));
+};
+
+/** How many decimals a slider shows: as many as its step, or its minimum, has. */
+const sliderDecimals = (def) => Math.max(decimalsOf(def.step), decimalsOf(def.min));
+
+/**
+ * A number as a slider holds it: inside min..max, on the grid min + k * step (the last notch at or
+ * below max), free of floating-point noise. Null when `n` is not a number.
+ */
+function snapSlider(def, n) {
+  const x = typeof n === 'string' && n.trim() === '' ? NaN : Number(n);
+  if (!Number.isFinite(x)) return null;
+  const last = Math.floor((def.max - def.min) / def.step + 1e-9);
+  const notch = Math.min(last, Math.max(0, Math.round((x - def.min) / def.step)));
+  return Number((def.min + notch * def.step).toFixed(sliderDecimals(def)));
+}
+
+/** A slider's number as text: its decimals, a + before a positive one when the range runs below zero, then the unit. */
+function formatSlider(def, n) {
+  const shown = n.toFixed(sliderDecimals(def));
+  return `${n > 0 && def.min < 0 ? '+' : ''}${shown}${def.unit ?? ''}`;
+}
+
 /** The value a slicer holds before anyone touches it. */
 function slicerDefault(def) {
   if (def.type === 'metric') return def.options[0].label;
+  if (def.type === 'slider') return snapSlider(def, def.value ?? def.min);
   if (def.mode === 'multi') return [];
   return def.all === false && def.values?.length ? def.values[0] : null;
 }
@@ -62,6 +89,7 @@ function slicerValue(def, state) {
   const value = state?.[def.id];
   if (value === undefined) return slicerDefault(def);
   if (def.type === 'metric') return def.options.some((o) => o.label === value) ? value : slicerDefault(def);
+  if (def.type === 'slider') return snapSlider(def, value) ?? slicerDefault(def);
   return value;
 }
 
@@ -84,7 +112,7 @@ function filterRows(rows, spec, state) {
   const checks = [];
   for (const id of spec.filters ?? []) {
     const def = spec.slicers?.[id];
-    if (def?.type === 'metric' || !def) continue;
+    if (!def || def.type === 'metric' || def.type === 'slider') continue;
     const value = slicerValue(def, state);
     if (def.mode === 'multi') {
       if (Array.isArray(value) && value.length) checks.push((row) => value.includes(String(row[def.field])));
@@ -110,26 +138,76 @@ function distinct(rows, field) {
 
 // ---- tokens -----------------------------------------------------------------------------------
 
-/** Replace `{metric}` in the option: by the metric's field inside `encode`, by its label elsewhere. */
-function applyMetric(option, metric) {
-  if (!metric) return;
-  const label = (text) => (typeof text === 'string' ? text.replaceAll('{metric}', metric.label) : text);
-  for (const title of asList(option.title)) {
-    title.text = label(title.text);
-    title.subtext = label(title.subtext);
+// What a filter's `{id}` says when nothing is chosen, and how several choices are joined.
+const TOKEN_WORDS = {
+  zh: {all: '全部', join: '、'},
+  en: {all: 'All', join: ', '},
+};
+const TOKEN = /\{([^{}|]+)\}/g;
+
+/** The text a slicer's `{id}` stands for: a slider's number, a metric's label, or the filter's choice. */
+function tokenText(def, state, words) {
+  const value = slicerValue(def, state);
+  if (def.type === 'slider') return formatSlider(def, value);
+  if (Array.isArray(value)) return value.length ? value.join(words.join) : words.all;
+  return value === null || value === '' ? words.all : String(value);
+}
+
+/**
+ * Replace `{id}` in every string of the option by what the slicer `id` holds now, except in the rows
+ * (`dataset`, a series' `data`), which are data and not text. `{metric}` also stands for the metric
+ * slicer the chart lists when no slicer is named metric. A `{name}` no slicer owns stays as written.
+ * A series' `encode` value that is a metric's token becomes the row field of its selected option.
+ */
+function applyTokens(option, {slicers, state, words, metric}) {
+  const texts = {};
+  const metrics = {};
+  for (const def of Object.values(slicers)) {
+    texts[def.id] = tokenText(def, state, words);
+    if (def.type === 'metric') metrics[def.id] = def.options.find((o) => o.label === slicerValue(def, state));
   }
-  for (const axis of [...asList(option.xAxis), ...asList(option.yAxis)]) {
-    if (isObject(axis) && axis.name !== undefined) axis.name = label(axis.name);
+  if (metric && !('metric' in texts)) {
+    texts.metric = metric.label;
+    metrics.metric = metric;
   }
-  for (const series of asList(option.series)) {
-    if (!isObject(series)) continue;
-    if (series.name !== undefined) series.name = label(series.name);
-    for (const [key, value] of Object.entries(series.encode ?? {})) {
-      if (value !== '{metric}') continue;
-      series.encode[key] = metric.y;
-      if (series.name === undefined && !series.seriesBy) series.name = metric.label;
+  const text = (value) => value.replace(TOKEN, (whole, id) => (Object.hasOwn(texts, id) ? texts[id] : whole));
+  const walk = (node) => {
+    if (typeof node === 'string') return text(node);
+    if (Array.isArray(node)) return node.map(walk);
+    if (isObject(node)) return Object.fromEntries(Object.entries(node).map(([key, value]) => [key, walk(value)]));
+    return node;
+  };
+  const series = (entry) => {
+    if (!isObject(entry)) return entry;
+    const {data, encode, ...rest} = entry;
+    const out = walk(rest);
+    if (data !== undefined) out.data = data;
+    if (isObject(encode)) {
+      out.encode = {};
+      for (const [dimension, field] of Object.entries(encode)) {
+        const chosen = typeof field === 'string' ? metrics[field.match(/^\{([^{}|]+)\}$/)?.[1]] : undefined;
+        if (chosen) {
+          out.encode[dimension] = chosen.y;
+          if (out.name === undefined && !out.seriesBy) out.name = chosen.label;
+        } else {
+          out.encode[dimension] = walk(field);
+        }
+      }
+    } else if (encode !== undefined) {
+      out.encode = encode;
     }
+    return out;
+  };
+  for (const key of Object.keys(option)) {
+    if (key === 'dataset') continue;
+    option[key] = key === 'series' ? (Array.isArray(option.series) ? option.series.map(series) : series(option.series)) : walk(option[key]);
   }
+}
+
+/** The ids, among `ids`, whose `{id}` the option writes: the charts to draw again when that slicer moves. */
+function tokenIds(option, ids) {
+  const written = JSON.stringify(option ?? {});
+  return ids.filter((id) => written.includes(`{${id}}`));
 }
 
 // ---- tidy rows to series ----------------------------------------------------------------------
@@ -324,7 +402,8 @@ function legendRows(names, width, size) {
   return rows;
 }
 
-function seriesNames(series) {
+function seriesNames(series, legend) {
+  if (Array.isArray(legend?.data)) return legend.data.map((d) => (isObject(d) ? d.name : d)).filter((n) => n !== undefined);
   return series.flatMap((s) => (s.type === 'pie' || s.type === 'funnel' ? asList(s.data).map((d) => d.name) : [s.name])).filter((n) => n !== undefined);
 }
 
@@ -373,7 +452,7 @@ function layout(option, ctx) {
   const horizontal = ctx.horizontal;
 
   // Legend: top left on a wide figure, along the bottom of a narrow one; it wraps, and scrolls past a few rows.
-  const names = seriesNames(info.series);
+  const names = seriesNames(info.series, option.legend);
   let legend = option.legend === false ? {show: false} : isObject(option.legend) ? {...option.legend} : null;
   if (legend === null && (info.series.length > 1 || info.circular)) legend = {};
   let legendHeight = 0;
@@ -540,20 +619,28 @@ function chartHeight(spec, option, ctx) {
  * `{option, height, theme, caption, empty, profile, horizontal}`.
  *
  * `spec` is the chart block plus the definitions of the slicers it lists (`spec.slicers`), `state`
- * maps slicer ids to values, and `env.themes` is what `themes()` built: its colour list gives each
- * `seriesBy` series a colour that does not change when a filter removes another series.
+ * maps slicer ids to values, and `env` carries `themes` (what `themes()` built: its colour list gives
+ * each `seriesBy` series a colour that does not change when a filter removes another series),
+ * `slicers` (every slicer of the report, for the `{id}` tokens) and `lang` (`zh` or `en`).
  */
 function prepare(spec, state = {}, width = 720, env = {}) {
   const profile = profileFor(width);
   const {name: paletteName, option} = Theme.pick(clone(spec.option ?? {}));
 
-  applyMetric(option, selectedMetric(spec, state));
+  applyTokens(option, {
+    slicers: {...env.slicers, ...spec.slicers},
+    state,
+    words: TOKEN_WORDS[env.lang] ?? TOKEN_WORDS.en,
+    metric: selectedMetric(spec, state),
+  });
   const allRows = sourceRows(option);
   const rows = filterRows(allRows, spec, state);
   const colors = option.color ?? env.themes?.[paletteName]?.color;
   const categories = expandSeries(option, rows, allRows, colors);
   if (option.dataset && option.series.every((s) => s.data !== undefined)) delete option.dataset;
   else if (option.dataset) asList(option.dataset).forEach((d, i) => i === 0 && (d.source = rows));
+  // The palette's series rules come before the layout, which gives a line only what the theme left unsaid.
+  option.series = Theme.decorate(option, paletteName).series;
 
   // Caption: the title leaves the chart and becomes HTML, so it wraps like text.
   const title = asList(option.title)[0] ?? {};
@@ -595,7 +682,7 @@ function prepare(spec, state = {}, width = 720, env = {}) {
     placePies(option, {width, height, top: reserve.topReserve, bottom: reserve.bottomReserve, labels: reserve.pieLabels});
   }
   return {
-    option: Theme.decorate(clone(option), paletteName),
+    option: clone(option),
     height,
     theme: paletteName,
     caption,
@@ -645,4 +732,4 @@ function themes(structure, colors) {
   return out;
 }
 
-module.exports = {filterValues, prepare, slicerDefault, sourceRows, themes};
+module.exports = {filterValues, formatSlider, prepare, slicerDefault, snapSlider, sourceRows, themes, tokenIds};

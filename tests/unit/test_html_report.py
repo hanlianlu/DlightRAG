@@ -28,6 +28,14 @@ _OPTION: dict[str, Any] = {
     "series": [{"type": "bar", "seriesBy": "region", "encode": {"x": "quarter", "y": "revenue"}}],
 }
 _REGION = '<div class="slicer" data-slicer="region" data-field="region" data-label="地区"></div>'
+_SPREAD = (
+    '<div class="slicer" data-slicer="spread" data-type="slider" data-label="利差" data-min="-1" '
+    'data-max="2" data-step="0.25" data-value="0.5" data-unit="pp"></div>'
+)
+_CHIPS = (
+    '<div class="slicer" data-slicer="scenario" data-all="false" '
+    'data-values=\'["基准","乐观"]\'></div>'
+)
 _METRIC = (
     '<div class="slicer" data-slicer="metric" data-type="metric" data-label="指标" '
     'data-options=\'[{"label":"销售额","y":"revenue"},{"label":"利润","y":"profit"}]\'></div>'
@@ -519,6 +527,60 @@ def test_error_a_malformed_slicer(build, slicer: str, needle: str) -> None:
     failed(build(report(slicer, chart())), 'slicer "s"', needle)
 
 
+@pytest.mark.parametrize(
+    ("attributes", "needle"),
+    [
+        ('data-max="2" data-step="0.25"', "needs numbers in data-min, data-max and data-step"),
+        ('data-min="x" data-max="2" data-step="0.25"', "needs numbers in data-min"),
+        ('data-min="0" data-max="0" data-step="1"', "data-max 0 must be above data-min 0"),
+        ('data-min="0" data-max="2" data-step="0"', "data-step 0 must be above 0"),
+        ('data-min="0" data-max="2" data-step="3"', "no more than the range (2)"),
+        (
+            'data-min="0" data-max="2" data-step="1" data-value="5"',
+            "data-value 5 is outside data-min..data-max",
+        ),
+        (
+            'data-min="0" data-max="2" data-step="1" data-value="x"',
+            'data-value "x" is not a number',
+        ),
+    ],
+)
+def test_error_a_malformed_slider(build, attributes: str, needle: str) -> None:
+    slicer = f'<div class="slicer" data-slicer="s" data-type="slider" {attributes}></div>'
+
+    failed(build(report(slicer, chart())), 'slicer "s"', needle)
+
+
+def test_error_a_chart_that_lists_a_slider_in_filters(build) -> None:
+    failed(
+        build(report(_SPREAD, chart(filters=["spread"]))),
+        'chart "sales" lists slider "spread"',
+        "filters no rows",
+        "{spread}",
+    )
+
+
+def test_a_filter_with_values_and_no_field_serves_a_script_or_a_token(build) -> None:
+    script = "<script>Report.ready(() => Report.slicer('scenario').value());</script>"
+
+    assert build(report(_CHIPS, chart(), script)).warnings == []
+
+
+def test_error_a_chart_that_lists_a_filter_with_no_field(build) -> None:
+    failed(
+        build(report(_CHIPS, chart(filters=["scenario"]))),
+        'chart "sales" lists slicer "scenario"',
+        "no data-field",
+    )
+
+
+@pytest.mark.parametrize("slicer_id", ["a", "b", "c", "d", "e", "value"])
+def test_error_a_slicer_named_like_an_echarts_placeholder(build, slicer_id: str) -> None:
+    slicer = f'<div class="slicer" data-slicer="{slicer_id}" data-field="region"></div>'
+
+    failed(build(report(slicer, chart(filters=[slicer_id]))), "template placeholders", "longer id")
+
+
 def test_error_a_dataset_from_a_block_that_is_missing(build) -> None:
     option = {**_OPTION, "dataset": {"from": "nowhere"}}
 
@@ -654,9 +716,54 @@ def test_the_example_text_sizes_at_or_over_11px_are_not_warned_about(build) -> N
 
 
 def test_warning_a_slicer_or_a_data_block_nothing_uses(build) -> None:
-    warned(build(report(_REGION, chart())), 'slicer "region"', "listed in no chart")
+    warned(
+        build(report(_SPREAD, chart())),
+        'slicer "spread"',
+        "is used by nothing",
+        '"filters"',
+        "{spread}",
+        "Report.slicer('spread')",
+    )
     block = '<script type="application/json" id="data-spare">[{"a": 1}]</script>'
     warned(build(report(chart(), block)), 'data block "spare" is used by no chart')
+
+
+@pytest.mark.parametrize("how", ["filters", "token", "script"])
+def test_a_slicer_is_in_use_when_a_chart_lists_it_its_token_is_written_or_a_script_names_it(
+    build, how: str
+) -> None:
+    title = {"text": "利差 {spread}", "subtext": "单位：万元 · 来源：内部销售数据"}
+    parts = {
+        "filters": (_REGION, chart(filters=["region"])),
+        "token": (_SPREAD, chart(option={**_OPTION, "title": title})),
+        "script": (
+            _SPREAD,
+            chart(),
+            "<script>Report.ready(() => Report.slicer('spread'));</script>",
+        ),
+    }[how]
+
+    assert build(report(*parts)).warnings == []
+
+
+def test_the_help_states_the_slider_and_token_rules(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        html_report.main(["build", "--help"])
+    text = " ".join(capsys.readouterr().out.split())
+
+    for rule in (
+        "data-min, data-max, data-step (numbers), data-value (default: data-min), data-unit",
+        "Report.slicer(ID).value() returns it, .set(n) clamps to min..max and snaps to the step",
+        "a + before a positive number when data-min is below zero",
+        "min -1, step 0.25, unit pp shows 0.5 as +0.50pp",
+        "once per animation frame at most, with the latest value",
+        'do not list it in "filters"',
+        "{ID} in any string of a chart's option, except the rows (dataset, a series' data)",
+        'a filter\'s chosen value (several joined by 、 or ", "; nothing chosen: 全部 or All',
+        "A {name} that is no slicer id stays as written",
+        "or an author script names its id in quotes",
+    ):
+        assert rule in text, rule
 
 
 def test_warnings_do_not_fail_the_build_and_are_counted_in_the_summary(build) -> None:

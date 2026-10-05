@@ -3,9 +3,10 @@
  * Draw report charts with the server-side SVG renderer, through the same `core.prepare` the browser
  * runtime calls: JSON jobs on stdin, results on stdout.
  *
- * A job is `{id, spec, state, width | widths, mode, svg, sweep}`. `svg: false` only checks that
- * ECharts can draw the chart; `sweep: true` draws it once for every state of its first filter, after
- * the defaults. A result is `{id, width, state, height, empty, svg}` or `{id, width, state, error}`.
+ * A job is `{id, spec, state, width | widths, mode, svg, sweep, slicers, lang}`. `svg: false` only
+ * checks that ECharts can draw the chart; `sweep: true` draws it once for every state of its first
+ * filter, after the defaults; `slicers` and `lang` are what the `{id}` tokens read. A result is
+ * `{id, width, state, height, empty, svg}` or `{id, width, state, error}`.
  */
 
 const {readFileSync} = require('node:fs');
@@ -60,7 +61,7 @@ function main() {
         try {
           const colors = palette[mode];
           themes[mode] ??= Core.themes(structure, colors);
-          const plan = Core.prepare(spec, state, width, {themes: themes[mode]});
+          const plan = Core.prepare(spec, state, width, {themes: themes[mode], slicers: job.slicers, lang: job.lang});
           if (plan.empty) {
             results.push({...label, height: plan.height, empty: true, svg: svg ? emptyFrame(width, plan.height, mode) : undefined});
             continue;

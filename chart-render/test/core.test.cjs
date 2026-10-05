@@ -200,6 +200,98 @@ test('the metric slicer picks the field of encode.y and the label of the title a
   assert.deepEqual(second.option.series[0].data, [60, 63, 66]);
 });
 
+const spread = {id: 'spread', type: 'slider', min: -1, max: 2, step: 0.25, value: 0.5, unit: 'pp'};
+const inflation = {id: 'inflation', type: 'slider', min: 0, max: 4, step: 0.25, value: 2, unit: '%'};
+const scenario = {id: 'scenario', type: 'filter', mode: 'single', all: false, values: ['基准', '乐观', '悲观']};
+const many = {...regions, id: 'many'};
+const slicers = {region, many, metric, spread, inflation, scenario};
+const tokens = (option, state = {}, lang = 'zh', extra = {}) =>
+  Core.prepare(chart(option, extra), state, 720, {themes, slicers, lang});
+
+test('a slider snaps to its notches, stays inside min..max, and reads with its decimals, a plus and its unit', () => {
+  assert.equal(Core.snapSlider(spread, 0.6), 0.5);
+  assert.equal(Core.snapSlider(spread, '1.13'), 1.25);
+  assert.equal(Core.snapSlider(spread, -7), -1);
+  assert.equal(Core.snapSlider(spread, 9), 2);
+  assert.equal(Core.snapSlider(spread, ''), null);
+  assert.equal(Core.snapSlider(spread, 'x'), null);
+  assert.equal(Core.snapSlider({id: 'o', min: 0, max: 1, step: 0.3}, 1), 0.9, 'the last notch at or below max');
+  assert.equal(Core.snapSlider({id: 't', min: 0, max: 1, step: 0.1}, 0.30000000000000004), 0.3, 'no floating-point noise');
+  assert.equal(Core.formatSlider(spread, 0.5), '+0.50pp');
+  assert.equal(Core.formatSlider(spread, -0.25), '-0.25pp');
+  assert.equal(Core.formatSlider(spread, 0), '0.00pp');
+  assert.equal(Core.formatSlider(inflation, 2), '2.00%', 'no plus when the range never runs below zero');
+  assert.equal(Core.formatSlider({id: 'y', min: 2020, max: 2030, step: 1, unit: '年'}, 2026), '2026年');
+  assert.equal(Core.formatSlider({id: 'h', min: 0.5, max: 3, step: 1}, 1.5), '1.5', 'the decimals of min count too');
+  assert.equal(Core.slicerDefault({...spread, value: 9}), 2);
+  assert.equal(Core.slicerDefault({...spread, value: undefined}), -1);
+});
+
+test('every slicer is a {id} token in any string of the option, whether a chart lists it or not', () => {
+  const p = tokens(
+    {
+      title: {text: '利差 {spread}', subtext: '通胀 {inflation} · {scenario} · {region}'},
+      legend: {data: ['{spread}']},
+      dataset: {source: [{k: '{spread}', v: 1}]},
+      xAxis: {type: 'category', name: '{inflation}'},
+      yAxis: {type: 'value'},
+      tooltip: {formatter: '{b}: {c} ({nothing}) {spread}'},
+      series: [{type: 'line', name: '{spread}', encode: {x: 'k', y: 'v'}}],
+    },
+    {spread: 1},
+  );
+  assert.deepEqual(p.caption, {title: '利差 +1.00pp', subtitle: '通胀 2.00% · 基准 · 全部'});
+  assert.deepEqual(p.option.legend.data, ['+1.00pp']);
+  assert.equal(p.option.xAxis.name, '2.00%');
+  assert.equal(p.option.series[0].name, '+1.00pp');
+  assert.equal(p.option.tooltip.formatter, '{b}: {c} ({nothing}) +1.00pp', 'a {name} no slicer owns stays');
+  assert.deepEqual(p.option.xAxis.data, ['{spread}'], 'rows are data, not text');
+});
+
+test('a filter token is the chosen value, several joined, or All in the report language', () => {
+  const text = (state, lang) => tokens({title: {text: '{region}|{many}'}, series: [{type: 'bar', data: [1]}], xAxis: {type: 'category', data: ['a']}, yAxis: {}}, state, lang).caption.title;
+  assert.equal(text({}, 'zh'), '全部|全部');
+  assert.equal(text({}, 'en'), 'All|All');
+  assert.equal(text({region: '华东', many: ['华东', '华北']}, 'zh'), '华东|华东、华北');
+  assert.equal(text({region: '华东', many: ['华东', '华北']}, 'en'), '华东|华东, 华北');
+});
+
+test('a slider token follows the state, snapped and kept inside its range', () => {
+  const title = (state) => tokens({title: {text: '{spread}'}, series: [{type: 'bar', data: [1]}], xAxis: {type: 'category', data: ['a']}, yAxis: {}}, state).caption.title;
+  assert.equal(title({}), '+0.50pp');
+  assert.equal(title({spread: 9}), '+2.00pp');
+  assert.equal(title({spread: -0.1}), '0.00pp');
+  assert.equal(title({spread: 'x'}), '+0.50pp');
+});
+
+test('a metric slicer of any id fills its token, and in encode the token is the row field', () => {
+  const kpi = {...metric, id: 'kpi'};
+  const spec = chart(
+    {
+      title: {text: '季度{kpi}'},
+      dataset: {source: sales},
+      xAxis: {type: 'category'},
+      yAxis: {type: 'value'},
+      series: [{type: 'line', encode: {x: 'quarter', y: '{kpi}'}}],
+    },
+    {filters: ['kpi'], slicers: {kpi}},
+  );
+  const p = Core.prepare(spec, {kpi: '利润'}, 720, {themes, slicers: {kpi}, lang: 'zh'});
+  assert.equal(p.caption.title, '季度利润');
+  assert.equal(p.option.series[0].name, '利润');
+  assert.deepEqual(p.option.series[0].data, [60, 63, 66]);
+});
+
+test('a slider filters no rows, and tokenIds names the slicers whose token a chart writes', () => {
+  const spec = chart(
+    {dataset: {source: sales}, xAxis: {type: 'category'}, yAxis: {type: 'value'}, title: {text: '{spread}'}, series: [{type: 'bar', encode: {x: 'quarter', y: 'revenue'}}]},
+    {filters: ['spread'], slicers: {spread}},
+  );
+  assert.deepEqual(plan(spec, {spread: 1}).option.series[0].data, [600, 630, 660]);
+  assert.deepEqual(Core.tokenIds(spec.option, ['spread', 'inflation', 'region']), ['spread']);
+  assert.deepEqual(Core.tokenIds({}, ['spread']), []);
+});
+
 test('the title leaves the chart for the caption, and so do the toolbox and the background', () => {
   const p = plan(chart({title: {text: 'T', subtext: 'S'}, toolbox: {feature: {}}, backgroundColor: '#fff', series: [{type: 'bar', data: [1]}], xAxis: {type: 'category', data: ['a']}, yAxis: {}}));
   assert.deepEqual(p.caption, {title: 'T', subtitle: 'S'});

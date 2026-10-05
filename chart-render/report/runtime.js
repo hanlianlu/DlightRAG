@@ -65,11 +65,23 @@ function parseJson(raw, fallback) {
   }
 }
 
+const attributeNumber = (node, name) => {
+  const raw = node.getAttribute(name);
+  return raw === null || raw.trim() === '' ? NaN : Number(raw);
+};
+
 function readSlicerDef(node) {
   const id = node.getAttribute('data-slicer');
   if (!id) return null;
-  const type = node.getAttribute('data-type') === 'metric' ? 'metric' : 'filter';
+  const kind = node.getAttribute('data-type');
+  const type = kind === 'metric' || kind === 'slider' ? kind : 'filter';
   const def = {id, type, label: node.getAttribute('data-label') || id, ui: node.getAttribute('data-ui') || 'auto'};
+  if (type === 'slider') {
+    const [min, max, step] = ['data-min', 'data-max', 'data-step'].map((name) => attributeNumber(node, name));
+    if (![min, max, step].every(Number.isFinite) || !(max > min) || !(step > 0)) return null;
+    const first = attributeNumber(node, 'data-value');
+    return {...def, mode: 'single', min, max, step, unit: node.getAttribute('data-unit') || '', value: Number.isFinite(first) ? first : min};
+  }
   if (type === 'metric') {
     def.options = parseJson(node.getAttribute('data-options'), []).filter((o) => o && o.label && o.y);
     if (!def.options.length) return null;
@@ -81,7 +93,7 @@ function readSlicerDef(node) {
   def.all = node.getAttribute('data-all') !== 'false';
   const values = node.getAttribute('data-values');
   if (values) def.values = parseJson(values, []).map(String);
-  return def.field ? def : null;
+  return def.field || def.values ? def : null;
 }
 
 const copy = (value) => (Array.isArray(value) ? [...value] : value);
@@ -90,25 +102,54 @@ function emitSlicer(id) {
   doc.dispatchEvent(new CustomEvent('report:slicer', {detail: {id, value: copy(state[id])}}));
 }
 
-function setSlicer(id, value, silent = false) {
+// A slider moves many times a frame; its event goes out once a frame, with the latest value.
+const pendingEvents = new Set();
+function emitLater(id) {
+  if (!pendingEvents.size) {
+    win.requestAnimationFrame(() => {
+      const ids = [...pendingEvents];
+      pendingEvents.clear();
+      for (const pending of ids) emitSlicer(pending);
+    });
+  }
+  pendingEvents.add(id);
+}
+
+/** The charts a slicer decides: the ones that list it in "filters" and the ones whose text holds its {id}. */
+const watchers = (id) => [...charts.values()].filter((record) => record.watching.has(id));
+
+function setSlicer(id, value) {
   const entry = slicers.get(id);
   if (!entry) return;
   const {def} = entry;
-  let next = value;
+  let next;
   if (def.type === 'metric') {
     const match = def.options.find((o) => o.label === value || o.y === value);
     if (!match) return;
     next = match.label;
+  } else if (def.type === 'slider') {
+    next = Core.snapSlider(def, value);
+    if (next === null) return;
   } else if (def.mode === 'multi') {
     next = (Array.isArray(value) ? value : value === null || value === '' ? [] : [value]).map(String);
+    if (def.values) next = next.filter((v) => def.values.includes(v));
   } else {
     next = value === undefined || value === null || value === '' ? null : String(value);
+    if (next !== null && def.values && !def.values.includes(next)) return;
     if (next === null && def.all === false) next = Core.slicerDefault(def);
   }
+  const changed = JSON.stringify(state[id]) !== JSON.stringify(next);
   state[id] = next;
   entry.sync();
-  for (const record of charts.values()) if (record.spec.filters.includes(id)) scheduleRender(record);
-  if (!silent) emitSlicer(id);
+  if (!changed) return;
+  const live = def.type === 'slider';
+  for (const record of watchers(id)) {
+    // A slider is dragged: each frame replaces the last at once, with nothing animating in between.
+    record.instant ||= live;
+    scheduleRender(record);
+  }
+  if (live) emitLater(id);
+  else emitSlicer(id);
 }
 
 function differsFromDefault(def, value) {
@@ -130,7 +171,48 @@ function watchOverflow(row) {
   win.requestAnimationFrame(mark);
 }
 
+/** A real range input with its label, its current value and its two ends; the fill follows the thumb. */
+function buildSlider(node, def) {
+  const labelId = `slicer-${def.id}-label`;
+  node.textContent = '';
+  node.classList.add('slicer-ready');
+  const label = el('span', {class: 'slicer-label', id: labelId, text: def.label});
+  const reset = el('button', {type: 'button', class: 'slicer-reset', text: text.reset});
+  const shown = el('span', {class: 'slicer-value', 'aria-hidden': 'true'});
+  const input = el('input', {
+    type: 'range',
+    class: 'slicer-range',
+    'aria-labelledby': labelId,
+    min: String(def.min),
+    max: String(def.max),
+    step: String(def.step),
+  });
+  const ends = el('span', {class: 'slicer-ends', 'aria-hidden': 'true'}, [
+    el('span', {text: Core.formatSlider(def, def.min)}),
+    el('span', {text: Core.formatSlider(def, Core.snapSlider(def, def.max))}),
+  ]);
+  input.addEventListener('input', () => setSlicer(def.id, input.valueAsNumber));
+  reset.addEventListener('click', () => setSlicer(def.id, Core.slicerDefault(def)));
+  node.append(label, reset, shown, input, ends);
+  const entry = {
+    def,
+    el: node,
+    sync() {
+      const value = state[def.id];
+      const words = Core.formatSlider(def, value);
+      input.value = String(value);
+      input.setAttribute('aria-valuetext', words);
+      input.style.setProperty('--ratio', String((value - def.min) / (def.max - def.min)));
+      shown.textContent = words;
+      reset.classList.toggle('on', differsFromDefault(def, value));
+    },
+  };
+  slicers.set(def.id, entry);
+  entry.sync();
+}
+
 function buildSlicer(node, def) {
+  if (def.type === 'slider') return buildSlider(node, def);
   const choices = def.type === 'metric' ? def.options.map((o) => o.label) : Core.filterValues(def, [...charts.values()].map((c) => c.spec));
   const useSelect = def.ui === 'select' ? def.mode !== 'multi' : def.ui === 'chips' ? false : def.mode === 'single' && choices.length > 6;
   const labelId = `slicer-${def.id}-label`;
@@ -211,8 +293,16 @@ function readSlicers() {
     slicers.set(def.id, {def, el: node, sync() {}});
   }
   for (const {el: node, def} of [...slicers.values()]) buildSlicer(node, def);
-  // A page-level slicer stays in view: wrap runs of them in a sticky bar.
-  const pageLevel = [...doc.querySelectorAll('.slicer.slicer-ready')].filter((n) => !n.closest('.card, figure, .callout, .kpis, .timeline, table'));
+  // A chart redraws for the slicers it lists and for the ones its text names with {id}.
+  const known = [...slicers.keys()];
+  for (const record of charts.values()) {
+    record.watching = new Set([...record.spec.filters, ...Core.tokenIds(record.spec.option, known)]);
+  }
+  // A page-level slicer stays in view: wrap runs of them in a sticky bar. A slider is too tall for
+  // that and stays where the author put it.
+  const pageLevel = [...doc.querySelectorAll('.slicer.slicer-ready')].filter(
+    (n) => n.getAttribute('data-type') !== 'slider' && !n.closest('.card, figure, .callout, .kpis, .timeline, table'),
+  );
   for (const node of pageLevel) {
     if (node.parentElement && node.parentElement.classList.contains('slicer-bar')) continue;
     const bar = el('div', {class: 'slicer-bar', role: 'group', 'aria-label': text.filters});
@@ -264,6 +354,8 @@ function readCharts() {
       width: 0,
       dirty: true,
       fatal: false,
+      instant: false,
+      watching: new Set(),
       frame: 0,
       spec: {
         id,
@@ -346,7 +438,8 @@ function renderChart(record) {
   if (record.fatal || !record.dirty || !isVisible(record)) return;
   const width = Math.floor(record.body.clientWidth);
   try {
-    const plan = Core.prepare(record.spec, state, width, {themes});
+    const slicerDefs = Object.fromEntries([...slicers].map(([slicerId, entry]) => [slicerId, entry.def]));
+    const plan = Core.prepare(record.spec, state, width, {themes, slicers: slicerDefs, lang: isChinese() ? 'zh' : 'en'});
     record.dirty = false;
     record.width = width;
     record.errorNode.hidden = true;
@@ -362,9 +455,10 @@ function renderChart(record) {
     } else {
       const reduced = motionQuery && motionQuery.matches;
       record.instance.setOption(
-        {...plan.option, animation: !reduced, animationDuration: 320, animationDurationUpdate: 240},
+        {...plan.option, animation: !reduced && !record.instant, animationDuration: 320, animationDurationUpdate: 240},
         {notMerge: true},
       );
+      record.instant = false;
     }
     record.instance.resize({width, height: plan.height});
   } catch (error) {
@@ -542,6 +636,7 @@ const Report = Object.freeze({
         if (dataset) dataset.source = rows;
         else record.spec.option.dataset = {source: rows};
         for (const entry of slicers.values()) if (entry.def.type === 'filter' && record.spec.filters.includes(entry.def.id)) buildSlicer(entry.el, entry.def);
+        record.instant = true;
         scheduleRender(record);
       },
       refresh() {

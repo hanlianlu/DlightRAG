@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import subprocess
 import sys
@@ -30,6 +31,10 @@ _MAX_BYTES = 20 * 1024 * 1024
 _MAX_ERRORS = 10
 # The most series the palette tells apart by colour alone, measured under colour-vision deficiency.
 _COLOUR_SERIES = 6
+# ECharts writes {a} {b} {c} {d} {e} and {value} in its own templates, so no slicer may be called so.
+_ECHARTS_PLACEHOLDERS = frozenset({"a", "b", "c", "d", "e", "value"})
+_SLICER_TYPES = ("filter", "metric", "slider")
+_TOKEN = re.compile(r"\{([^{}|]+)\}")
 _PREVIEW_WIDTHS = (360, 900)
 _PREVIEW_SCALE = {360: 2, 900: 1}
 
@@ -481,8 +486,13 @@ def _read_slicers(report: _Report) -> None:
         mode = attrs.get("data-mode", "single")
         ui = attrs.get("data-ui", "auto")
         problems = []
-        if kind not in ("filter", "metric"):
-            problems.append(f'data-type "{kind}" must be filter or metric')
+        if slicer_id in _ECHARTS_PLACEHOLDERS:
+            problems.append(
+                f'"{slicer_id}" is one of ECharts\' own template placeholders ({{a}} {{b}} {{c}} '
+                "{d} {e} {value}), which a {id} token would replace; choose a longer id"
+            )
+        if kind not in _SLICER_TYPES:
+            problems.append(f'data-type "{kind}" must be filter, metric or slider')
         if mode not in ("single", "multi"):
             problems.append(f'data-mode "{mode}" must be single or multi')
         if ui not in ("auto", "chips", "select"):
@@ -504,17 +514,65 @@ def _read_slicers(report: _Report) -> None:
                 if len(set(labels)) != len(labels):
                     problems.append("data-options labels must be unique")
             slicer["options"] = options if good else []
+        elif kind == "slider":
+            _read_slider(attrs, slicer, problems)
         else:
             slicer["all"] = attrs.get("data-all") != "false"
             slicer["field"] = attrs.get("data-field", "")
-            if not slicer["field"]:
-                problems.append('a filter slicer needs data-field="the row field to filter on"')
             if attrs.get("data-values"):
                 values = _json_attribute(attrs["data-values"], problems, "data-values")
                 slicer["values"] = [str(v) for v in values] if isinstance(values, list) else []
+            if not slicer["field"] and "values" not in slicer:
+                problems.append(
+                    'a filter slicer needs data-field="the row field to filter on", or '
+                    'data-values=\'["a","b"]\' when only a script or a {id} token reads it'
+                )
         for problem in problems:
             report.error(f'slicer "{slicer_id}" (line {line}): {problem}')
         report.slicers[slicer_id] = slicer
+
+
+def _number_attribute(attrs: dict[str, str], name: str) -> float | None:
+    raw = attrs.get(name, "").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _read_slider(attrs: dict[str, str], slicer: dict[str, Any], problems: list[str]) -> None:
+    """Read a slider's range, step, default and unit; say what is wrong with any of them."""
+    low = _number_attribute(attrs, "data-min")
+    high = _number_attribute(attrs, "data-max")
+    step = _number_attribute(attrs, "data-step")
+    if low is None or high is None or step is None:
+        problems.append(
+            'a slider needs numbers in data-min, data-max and data-step, such as data-min="-1" '
+            'data-max="2" data-step="0.25"'
+        )
+        return
+    if high <= low:
+        problems.append(f"data-max {attrs['data-max']} must be above data-min {attrs['data-min']}")
+        return
+    if step <= 0 or step > high - low:
+        problems.append(
+            f"data-step {attrs['data-step']} must be above 0 and no more than the range "
+            f"({high - low:g}); it is the size of one notch"
+        )
+        return
+    value = _number_attribute(attrs, "data-value")
+    if "data-value" in attrs and value is None:
+        problems.append(f'data-value "{attrs["data-value"]}" is not a number')
+    elif value is not None and not low <= value <= high:
+        problems.append(f"data-value {attrs['data-value']} is outside data-min..data-max")
+    slicer.update(
+        min=low,
+        max=high,
+        step=step,
+        value=low if value is None else value,
+        unit=attrs.get("data-unit", ""),
+    )
 
 
 def _json_attribute(raw: str | None, problems: list[str], name: str) -> Any:
@@ -555,6 +613,17 @@ def _check_chart(report: _Report, chart: _Chart) -> None:
                 f'{name} lists filter "{slicer_id}", but no slicer declares it; add '
                 f'<div class="slicer" data-slicer="{slicer_id}" data-field="..."></div>'
             )
+        elif report.slicers[slicer_id]["type"] == "slider":
+            report.error(
+                f'{name} lists slider "{slicer_id}" in "filters", but a slider filters no rows; '
+                f"write {{{slicer_id}}} in the chart's text, or compute the rows in a script"
+            )
+        elif (
+            report.slicers[slicer_id]["type"] == "filter" and not report.slicers[slicer_id]["field"]
+        ):
+            report.error(
+                f'{name} lists slicer "{slicer_id}", which has no data-field to filter its rows by'
+            )
     if spec.get("orient", "auto") not in ("auto", "keep"):
         report.error(f'{name}: "orient" must be auto or keep')
     aspect = spec.get("aspect", "16:9")
@@ -586,21 +655,39 @@ def _check_chart(report: _Report, chart: _Chart) -> None:
             "a series its data"
         )
     _check_fields(report, chart)
-    if "{metric}" in text and not any(
-        report.slicers.get(f, {}).get("type") == "metric" for f in filters
+    if (
+        "{metric}" in text
+        and "metric" not in report.slicers
+        and not any(report.slicers.get(f, {}).get("type") == "metric" for f in filters)
     ):
         report.error(f'{name} uses {{metric}} but lists no metric slicer in "filters"')
 
 
+def _metric_slicer(report: _Report, chart: _Chart, name: str) -> dict[str, Any] | None:
+    """The metric slicer a ``{name}`` token stands for: the one so named, or for ``{metric}`` the one the chart lists."""
+    slicer = report.slicers.get(name)
+    if slicer is None and name == "metric":
+        slicer = next(
+            (
+                report.slicers[i]
+                for i in chart.filters
+                if report.slicers.get(i, {}).get("type") == "metric"
+            ),
+            None,
+        )
+    return slicer if slicer is not None and slicer["type"] == "metric" else None
+
+
 def _fields_of(report: _Report, chart: _Chart, value: str) -> list[str]:
-    """The row fields an encode value stands for: ``{metric}`` stands for every option's field."""
-    if value != "{metric}":
+    """The row fields an encode value stands for: a metric slicer's token stands for every option's field."""
+    token = _TOKEN.fullmatch(value)
+    if token is None:
         return [value]
-    for slicer_id in chart.filters:
-        slicer = report.slicers.get(slicer_id)
-        if slicer and slicer["type"] == "metric":
-            return [o["y"] for o in slicer["options"]]
-    return []
+    slicer = _metric_slicer(report, chart, token.group(1))
+    if slicer is not None:
+        return [o["y"] for o in slicer["options"]]
+    # {metric} with no metric slicer is reported once, by the chart check; any other value is a field name.
+    return [] if token.group(1) == "metric" and "metric" not in report.slicers else [value]
 
 
 def _check_fields(report: _Report, chart: _Chart) -> None:
@@ -814,11 +901,17 @@ def _check_usage(report: _Report) -> None:
     for name in report.datasets.keys() - report.used_datasets:
         report.warn(f'data block "{name}" is used by no chart; remove it, or add dataset.from')
     listed = {f for chart in report.charts.values() for f in chart.filters}
+    written = " ".join(
+        json.dumps(chart.option, ensure_ascii=False) for chart in report.charts.values()
+    )
+    scripts = "\n".join(text for text, _ in report.fragment.scripts)
     for slicer_id, slicer in report.slicers.items():
-        if slicer_id not in listed:
+        named_by_script = re.search(rf"""['"`]{re.escape(slicer_id)}['"`]""", scripts)
+        if slicer_id not in listed and f"{{{slicer_id}}}" not in written and not named_by_script:
             report.warn(
-                f'slicer "{slicer_id}" (line {slicer["line"]}) is listed in no chart\'s "filters"; '
-                "list it where it should apply, or remove it"
+                f'slicer "{slicer_id}" (line {slicer["line"]}) is used by nothing; list it in a '
+                f"chart's \"filters\", write {{{slicer_id}}} in a chart's text, or read it in a "
+                f"script with Report.slicer('{slicer_id}')"
             )
 
 
@@ -833,6 +926,24 @@ def _slicer_defs(report: _Report, chart: _Chart) -> dict[str, dict[str, Any]]:
 
 def _runtime_spec(report: _Report, chart: _Chart) -> dict[str, Any]:
     return {**chart.block, "id": chart.id, "slicers": _slicer_defs(report, chart)}
+
+
+def _is_chinese(found: _Fragment) -> bool:
+    """Whether the fragment's own words are Chinese: han characters are a real share of its letters."""
+    visible = "".join(text for text, _ in found.text)
+    han, latin = len(_CJK.findall(visible)), len(re.findall(r"[A-Za-z]", visible))
+    return han >= 2 and han >= 0.15 * (han + latin)
+
+
+def _node_context(report: _Report) -> dict[str, Any]:
+    """What every chart job carries so a {id} token reads as it does in the browser."""
+    return {
+        "slicers": {
+            slicer_id: {k: v for k, v in slicer.items() if k != "line"}
+            for slicer_id, slicer in report.slicers.items()
+        },
+        "lang": "zh" if _is_chinese(report.fragment) else "en",
+    }
 
 
 def _node(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -865,6 +976,7 @@ def _check_drawing(report: _Report) -> None:
             "widths": list(_PREVIEW_WIDTHS),
             "sweep": True,
             "svg": False,
+            **_node_context(report),
         }
         for c in report.charts.values()
         if c.spec is not None
@@ -939,9 +1051,7 @@ def _runtime() -> str:
 
 
 def _document(fragment: str, found: _Fragment, title: str | None) -> str:
-    visible = "".join(text for text, _ in found.text)
-    han, latin = len(_CJK.findall(visible)), len(re.findall(r"[A-Za-z]", visible))
-    chinese = han >= 2 and han >= 0.15 * (han + latin)
+    chinese = _is_chinese(found)
     try:
         library = _escape_script(echarts_render.echarts_library().read_text(encoding="utf-8"))
     except echarts_render.RenderError as error:
@@ -971,6 +1081,7 @@ def _preview(report: _Report, directory: Path, dark: bool) -> None:
             "spec": _runtime_spec(report, chart),
             "width": width,
             "mode": "dark" if dark else "light",
+            **_node_context(report),
         }
         for chart in report.charts.values()
         if chart.spec is not None
@@ -1042,10 +1153,41 @@ def build(source: Path, out: Path, title: str | None, preview: Path | None, dark
     return 0
 
 
+_BUILD_RULES = """\
+slicers (<div class="slicer" data-slicer="ID" ...>; ID is not a, b, c, d, e or value):
+  filter (default)  data-field="row field" filters the rows of the charts that list ID in "filters";
+                    data-values='["a","b"]' fixes the choices (alone, when only a script or a {ID}
+                    token reads it); data-mode="multi", data-all="false", data-ui="chips|select"
+  metric            data-options='[{"label":"Sales","y":"revenue"}]' swaps the plotted field
+  slider            data-min, data-max, data-step (numbers), data-value (default: data-min), data-unit
+
+a slider is a real <input type=range>. Its value is a Number: Report.slicer(ID).value() returns it,
+.set(n) clamps to min..max and snaps to the step. It is shown with as many decimals as data-step (or
+data-min) has, a + before a positive number when data-min is below zero, then the unit: min -1,
+step 0.25, unit pp shows 0.5 as +0.50pp. The report:slicer event fires on every input, once per
+animation frame at most, with the latest value. A slider filters no rows: do not list it in "filters".
+
+tokens: {ID} in any string of a chart's option, except the rows (dataset, a series' data), becomes
+what slicer ID holds now: a slider's number as above, a metric's label, a filter's chosen value
+(several joined by 、 or ", "; nothing chosen: 全部 or All, by the report's language).
+{metric} also names the metric slicer the chart lists when no slicer has the id metric, and in a
+series' encode a metric slicer's token is the row field of its chosen option. A {name} that is no
+slicer id stays as written.
+
+a slicer is in use when a chart lists it in "filters", a chart's text holds its {ID}, or an author
+script names its id in quotes; the build warns about any other.
+"""
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="html-report", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    build_parser = commands.add_parser("build", help="check a fragment and build the report")
+    build_parser = commands.add_parser(
+        "build",
+        help="check a fragment and build the report",
+        epilog=_BUILD_RULES,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     build_parser.add_argument("source", type=Path, help="the HTML fragment")
     build_parser.add_argument("out", type=Path, help="the report to write")
     build_parser.add_argument("--title", help="the document title (default: the first h1)")
