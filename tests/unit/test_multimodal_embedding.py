@@ -600,10 +600,13 @@ async def test_the_startup_probe_sends_both_image_requests_and_opens_no_trace(
     finally:
         await embedder.aclose()
 
-    query, fused, _ = (
+    # The two probe requests are in flight together, so neither is sent first.
+    *probes, _ = (
         call.kwargs["json"]
         for call in embedder._client.post.await_args_list  # pyright: ignore[reportPrivateUsage]
     )
+    sent = {payload["input_type"]: payload for payload in probes}
+    query, fused = sent["query"], sent["document"]
     assert [[part["type"] for part in item["content"]] for item in query["inputs"]] == [
         ["image_base64"]
     ]
@@ -618,6 +621,50 @@ async def test_the_startup_probe_sends_both_image_requests_and_opens_no_trace(
     (span,) = langfuse_export.spans()
     assert span.name == "embed-text"
     assert langfuse_export.usage(span) == {"input": 7, "total": 7}
+
+
+async def test_the_startup_probe_sends_both_requests_at_once_and_a_rejection_ends_both() -> None:
+    """Neither request answers before both were sent; the rejection surfaces as it is,
+    and the request still waiting is cancelled before the probe raises."""
+    embedder = MultimodalEmbedder(
+        model="voyage-multimodal-3.5",
+        base_url="https://api.voyageai.com/v1",
+        api_key="key",
+        dim=3,
+        provider=VoyageEmbedProvider(),
+    )
+    sent: set[str] = set()
+    both_sent = asyncio.Event()
+    never = asyncio.Event()
+    waiting_request_cancelled = asyncio.Event()
+
+    async def post(_url: str, *, json: dict[str, Any]) -> httpx.Response:
+        sent.add(json["input_type"])
+        if len(sent) == 2:
+            both_sent.set()
+        await both_sent.wait()
+        if json["input_type"] == "document":
+            return _response(400, {"detail": "fused documents are not accepted"})
+        try:
+            await never.wait()
+        except asyncio.CancelledError:
+            waiting_request_cancelled.set()
+            raise
+        raise AssertionError("the probe left a request it no longer needed running")
+
+    embedder._client.post = AsyncMock(side_effect=post)  # pyright: ignore[reportPrivateUsage]
+    tasks_before = asyncio.all_tasks()
+    try:
+        with pytest.raises(httpx.HTTPStatusError) as rejected:
+            async with asyncio.timeout(5):
+                await embedder.probe_image_embedding()
+        assert waiting_request_cancelled.is_set()
+        assert asyncio.all_tasks() <= tasks_before
+    finally:
+        await embedder.aclose()
+
+    assert rejected.value.response.status_code == 400
+    assert sent == {"query", "document"}
 
 
 def _record_retry_delays(monkeypatch: pytest.MonkeyPatch) -> list[float]:

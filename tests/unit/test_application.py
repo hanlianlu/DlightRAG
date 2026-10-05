@@ -114,8 +114,13 @@ class _Capabilities(_Collaborator):
     def resolve_profiles(self) -> None:
         self._record("resolve_profiles")
 
-    async def probe_all(self) -> None:
-        self._record("probe_all")
+    async def probe_rerank(self) -> None:
+        self._record("probe_rerank")
+
+    async def probe_chat(self) -> None:
+        # Overlaps the default workspace's warm-up, so where it lands among the
+        # recorded events is not a contract; its own test pins the overlap.
+        pass
 
 
 class _SearchToolchain:
@@ -496,7 +501,7 @@ async def test_application_exposes_only_typed_services_and_closes_in_dependency_
         "run_store:iter_active_run_requirements",
         "corpora:initialize",
         "retrieval:planner_for",
-        "capabilities:probe_all",
+        "capabilities:probe_rerank",
         f"pool:acquire:{normalize_workspace(test_config.deployment.workspace)}",
         "corpora:start_promotion_worker",
         "listener:start",
@@ -660,12 +665,21 @@ async def test_cancelling_startup_closes_every_initialized_collaborator(
     parts = _Parts()
     application = parts.application(test_config)
     warm_started = asyncio.Event()
+    chat_probe_cancelled = asyncio.Event()
 
     async def blocked_acquire(_workspace: str) -> Any:
         warm_started.set()
         await asyncio.Event().wait()
 
+    async def pending_chat_probe() -> None:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            chat_probe_cancelled.set()
+            raise
+
     parts.pool.acquire = blocked_acquire  # type: ignore[method-assign]
+    parts.capabilities.probe_chat = pending_chat_probe  # type: ignore[method-assign]
     startup = asyncio.create_task(application.astart())
     await warm_started.wait()
 
@@ -673,6 +687,7 @@ async def test_cancelling_startup_closes_every_initialized_collaborator(
     with pytest.raises(asyncio.CancelledError):
         await startup
 
+    assert chat_probe_cancelled.is_set()
     assert parts.recorder.closed() == _CLOSE_ORDER
     assert application.health.is_closed is True
 
@@ -845,6 +860,86 @@ async def test_a_default_workspace_that_fails_for_good_closes_startup(
         await application.astart()
 
     assert application.health.is_closed is True
+
+
+@pytest.mark.parametrize("warm_up", ["settles", "fails"])
+async def test_the_chat_probes_run_beside_the_default_workspace_warm_up(
+    test_config: DlightragConfig, warm_up: str
+) -> None:
+    """A workspace is built with the rerank verdict while the chat probes are still
+    running, startup waits for them, and a failed warm-up leaves none running."""
+    parts = _Parts()
+    rerank_probed = False
+    chat_probe = "idle"
+    chat_started = asyncio.Event()
+    chat_released = asyncio.Event()
+    seen: dict[str, object] = {}
+
+    async def probe_rerank() -> None:
+        nonlocal rerank_probed
+        await asyncio.sleep(0)
+        rerank_probed = True
+
+    async def probe_chat() -> None:
+        nonlocal chat_probe
+        chat_probe = "running"
+        chat_started.set()
+        try:
+            await chat_released.wait()
+        except asyncio.CancelledError:
+            chat_probe = "cancelled"
+            raise
+        chat_probe = "finished"
+
+    async def acquire(_workspace: str) -> object:
+        await chat_started.wait()
+        seen.update(rerank_probed=rerank_probed, chat_probe=chat_probe)
+        if warm_up == "fails":
+            raise CorpusSchemaError("workspace schema missing")
+        chat_released.set()
+        return object()
+
+    parts.capabilities.probe_rerank = probe_rerank  # type: ignore[method-assign]
+    parts.capabilities.probe_chat = probe_chat  # type: ignore[method-assign]
+    parts.pool.acquire = acquire  # type: ignore[method-assign]
+    application = parts.application(test_config)
+    tasks_before = asyncio.all_tasks()
+
+    async with asyncio.timeout(5):
+        if warm_up == "fails":
+            with pytest.raises(StorageSchemaError):
+                await application.astart()
+        else:
+            await application.astart()
+
+    assert seen == {"rerank_probed": True, "chat_probe": "running"}
+    if warm_up == "fails":
+        assert chat_probe == "cancelled"
+        assert asyncio.all_tasks() <= tasks_before
+    else:
+        assert chat_probe == "finished"
+        assert application.health.components["providers"]["status"] == "healthy"
+        await application.aclose()
+
+
+@pytest.mark.parametrize("failing_probe", ["probe_rerank", "probe_chat"])
+async def test_a_failed_capability_probe_degrades_providers_without_failing_startup(
+    test_config: DlightragConfig, failing_probe: str
+) -> None:
+    parts = _Parts()
+
+    async def failed() -> None:
+        raise RuntimeError("probe failed")
+
+    setattr(parts.capabilities, failing_probe, failed)
+    application = parts.application(test_config)
+
+    await application.astart()
+
+    assert application.health.warnings == ("Model providers unavailable",)
+    assert application.health.is_ready is True
+    assert "coordinator:start" in parts.recorder.started()
+    await application.aclose()
 
 
 async def test_transient_startup_faults_warn_without_starting_the_run_coordinator(

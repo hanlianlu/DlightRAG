@@ -1582,7 +1582,7 @@ class TestWorkspaceRagLightRAGMainPath:
         service = _service(test_config, backend=backend)
         monkeypatch.setattr(service, "_do_initialize_unified", AsyncMock())
 
-        await service._do_initialize()
+        await service._do_initialize(MagicMock())
 
         assert events == [
             "environment",
@@ -1655,13 +1655,92 @@ class TestWorkspaceRagLightRAGMainPath:
                 "dlightrag.engine.rag.retrieval.retriever.UnifiedRetriever", return_value=object()
             ),
         ):
-            await service._do_initialize_unified()
+            await service._do_initialize_unified(await service._resolve_models())
             await asyncio.sleep(0)
 
         # The KG legs resolve chunks through text_chunks, so a document scope
         # only reaches them while this wrapper is installed.
         assert type(service._lightrag.text_chunks).__name__ == "FilteredChunkStore"
         resume_pipeline.assert_awaited_once_with()
+
+    async def test_provider_requests_settle_before_the_initialization_lock_is_taken(
+        self, test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Other processes wait on the lock, so it covers storage and never a provider;
+        when initialization fails, every model resolution built is closed."""
+        mutate_config(test_config, "models.embedding.startup_probe", True)
+        events: list[str] = []
+
+        class RecordingCoordination:
+            @asynccontextmanager
+            async def workspace_initialization(self):
+                events.append("lock taken")
+                try:
+                    yield
+                finally:
+                    events.append("lock released")
+
+        class ChatModels:
+            default_func = object()
+            role_configs = None
+
+            @classmethod
+            async def acreate(cls, *_args: object, **_kwargs: object) -> ChatModels:
+                return cls()
+
+            async def aclose(self) -> None:
+                events.append("chat models closed")
+
+        class Embedder:
+            supports_images = True
+
+            async def probe_image_embedding(self) -> None:
+                await asyncio.sleep(0)
+                events.append("embedding probed")
+
+            async def aclose(self) -> None:
+                events.append("embedder closed")
+
+        def create(**_kwargs: object) -> SimpleNamespace:
+            events.append("storages created")
+            return _runtime_lightrag()
+
+        async def attach(_lightrag: object) -> None:
+            events.append("storages attached")
+            raise RuntimeError("stop after attach")
+
+        workspace_id = normalize_workspace(test_config.deployment.workspace)
+        backend = _backend(workspace_id, read_only=False)
+        backend.coordination = RecordingCoordination()
+        backend.runtime.create = create
+        backend.runtime.attach = attach
+        module = "dlightrag.engine.rag.workspace.workspace_rag"
+        monkeypatch.setattr(f"{module}.LightRagChatModels", ChatModels)
+        monkeypatch.setattr(f"{module}.build_rerank_func", lambda *_a, **_k: None)
+        monkeypatch.setattr(f"{module}.create_embedding_model", lambda *_a, **_k: Embedder())
+        monkeypatch.setattr(f"{module}.build_lightrag_embedding", lambda *_args: object())
+        monkeypatch.setattr("dlightrag.engine.rag.lightrag.patches.apply", lambda **_kwargs: None)
+        monkeypatch.setattr(
+            "lightrag.parser.routing.validate_parser_routing_config", lambda _rules: None
+        )
+
+        with pytest.raises(RuntimeError, match="stop after attach"):
+            await WorkspaceRag.acreate(
+                workspace_id=workspace_id,
+                settings=rag_settings(test_config),
+                backend=cast(Any, backend),
+                scheduler=ModelScheduler(max_concurrency=1),
+                telemetry=NoopTelemetry(),
+            )
+
+        assert events[:5] == [
+            "embedding probed",
+            "lock taken",
+            "storages created",
+            "storages attached",
+            "lock released",
+        ]
+        assert sorted(events[5:]) == ["chat models closed", "embedder closed"]
 
     @pytest.mark.parametrize("case", ["reader_attach_drift", "fused_vectors_without_a_store"])
     async def test_initialization_stops_on_storage_the_runtime_cannot_use(
@@ -1724,7 +1803,7 @@ class TestWorkspaceRagLightRAGMainPath:
             ),
         ):
             with pytest.raises(refusal[0], match=refusal[1]):
-                await service._do_initialize_unified()
+                await service._do_initialize_unified(await service._resolve_models())
 
     async def test_aingest_azure_blob_single(self, test_config: DlightragConfig) -> None:
         """Downloads one blob into an ephemeral parser item and stores remote metadata."""

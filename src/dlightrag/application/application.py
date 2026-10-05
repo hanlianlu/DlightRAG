@@ -211,9 +211,21 @@ class Application:
             components.retrieval.planner_for()
             # Vision probes run once at startup, not from health endpoints. A
             # provider interruption degrades capability health without taking
-            # down durable Run admission.
-            await self._probe_providers()
-            degraded = await self._warm_default_workspace()
+            # down durable Run admission. A workspace is built with the rerank
+            # verdict, so that probe settles first; the others are not read while
+            # one is built, and overlap its warm-up.
+            capabilities = components.capabilities
+            rerank_probed = await self._probe_providers(capabilities.probe_rerank)
+            chat_probes = asyncio.create_task(self._probe_providers(capabilities.probe_chat))
+            try:
+                degraded = await self._warm_default_workspace()
+            except BaseException:
+                chat_probes.cancel()
+                await asyncio.gather(chat_probes, return_exceptions=True)
+                raise
+            chat_probed = await chat_probes
+            if rerank_probed and chat_probed:
+                components.health.mark_component_healthy("providers")
             self._start_promotion_worker()
             await self._start_run_coordinator()
             await self._initialize_web_conversations()
@@ -272,17 +284,18 @@ class Application:
             return False
         return True
 
-    async def _probe_providers(self) -> None:
+    async def _probe_providers(self, probe: Callable[[], Awaitable[None]]) -> bool:
+        """Run one startup capability probe; a failure degrades providers, never startup."""
         try:
-            await self._components.capabilities.probe_all()
+            await probe()
         except Exception as exc:
             self._components.health.mark_component_degraded("providers")
             logger.warning(
                 "Startup model capability probe failed",
                 extra={"error_type": type(exc).__name__},
             )
-            return
-        self._components.health.mark_component_healthy("providers")
+            return False
+        return True
 
     async def _initialize_run_stores(self) -> None:
         """Migrate the durable operational schema, or validate it on a reader.

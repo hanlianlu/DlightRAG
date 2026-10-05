@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Answer-owned model capability coordination and image policy."""
 
+import asyncio
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 
@@ -167,10 +168,19 @@ class AnswerCapabilityCoordinator:
             supports_images=declared.supports_images and status == "supported",
         )
 
-    async def probe_all(self) -> None:
-        await self.probe_answer()
-        await self.probe_vlm()
-        await self.probe_rerank()
+    async def probe_chat(self) -> None:
+        """Probe the Answer and VLM models together; neither verdict feeds the other.
+
+        Both finish before a failure of either is raised.
+        """
+        outcomes = await asyncio.gather(
+            self.probe_answer(),
+            self.probe_vlm(),
+            return_exceptions=True,
+        )
+        for outcome in outcomes:
+            if isinstance(outcome, BaseException):
+                raise outcome
 
     async def probe_answer(self) -> None:
         if self._answer_image_capability is not None:

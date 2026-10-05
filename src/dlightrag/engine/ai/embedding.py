@@ -191,7 +191,9 @@ class MultimodalEmbedder:
         """Probe both image-query and native fused-document capabilities.
 
         A capability check is not a unit of work: it sends the requests an image query
-        and a fused document send, and opens no observation.
+        and a fused document send, and opens no observation. The two requests are
+        independent, so they are in flight together: the first to fail is raised as it
+        is, and the other is cancelled before this returns.
         """
         self._ensure_image_support()
         image = Image.new("RGB", (1, 1), "white")
@@ -200,11 +202,22 @@ class MultimodalEmbedder:
                 (ImageEmbeddingInput(data_uri=bounded_embedding_image_data_uri(image)), "query"),
                 (self._fused_input("DlightRAG fusion probe", image), "document"),
             ]
-            for probe, context in probes:
-                requests = await asyncio.to_thread(self._plan_requests, [probe], context=context)
-                await self._run_requests(requests, expected_count=1)
+            sent = [
+                asyncio.create_task(self._send_probe(probe, context)) for probe, context in probes
+            ]
+            try:
+                await asyncio.gather(*sent)
+            except BaseException:
+                for task in sent:
+                    task.cancel()
+                await asyncio.gather(*sent, return_exceptions=True)
+                raise
         finally:
             image.close()
+
+    async def _send_probe(self, probe: EmbeddingInput, context: EmbeddingContext) -> None:
+        requests = await asyncio.to_thread(self._plan_requests, [probe], context=context)
+        await self._run_requests(requests, expected_count=1)
 
     async def _embed_inputs(
         self,

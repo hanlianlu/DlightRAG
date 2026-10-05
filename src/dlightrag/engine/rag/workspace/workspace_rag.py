@@ -33,6 +33,7 @@ from dlightrag.engine.rag.corpus.contracts import (
     VisualAssetSize,
 )
 from dlightrag.engine.rag.corpus.ingestion.document_embedding import (
+    RobustDocumentEmbedder,
     build_document_embedder,
     resolve_direct_image_embedding_enabled,
 )
@@ -167,6 +168,15 @@ class _RetryRequest:
     # Locators whose owners the replay may retire; replays sharing one never
     # share a pipeline pass.
     ownership_locators: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedModels:
+    """The models one runtime is built from, settled before any storage is touched."""
+
+    runtime: CorpusRuntimeModels
+    embedder: MultimodalEmbedder
+    document_embedder: RobustDocumentEmbedder
 
 
 def _metadata_download_locator(metadata: object) -> str | None:
@@ -373,29 +383,20 @@ class WorkspaceRag:
         if self._initialized:
             return
 
+        # Provider round trips (the embedding probe) settle before the cross-process
+        # lock is taken, so a process waiting for the lock never waits on a provider.
+        models = await self._resolve_models()
         async with self.backend.coordination.workspace_initialization():
-            await self._do_initialize()
+            await self._do_initialize(models)
 
         self._initialized = True
         logger.debug("WorkspaceRag initialized")
 
-    async def _do_initialize(self) -> None:
-        """Create one LightRAG-backed unified pipeline."""
-        from lightrag.parser.routing import validate_parser_routing_config
+    async def _resolve_models(self) -> _ResolvedModels:
+        """Resolve the chat, rerank and embedding models, probing image embedding.
 
-        from dlightrag.engine.rag.lightrag.patches import apply as apply_lightrag_patches
-
-        validate_parser_routing_config(self.settings.parser_rules)
-        apply_lightrag_patches(
-            docling_active=self.settings.docling_active,
-            docling_code_formula_preset=self.settings.docling_code_formula_preset,
-        )
-        await self._do_initialize_unified()
-
-    async def _do_initialize_unified(self) -> None:
-        """Initialize the direct LightRAG multimodal runtime.
-
-        Wires storage-neutral retrieval and ingestion around the backend runtime.
+        Reaches model providers, never corpus storage. Each client is recorded on
+        ``self`` as it is built, so ``aclose`` releases it whatever fails next.
         """
         settings = self.settings
         logger.info("Initializing unified representational RAG mode...")
@@ -443,15 +444,36 @@ class WorkspaceRag:
             multimodal_embedder,
             image_enabled=self._direct_image_embedding_enabled,
         )
-
-        lightrag = self.backend.runtime.create(
-            models=CorpusRuntimeModels(
+        return _ResolvedModels(
+            runtime=CorpusRuntimeModels(
                 default_llm_func=default_func_lr,
                 embedding_func=embedding_func,
                 role_llm_configs=role_overrides,
             ),
-            settings=settings,
+            embedder=multimodal_embedder,
+            document_embedder=document_embedder,
         )
+
+    async def _do_initialize(self, models: _ResolvedModels) -> None:
+        """Create one LightRAG-backed unified pipeline."""
+        from lightrag.parser.routing import validate_parser_routing_config
+
+        from dlightrag.engine.rag.lightrag.patches import apply as apply_lightrag_patches
+
+        validate_parser_routing_config(self.settings.parser_rules)
+        apply_lightrag_patches(
+            docling_active=self.settings.docling_active,
+            docling_code_formula_preset=self.settings.docling_code_formula_preset,
+        )
+        await self._do_initialize_unified(models)
+
+    async def _do_initialize_unified(self, models: _ResolvedModels) -> None:
+        """Initialize the direct LightRAG multimodal runtime.
+
+        Wires storage-neutral retrieval and ingestion around the backend runtime.
+        """
+        settings = self.settings
+        lightrag = self.backend.runtime.create(models=models.runtime, settings=settings)
         self._lightrag = lightrag
         corpus_stores = await self.backend.runtime.attach(lightrag)
         logger.info(
@@ -472,7 +494,7 @@ class WorkspaceRag:
 
             filtered_vdb = FilteredVectorStorage(
                 original=lightrag.chunks_vdb,
-                embedding_func=embedding_func,
+                embedding_func=models.runtime.embedding_func,
                 visibility_lookup=corpus_stores.metadata_index,
                 chunk_vectors=corpus_stores.chunk_vectors,
             )
@@ -527,7 +549,7 @@ class WorkspaceRag:
                 lightrag=lightrag,
                 stores=self._lightrag_stores,
                 metadata_index=self._metadata_index,
-                document_embedder=document_embedder,
+                document_embedder=models.document_embedder,
                 workspace=self.workspace_id,
                 input_root=self._workspace_input_root(),
                 parser_rules=settings.parser_rules,
@@ -548,7 +570,7 @@ class WorkspaceRag:
             bm25=self._bm25,
             visual=(
                 DirectVisualRetriever(
-                    embedder=multimodal_embedder,
+                    embedder=models.embedder,
                     stores=self._lightrag_stores,
                     top_k=settings.direct_visual_top_k,
                 )

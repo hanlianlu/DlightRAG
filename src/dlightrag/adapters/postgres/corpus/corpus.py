@@ -271,7 +271,7 @@ class PGCorpusCoordination:
             if await conn.fetchval("SELECT pg_try_advisory_lock($1)", _PG_INIT_LOCK_KEY):
                 await conn.execute("SELECT pg_advisory_unlock($1)", _PG_INIT_LOCK_KEY)
                 return
-            backoff = min(backoff * 1.5, 5.0)
+            backoff = min(backoff * 1.5, 0.5)
         logger.warning("Lock acquisition timeout after %.0fs", _INIT_WAIT_SECONDS)
 
     @asynccontextmanager
