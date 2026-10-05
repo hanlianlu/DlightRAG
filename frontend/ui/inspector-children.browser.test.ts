@@ -5,7 +5,7 @@ import {sendKeys} from '@web/test-runner-commands';
 import {CHILD_TRANSCRIPT_LIMIT} from '../api/conversations.ts';
 import {defineDesignSystemElements} from '../design-system/index.ts';
 import {NOW, ago, observation, question, receipt, refusal, roster, row, serve, sourceFor} from '../testing/children.ts';
-import {waitFor} from '../testing/dom.ts';
+import {linkStyles, waitFor} from '../testing/dom.ts';
 import './inspector-children.ts';
 import type {ChildrenSource, DlInspectorChildren} from './inspector-children.ts';
 
@@ -1145,4 +1145,154 @@ it('names a child by its id when it has no objective', async () => {
   await waitFor(() => rows(dock).length === 1);
 
   expect(rows(dock)[0]!.text).to.equal('a Running');
+});
+
+// ── The live edge of a child's activity ──
+
+describe('the page of a running child', () => {
+  let unlink: () => void;
+  before(async () => {
+    // Scrolling needs the page laid out as the product lays it out.
+    unlink = await linkStyles([
+      '../design-system/index.css',
+      '../styles/child-session.module.css',
+      '../styles/inspector-children.module.css',
+    ].map((href) => new URL(href, import.meta.url).href));
+  });
+  after(() => { unlink(); });
+
+  const says = (count: number) => Array.from({length: count}, (_, index) => (
+    {role: 'assistant', content: `Step ${index}`, tool_calls: []}
+  ));
+  const page = (dock: DlInspectorChildren) => session(dock).querySelector<HTMLElement>('[data-page]')!;
+  /** How far the page lies below what is on screen, in pixels. */
+  const below = (box: HTMLElement) => box.scrollHeight - box.clientHeight - box.scrollTop;
+  const frames = () => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => { requestAnimationFrame(() => { resolve(); }); });
+  });
+  /** The reader scrolls: the page is moved, and given the frames it takes to see it. */
+  const scrollTo = async (box: HTMLElement, top: number) => {
+    box.scrollTop = top;
+    await frames();
+  };
+
+  it('opens on its title, keeps the bottom in view for a reader who scrolled there, and lets go when they scroll up', async () => {
+    immediateFollowRefreshes();
+    let steps = 40;
+    const running = row('a', 'running', {started_at: ago(5)});
+    serve({page: () => roster([running]), observe: () => observation(running, {transcript: says(steps)})});
+    const dock = await mount(sourceFor().source, 420);
+    await waitFor(() => rows(dock).length === 1);
+    await openChild(dock, 'a');
+    await waitFor(() => shown(dock).includes('Step 39'));
+    const box = page(dock);
+    expect(box.scrollHeight, 'the page is taller than the dock').to.be.greaterThan(box.clientHeight + 100);
+    const arrive = async (total: number) => {
+      steps = total;
+      dock.refreshIfFollowing('run-1');
+      await waitFor(() => shown(dock).includes(`Step ${total - 1}`));
+    };
+
+    // A reader who has not scrolled stays on the title as steps arrive.
+    expect(box.scrollTop).to.equal(0);
+    await arrive(44);
+    expect(box.scrollTop).to.equal(0);
+
+    // One who has scrolled to the bottom is kept there.
+    await scrollTo(box, box.scrollHeight);
+    await arrive(48);
+    expect(below(box)).to.be.lessThan(1);
+    await arrive(52);
+    expect(below(box)).to.be.lessThan(1);
+
+    // And once they scroll up the page stays where they are.
+    await scrollTo(box, 100);
+    await arrive(56);
+    expect(box.scrollTop).to.equal(100);
+    expect(below(box)).to.be.greaterThan(100);
+  });
+
+  it('opens each child on its title, even from the bottom of another', async () => {
+    immediateFollowRefreshes();
+    const loadingB = deferred<Response>();
+    const running = (id: string) => row(id, 'running', {started_at: ago(5)});
+    serve({
+      page: () => roster([running('a'), running('b')]),
+      observe: (id) => (id === 'b' ? loadingB.promise : observation(running(id), {transcript: says(40)})),
+    });
+    const dock = await mount(sourceFor().source, 800);
+    await waitFor(() => rows(dock).length === 2);
+    await waitFor(() => title(dock) === 'objective a' && shown(dock).includes('Step 39'));
+    const box = page(dock);
+    await scrollTo(box, box.scrollHeight);
+    expect(below(box)).to.be.lessThan(1);
+
+    // The next child is still loading, so its page is short, when the scroll back to the top is seen.
+    rowFor(dock, 'b').click();
+    await waitFor(() => title(dock) === 'objective b');
+    await scrollTo(box, 0);
+    loadingB.resolve(observation(running('b'), {transcript: says(40)}));
+    await waitFor(() => shown(dock).includes('Step 39'));
+    expect(page(dock) === box, 'the same page is on show').to.equal(true);
+    expect(box.scrollTop, 'the next child opens on its title').to.equal(0);
+    dock.refreshIfFollowing('run-1');
+    await settle(60);
+    expect(box.scrollTop, 'and nothing carries the earlier child\'s place over').to.equal(0);
+  });
+
+  it('lets go of a reader who opens a step at the bottom, which grows the page without scrolling it', async () => {
+    immediateFollowRefreshes();
+    let steps = 30;
+    const running = row('a', 'running', {started_at: ago(5)});
+    const transcript = () => [
+      ...says(steps),
+      {role: 'assistant', content: '', tool_calls: [{id: 't1', name: 'read'}]},
+      {role: 'tool', content: Array.from({length: 40}, (_, line) => `line ${line}`).join('\n'), tool_call_id: 't1', name: 'read', is_error: false},
+    ];
+    serve({page: () => roster([running]), observe: () => observation(running, {transcript: transcript()})});
+    const dock = await mount(sourceFor().source, 420);
+    await waitFor(() => rows(dock).length === 1);
+    await openChild(dock, 'a');
+    await waitFor(() => shown(dock).includes('Reading a document'));
+    const box = page(dock);
+    await scrollTo(box, box.scrollHeight);
+
+    // The reader opens the last step: its whole result lengthens the page below where they stand.
+    session(dock).querySelector<HTMLElement>('summary:has(+ pre)')!.click();
+    await waitFor(() => below(box) > 100);
+    const stood = box.scrollTop;
+    steps = 34;
+    dock.refreshIfFollowing('run-1');
+    await waitFor(() => shown(dock).includes('Step 33'));
+
+    expect(box.scrollTop, 'a reader who is no longer at the bottom is not pulled back to it').to.equal(stood);
+  });
+
+  it('does not follow a child that has settled', async () => {
+    immediateFollowRefreshes();
+    let steps = 40;
+    let summary = 'First summary.';
+    const settled = () => row('a', 'succeeded', {started_at: ago(9), finished_at: ago(1), summary});
+    serve({page: () => roster([settled()]), observe: () => observation(settled(), {transcript: says(steps)})});
+    const dock = await mount(sourceFor().source, 420);
+    await waitFor(() => rows(dock).length === 1);
+    await openChild(dock, 'a');
+    await waitFor(() => shown(dock).includes('Activity · 40 steps'));
+    // Its activity is folded; the reader opens it and goes to the bottom.
+    session(dock).querySelector<HTMLDetailsElement>('details:has(ol)')!.open = true;
+    const box = page(dock);
+    await waitFor(() => box.scrollHeight > box.clientHeight + 100);
+    // WebKit lays an opened fold out a frame later, and takes back a position set before it has.
+    await frames();
+    await scrollTo(box, box.scrollHeight);
+    const stood = box.scrollTop;
+    expect(stood).to.be.greaterThan(100);
+
+    steps = 46;
+    summary = 'A later summary.';
+    dock.refreshIfFollowing('run-1');
+    await waitFor(() => shown(dock).includes('Step 45'));
+    expect(box.scrollTop).to.equal(stood);
+    expect(below(box)).to.be.greaterThan(50);
+  });
 });

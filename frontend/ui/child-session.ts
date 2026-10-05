@@ -89,6 +89,14 @@ function outcomeText(code: string): string {
   }
 }
 
+/** Whether the reader has scrolled a page down to within one line of its bottom. A page that has not been
+ * scrolled down is not at a bottom the reader chose, however short it is. */
+function scrolledToBottom(page: HTMLElement): boolean {
+  const line = Number.parseFloat(getComputedStyle(page).lineHeight);
+  return page.scrollTop > 0
+    && page.scrollHeight - page.scrollTop - page.clientHeight <= (Number.isFinite(line) ? line : 1);
+}
+
 /** What a Run that is over says in the place of the box that would steer or continue its children. */
 function finishedText(): string {
   return msg('This answer has finished, so its child agents can no longer be steered or continued.', {id: 'childSession.finished'});
@@ -155,6 +163,9 @@ export class DlChildSession extends LightElement {
   #allowNextLineBreak = false;
   /** The Run ended while this page was open to its children, which the page says out loud. */
   #runEnded = false;
+  /** The reader has scrolled a running child's page to its bottom and is still there, so the page keeps
+   * its bottom in view as steps arrive. Only the reader's own scrolling sets it: opening a child never jumps. */
+  #following = false;
 
   constructor() {
     super();
@@ -202,15 +213,34 @@ export class DlChildSession extends LightElement {
     // Only a running child of a Run that is still going can be cancelled, so a question about it lapses
     // when either ends.
     if (this.confirming && (!this.commandable || this.#child()?.status !== 'running')) this.confirming = false;
+    // Measured before the update adds to the page: a reader who has left the bottom, or a child that has
+    // settled, is no longer followed.
+    const page = this.#page();
+    if (this.#following && !(page && this.#child()?.status === 'running' && scrolledToBottom(page))) {
+      this.#following = false;
+    }
   }
 
-  protected override updated(): void {
+  protected override updated(changed: PropertyValues<this>): void {
     // The toggle shows only where the title is cut off, or has been opened.
     const title = this.querySelector<HTMLElement>('[data-title]');
     const more = this.querySelector<HTMLElement>('[data-more]');
     if (title && more) more.hidden = !this.objectiveOpen && title.scrollHeight <= title.clientHeight + 1;
     for (const field of this.querySelectorAll<HTMLTextAreaElement>('textarea')) this.#fit(field);
+    const page = this.#page();
+    if (!page) return;
+    // A child opens on its title, and a page that is followed keeps its bottom in view.
+    if (changed.has('source') || changed.has('childSessionId')) page.scrollTop = 0;
+    else if (this.#following) page.scrollTop = page.scrollHeight;
   }
+
+  #page(): HTMLElement | null {
+    return this.querySelector<HTMLElement>('[data-page]');
+  }
+
+  #scrolled = (event: Event): void => {
+    this.#following = this.#child()?.status === 'running' && scrolledToBottom(event.currentTarget as HTMLElement);
+  };
 
   /** Read the child where it stands; a read already in flight is not interrupted, one more follows it. */
   #reobserve(): void {
@@ -477,7 +507,7 @@ export class DlChildSession extends LightElement {
     const running = child.status === 'running';
     return html`
       <section class=${styles.session} aria-labelledby="child-session-title">
-        <div class=${styles.scroll}>
+        <div class=${styles.scroll} data-page @scroll=${this.#scrolled}>
           ${keyed(this.childSessionId, html`
             ${this.#heading(child)}
             ${this.#statusLine(child, running)}
