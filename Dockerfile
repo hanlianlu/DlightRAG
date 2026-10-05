@@ -68,7 +68,7 @@ RUN cargo install --locked resvg --version ${RESVG_VERSION} --root /out \
 
 # Charts: ECharts draws on the image's node, so only echarts.min.js and its licenses ship, beside
 # the two commands (echarts-render, html-report), the one palette and house theme they share, and
-# the report runtime. The report examples ship too: small, and what an agent reads to see the contract.
+# the report runtime.
 FROM node:26-slim AS chart-render
 WORKDIR /build
 COPY chart-render/package.json chart-render/package-lock.json ./
@@ -79,7 +79,6 @@ RUN npm ci --omit=dev --no-audit --no-fund \
     && cp node_modules/zrender/LICENSE /out/licenses/LICENSE-zrender
 COPY chart-render/echarts_render.py chart-render/html_report.py chart-render/ssr.cjs chart-render/theme.js chart-render/theme.json chart-render/palette.json /out/
 COPY chart-render/report/core.js chart-render/report/runtime.js chart-render/report/report.css chart-render/report/preview.cjs /out/report/
-COPY chart-render/report/examples/ /out/report/examples/
 RUN chmod 755 /out/echarts_render.py /out/html_report.py
 
 # Charts: Noto Sans SC (OFL-1.1), pinned to one noto-cjk commit and checked by digest. A remote

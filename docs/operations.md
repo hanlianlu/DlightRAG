@@ -116,9 +116,9 @@ than colour can tell apart, and boilerplate the reader did not ask for (a
 disclaimer, an AI credit, a privacy or copyright line, a footer credit, a call
 to action). `--preview DIR` draws every chart to PNG at 360 and 900 px with the
 code the browser runs, so the author can look before the report ships. The
-fragment contract is the built-in `interactive-html` Skill's; the three reports
-under `chart-render/report/examples/` show it, and the browser tests build and
-open them.
+fragment contract is the built-in `interactive-html` Skill's, and so are the
+examples under its `references/`: a model reads them through `load_skill`, and
+the browser tests build and open those same files.
 
 Both commands draw in one palette, the Mineral palette of the product's own
 design system. `palette.json` holds its chart colours once, for light and dark:
@@ -144,7 +144,7 @@ The image adds, all under `/usr/local`:
 | Path | Content |
 |---|---|
 | `bin/echarts-render`, `bin/html-report` | Symlinks to `lib/echarts-render/echarts_render.py` and `html_report.py` |
-| `lib/echarts-render/` | The toolkit from `chart-render/`: the two commands, `ssr.cjs`, the shared `theme.js`, `theme.json` and `palette.json`, the report runtime in `report/` (`core.js`, `runtime.js`, `report.css`, `preview.cjs` and the `examples/`), `echarts.min.js`, and the ECharts and zrender licenses |
+| `lib/echarts-render/` | The toolkit from `chart-render/`: the two commands, `ssr.cjs`, the shared `theme.js`, `theme.json` and `palette.json`, the report runtime in `report/` (`core.js`, `runtime.js`, `report.css` and `preview.cjs`), `echarts.min.js`, and the ECharts and zrender licenses |
 | `bin/resvg` | The upstream resvg CLI, built from its crates.io release; the licenses of resvg and of every crate its locked build used are in `share/doc/resvg/`, one directory per crate |
 | `share/fonts/noto-sans-sc/` | Noto Sans SC Regular and Bold, with the OFL-1.1 license |
 

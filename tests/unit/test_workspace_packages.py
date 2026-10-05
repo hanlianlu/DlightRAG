@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.support.report_examples import examples
+
 _REPO = Path(__file__).resolve().parents[2]
 _VERSION = "2.0.0"
 _BATTERIES = (
@@ -26,6 +28,7 @@ _BATTERIES = (
     "openai>=2.54.0",
 )
 _ROOT_REQUIRES = (f"dlightrag-memory=={_VERSION}", *_BATTERIES)
+_REPORT_EXAMPLES = "engine/agent/builtin_skills/interactive-html/references"
 
 
 @pytest.mark.parametrize("package_name", ["dlightrag", "dlightrag_memory"])
@@ -46,6 +49,7 @@ def _write_wheel(
     include_frontend: bool = False,
     additional_sources: dict[str, str] | None = None,
     sdist_source: str | None = None,
+    sdist_without: tuple[str, ...] = (),
 ) -> None:
     wheel_name = distribution.replace("-", "_")
     dist_info = f"{wheel_name}-{version}.dist-info"
@@ -94,6 +98,7 @@ def _write_wheel(
         **{
             f"{sdist_root}/src/{package}/{relative_path}": content
             for relative_path, content in sources.items()
+            if relative_path not in sdist_without
         },
         f"{sdist_root}/src/{package}/py.typed": "",
     }
@@ -135,6 +140,8 @@ def _write_workspace_artifacts(
     root_include_model_catalog: bool = True,
     root_include_builtin_skill_creator: bool = True,
     root_include_builtin_skill_council: bool = True,
+    root_include_report_examples: bool = True,
+    root_sdist_without: tuple[str, ...] = (),
     root_include_frontend: bool = True,
     root_extras: tuple[str, ...] = ("milvus",),
     memory_source: str = "",
@@ -152,6 +159,11 @@ def _write_workspace_artifacts(
         root_sources["engine/agent/builtin_skills/council/SKILL.md"] = (
             "---\nname: council\ndescription: Independent critique.\n---\n# Council"
         )
+    if root_include_report_examples:
+        for name in examples().values():
+            root_sources[f"{_REPORT_EXAMPLES}/{name.name}"] = (
+                "<!-- an example -->\n<header></header>"
+            )
     _write_wheel(
         tmp_path,
         distribution="dlightrag",
@@ -164,6 +176,7 @@ def _write_workspace_artifacts(
         include_legal=root_include_legal,
         include_frontend=root_include_frontend,
         additional_sources=root_sources,
+        sdist_without=root_sdist_without,
     )
     _write_wheel(
         tmp_path,
@@ -422,6 +435,31 @@ def test_workspace_wheel_verifier_requires_builtin_skill_council(tmp_path: Path)
 
     assert completed.returncode == 1
     assert "built-in council SKILL.md" in completed.stderr
+
+
+def test_workspace_wheel_verifier_requires_every_interactive_html_example_in_the_wheel(
+    tmp_path: Path,
+) -> None:
+    _write_workspace_artifacts(tmp_path, root_include_report_examples=False)
+
+    completed = _verify_wheels(tmp_path)
+
+    assert completed.returncode == 1
+    assert "wheel must contain the interactive-html report examples" in completed.stderr
+    assert all(path.name in completed.stderr for path in examples().values())
+
+
+def test_workspace_wheel_verifier_requires_every_interactive_html_example_in_the_sdist(
+    tmp_path: Path,
+) -> None:
+    first = f"{_REPORT_EXAMPLES}/{next(iter(examples().values())).name}"
+    _write_workspace_artifacts(tmp_path, root_sdist_without=(first,))
+
+    completed = _verify_wheels(tmp_path)
+
+    assert completed.returncode == 1
+    assert "sdist must contain the interactive-html report examples" in completed.stderr
+    assert Path(first).name in completed.stderr
 
 
 def test_workspace_wheel_verifier_rejects_unexpected_root_extras(tmp_path: Path) -> None:

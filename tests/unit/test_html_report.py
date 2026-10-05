@@ -12,6 +12,7 @@ import pytest
 from PIL import Image
 
 from tests.support.chart_tools import require_png_tools
+from tests.support.report_examples import examples
 
 _ROWS = [
     {"region": "华东", "quarter": "2023Q1", "revenue": 10, "profit": 1},
@@ -19,7 +20,6 @@ _ROWS = [
     {"region": "华北", "quarter": "2023Q1", "revenue": 8, "profit": 1},
     {"region": "华北", "quarter": "2023Q2", "revenue": 9, "profit": 1},
 ]
-_EXAMPLES = Path(html_report.__file__).parent / "report/examples"
 _OPTION: dict[str, Any] = {
     "title": {"text": "季度销售额", "subtext": "单位：万元 · 来源：内部销售数据"},
     "dataset": {"source": _ROWS},
@@ -193,9 +193,9 @@ def test_a_report_over_the_artifact_limit_is_refused(
     failed(build(report(chart())), "20 MiB")
 
 
-@pytest.mark.parametrize("example", ("brief", "dashboard", "multipage"))
+@pytest.mark.parametrize("example", sorted(examples()))
 def test_the_toolkit_adds_no_footer_credit_watermark_or_timestamp(build, example: str) -> None:
-    fragment = (_EXAMPLES / f"{example}.html").read_text(encoding="utf-8")
+    fragment = examples()[example].read_text(encoding="utf-8")
     document = build(fragment).document
 
     # The body is the author's fragment in one wrapper, with nothing before or after it.
@@ -668,11 +668,13 @@ def test_warnings_do_not_fail_the_build_and_are_counted_in_the_summary(build) ->
     assert "2 warnings" in result.out
 
 
-def test_the_golden_examples_build_without_a_warning(build, tmp_path: Path) -> None:
-    for name in ("brief", "dashboard", "multipage"):
-        example = _EXAMPLES / f"{name}.html"
-        result = build(example.read_text(encoding="utf-8"))
+@pytest.mark.parametrize("name", sorted(examples()))
+def test_each_golden_example_builds_without_a_warning_and_stays_small_enough_to_read(
+    build, name: str
+) -> None:
+    example = examples()[name]
+    result = build(example.read_text(encoding="utf-8"))
 
-        assert result.code == 0, result.err
-        assert result.warnings == [], name
-        assert len(example.read_bytes()) < 12 * 1024, name
+    assert result.code == 0, result.err
+    assert result.warnings == []
+    assert example.stat().st_size < 12 * 1024

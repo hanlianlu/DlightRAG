@@ -71,6 +71,9 @@ _ROOT_CONSOLE_SCRIPTS = (
 _CONCRETE_LIGHTRAG_BACKEND = "lightrag.kg.postgres_impl"
 _BUILTIN_SKILL_CREATOR = "dlightrag/engine/agent/builtin_skills/skill-creator/SKILL.md"
 _BUILTIN_SKILL_COUNCIL = "dlightrag/engine/agent/builtin_skills/council/SKILL.md"
+# The built-in interactive-html Skill's reference reports: a model reads them through load_skill, so
+# every one the source tree holds must ship, in the wheel and in the sdist.
+_REPORT_EXAMPLES_DIR = "dlightrag/engine/agent/builtin_skills/interactive-html/references"
 # import-linter rejects external submodules as contract targets, so the built
 # artifact gate owns this one exact LightRAG implementation prohibition.
 _SPECIFIC_SOURCE_PROHIBITIONS = {
@@ -125,6 +128,7 @@ class WheelFacts:
     has_model_catalog: bool
     has_builtin_skill_creator: bool
     has_builtin_skill_council: bool
+    report_examples: frozenset[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +146,7 @@ class SdistFacts:
     has_model_catalog: bool
     has_builtin_skill_creator: bool
     has_builtin_skill_council: bool
+    report_examples: frozenset[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,6 +163,23 @@ def _normalize_distribution(value: str) -> str:
 def _requirement_name(value: str) -> str:
     name = re.split(r"[\s<>=!~;\[(]", value, maxsplit=1)[0]
     return _normalize_distribution(name)
+
+
+def _report_example_name(member: str) -> str | None:
+    """The file name when ``member`` (a path inside the package) is a report example."""
+    directory, _, name = member.rpartition("/")
+    if directory == _REPORT_EXAMPLES_DIR and name.startswith("example-") and name.endswith(".html"):
+        return name
+    return None
+
+
+def _source_report_examples(config_path: Path) -> frozenset[str]:
+    """The report examples the source tree ships: the artifacts must carry exactly these."""
+    directory = config_path.parent / "src" / _REPORT_EXAMPLES_DIR
+    names = frozenset(path.name for path in directory.glob("example-*.html"))
+    if not names:
+        raise ValueError(f"{directory}: the source tree holds no interactive-html report examples")
+    return names
 
 
 def _metadata_facts(
@@ -258,6 +280,9 @@ def _wheel_facts(
         has_model_catalog = "dlightrag/engine/ai/model_catalog.json" in wheel.namelist()
         has_builtin_skill_creator = _BUILTIN_SKILL_CREATOR in wheel.namelist()
         has_builtin_skill_council = _BUILTIN_SKILL_COUNCIL in wheel.namelist()
+        report_examples = frozenset(
+            example for member in wheel.namelist() if (example := _report_example_name(member))
+        )
         sources = (
             (name, wheel.read(name))
             for name in wheel.namelist()
@@ -283,6 +308,7 @@ def _wheel_facts(
         has_model_catalog,
         has_builtin_skill_creator,
         has_builtin_skill_council,
+        report_examples,
     )
 
 
@@ -497,6 +523,7 @@ def _sdist_facts(
         has_model_catalog = False
         has_builtin_skill_creator = False
         has_builtin_skill_council = False
+        report_examples: set[str] = set()
         sources: list[tuple[str, bytes]] = []
         for member in members:
             parts = Path(member.name).parts
@@ -516,6 +543,10 @@ def _sdist_facts(
                 has_builtin_skill_creator = True
             if member.name == f"{sdist_root}/src/{_BUILTIN_SKILL_COUNCIL}":
                 has_builtin_skill_council = True
+            if member.name.startswith(f"{sdist_root}/src/") and (
+                example := _report_example_name(member.name.removeprefix(f"{sdist_root}/src/"))
+            ):
+                report_examples.add(example)
             if len(parts) > 1:
                 frontend_members.add("/".join(parts[1:]))
             relative_parts = parts[1:]
@@ -551,6 +582,7 @@ def _sdist_facts(
         has_model_catalog,
         has_builtin_skill_creator,
         has_builtin_skill_council,
+        frozenset(report_examples),
     )
 
 
@@ -670,6 +702,7 @@ def verify_dist(dist_dir: Path, *, config_path: Path) -> None:
         _sha256((config_path.parent / "NOTICE").read_bytes()),
     )
     rules_by_distribution = _import_rules(config_path)
+    expected_examples = _source_report_examples(config_path)
     for wheel in wheels:
         facts = _wheel_facts(
             wheel,
@@ -743,6 +776,11 @@ def verify_dist(dist_dir: Path, *, config_path: Path) -> None:
             raise ValueError("dlightrag: wheel must contain the built-in skill-creator SKILL.md")
         if distribution == "dlightrag" and not facts.has_builtin_skill_council:
             raise ValueError("dlightrag: wheel must contain the built-in council SKILL.md")
+        if distribution == "dlightrag" and (missing := expected_examples - facts.report_examples):
+            raise ValueError(
+                "dlightrag: wheel must contain the interactive-html report examples; "
+                f"missing {sorted(missing)}"
+            )
         if distribution == "dlightrag" and not facts.has_frontend:
             raise ValueError("dlightrag: wheel must contain generated frontend assets")
 
@@ -786,6 +824,11 @@ def verify_dist(dist_dir: Path, *, config_path: Path) -> None:
             raise ValueError("dlightrag: sdist must contain the built-in skill-creator SKILL.md")
         if distribution == "dlightrag" and not facts.has_builtin_skill_council:
             raise ValueError("dlightrag: sdist must contain the built-in council SKILL.md")
+        if distribution == "dlightrag" and (missing := expected_examples - facts.report_examples):
+            raise ValueError(
+                "dlightrag: sdist must contain the interactive-html report examples; "
+                f"missing {sorted(missing)}"
+            )
         if distribution == "dlightrag" and not facts.has_frontend:
             raise ValueError("dlightrag: sdist must contain generated frontend assets")
 
@@ -847,7 +890,7 @@ def _wheel_installation_members(path: Path) -> tuple[str, str, dict[str, bytes]]
     return distribution, version, members
 
 
-def _smoke_root_interfaces() -> None:
+def _smoke_root_interfaces(expected_examples: frozenset[str]) -> None:
     import asyncio
     from types import SimpleNamespace
     from typing import Any, cast
@@ -1036,6 +1079,24 @@ def _smoke_root_interfaces() -> None:
         raise ValueError("installed root package did not read the built-in council Skill")
     if "only when the user" in council.description.lower():
         raise ValueError("installed council Skill metadata requires an explicit user gate")
+    # load_skill reads the interactive-html examples through this same packaged root.
+    builtin_root = skills_bundle_factory(config).builtin_root
+    references = (
+        None if builtin_root is None else builtin_root.joinpath("interactive-html", "references")
+    )
+    if references is None or not references.is_dir():
+        raise ValueError("installed root package has no interactive-html references directory")
+    installed_examples = {
+        child.name for child in references.iterdir() if child.name.startswith("example-")
+    }
+    if installed_examples != set(expected_examples):
+        raise ValueError(
+            "installed interactive-html report examples differ from the source tree: "
+            f"{sorted(installed_examples)} != {sorted(expected_examples)}"
+        )
+    for example_name in sorted(installed_examples):
+        if not references.joinpath(example_name).read_text(encoding="utf-8").strip():
+            raise ValueError(f"installed interactive-html example {example_name} is empty")
     if len(DEPLOYMENT_OWNER_ID) != 64:
         raise ValueError("installed Access package did not expose a SHA-256 owner id")
     if AnswerRunClient.__module__ != "dlightrag.adapters.http.client.client":
@@ -1123,7 +1184,7 @@ def _smoke_root_interfaces() -> None:
     asyncio.run(corpus_smoke())
 
 
-def verify_installed(dist_dir: Path) -> None:
+def verify_installed(dist_dir: Path, *, config_path: Path) -> None:
     """Prove this interpreter loaded root and Memory from the current wheels."""
     dist_dir = dist_dir.resolve()
     repository = dist_dir.parent.resolve()
@@ -1173,7 +1234,7 @@ def verify_installed(dist_dir: Path) -> None:
 
     if len(versions) != 1:
         raise ValueError(f"installed workspace versions are not lockstep: {sorted(versions)}")
-    _smoke_root_interfaces()
+    _smoke_root_interfaces(_source_report_examples(config_path))
 
 
 def _venv_executable(venv: Path, name: str) -> Path:
@@ -1327,7 +1388,7 @@ def main() -> int:
         verify_workspace_definition(workspace_root)
         verify_dist(args.dist, config_path=args.config)
         if args.installed:
-            verify_installed(args.dist)
+            verify_installed(args.dist, config_path=args.config)
         elif args.smoke_installed:
             smoke_installed(args.dist, config_path=args.config)
     except (

@@ -20,10 +20,10 @@ from playwright.sync_api import Browser
 from tests.e2e import report_probe as probe
 from tests.e2e.report_frame import ReportPage
 from tests.support import colour
+from tests.support.report_examples import examples
 
 pytestmark = pytest.mark.e2e
 
-_EXAMPLES = Path(html_report.__file__).parent / "report/examples"
 _PALETTE = json.loads((Path(html_report.__file__).parent / "palette.json").read_text("utf-8"))
 _WIDTHS = (360, 390, 820, 1280)
 _SCHEMES = ("light", "dark")
@@ -58,7 +58,7 @@ def built(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
     out = {}
     for name in _CHARTS:
         out[name] = folder / f"{name}.html"
-        assert html_report.main(["build", str(_EXAMPLES / f"{name}.html"), str(out[name])]) == 0
+        assert html_report.main(["build", str(examples()[name]), str(out[name])]) == 0
     return out
 
 
@@ -103,6 +103,10 @@ def each_page(example: str, page: ReportPage) -> Iterator[tuple[str | None, list
     for page_id, charts in _PAGES[example].items():
         show(page, page_id)
         yield page_id, charts
+
+
+def test_every_example_the_skill_shows_a_model_is_opened_here() -> None:
+    assert sorted(_CHARTS) == sorted(examples())
 
 
 # ---- the report runs clean inside the sandbox, and every chart fits -----------------------------
