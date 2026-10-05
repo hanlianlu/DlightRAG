@@ -349,11 +349,10 @@ export class DlFailedFileRecovery extends LightElement {
     const workspace = this.workspace;
     if (!workspace || this.recoveryPending || this.#tracker.active) return;
     const controller = this.#session.startMutation();
-    const generation = this.#session.contextGeneration;
     this.recoveryPending = true;
     try {
       const run = await startFailedFileRetry(workspace, controller.signal);
-      if (!this.#session.isMutationCurrent(controller, workspace, this.workspace, generation, this.active)) return;
+      if (!this.#session.isMutationCurrent(controller, workspace, this.workspace, this.active)) return;
       this.#tracker.follow(run);
       if (corpusRunActive(run)) {
         requestToast(this, {
@@ -361,7 +360,7 @@ export class DlFailedFileRecovery extends LightElement {
         });
       }
     } catch (error) {
-      if (isAbortError(error) || !this.#session.isMutationCurrent(controller, workspace, this.workspace, generation, this.active)) return;
+      if (isAbortError(error) || !this.#session.isMutationCurrent(controller, workspace, this.workspace, this.active)) return;
       requestToast(this, {
         message: recoveryRequestError(
           error,

@@ -71,7 +71,6 @@ export class DlInspectorFiles extends LightElement {
   #deleteRunId: string | null = null;
 
   #workspace = '';
-  #requestGeneration = 0;
   /** A list refresh asked for while a mutation held the request slot. */
   #reloadDeferred = false;
   readonly #session = new InspectorFilesSession();
@@ -165,12 +164,12 @@ export class DlInspectorFiles extends LightElement {
     }
     this.#workspace = workspace;
     this.uploading = false;
-    const {controller, generation} = this.#startRequest();
+    const controller = this.#session.startRequest();
     if (showLoading) this.loading = true;
     this.error = null;
     try {
       const snapshot = await getFilePanel(workspace, null, controller.signal);
-      if (!this.#isCurrent(controller, workspace, generation)) return;
+      if (!this.#isCurrent(controller, workspace)) return;
       if (snapshot.workspace !== workspace) {
         throw new Error('file panel response changed workspace identity');
       }
@@ -180,7 +179,7 @@ export class DlInspectorFiles extends LightElement {
     } catch (error) {
       if (
         isAbortError(error)
-        || !this.#isCurrent(controller, workspace, generation)
+        || !this.#isCurrent(controller, workspace)
       ) return;
       // Keep the workspace transition fail closed even when a transport ignores
       // AbortSignal and resolves an invalidated request later.
@@ -244,8 +243,8 @@ export class DlInspectorFiles extends LightElement {
     }
     this.#invalidateOlderFiles();
     this.#workspace = workspace;
-    const {controller, generation} = this.#startRequest();
-    this.#beginMutation();
+    const controller = this.#session.startRequest();
+    this.#session.beginMutation();
     // A followed Run settling now would reload the list and abort this request.
     this.#tracker.pause();
     let followed = false;
@@ -255,7 +254,7 @@ export class DlInspectorFiles extends LightElement {
     requestToast(this, {message: msg(str`Uploading ${name}...`, {id: 'inspectorFiles.uploadingToast'})});
     try {
       const receipt = await uploadFileBatch(workspace, files, controller.signal);
-      if (!this.#isCurrent(controller, workspace, generation)) return;
+      if (!this.#isCurrent(controller, workspace)) return;
       this.acceptedFiles = receipt.fileCount ?? files.length;
       requestToast(this, {
         message: msg('Files received — Corpus update accepted', {id: 'inspectorFiles.filesReceived'}),
@@ -265,7 +264,7 @@ export class DlInspectorFiles extends LightElement {
     } catch (error) {
       if (
         isAbortError(error)
-        || !this.#isCurrent(controller, workspace, generation)
+        || !this.#isCurrent(controller, workspace)
       ) return;
       const message = apiErrorMessage(
         error,
@@ -274,7 +273,7 @@ export class DlInspectorFiles extends LightElement {
       this.error = message;
       requestToast(this, {message});
     } finally {
-      this.#finishMutation();
+      this.#session.finishMutation();
       if (this.#session.finishRequest(controller)) {
         this.uploading = false;
         this.loading = false;
@@ -306,14 +305,14 @@ export class DlInspectorFiles extends LightElement {
     if (await modalResult(this, dialog, () => this.#restoreDeleteTrigger(), this.lifetime) !== 'confirm') return;
     const workspace = this.handles.ingest.workspace;
     this.#invalidateOlderFiles();
-    const {controller, generation} = this.#startRequest();
-    this.#beginMutation();
+    const controller = this.#session.startRequest();
+    this.#session.beginMutation();
     this.#tracker.pause();
     let followed = false;
     this.error = null;
     try {
       const receipt = await deleteFileRequest(workspace, filePath, controller.signal);
-      if (!this.#isCurrent(controller, workspace, generation)) return;
+      if (!this.#isCurrent(controller, workspace)) return;
       requestToast(this, {
         message: msg('File deletion accepted.', {id: 'inspectorFiles.fileDeleted'}),
       });
@@ -322,7 +321,7 @@ export class DlInspectorFiles extends LightElement {
     } catch (error) {
       if (
         isAbortError(error)
-        || !this.#isCurrent(controller, workspace, generation)
+        || !this.#isCurrent(controller, workspace)
       ) return;
       const message = apiErrorMessage(
         error,
@@ -331,7 +330,7 @@ export class DlInspectorFiles extends LightElement {
       this.error = message;
       requestToast(this, {message});
     } finally {
-      this.#finishMutation();
+      this.#session.finishMutation();
       if (this.#session.finishRequest(controller)) this.loading = false;
       if (!followed) this.#resumeFollowing();
       this.#reloadIfDeferred();
@@ -406,29 +405,9 @@ export class DlInspectorFiles extends LightElement {
     this.#restoreOlderFocus = false;
   }
 
-  #startRequest(): {controller: AbortController; generation: number} {
-    this.#requestGeneration += 1;
-    return {
-      controller: this.#session.startRequest(),
-      generation: this.#requestGeneration,
-    };
-  }
-
-  #isCurrent(
-    controller: AbortController,
-    workspace: string,
-    generation: number,
-  ): boolean {
-    return generation === this.#requestGeneration
-      && this.#session.isCurrent(controller, workspace, this.handles.ingest.workspace);
-  }
-
-  #beginMutation(): void {
-    this.#session.beginMutation();
-  }
-
-  #finishMutation(): void {
-    this.#session.finishMutation();
+  /** The answer is still wanted: nothing has replaced its request, and the panel still shows its workspace. */
+  #isCurrent(controller: AbortController, workspace: string): boolean {
+    return this.#session.isCurrent(controller, workspace, this.handles.ingest.workspace);
   }
 
   #chooseFiles(): void {
@@ -561,14 +540,14 @@ export class DlInspectorFiles extends LightElement {
     if (workspace !== this.handles.ingest.workspace || !this.active || this.hasActiveMutation
         || this.#tracker.active) return;
     this.#invalidateOlderFiles();
-    const {controller, generation} = this.#startRequest();
-    this.#beginMutation();
+    const controller = this.#session.startRequest();
+    this.#session.beginMutation();
     this.actionPending = true;
     try {
       const receipt = kind === 'delete'
         ? await deleteWorkspaceRequest(workspace, controller.signal)
         : await resetWorkspaceRequest(workspace, controller.signal);
-      if (!this.#isCurrent(controller, workspace, generation)) return;
+      if (!this.#isCurrent(controller, workspace)) return;
       this.#deleteRunId = kind === 'delete' ? receipt.runId : null;
       this.#tracker.follow(receipt);
       this.querySelector<HTMLDialogElement>('#workspace-action-dialog')?.close();
@@ -578,7 +557,7 @@ export class DlInspectorFiles extends LightElement {
           : msg(str`Corpus reset accepted for ${workspace}.`, {id: 'inspectorFiles.resetAccepted'}),
       });
     } catch (error) {
-      if (!isAbortError(error) && this.#isCurrent(controller, workspace, generation)) {
+      if (!isAbortError(error) && this.#isCurrent(controller, workspace)) {
         requestToast(this, {
           message: apiErrorMessage(error, kind === 'delete'
             ? msg('Could not accept workspace deletion.', {id: 'inspectorFiles.deleteWorkspaceFailed'})
@@ -586,7 +565,7 @@ export class DlInspectorFiles extends LightElement {
         });
       }
     } finally {
-      this.#finishMutation();
+      this.#session.finishMutation();
       if (this.#session.finishRequest(controller)) {
         this.actionPending = false;
         await this.updateComplete;
