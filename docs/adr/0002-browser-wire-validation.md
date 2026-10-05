@@ -14,7 +14,9 @@ Before this change REST responses were trusted by assertion: six api modules end
 
 Adopt valibot as the only schema library in the browser. Every REST api module declares its payload schemas colocated with its client functions. A schema is the single source of truth: the TypeScript domain type is inferred from it, `parse` validates every response at the edge, and a transform step renames wire fields to their domain spelling exactly once. Wire Format stops at the api layer; nothing in stores/ or ui/ reads a snake_case server field.
 
-The SSE path keeps its hand-rolled interpretation. Its events already cross a whitelist union, the transport owns resume semantics and cursor bookkeeping, and folding streaming events through a schema validator would duplicate the interpretation layer for no added safety.
+The SSE path keeps its hand-rolled interpretation of event envelopes. Its events already cross a whitelist union, the transport owns resume semantics and cursor bookkeeping, and folding streaming events through a schema validator would duplicate the interpretation layer for no added safety.
+
+A payload that is itself a domain object is not an envelope: it crosses the api edge through the schema that owns the type — the memory event through `parseMemoryOperationEvent`, the `done` frame's AnswerPresentation through `parseAnswerPresentation` — so one type never has two translators or a cast between them. The server serializes that presentation identically on the stream and in the history, every unset field an explicit null, which is what lets one schema read both.
 
 ## Why this shape
 
@@ -26,7 +28,7 @@ A schema is one declaration serving three consumers — types, runtime validatio
 - **Parse without renaming.** Smallest diff, but keeps two naming conventions alive and leaks wire spelling into ui/.
 - **Status-quo casts.** The reason this decision exists.
 - **zod.** Same role, larger bundle cost.
-- **Validate SSE events through schemas too.** Duplicates the interpretation layer; the whitelist union already rejects unknown event types.
+- **Validate the SSE envelope through schemas too.** Duplicates the interpretation layer; the whitelist union already rejects unknown event types.
 - **Ask the server for camelCase.** Changes the public REST contract for a client-side convenience; wire spelling is server-owned.
 
 ## Consequences
@@ -37,4 +39,4 @@ Failures cross the same edge. A refusal answering the general `{detail, error_ty
 
 ## Scope
 
-This decision does not freeze REST paths or response shapes. When the server contract changes, the owning api schema, inferred domain type, transform, and callers change together; server-owned snake_case still stops at that boundary. SSE keeps its separate whitelist interpretation and durable cursor/reconnect behavior unless a later decision replaces that boundary explicitly.
+This decision does not freeze REST paths or response shapes. When the server contract changes, the owning api schema, inferred domain type, transform, and callers change together; server-owned snake_case still stops at that boundary. SSE event envelopes keep their separate whitelist interpretation and durable cursor/reconnect behavior unless a later decision replaces that boundary explicitly.

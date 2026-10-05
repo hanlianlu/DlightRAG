@@ -1729,6 +1729,28 @@ def test_a_cancelled_run_carries_no_answer() -> None:
     assert json.loads(frame.split("data: ", 1)[1].strip()) == {"status": "cancelled"}
 
 
+async def test_the_live_done_frame_and_the_history_carry_one_presentation_wire(
+    client: AsyncClient, service: Any, application: Any
+) -> None:
+    """The browser reads both through one schema, so both serialize the same way."""
+    result = _with_artifact(stored_result(), answer="[Report][r]\n\n[r]: artifact:report.md")
+    result["artifact_bindings"] = {"artifact:report.md": _REPORT_RESOURCE}
+    service.turn_for_run.return_value = linked_turn(answer_run(status="succeeded", result=result))
+
+    async def _events(**_kwargs: Any):
+        yield _event(2, "done", {"status": "succeeded", "result": result})
+
+    application.runs.subscribe.side_effect = _events
+
+    history = await client.get(f"/web/api/runs/{RUN_ID}")
+    live = await client.get(f"/web/api/runs/{RUN_ID}/events")
+
+    presentation = json.loads(live.text.split("data: ", 1)[1].strip())["presentation"]
+    assert presentation == history.json()["presentation"]
+    # Unset fields still arrive, as the explicit nulls the browser's schema requires.
+    assert presentation["parts"][0]["artifact"] is None
+
+
 # ---------------------------------------------------------------------------
 # Turn projection
 # ---------------------------------------------------------------------------

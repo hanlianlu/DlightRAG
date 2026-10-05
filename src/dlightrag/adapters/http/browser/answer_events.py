@@ -10,7 +10,9 @@ gap nor a duplicate.
 
 Unlike the REST projection, a browser ``done`` frame carries rendered
 presentation -- sanitized ``html``, the answer text, and answer images -- instead
-of the canonical stored result.
+of the canonical stored result. That presentation is the one the conversation
+history serves, serialized the same way (unset fields as explicit nulls), so the
+browser reads both through one schema.
 """
 
 from collections.abc import Mapping
@@ -163,7 +165,11 @@ def _browser_payload(
                 run_id=run_id,
                 image_rewrites=image_rewrites,
             )
-            return {"status": "cancelled"} if done.status == "cancelled" else done
+            if done.status == "cancelled":
+                return {"status": "cancelled"}
+            # The browser parses this presentation with the schema it parses the history
+            # with, and the history serves every unset field as an explicit null.
+            return done.model_dump(mode="json")
         case _:
             return AnswerErrorEvent(
                 kind=str(payload.get("kind") or "answer_stream_failed"),

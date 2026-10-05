@@ -6,7 +6,7 @@
 
 import {msg} from '@lit/localize';
 
-import type {AnswerPresentation} from '../api/conversations.ts';
+import {parseAnswerPresentation} from '../api/conversations.ts';
 import type {AnswerRunEvent} from './run-controller.ts';
 import {localizedRunErrorPayload} from './run-errors.ts';
 import type {ChatTurnView} from './chat-views.ts';
@@ -52,17 +52,9 @@ export function answerPhaseLabel(phase: string): string | null {
   return ANSWER_PHASE_LABELS[phase as AnswerPhase];
 }
 
-/** The SSE done event carries a snake_case wire presentation subset — not the
- *  validated REST AnswerPresentation. It only fills the view until the terminal
- *  refresh reconciles server truth. */
-interface DonePresentationWire {
-  answer_text: string;
-  sources?: unknown[];
-}
-
 interface DonePayload {
   status: 'succeeded' | 'cancelled';
-  presentation: DonePresentationWire | null;
+  presentation: unknown;
   usage?: Record<string, unknown>;
 }
 
@@ -138,16 +130,18 @@ export function applyAnswerEvent(
           liveStatus: msg('Answer stopped', {id: 'chatFeature.answerStopped'}),
         };
       }
-      if (!payload.presentation) {
+      // The frame's presentation is the one the history serves, so the schema that
+      // owns the type reads it; a missing or malformed one is a service error.
+      const presentation = parseAnswerPresentation(payload.presentation);
+      if (presentation === null) {
         const message = msg('Service error. Please try again.', {id: 'chatFeature.serviceError'});
         return {...turn, state: 'failed', error: message, progress: '', liveStatus: message};
       }
       return {
         ...turn,
         state: 'succeeded',
-        // Wire subset stands in until refreshActive() swaps in the stored turn.
-        presentation: payload.presentation as unknown as AnswerPresentation,
-        streamText: payload.presentation.answer_text,
+        presentation,
+        streamText: presentation.answerText,
         usage: payload.usage ?? {},
         progress: '',
         liveStatus: msg('Answer ready', {id: 'chatFeature.answerReady'}),

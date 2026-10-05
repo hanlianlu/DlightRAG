@@ -110,24 +110,92 @@ test('errors fail the turn', () => {
   assert.equal(view.error, 'Run could not be recovered.');
 });
 
+// A succeeded done frame as the server sends it: the history's presentation wire,
+// every unset field an explicit null.
+const doneFrame = {
+  status: 'succeeded',
+  presentation: {
+    video_links: [],
+    answer_text: 'Revenue increased [1].',
+    parts: [{
+      type: 'markdown',
+      text: 'Revenue increased [1].',
+      html: '<p>Revenue increased <cite class="citation-badge" data-ref="1" role="button" tabindex="0" title="Report" aria-label="Source 1">1</cite>.</p>\n',
+      artifact: null,
+      evidence_image: null,
+      inline: false,
+      slot: null,
+    }],
+    sources: [{
+      id: '1',
+      title: 'Report',
+      source_url: null,
+      download_url: '/web/api/files/raw/report?workspace=default',
+      chunks: [{
+        chunk_idx: 1,
+        page_number: 3,
+        content_html: '<p>Revenue grew eleven percent.</p>\n',
+        image_url: null,
+        thumbnail_url: null,
+      }],
+    }],
+    evidence_images: [],
+    link_cards: [],
+    artifacts: [],
+    artifact_outcome: {status: 'complete', issues: []},
+  },
+  usage: {usage_details: {total_tokens: 42}},
+};
+
 test('done settles succeeded, cancelled, and malformed payloads', () => {
-  const succeeded = applyAnswerEvent(turn(), {
-    kind: 'done',
-    payload: {
-      status: 'succeeded',
-      presentation: {answer_text: 'answer', sources: []},
-      usage: {tokens: 1},
-    },
-  }, 1000);
+  const succeeded = applyAnswerEvent(turn(), {kind: 'done', payload: doneFrame}, 1000);
   assert.equal(succeeded.state, 'succeeded');
-  assert.equal(succeeded.streamText, 'answer');
-  assert.deepEqual(succeeded.usage, {tokens: 1});
+  assert.equal(succeeded.streamText, 'Revenue increased [1].');
+  assert.deepEqual(succeeded.presentation, {
+    answerText: 'Revenue increased [1].',
+    parts: [{
+      type: 'markdown',
+      text: 'Revenue increased [1].',
+      html: doneFrame.presentation.parts[0].html,
+      artifact: null,
+      evidenceImage: null,
+      inline: false,
+    }],
+    sources: [{
+      id: '1',
+      title: 'Report',
+      sourceUrl: null,
+      downloadUrl: '/web/api/files/raw/report?workspace=default',
+      chunks: [{
+        chunkIdx: 1,
+        pageNumber: 3,
+        contentHtml: '<p>Revenue grew eleven percent.</p>\n',
+        imageUrl: null,
+        thumbnailUrl: null,
+      }],
+    }],
+    linkCards: [],
+    evidenceImages: [],
+    artifacts: [],
+    artifactOutcome: {status: 'complete', issues: []},
+  });
+  assert.deepEqual(succeeded.usage, {usage_details: {total_tokens: 42}});
 
   const cancelled = applyAnswerEvent(turn(), {kind: 'done', payload: {status: 'cancelled'}}, 1000);
   assert.equal(cancelled.state, 'cancelled');
 
   const malformed = applyAnswerEvent(turn(), {kind: 'done', payload: {status: 'running'}}, 1000);
   assert.equal(malformed.state, 'failed');
+
+  // A presentation that breaks the contract is a service error, never a half-read answer.
+  const {artifact_outcome: _outcome, ...incomplete} = doneFrame.presentation;
+  const violated = applyAnswerEvent(turn(), {
+    kind: 'done',
+    payload: {...doneFrame, presentation: incomplete},
+  }, 1000);
+  assert.equal(violated.state, 'failed');
+  assert.equal(violated.error, 'Service error. Please try again.');
+  assert.equal(violated.presentation, null);
 });
 
 test('only child-agent tool events count as child activity', () => {

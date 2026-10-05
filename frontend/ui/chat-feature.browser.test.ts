@@ -1419,6 +1419,52 @@ it('frame-batches 2,000 streamed tokens into bounded Chat and Message List updat
   }
 });
 
+it('shows the answer a live done frame carries when no refresh can supply it', async () => {
+  const conversationId = 'conversation-done-frame';
+  const runId = 'run-done-frame';
+  const done = {status: 'succeeded', presentation: presentationWire(presentation), usage: {}};
+  // Only the stream answers: the history read that follows the run and every other
+  // request fail, so the frame alone has to supply the answer.
+  window.fetch = ((input: RequestInfo | URL) => {
+    if (!String(input).endsWith('/events')) return Promise.resolve(new Response('{}', {status: 503}));
+    return Promise.resolve(new Response(
+      'id: 1\nevent: token\ndata: "A stored"\n\n'
+      + `id: 2\nevent: done\ndata: ${JSON.stringify(done)}\n\n`,
+      {status: 200, headers: {'Content-Type': 'text/event-stream'}},
+    ));
+  }) as typeof fetch;
+  conversationStore.adoptCreatedConversation({
+    conversationId,
+    title: 'Done frame',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    forkedFromConversationId: null,
+    forkedFromTitle: null,
+  });
+
+  const feature = document.createElement('dl-chat-feature') as DlChatFeature;
+  feature.view = {
+    kind: 'ready',
+    conversationId,
+    lineage: null,
+    history: [{
+      ...storedTurn(),
+      answerRunId: runId,
+      turnId: 'turn-done-frame',
+      status: 'running',
+      presentation: null,
+    }],
+  };
+  document.body.appendChild(feature);
+
+  await waitFor(() => feature.turns[0]?.state === 'succeeded');
+  await settle(feature);
+
+  expect(feature.turns[0].state).to.equal('succeeded');
+  expect(feature.turns[0].presentation).to.deep.equal(presentation);
+  expect(feature.querySelector('dl-answer-presentation')?.textContent).to.contain('A stored answer.');
+});
+
 it('announces child activity for every tool event once a run has children, and for its end', async () => {
   const originalRequestFrame = window.requestAnimationFrame;
   const originalCancelFrame = window.cancelAnimationFrame;

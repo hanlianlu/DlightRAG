@@ -233,6 +233,13 @@ const answerPresentation = v.pipe(
 );
 export type AnswerPresentation = v.InferOutput<typeof answerPresentation>;
 
+/** Return the typed presentation a live `done` event carries, or null for a
+ *  payload this client cannot interpret. */
+export function parseAnswerPresentation(wire: unknown): AnswerPresentation | null {
+  const parsed = v.safeParse(answerPresentation, wire);
+  return parsed.success ? parsed.output : null;
+}
+
 const agentChildStatus = v.pipe(
   v.object({
     child_session_id: v.optional(v.string()),
