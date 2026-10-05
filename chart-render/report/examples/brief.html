@@ -1,0 +1,41 @@
+<header class="report-head">
+  <h1>2024 年经营简报</h1>
+  <p class="lede">全年营收 20.1 亿元、利润 3.1 亿元；四个季度逐季走高，第四季度利润率升至 18.3%。</p>
+  <p class="meta">数据期间 2024 年 1–12 月 · 来源：公司季度经营数据</p>
+</header>
+
+<section class="kpis">
+  <div class="kpi"><b>20.1 亿元</b><span>全年营收</span><small>第四季度 6.0 亿元</small></div>
+  <div class="kpi"><b>3.1 亿元</b><span>全年利润</span><small>第四季度 1.1 亿元</small></div>
+  <div class="kpi"><b>15.4%</b><span>全年利润率</span><small><span class="delta up">+6.4 个百分点</span> 四季度比一季度</small></div>
+  <div class="kpi"><b>+17.6%</b><span>四季度营收环比</span><small><span class="delta up">+37.5%</span> 利润环比</small></div>
+</section>
+
+<main>
+  <figure class="chart wide" data-chart="trend"></figure>
+
+  <div class="callout" data-kind="insight">
+    <p>营收与利润同步走高：第四季度营收比第一季度增长 42.9%，利润增长 120%，利润率由 11.9% 升至 18.3%，增长的质量在改善。</p>
+  </div>
+</main>
+
+<script type="application/json" id="chart-trend">
+{ "aspect": "16:7",
+  "option": {
+    "title": {"text": "季度营收与利润", "subtext": "单位：亿元 · 来源：公司季度经营数据"},
+    "dataset": {"source": [
+      {"quarter": "第一季度", "item": "营收", "value": 4.2},
+      {"quarter": "第二季度", "item": "营收", "value": 4.8},
+      {"quarter": "第三季度", "item": "营收", "value": 5.1},
+      {"quarter": "第四季度", "item": "营收", "value": 6.0},
+      {"quarter": "第一季度", "item": "利润", "value": 0.5},
+      {"quarter": "第二季度", "item": "利润", "value": 0.7},
+      {"quarter": "第三季度", "item": "利润", "value": 0.8},
+      {"quarter": "第四季度", "item": "利润", "value": 1.1}
+    ]},
+    "xAxis": {"type": "category"},
+    "yAxis": {"type": "value"},
+    "series": [{"type": "line", "seriesBy": "item", "encode": {"x": "quarter", "y": "value"},
+                "label": {"show": true, "position": "top"}}]
+  } }
+</script>
