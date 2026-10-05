@@ -1111,7 +1111,6 @@ Tracing activates only when both Langfuse keys are set; keep them in `.env`.
 | `langfuse_public_key`, `langfuse_secret_key` | unset | Both required |
 | `langfuse_host` | `https://cloud.langfuse.com` | Trace destination |
 | `langfuse_trace_sensitive_data` | `true` | Suppress raw content — observation inputs, outputs, and error text — when false |
-| `langfuse_export_external_spans` | `false` | Export third-party OTel spans |
 | `langfuse_environment` | unset | Deployment label such as `local`, `staging`, or `production`, so deployments' traces stay apart: lowercase letters, digits, `_`, and `-`, at most 40 characters, starting with a letter or digit but not with `langfuse` |
 | `langfuse_release` | running package version | Release label |
 | `langfuse_sample_rate` | `1.0` | Export fraction |

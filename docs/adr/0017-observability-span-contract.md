@@ -4,6 +4,8 @@
 
 Accepted and implemented. No configuration key beyond the existing Langfuse settings: the vocabulary is code, the contract is one registry plus one test.
 
+Amended by [ADR 0036](0036-traces-hold-only-product-work-and-usage-counts-each-token-once.md): the vocabulary loses `probe-image-capability` and `recover-ingestion`, usage keys are mutually exclusive buckets, Langfuse exports through a tracer provider of its own, and the Consequence below that ingestion's per-chunk calls surface as their own traces no longer holds: they nest under the batch.
+
 ## Context
 
 Traces are a product surface, not a by-product: Langfuse groups observations into traces by the OTel context, and every dashboard, evaluator, and saved filter targets observation *names*. DlightRAG's names had drifted into three separate problems, all measurable in the deployment's own Langfuse project (78,730 observations, 58,419 traces, 23 names):

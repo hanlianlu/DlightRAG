@@ -1,11 +1,18 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Unit-test fixtures; the root conftest isolates every suite from operator inputs."""
 
-from collections.abc import Generator
+import functools
+import json
+import uuid
+from collections.abc import Callable, Generator
 from typing import Any
 
+import langfuse as langfuse_sdk
 import pytest
+from opentelemetry.sdk.trace import ReadableSpan
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from dlightrag.application.config import ObservabilitySettings
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.media import MODEL_IMAGE_MAX_PIXELS
 from dlightrag.engine.ai.structured_transport import JSON_SCHEMA_TRANSPORT_CACHE
@@ -117,3 +124,67 @@ def reset_langfuse_client(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
     langfuse_state.install_client(None, trace_sensitive=True)
     yield
     langfuse_state.install_client(previous, trace_sensitive=previous_sensitive)
+
+
+class LangfuseExport:
+    """What a real Langfuse client, started by ``init_tracing``, has exported."""
+
+    def __init__(self, exporter: InMemorySpanExporter) -> None:
+        self._exporter = exporter
+
+    def spans(self) -> tuple[ReadableSpan, ...]:
+        from dlightrag.adapters.observability import langfuse as langfuse_state
+
+        client = langfuse_state.current_client()
+        assert client is not None, "tracing is not started"
+        client.flush()
+        return self._exporter.get_finished_spans()
+
+    @staticmethod
+    def usage(span: ReadableSpan) -> dict[str, int]:
+        """The usage keys the span carries, none when it carries none."""
+        value = (span.attributes or {}).get(
+            langfuse_sdk.LangfuseOtelSpanAttributes.OBSERVATION_USAGE_DETAILS
+        )
+        return {} if value is None else json.loads(str(value))
+
+
+@pytest.fixture
+def start_langfuse_export(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Generator[Callable[..., LangfuseExport]]:
+    """Start a real Langfuse client through ``init_tracing``, exporting into memory.
+
+    Only the span exporter is the test's: the tracer provider, sampling, masking and
+    attribute mapping are the product's. Langfuse keeps one resource manager per public
+    key for the life of the process, so every client gets a key of its own.
+    """
+    from dlightrag.adapters.observability import langfuse as langfuse_state
+
+    real_client = langfuse_sdk.Langfuse
+
+    def start(**settings: Any) -> LangfuseExport:
+        exporter = InMemorySpanExporter()
+        monkeypatch.setattr(
+            "langfuse.Langfuse", functools.partial(real_client, span_exporter=exporter)
+        )
+        langfuse_state.init_tracing(
+            ObservabilitySettings(
+                langfuse_public_key=f"pk-lf-{uuid.uuid4().hex}",
+                langfuse_secret_key="sk-lf-test",
+                langfuse_host="http://127.0.0.1:9",
+                langfuse_environment="test",
+                langfuse_release="9.9.9",
+                **settings,
+            )
+        )
+        return LangfuseExport(exporter)
+
+    yield start
+    langfuse_state.shutdown_tracing()
+    langfuse_state.install_client(None, trace_sensitive=True)
+
+
+@pytest.fixture
+def langfuse_export(start_langfuse_export: Callable[..., LangfuseExport]) -> LangfuseExport:
+    return start_langfuse_export()

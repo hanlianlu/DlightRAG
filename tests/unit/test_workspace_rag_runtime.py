@@ -14,10 +14,11 @@ import httpx
 import pytest
 from lightrag.constants import PARSED_DIR_NAME
 
+from dlightrag.adapters.observability import LangfuseTelemetry
 from dlightrag.application.config import DlightragConfig
 from dlightrag.application.settings import rag_settings
 from dlightrag.engine.ai.scheduler import ModelScheduler
-from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY, NoopTelemetry
+from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY, NoopTelemetry, Telemetry
 from dlightrag.engine.rag.corpus.ingestion.document_embedding import (
     build_document_embedder,
     resolve_direct_image_embedding_enabled,
@@ -32,12 +33,14 @@ from dlightrag.engine.rag.workspace.pool import WorkspacePool, WorkspaceUnavaila
 from dlightrag.engine.rag.workspace.workspace_rag import RemoteIngestWindowProgress, WorkspaceRag
 from dlightrag.engine.rag.workspace.workspaces import normalize_workspace
 from tests.config_helpers import mutate_config
+from tests.unit.conftest import LangfuseExport
 
 
 def _service(
     config: DlightragConfig,
     *,
     backend: Any | None = None,
+    telemetry: Telemetry | None = None,
 ) -> WorkspaceRag:
     workspace_id = normalize_workspace(config.deployment.workspace)
     return WorkspaceRag(
@@ -48,7 +51,7 @@ def _service(
             backend if backend is not None else _backend(workspace_id, read_only=config.is_reader),
         ),
         scheduler=ModelScheduler(max_concurrency=1),
-        telemetry=NoopTelemetry(),
+        telemetry=telemetry or NoopTelemetry(),
     )
 
 
@@ -840,6 +843,33 @@ class TestWorkspaceRagClose:
         await recovery
 
         service._lightrag.apipeline_process_enqueue_documents.assert_awaited_once_with()
+
+    async def test_startup_pipeline_recovery_opens_no_trace_but_hides_no_model_work(
+        self, test_config: DlightragConfig, langfuse_export: LangfuseExport
+    ) -> None:
+        """The sweep is a safety net, not a unit of work; the spend it starts stays visible."""
+
+        class FakeCoordination:
+            @asynccontextmanager
+            async def pipeline_recovery(self):
+                yield
+
+        backend = _backend(normalize_workspace(test_config.deployment.workspace), read_only=False)
+        backend.coordination = FakeCoordination()
+        service = _service(test_config, backend=backend, telemetry=LangfuseTelemetry())
+
+        async def resume() -> None:
+            async with service.telemetry.observe("generate-completion"):
+                pass
+
+        service._lightrag = MagicMock()
+        service._lightrag.apipeline_process_enqueue_documents = AsyncMock(side_effect=resume)
+
+        await service._resume_lightrag_pipeline()
+
+        assert [(span.name, span.parent) for span in langfuse_export.spans()] == [
+            ("generate-completion", None)
+        ]
 
 
 # ---------------------------------------------------------------------------

@@ -242,6 +242,25 @@ def provider_input_tokens(usage: Mapping[str, int] | None) -> int | None:
     )
 
 
+def provider_output_tokens(usage: Mapping[str, int] | None) -> int | None:
+    """Return the completion tokens one provider billed, or None when unstated.
+
+    Reasoning counts inside it: OpenAI, Anthropic and the Responses wire count it in
+    their output counter, and the Gemini adapter folds its thought tokens into
+    ``completion_tokens`` to match.
+    """
+    if not usage:
+        return None
+    return _first_int(usage, ("completion_tokens", "output_tokens"))
+
+
+def provider_total_tokens(usage: Mapping[str, int] | None) -> int | None:
+    """Return the total one provider states for the call, or None when it states none."""
+    if not usage:
+        return None
+    return _first_int(usage, ("total_tokens",))
+
+
 def _first_int(usage: Mapping[str, int], keys: tuple[str, ...]) -> int | None:
     for key in keys:
         value = usage.get(key)
@@ -520,7 +539,9 @@ __all__ = [
     "is_provider_reasoning_rejection",
     "provider_cache_hit_tokens",
     "provider_input_tokens",
+    "provider_output_tokens",
     "provider_status_code",
+    "provider_total_tokens",
     "usage_mapping",
     "usage_to_dict",
 ]

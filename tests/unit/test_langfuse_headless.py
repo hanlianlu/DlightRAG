@@ -44,7 +44,7 @@ def test_bootstrap_creates_matching_headless_and_dlightrag_env(tmp_path: Path) -
     assert dlightrag_values["DLIGHTRAG_OBSERVABILITY__LANGFUSE_SECRET_KEY"] == "sk-test"
     # Non-secret SDK behavior stays in config.yaml, not .env.
     assert "DLIGHTRAG_OBSERVABILITY__LANGFUSE_HOST" not in dlightrag_values
-    assert "DLIGHTRAG_OBSERVABILITY__LANGFUSE_EXPORT_EXTERNAL_SPANS" not in dlightrag_values
+    assert "DLIGHTRAG_OBSERVABILITY__LANGFUSE_SAMPLE_RATE" not in dlightrag_values
 
 
 def test_bootstrap_reuses_existing_langfuse_init_project_keys(tmp_path: Path) -> None:
@@ -102,7 +102,7 @@ def test_bootstrap_preserves_user_choices(tmp_path: Path) -> None:
     )
     dlightrag_env = tmp_path / ".env"
     dlightrag_env.write_text(
-        "DLIGHTRAG_OBSERVABILITY__LANGFUSE_EXPORT_EXTERNAL_SPANS=true\n",
+        "DLIGHTRAG_OBSERVABILITY__LANGFUSE_SAMPLE_RATE=0.5\n",
         encoding="utf-8",
     )
 
@@ -114,4 +114,4 @@ def test_bootstrap_preserves_user_choices(tmp_path: Path) -> None:
     langfuse_values = read_env(langfuse_env).values
     dlightrag_values = read_env(dlightrag_env).values
     assert langfuse_values["LANGFUSE_INIT_USER_PASSWORD"] == "already-set"
-    assert dlightrag_values["DLIGHTRAG_OBSERVABILITY__LANGFUSE_EXPORT_EXTERNAL_SPANS"] == "true"
+    assert dlightrag_values["DLIGHTRAG_OBSERVABILITY__LANGFUSE_SAMPLE_RATE"] == "0.5"

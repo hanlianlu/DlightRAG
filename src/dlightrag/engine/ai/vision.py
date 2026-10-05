@@ -15,7 +15,6 @@ from typing import Any, Literal
 from dlightrag.engine.ai.providers import provider_for
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelSettings
-from dlightrag.engine.ai.telemetry import Telemetry
 
 logger = logging.getLogger(__name__)
 
@@ -95,11 +94,9 @@ class ModelImageCapabilities:
         *,
         scheduler: ModelScheduler,
         reprobe_cooldown_seconds: float = _REPROBE_COOLDOWN_SECONDS,
-        telemetry: Telemetry,
     ) -> None:
         self._cooldown_seconds = reprobe_cooldown_seconds
         self._scheduler = scheduler
-        self._telemetry = telemetry
         self._identity_secret = secrets.token_bytes(32)
         self._outcomes: dict[str, ImageProbeOutcome] = {}
         self._last_probe: dict[str, float] = {}
@@ -140,40 +137,32 @@ class ModelImageCapabilities:
 
     async def _probe(self, settings: ModelSettings) -> ImageProbeOutcome:
         provider: Any = None
-        async with self._telemetry.observe(
-            "probe-image-capability",
-            metadata={"provider": settings.provider},
-            model=settings.model,
-        ) as observation:
-            try:
-                provider = provider_for(settings)
-                outcome = await self._scheduler.run(
-                    lambda: probe_image_capability(
-                        provider,
-                        model=settings.model,
-                        model_kwargs=settings.model_kwargs_copy() or None,
-                    )
+        try:
+            provider = provider_for(settings)
+            outcome = await self._scheduler.run(
+                lambda: probe_image_capability(
+                    provider,
+                    model=settings.model,
+                    model_kwargs=settings.model_kwargs_copy() or None,
                 )
-            except Exception:
-                logger.debug("Image capability probe failed", exc_info=True)
-                outcome = ImageProbeOutcome(status="unknown", failure_kind="probe_error")
-            finally:
-                if provider is not None:
-                    close_task = asyncio.create_task(provider.aclose())
-                    try:
-                        await asyncio.shield(close_task)
-                    except asyncio.CancelledError:
-                        try:
-                            await close_task
-                        except Exception:
-                            logger.warning(
-                                "Failed to close cancelled image-probe provider",
-                                exc_info=True,
-                            )
-                        raise
-            observation.update(
-                output={"status": outcome.status, "failure_kind": outcome.failure_kind}
             )
+        except Exception:
+            logger.debug("Image capability probe failed", exc_info=True)
+            outcome = ImageProbeOutcome(status="unknown", failure_kind="probe_error")
+        finally:
+            if provider is not None:
+                close_task = asyncio.create_task(provider.aclose())
+                try:
+                    await asyncio.shield(close_task)
+                except asyncio.CancelledError:
+                    try:
+                        await close_task
+                    except Exception:
+                        logger.warning(
+                            "Failed to close cancelled image-probe provider",
+                            exc_info=True,
+                        )
+                    raise
         logger.info(
             "Image capability probe: status=%s model=%s provider=%s",
             outcome.status,

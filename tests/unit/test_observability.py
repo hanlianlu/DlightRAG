@@ -15,7 +15,6 @@ import pytest
 
 import dlightrag.adapters.observability as observability
 from dlightrag.adapters.observability import langfuse as langfuse_state
-from dlightrag.adapters.observability import tracing as tracing_module
 from dlightrag.adapters.observability.masking import mask_langfuse_payload
 from dlightrag.engine.ai.telemetry import SPAN_TYPES, NoopTelemetry
 from tests.unit.conftest import RecordingLangfuse, RecordingObservation
@@ -386,36 +385,6 @@ def test_trace_sensitive_enabled_reflects_flag() -> None:
     assert observability.trace_sensitive_enabled() is True
 
 
-def test_unknown_usage_dialects_contribute_no_usage_keys() -> None:
-    """An unrecognized dialect must not put arbitrary keys on a generation span."""
-    assert tracing_module._langfuse_usage_details({"tokens_used": 5, "nested": {"a": 1}}) == {}  # type: ignore[arg-type]
-
-
-def test_langfuse_usage_details_normalizes_overlapping_provider_keys() -> None:
-    # DeepSeek-style usage mixes components, an aggregate, and cache counters;
-    # Langfuse sums every value into total, so forwarding raw triple-counts.
-    raw = {
-        "prompt_tokens": 3911,
-        "completion_tokens": 254,
-        "total_tokens": 4165,
-        "prompt_cache_hit_tokens": 0,
-        "prompt_cache_miss_tokens": 3911,
-    }
-    assert tracing_module._langfuse_usage_details(raw) == {
-        "input": 3911,
-        "output": 254,
-        "total": 4165,
-    }
-
-
-def test_langfuse_usage_details_derives_total_when_absent() -> None:
-    assert tracing_module._langfuse_usage_details({"input_tokens": 10, "output_tokens": 4}) == {
-        "input": 10,
-        "output": 4,
-        "total": 14,
-    }
-
-
 async def test_trace_observation_nests_child_observations() -> None:
     client = RecordingLangfuse()
     langfuse_state.install_client(client, trace_sensitive=True)
@@ -453,34 +422,6 @@ async def test_trace_observation_update_is_noop_without_client() -> None:
         trace.update(output={"answer_len": 12})
 
 
-def test_init_tracing_filters_external_spans_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, Any] = {}
-
-    class FakeLangfuse:
-        def __init__(self, **kwargs: Any) -> None:
-            captured.update(kwargs)
-
-    monkeypatch.setattr("langfuse.Langfuse", FakeLangfuse)
-
-    config = SimpleNamespace(
-        langfuse_public_key="pk-test",
-        langfuse_secret_key="sk-test",
-        langfuse_host="https://cloud.langfuse.com",
-        langfuse_export_external_spans=False,
-    )
-    observability.init_tracing(config)
-
-    should_export_span = captured["should_export_span"]
-
-    assert captured["base_url"] == "https://cloud.langfuse.com"
-    assert should_export_span(
-        SimpleNamespace(instrumentation_scope=SimpleNamespace(name="langfuse-sdk"))
-    )
-    assert not should_export_span(
-        SimpleNamespace(instrumentation_scope=SimpleNamespace(name="openai"))
-    )
-
-
 def test_init_tracing_does_not_call_blocking_auth_check(monkeypatch: pytest.MonkeyPatch) -> None:
     auth_called = False
 
@@ -499,7 +440,6 @@ def test_init_tracing_does_not_call_blocking_auth_check(monkeypatch: pytest.Monk
         langfuse_public_key="pk-test",
         langfuse_secret_key="sk-test",
         langfuse_host="https://cloud.langfuse.com",
-        langfuse_export_external_spans=False,
     )
     observability.init_tracing(config)
 
@@ -520,7 +460,6 @@ def test_init_tracing_forwards_v4_client_options(monkeypatch: pytest.MonkeyPatch
         langfuse_public_key="pk-test",
         langfuse_secret_key="sk-test",
         langfuse_host="https://cloud.langfuse.com",
-        langfuse_export_external_spans=False,
         langfuse_environment="production",
         langfuse_release="2026.06.06",
         langfuse_sample_rate=0.25,
@@ -551,7 +490,6 @@ def test_langfuse_mask_redacts_secrets_and_omits_images(monkeypatch: pytest.Monk
         langfuse_public_key="pk-test",
         langfuse_secret_key="sk-test",
         langfuse_host="https://cloud.langfuse.com",
-        langfuse_export_external_spans=False,
     )
 
     observability.init_tracing(config)
@@ -598,6 +536,26 @@ def test_shutdown_tracing_uses_sdk_shutdown_and_clears_client() -> None:
     assert langfuse_state.current_client() is None
 
 
+def test_a_client_that_fails_to_start_leaves_tracing_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UnreachableLangfuse:
+        def __init__(self, **_kwargs: Any) -> None:
+            raise RuntimeError("unreachable")
+
+    monkeypatch.setattr("langfuse.Langfuse", UnreachableLangfuse)
+
+    observability.init_tracing(
+        SimpleNamespace(
+            langfuse_public_key="pk-test",
+            langfuse_secret_key="sk-test",
+            langfuse_host="https://cloud.langfuse.com",
+        )
+    )
+
+    assert langfuse_state.current_client() is None
+
+
 _SPAN_VOCABULARY_SOURCE = Path(__file__).resolve().parents[2] / "src" / "dlightrag"
 _CONTRACT_DOC = Path(__file__).resolve().parents[2] / "docs" / "observability.md"
 
@@ -614,7 +572,6 @@ _EXPECTED_TYPES: dict[str, set[str]] = {
         "highlight-sources",
         "ingest-documents",
         "plan-retrieval",
-        "recover-ingestion",
         "run-retrieval",
     },
     "embedding": {"embed-text"},
@@ -622,7 +579,6 @@ _EXPECTED_TYPES: dict[str, set[str]] = {
         "generate-agent-turn",
         "generate-completion",
         "compact-session",
-        "probe-image-capability",
     },
     "retriever": {"retrieve-context"},
     "span": {"call-rerank-model", "rerank-passages"},
@@ -775,7 +731,6 @@ def test_init_tracing_defaults_the_release_to_the_package_version(
         langfuse_public_key="pk-test",
         langfuse_secret_key="sk-test",
         langfuse_host="https://cloud.langfuse.com",
-        langfuse_export_external_spans=False,
     )
 
     observability.init_tracing(config)
