@@ -71,6 +71,7 @@ export interface Wire {
 const DEFAULT_ROUTES: Record<string, Handler> = {
   'GET /web/api/connections/mcp': () => Response.json({revision: '0', connections: [], presets: []}),
   'GET /web/api/agent-accounts': () => Response.json(agentAccountsView()),
+  'GET /web/api/skills/mine': () => Response.json({skills: [], limit: 20}),
 };
 
 /** Answer fetches by `METHOD /path`; a route here replaces the default for the same key. */
@@ -112,6 +113,22 @@ export function memoryPage(
     memories: records.map(({id, kind, body}) => ({memory_id: id, kind: kind ?? 'preference', body})),
     next_cursor: nextCursor,
   });
+}
+
+export interface WireSkill {
+  name: string;
+  description: string;
+  enabled: boolean;
+}
+
+/** One of the owner's own Skills, as the wire sends it: on, with a description that names it. */
+export function wireSkill(name: string, extra: Partial<WireSkill> = {}): WireSkill {
+  return {name, description: `Instructions for ${name}.`, enabled: true, ...extra};
+}
+
+/** The owner's own Skills, as the wire sends them. */
+export function ownerSkills(skills: WireSkill[] = [], limit = 20): Response {
+  return Response.json({skills, limit});
 }
 
 export interface WireAccount {

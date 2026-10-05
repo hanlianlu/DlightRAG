@@ -29,6 +29,7 @@ import './settings-connections.ts';
 import './settings-conversations.ts';
 import {languageLabel} from './settings-language.ts';
 import './settings-memory.ts';
+import './settings-skills.ts';
 import type {SettingsSection, SettingsSummary} from './settings-summary.ts';
 import './toast.ts';
 import {requestToast} from './toast-request.ts';
@@ -73,6 +74,16 @@ const SECTIONS: readonly SectionDefinition[] = [
     description: () => msg(
       'Preferences and facts the agent remembers about you across conversations.',
       {id: 'settings.memoryDescription'},
+    ),
+  },
+  {
+    section: 'skills',
+    group: 'agent',
+    icon: 'skills',
+    label: () => msg('Skills', {id: 'settings.skills'}),
+    description: () => msg(
+      'Instructions the agent can load when they fit the task. Turn one off to keep it without the agent using it; delete removes it for good.',
+      {id: 'settings.skillsDescription'},
     ),
   },
   {
@@ -124,6 +135,13 @@ function statusOf(summary: SettingsSummary | undefined): {short: string; detail:
       return summary.count === null
         ? {short: '', detail: msg('On', {id: 'settings.status.memoryOn'})}
         : {short: String(summary.count), detail: msg(str`On · ${summary.count} stored`, {id: 'settings.status.memoryStored'})};
+    case 'skills':
+      return summary.total === 0
+        ? {short: '', detail: msg('None yet', {id: 'settings.status.skillsNone'})}
+        : {
+          short: `${summary.enabled}/${summary.total}`,
+          detail: msg(str`${summary.enabled} of ${summary.total} on`, {id: 'settings.status.skills'}),
+        };
     case 'conversations':
       return {
         short: String(summary.count),
@@ -250,6 +268,7 @@ export class DlSettingsDialog extends LightElement {
               <dl-settings-memory class=${styles.page} .active=${this.mounted} .current=${isPage('memory')}
                 ?hidden=${!isPage('memory')}></dl-settings-memory>
               ${this.mounted ? html`
+                <dl-settings-skills class=${styles.page} ?hidden=${!isPage('skills')}></dl-settings-skills>
                 <dl-settings-conversations class=${styles.page} .handles=${this.handles}
                   .deleteAll=${this.#deleteAll} ?hidden=${!isPage('conversations')}></dl-settings-conversations>
                 <dl-settings-language class=${styles.page}

@@ -289,11 +289,11 @@ export class DlSettingsAgentAccounts extends LightElement {
 
   #empty(): TemplateResult {
     return html`
-      <div class="${shared.card} ${styles.empty}">
-        <span class=${styles.emptyIcon}>${icon('agent-accounts', {size: 'md'})}</span>
-        <h4 id="agent-accounts-empty-title" class=${styles.emptyTitle} tabindex="-1">${
+      <div class="${shared.card} ${shared.empty}">
+        <span class=${shared.emptyIcon}>${icon('agent-accounts', {size: 'md'})}</span>
+        <h4 id="agent-accounts-empty-title" class=${shared.emptyTitle} tabindex="-1">${
           msg('No accounts yet', {id: 'agentAccounts.emptyTitle'})}</h4>
-        <span class=${styles.emptyBody}>${msg(
+        <span class=${shared.emptyBody}>${msg(
           'When Research meets a website that needs a free account, the agent signs up under its own identity and the account appears here.',
           {id: 'agentAccounts.emptyBody'},
         )}</span>
@@ -327,7 +327,7 @@ export class DlSettingsAgentAccounts extends LightElement {
   protected override render(): TemplateResult {
     return html`
       ${this.view ? this.#page(this.view) : this.error ? html`
-        <div class=${styles.failed}>
+        <div class=${shared.failed}>
           <p class=${shared.note} role="alert">${msg('Could not load agent accounts.', {id: 'agentAccounts.loadFailed'})}</p>
           <button type="button" class="dl-btn" @click=${this.#retry}>${msg('Retry', {id: 'agentAccounts.retry'})}</button>
         </div>` : html`<p class=${shared.hint} role="status">${

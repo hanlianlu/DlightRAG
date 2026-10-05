@@ -28,6 +28,7 @@
   "remove": {"source": "lucide", "name": "trash"},
   "send": {"source": "lucide", "name": "send"},
   "settings": {"source": "lucide", "name": "settings"},
+  "skills": {"source": "lucide", "name": "book-open"},
   "status-dot": {"source": "dlightrag", "name": "status-dot", "fill": "currentColor", "stroke": "none", "nodes": [["circle", {"cx": "12", "cy": "12", "r": "4"}]]},
   "stop": {"source": "lucide", "name": "square", "fill": "currentColor", "stroke": "none"},
   "sun": {"source": "lucide", "name": "sun"},

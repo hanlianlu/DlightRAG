@@ -25,6 +25,7 @@ const TOOL_VERBS: Record<string, string> = {
   load_skill: 'Loading skill',
   publish_skill: 'Publishing skill',
   delete_skill: 'Removing skill',
+  set_skill_enabled: 'Updating skill',
   remember: 'Saving a memory',
   forget: 'Removing a memory',
   recall_memory: 'Recalling memories',

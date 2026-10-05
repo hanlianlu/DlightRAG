@@ -9,8 +9,10 @@ import {
   memorySettings,
   mountSettings,
   openSettings,
+  ownerSkills,
   wire,
   wireAccount,
+  wireSkill,
 } from '../testing/settings.ts';
 type AxeNode = {
   target: string[];
@@ -304,11 +306,16 @@ it('every page of the Settings dialog has no serious accessible-name or structur
     'GET /web/api/memory': () => memoryPage([
       {id: 'one', body: 'Use concise answers'}, {id: 'two', kind: 'fact', body: 'Lives in Sweden'},
     ]),
+    'GET /web/api/skills/mine': () => ownerSkills([
+      wireSkill('csv-report', {description: 'Summarise a CSV file into a short report, with the columns it found and the rows it skipped.'}),
+      wireSkill('old-style-guide', {enabled: false}),
+    ]),
+    'GET /web/api/skills/mine/csv-report/document': () => new Response('---\nname: csv-report\n---\nSummarise a CSV file.\n'),
   }).fetch;
   try {
     const {settings} = mountSettings();
     const dialog = await openSettings(settings);
-    for (const section of ['connections', 'agent-accounts', 'memory', 'conversations', 'language']) {
+    for (const section of ['connections', 'agent-accounts', 'memory', 'skills', 'conversations', 'language']) {
       const row = settings.querySelector<HTMLButtonElement>(`nav [data-section="${section}"]`)!;
       row.click();
       await settings.updateComplete;
@@ -324,6 +331,11 @@ it('every page of the Settings dialog has no serious accessible-name or structur
         await feature.updateComplete;
       } else if (section === 'memory') {
         await waitFor(() => settings.querySelectorAll('dl-settings-memory li').length === 2);
+      } else if (section === 'skills') {
+        // One Skill is off, and the first shows its SKILL.md.
+        await waitFor(() => settings.querySelectorAll('dl-settings-skills [data-skill]').length === 2);
+        settings.querySelector<HTMLButtonElement>('dl-settings-skills [data-view="csv-report"]')!.click();
+        await waitFor(() => settings.querySelector('dl-settings-skills pre') !== null);
       }
       expect(await seriousViolations(dialog), section).to.deep.equal([]);
     }

@@ -13,6 +13,7 @@ export type SettingsSection =
   | 'connections'
   | 'agent-accounts'
   | 'memory'
+  | 'skills'
   | 'conversations'
   | 'language';
 
@@ -21,6 +22,7 @@ export type SettingsSummary =
   | {section: 'agent-accounts'; count: number}
   /** `enabled` is null while the switch is unread, and `count` is null while Memory is off. */
   | {section: 'memory'; enabled: boolean | null; count: number | null}
+  | {section: 'skills'; enabled: number; total: number}
   | {section: 'conversations'; count: number}
   | {section: 'language'; preference: LanguagePreference};
 

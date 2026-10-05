@@ -9,9 +9,11 @@ import {
   memorySettings,
   mountSettings,
   openSettings,
+  ownerSkills,
   settingsClosed,
   wire,
   wireAccount,
+  wireSkill,
 } from '../testing/settings.ts';
 import type {DlSettingsDialog} from './settings.ts';
 
@@ -24,7 +26,7 @@ afterEach(() => {
   document.body.className = '';
 });
 
-/** The reads a fully populated Settings makes: two Connections, three accounts, five memories. */
+/** The reads a fully populated Settings makes: two Connections, three accounts, five memories, two Skills. */
 function populated(): ReturnType<typeof wire> {
   return wire({
     'GET /web/api/connections/mcp': () => Response.json({
@@ -42,6 +44,7 @@ function populated(): ReturnType<typeof wire> {
     ])),
     'GET /web/api/memory/settings': () => memorySettings(true, 5),
     'GET /web/api/memory': () => memoryPage([{id: 'one', body: 'Use concise answers'}]),
+    'GET /web/api/skills/mine': () => ownerSkills([wireSkill('csv-report'), wireSkill('old-style-guide', {enabled: false})]),
   });
 }
 
@@ -77,6 +80,10 @@ const PAGES = [
   {
     section: 'memory', name: 'Profile Memory', status: '5', detail: 'On · 5 stored',
     description: 'Preferences and facts the agent remembers about you across conversations.',
+  },
+  {
+    section: 'skills', name: 'Skills', status: '1/2', detail: '1 of 2 on',
+    description: 'Instructions the agent can load when they fit the task. Turn one off to keep it without the agent using it; delete removes it for good.',
   },
   {
     section: 'conversations', name: 'Conversation Sessions', status: '0', detail: '0 conversations · kept 365 days',
@@ -116,7 +123,7 @@ it('opens a modal named Settings on Connections, with three labelled groups of p
     pages: [...group.querySelectorAll('.dl-nav-item')].map(nameOf),
   }));
   expect(groups).to.deep.equal([
-    {name: 'Agent', pages: ['Connections', 'Agent Accounts', 'Profile Memory']},
+    {name: 'Agent', pages: ['Connections', 'Agent Accounts', 'Profile Memory', 'Skills']},
     {name: 'Data', pages: ['Conversation Sessions']},
     {name: 'General', pages: ['Language']},
   ]);
@@ -230,6 +237,7 @@ it('opens at once, whatever any page is still waiting for', async () => {
     'GET /web/api/connections/mcp': () => never,
     'GET /web/api/agent-accounts': () => never,
     'GET /web/api/memory/settings': () => never,
+    'GET /web/api/skills/mine': () => never,
   }).fetch;
   const {settings} = mountSettings();
   const dialog = await openSettings(settings);
@@ -241,6 +249,7 @@ it('opens at once, whatever any page is still waiting for', async () => {
   expect(settings.textContent).to.contain('Loading Connections');
   expect(settings.textContent).to.contain('Loading agent accounts');
   expect(settings.textContent).to.contain('Loading memory settings');
+  expect(settings.textContent).to.contain('Loading skills');
   expect(settings.querySelector('#memory-enabled-toggle')).to.equal(null);
 });
 

@@ -1,0 +1,118 @@
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
+
+/* Settings → Skills: one row per Skill, a name with its switch above the two actions, and the
+ * Skill's SKILL.md under them while it shows. The card, its hairlines, the label and caption
+ * colours, the note, and the empty state are the shared page styles. */
+
+@layer features {
+  .skill {
+    display: grid;
+    gap: var(--space-inline);
+    padding: var(--space-tight) var(--space-component);
+  }
+
+  /* The switch reaches out to the control ladder's hit target, so the row it sits in is at least that
+   * tall: a short Skill would otherwise let the switch's reach cover the top of the buttons below. */
+  .main {
+    align-items: center;
+    display: flex;
+    gap: var(--space-component);
+    min-height: var(--control-hit-target);
+  }
+
+  .text {
+    display: grid;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .heading {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-inline) var(--space-tight);
+  }
+
+  /* A Skill's name is an identifier the agent and the `/skill:` completion use, so it reads as one. */
+  .name {
+    font-family: SFMono-Regular, Consolas, monospace;
+  }
+
+  /* Off is said in words as well as by the switch and the quieter name. */
+  .state {
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-pill);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    padding-inline: var(--space-tight);
+    white-space: nowrap;
+  }
+
+  /* Two lines of the description; View shows the whole of it with the file it came from. */
+  .description {
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    display: -webkit-box;
+    margin: 0;
+    overflow: hidden;
+  }
+
+  .description.whole {
+    -webkit-line-clamp: none;
+    display: block;
+  }
+
+  .actions {
+    align-items: center;
+    display: flex;
+    gap: var(--space-tight);
+    justify-content: space-between;
+  }
+
+  .view {
+    align-items: center;
+    display: inline-flex;
+    gap: var(--space-inline);
+  }
+
+  .chevron {
+    display: flex;
+    flex-shrink: 0;
+    transition: transform var(--duration-control) var(--easing-standard);
+  }
+
+  .view[aria-expanded='true'] .chevron {
+    transform: rotate(90deg);
+  }
+
+  /* The file as it is stored: its own line breaks stay, a long line wraps instead of scrolling
+   * sideways, and a long file scrolls in its box, which a keyboard reaches. */
+  .document {
+    background: var(--color-bg-subtle);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-control);
+    box-sizing: border-box;
+    color: var(--color-text-primary);
+    font-family: SFMono-Regular, Consolas, monospace;
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    margin: 0;
+    max-block-size: 20rem;
+    overflow: auto;
+    overflow-wrap: anywhere;
+    padding: var(--space-tight) var(--space-component);
+    white-space: pre-wrap;
+  }
+
+  .document:focus-visible {
+    outline: 2px solid var(--color-control-ring);
+    outline-offset: 2px;
+  }
+
+  @media (width <= 720px), (height <= 480px) {
+    .skill {
+      padding-block: var(--space-component);
+    }
+  }
+}

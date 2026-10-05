@@ -78,8 +78,59 @@ def _install_memory_routes(
     page.route("**/web/api/memory**", memory)
 
 
+_LONG_DESCRIPTION = (
+    "Summarise a CSV file into a short report: the columns it found, the rows it skipped, and a "
+    "sentence for every column that looks like a date, an amount, or an identifier, with the "
+    "caveats a reader needs before trusting a figure taken from it."
+)
+_MORE_LINES = "Another line of the file.\n" * 40
+_LONG_LINE = "https://example.test/a-long-line-without-any-break/" + "x" * 120
+_SKILL_DOCUMENT = (
+    "---\nname: csv-report\ndescription: Summarise a CSV file into a short report.\n---\n\n"
+    "# CSV report\n\nUse this when the user hands you a CSV file, and never guess a column's "
+    f"meaning from its position alone: read the header, count the rows, and say what was skipped.\n{_LONG_LINE}\n"
+    f"{_MORE_LINES}"
+)
+
+
+def _skill(name: str, description: str, *, enabled: bool = True) -> dict[str, Any]:
+    return {"name": name, "description": description, "enabled": enabled}
+
+
+def _install_skills_routes(
+    page: Page,
+    skills: list[dict[str, Any]],
+    documents: dict[str, str] | None = None,
+) -> list[tuple[str, str]]:
+    """The owner's Skills answered from ``skills`` and each SKILL.md from ``documents``.
+
+    Returns what the page asked of the routes, as (method, path), in order.
+    """
+    asked: list[tuple[str, str]] = []
+
+    def handle(route: Route) -> None:
+        request = route.request
+        path = urlparse(request.url).path
+        asked.append((request.method, path))
+        if request.method == "GET" and path == "/web/api/skills/mine":
+            route.fulfill(json={"skills": skills, "limit": 20})
+        elif request.method == "GET" and path.endswith("/document"):
+            route.fulfill(
+                body=(documents or {})[path.rsplit("/", 2)[1]],
+                content_type="text/plain; charset=utf-8",
+            )
+        else:
+            route.abort()
+
+    page.route("**/web/api/skills/mine**", handle)
+    return asked
+
+
 def _install_busy_settings_routes(page: Page) -> None:
-    """Connections with presets and one that is failing, and Profile Memory on with a next page."""
+    """Connections with presets and one failing, Profile Memory on with a next page, and three Skills.
+
+    One Skill is off, and one has a description too long for the two lines a row gives it.
+    """
 
     def connections(route: Route) -> None:
         def connection(
@@ -131,6 +182,15 @@ def _install_busy_settings_routes(page: Page) -> None:
         page,
         ["Use concise answers", "Works on the ingestion service"],
         next_cursor="more",
+    )
+    _install_skills_routes(
+        page,
+        [
+            _skill("csv-report", _LONG_DESCRIPTION),
+            _skill("pdf-extract", "Pull the text and tables out of a PDF."),
+            _skill("old-style-guide", "House style from last year.", enabled=False),
+        ],
+        {"csv-report": _SKILL_DOCUMENT},
     )
 
 
@@ -250,7 +310,8 @@ def _walk_settings(page: Page, settings: Locator, check: Callable[[str], None]) 
 
     On a phone a page is reached from the section list and left by Back; beside a pointer the
     navigation is always in view. The states are the cards of Connections with one open on each
-    authentication, the form that adds one, a Memory list with a next page, and the other pages.
+    authentication, the form that adds one, a Memory list with a next page, Skills with one's
+    SKILL.md open, and the other pages.
     """
     phone = (page.viewport_size or {"width": 0})["width"] <= 720
     navigation = settings.get_by_role("navigation", name="Settings")
@@ -298,6 +359,15 @@ def _walk_settings(page: Page, settings: Locator, check: Callable[[str], None]) 
     memory = visit("Profile Memory")
     expect(memory.get_by_role("button", name="Load more")).to_be_visible()
     check("Profile Memory")
+    leave()
+
+    skills = visit("Skills")
+    expect(skills.get_by_role("switch")).to_have_count(3)
+    expect(skills.get_by_text("Disabled", exact=True)).to_have_count(1)
+    check("Skills")
+    skills.get_by_role("button", name="View csv-report").click()
+    expect(skills.get_by_role("region", name="SKILL.md of csv-report")).to_be_visible()
+    check("Skills with a SKILL.md open")
     leave()
 
     visit("Conversation Sessions")
@@ -445,6 +515,47 @@ def test_profile_memory_shows_the_whole_text_of_a_memory(page: Page) -> None:
     assert shape["clipped"] is False
     # More than the two lines of the old clamp, whatever the fonts make of the wrapped paragraph.
     assert shape["lines"] > 2.5
+
+
+@pytest.mark.e2e
+def test_a_skill_description_is_two_lines_until_view_shows_the_whole_of_it(page: Page) -> None:
+    _install_conversation_routes(page)
+    asked = _install_skills_routes(
+        page,
+        [_skill("csv-report", _LONG_DESCRIPTION), _skill("pdf-extract", "Short.")],
+        {"csv-report": _SKILL_DOCUMENT},
+    )
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto("/web/")
+    page.locator("[aria-current='page']").wait_for()
+
+    settings = _open_settings_page(page, "Skills")
+    region = settings.get_by_role("region", name="Skills")
+    expect(region.get_by_text("2 of 20 skills")).to_be_visible()
+    description = region.get_by_text(_LONG_DESCRIPTION, exact=True)
+    lines = """element => element.getBoundingClientRect().height
+        / Number.parseFloat(getComputedStyle(element).lineHeight)"""
+    assert description.evaluate(lines) == pytest.approx(2, abs=0.1)
+    assert description.evaluate("element => element.scrollHeight > element.clientHeight") is True
+
+    # View gives the description its whole height, and brings the file under it as plain text,
+    # wrapped to the page rather than scrolled sideways.
+    region.get_by_role("button", name="View csv-report").click()
+    document = region.get_by_role("region", name="SKILL.md of csv-report")
+    expect(document).to_have_text(_SKILL_DOCUMENT)
+    assert description.evaluate(lines) > 2.5
+    assert description.evaluate("element => element.scrollHeight <= element.clientHeight") is True
+    assert document.evaluate("element => element.scrollWidth <= element.clientWidth") is True
+    # A long file scrolls in its own box instead of stretching the page, and a keyboard reaches it.
+    assert document.evaluate("element => element.scrollHeight > element.clientHeight") is True
+    document.focus()
+    expect(document).to_be_focused()
+
+    region.get_by_role("button", name="View csv-report").click()
+    expect(document).to_have_count(0)
+    region.get_by_role("button", name="View csv-report").click()
+    expect(document).to_be_visible()
+    assert asked.count(("GET", "/web/api/skills/mine/csv-report/document")) == 1
 
 
 @pytest.mark.e2e
