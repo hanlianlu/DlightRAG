@@ -18,6 +18,12 @@ from dlightrag.adapters.observability.langfuse import (
     trace_attributes,
     trace_sensitive_enabled,
 )
+from dlightrag.engine.ai.providers.base import (
+    provider_cache_hit_tokens,
+    provider_input_tokens,
+    provider_output_tokens,
+    provider_total_tokens,
+)
 from dlightrag.engine.ai.telemetry import SPAN_TYPES, Observation, SpanName, SpanType
 
 logger = logging.getLogger(__name__)
@@ -84,45 +90,32 @@ class LangfuseTelemetry:
         )
 
 
-_USAGE_INPUT_KEYS = ("prompt_tokens", "input_tokens")
-_USAGE_OUTPUT_KEYS = ("completion_tokens", "output_tokens")
-_USAGE_TOTAL_KEYS = ("total_tokens",)
-_USAGE_CACHED_INPUT_KEYS = (
-    "prompt_tokens_details.cached_tokens",
-    "prompt_cache_hit_tokens",
-    "cache_read_input_tokens",
-    "cached_content_tokens",
-)
-
-
 def _langfuse_usage_details(raw: Mapping[str, Any]) -> dict[str, int]:
-    def _first(keys: tuple[str, ...]) -> int | None:
-        for key in keys:
-            value = raw.get(key)
-            if isinstance(value, int) and not isinstance(value, bool):
-                return value
-        return None
+    """Map one provider's counters onto Langfuse's mutually exclusive usage keys.
 
-    inp = _first(_USAGE_INPUT_KEYS)
-    out = _first(_USAGE_OUTPUT_KEYS)
-    total = _first(_USAGE_TOTAL_KEYS)
-    cached = _first(_USAGE_CACHED_INPUT_KEYS)
-    if total is None and (inp is not None or out is not None):
-        total = (inp or 0) + (out or 0)
+    Langfuse prices every key on its own and takes ``total`` as their sum, so a token
+    sits in exactly one key: ``input`` is the prompt without the tokens a prefix cache
+    served, and those are ``input_cached_tokens``. Which counter holds what, in each
+    provider dialect, is the provider helpers' knowledge alone.
+    """
+    prompt = provider_input_tokens(raw)
+    cached = provider_cache_hit_tokens(raw) or 0
+    output = provider_output_tokens(raw)
 
     details: dict[str, int] = {}
-    if inp is not None:
-        details["input"] = inp
-    if out is not None:
-        details["output"] = out
-    if total is not None:
-        details["total"] = total
+    if prompt is not None:
+        details["input"] = prompt - cached
     if cached:
         details["input_cached_tokens"] = cached
-    if not details:
+    if output is not None:
+        details["output"] = output
+    total = provider_total_tokens(raw)
+    if not details and total is None:
         # An unknown provider dialect must not put arbitrary keys on the span:
-        # Langfuse derives cost only from input/output/total.
+        # Langfuse derives cost only from the keys it has prices for.
         logger.debug("No recognized usage keys in provider usage payload")
+        return details
+    details["total"] = sum(details.values()) if total is None else total
     return details
 
 

@@ -236,7 +236,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         profile_for_role=lambda role: model_profile_for_role(config, role),
         model_settings_for_role=lambda role: model_settings_for_role(config, role),
         rerank_model_settings=lambda: rerank_scoring_model_settings(config),
-        image_capabilities=ModelImageCapabilities(scheduler=scheduler, telemetry=telemetry),
+        image_capabilities=ModelImageCapabilities(scheduler=scheduler),
         on_answer_capability=health.set_answer_image_capability,
     )
 

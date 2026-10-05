@@ -1116,7 +1116,6 @@ class ObservabilitySettings(FrozenSettings):
     langfuse_public_key: str | None = None
     langfuse_secret_key: str | None = Field(default=None, repr=False)
     langfuse_host: ServiceUrl = "https://cloud.langfuse.com"
-    langfuse_export_external_spans: bool = False
     langfuse_trace_sensitive_data: bool = True
     langfuse_environment: str | None = Field(
         default=None,

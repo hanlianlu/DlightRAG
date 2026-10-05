@@ -188,11 +188,21 @@ class MultimodalEmbedder:
         return await self._embed_inputs(inputs, context="query", modality="image")
 
     async def probe_image_embedding(self) -> None:
-        """Probe both image-query and native fused-document capabilities."""
+        """Probe both image-query and native fused-document capabilities.
+
+        A capability check is not a unit of work: it sends the requests an image query
+        and a fused document send, and opens no observation.
+        """
+        self._ensure_image_support()
         image = Image.new("RGB", (1, 1), "white")
         try:
-            await self.embed_query_images([image])
-            await self.embed_index_fused([("DlightRAG fusion probe", image)])
+            probes: list[tuple[EmbeddingInput, EmbeddingContext]] = [
+                (ImageEmbeddingInput(data_uri=bounded_embedding_image_data_uri(image)), "query"),
+                (self._fused_input("DlightRAG fusion probe", image), "document"),
+            ]
+            for probe, context in probes:
+                requests = await asyncio.to_thread(self._plan_requests, [probe], context=context)
+                await self._run_requests(requests, expected_count=1)
         finally:
             image.close()
 
@@ -282,36 +292,55 @@ class MultimodalEmbedder:
             model=self.fingerprint.model,
         ) as observation:
             try:
-                raw_outcomes = await asyncio.gather(
-                    *(
-                        self._scheduler.run(lambda request=request: self._execute_request(request))
-                        for request in requests
-                    ),
-                    return_exceptions=True,
-                )
-                outcomes: list[_EmbeddingOutcome] = []
-                for outcome in raw_outcomes:
-                    if isinstance(outcome, BaseException):
-                        raise outcome
-                    outcomes.append(outcome)
-                vectors = [vector for outcome in outcomes for vector in outcome.vectors]
-                self._validate_vectors(vectors, expected_count=expected_count)
+                outcome = await self._run_requests(requests, expected_count=expected_count)
             except Exception as exc:
                 observation.update(
                     level="ERROR",
                     status_message=telemetry_error_message(self._telemetry, exc),
                 )
                 raise
-            usage = _merge_usage(outcome.usage for outcome in outcomes)
+            billed = outcome.usage.get("total_tokens")
             observation.update(
                 output={
-                    "embedding_count": len(vectors),
+                    "embedding_count": len(outcome.vectors),
                     "request_count": len(requests),
-                    "retry_count": sum(outcome.retries for outcome in outcomes),
-                    "usage": usage,
-                }
+                    "retry_count": outcome.retries,
+                    "usage": outcome.usage,
+                },
+                # An embedding bills its input alone; Voyage states that as
+                # ``total_tokens``, and a wire that states no such counter reports no usage.
+                usage_details=(
+                    None if billed is None else {"prompt_tokens": billed, "total_tokens": billed}
+                ),
             )
-            return vectors
+            return outcome.vectors
+
+    async def _run_requests(
+        self,
+        requests: list[_EmbeddingRequest],
+        *,
+        expected_count: int,
+    ) -> _EmbeddingOutcome:
+        """Run every request to completion and return their validated, merged outcome."""
+        raw_outcomes = await asyncio.gather(
+            *(
+                self._scheduler.run(lambda request=request: self._execute_request(request))
+                for request in requests
+            ),
+            return_exceptions=True,
+        )
+        outcomes: list[_EmbeddingOutcome] = []
+        for outcome in raw_outcomes:
+            if isinstance(outcome, BaseException):
+                raise outcome
+            outcomes.append(outcome)
+        vectors = [vector for outcome in outcomes for vector in outcome.vectors]
+        self._validate_vectors(vectors, expected_count=expected_count)
+        return _EmbeddingOutcome(
+            vectors=vectors,
+            retries=sum(outcome.retries for outcome in outcomes),
+            usage=_merge_usage(outcome.usage for outcome in outcomes),
+        )
 
     async def _execute_request(self, request: _EmbeddingRequest) -> _EmbeddingOutcome:
         data, retries = await self._post(request.payload)

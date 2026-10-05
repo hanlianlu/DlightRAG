@@ -4,7 +4,9 @@ DlightRAG's traces are a product surface: they are how a Run is reviewed, how
 cost is attributed, and what evaluators and dashboards target. This document is
 the contract. It is enforced by `tests/unit/test_observability.py`, which fails
 when a name leaves the vocabulary, when a name is unused, when a name carries a
-dynamic value, or when core code restates an observation type.
+dynamic value, or when core code restates an observation type, and by
+`tests/unit/test_observability_wire.py`, which reads what a real Langfuse client
+exports: a trace's roots, its attribution, and its usage keys.
 
 ## One unit of work, one trace
 
@@ -15,7 +17,6 @@ A trace is one self-contained unit of work. The root observation is opened
 | --- | --- | --- |
 | Answer Run (Fast or Research, root or Child) | `run-answer` (`agent`) | the claimed Run's executor, inside the worker that owns the lease; a Child Run is driven inside its parent's trace and opens no second root |
 | Document ingestion | `ingest-documents` (`chain`) | the ingestion engine for the accepted document batch |
-| Startup ingestion recovery | `recover-ingestion` (`chain`) | the workspace RAG startup path |
 | Retrieval Run | `run-retrieval` (`chain`) | the claimed Run's retrieval executor, inside the worker that owns the lease |
 
 Everything the unit of work orchestrates nests inside its root: agent Turns,
@@ -23,11 +24,17 @@ Tool calls, provider calls, embeddings, reranks, and retrieval. A Run that
 executes in a background worker therefore produces one trace, and none of its
 own calls can surface as a root: the root span is open for the whole operation,
 so the OTel context carries it into every nested task and thread it starts.
-Work a library detaches from that context is the one exception, described
+Work a library performs outside any root is the one exception, described
 below. A Corpus Mutation Run that ingests is traced by its `ingest-documents`
 batch. One that only deletes or resets opens no observation of its own; when a
 delete makes LightRAG rebuild entities and relations that other documents share,
-those model calls surface as detached traces.
+those model calls can surface as traces of their own.
+
+Capability checks are not a unit of work. The probes a process runs at start
+(whether the chat model accepts images, whether the embedding endpoint accepts an
+image query and a fused document), the same image probe when a published model
+catalogue makes it run again, and the sweep that resumes interrupted ingestion open
+no observation, so starting a container adds nothing to the trace list.
 
 Traces are grouped by **Agent Session** (`session_id`) and **owner**
 (`user_id`). A conversation is a session; each of its Runs is its own trace,
@@ -35,16 +42,32 @@ which keeps traces small and makes the session view a replay. Attribution is
 applied once, at the Run boundary, through `Telemetry.trace(...)`; no call site
 threads ids, and no observation restates them.
 
-### Known boundary: work a library detaches
+### Known boundary: model work outside any root
 
-A provider call made from a library's own executor — LightRAG's ingestion and
-extraction workers, which do not propagate the trace context into their tasks —
-carries no ambient parent observation and therefore surfaces as its own trace.
-Startup recovery embeddings behave the same way. `ingest-documents` still
-records the accepted batch, but ingestion's per-chunk cost appears as separate
-`embed-text` and `generate-completion` traces rather than as children of the
-batch. Only the library running its callbacks inside the caller's context would
-close this boundary.
+Ingestion nests. The `ingest-documents` trace of release 2.0.40 (2026-10-03) holds
+all 3,057 of its observations in one tree, the batch root with 421 embeddings and
+2,635 completions beneath it, and no orphan completion or embedding root has
+appeared since. Release 2.0.23 did detach them (86 image-embedding roots on
+2026-09-30); that boundary has closed.
+
+What can still surface as a trace of its own is model work LightRAG performs
+outside any root: the entity and relation rebuild after a delete that other
+documents share, and whatever the startup sweep finds to resume. Those calls have
+no ambient parent, and they are exported rather than dropped, because each is real
+spend a reviewer would otherwise never see. Neither has occurred in the measured
+data, so this is what can happen, not what has.
+
+Langfuse owns an isolated OpenTelemetry TracerProvider, never the process-global
+one ([ADR 0036](adr/0036-traces-hold-only-product-work-and-usage-counts-each-token-once.md)).
+The spans other libraries open (FastAPI's request span, the MCP SDK's, HTTP
+clients, database drivers) are therefore neither exported nor ancestors of an
+observation, and every observation DlightRAG opens is a child of one DlightRAG
+opened or a root. The root is opened in the worker that owns the work, not in the
+request that admitted it, so a request's own headers do not reach it. Sharing the
+global provider is what once produced traces
+with no root and no name: a framework span became the recording parent of an
+observation, and it was filtered out of the export, leaving the observation a
+child of a span Langfuse never received.
 
 ## The span vocabulary
 
@@ -67,8 +90,6 @@ requires a new registry entry, not a new string.
 | `plan-retrieval` | `chain` | One query plan | `workspaces`, `history_messages` |
 | `highlight-sources` | `chain` | One semantic-highlight enrichment | `source_count`, `text_chunk_count` |
 | `ingest-documents` | `chain` | One accepted document batch | `document_count`, `doc_ids` |
-| `recover-ingestion` | `chain` | Startup promotion of interrupted ingestion | `trigger` |
-| `probe-image-capability` | `generation` | One image-capability probe against a provider | `provider` |
 
 **Rules**
 
@@ -92,8 +113,20 @@ requires a new registry entry, not a new string.
   user's question and its output is the answer (or the terminal outcome for a
   deferred or failed Run). Raw payloads belong in `metadata`.
 - **Model, usage, and cost ride on the observation.** `model` is passed to the
-  adapter, which maps each provider dialect's usage fields onto Langfuse's
-  `input`/`output`/`total`/`input_cached_tokens`. Cost is never computed here.
+  adapter, which maps each provider dialect's usage counters onto Langfuse's usage
+  keys. Langfuse prices every key on its own and takes `total` as their sum, so the
+  keys are mutually exclusive buckets and a token is counted in exactly one:
+  `input` is the prompt without the tokens the provider's prefix cache served,
+  `input_cached_tokens` is that cache hit (omitted when zero), `output` is the
+  completion with its reasoning, and `total` is the total the provider states or,
+  when it states none, the sum of those keys. OpenAI, DeepSeek, Gemini and the
+  Responses wire count a cache hit inside the prompt; Anthropic counts cache reads
+  and writes beside `input_tokens`, not inside it. Either way `input` ends as the
+  prompt minus the reads, so Anthropic's cache writes stay inside `input`. The
+  dialect arithmetic lives once, in the provider helpers of
+  `engine/ai/providers/base.py`. A dialect the adapter does not recognise
+  contributes no usage keys. An embedding observation reports the provider's
+  billable `total_tokens` as `input` and `total`. Cost is never computed here.
 
 ## Redaction
 
@@ -121,9 +154,23 @@ user-authored is even shaped while capture is off:
   name is replaced except a flag, and a count under a name that merely contains
   `token` (such as `max_tokens`); inline image bytes are removed from message
   telemetry before it leaves the process.
-- Only DlightRAG's own observations are exported
-  (`langfuse_export_external_spans` is off by default), so HTTP client and
-  database spans do not pollute the tree.
+- Only DlightRAG's own observations are exported: Langfuse runs on a tracer
+  provider of its own, so no span another library opens in this process reaches it,
+  and the HTTP client and database spans of those libraries cannot pollute the
+  tree. Every payload Langfuse receives has therefore passed the masking above.
+
+## Cost
+
+DlightRAG reports usage and never computes cost. Langfuse infers it from a Model
+definition in the project: the definition's match pattern is tested against the
+observation's `model` attribute, which is the DlightRAG model alias (such as
+`deepseek-flash` or `voyage-multimodal-3.5`), and its prices are keyed by the usage
+keys above (`input`, `output`, `input_cached_tokens`). A charge a provider reports
+itself (OpenRouter's `usage.include`, in [Operations](operations.md#cost-and-recovery))
+is passed through as `cost_details`, and Langfuse prefers an ingested cost to an
+inferred one. Until the project has a definition that matches an alias, that
+alias's cost shows 0. The prices are the operator's to enter; the repository holds
+none.
 
 ## Deployment
 

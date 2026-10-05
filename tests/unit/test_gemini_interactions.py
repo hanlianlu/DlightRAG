@@ -738,11 +738,13 @@ async def test_usage_counts_thinking_as_output_and_keeps_cache_hits() -> None:
     assert turn.usage_details == _COUNTERS
     assert provider_input_tokens(turn.usage_details) == 62
     assert provider_cache_hit_tokens(turn.usage_details) == 40
+    # Gemini counts its 40 cached tokens inside the 62 of the prompt, so Langfuse's input
+    # is the other 22 and the three buckets still sum to the stated total.
     assert _langfuse_usage_details(_COUNTERS) == {
-        "input": 62,
+        "input": 22,
+        "input_cached_tokens": 40,
         "output": 468,
         "total": 530,
-        "input_cached_tokens": 40,
     }
 
 

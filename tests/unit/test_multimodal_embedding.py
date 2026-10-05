@@ -15,6 +15,7 @@ import pytest
 from lightrag.utils import TiktokenTokenizer
 from PIL import Image
 
+from dlightrag.adapters.observability import LangfuseTelemetry
 from dlightrag.engine.ai import embedding
 from dlightrag.engine.ai.contracts import InputModality, ResolvedInputModality
 from dlightrag.engine.ai.embedding import MultimodalEmbedder as _MultimodalEmbedder
@@ -35,6 +36,7 @@ from dlightrag.engine.ai.providers.embed_providers import (
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from tests.support.loopback import bypass_proxies, loopback_server, reset_on_accept
+from tests.unit.conftest import LangfuseExport
 
 
 @pytest.fixture(autouse=True)
@@ -574,24 +576,48 @@ async def test_image_payload_preparation_runs_off_event_loop(monkeypatch) -> Non
     assert all(thread_id != loop_thread for thread_id in preparation_threads)
 
 
-async def test_probe_checks_image_query_and_fused_document() -> None:
+async def test_the_startup_probe_sends_both_image_requests_and_opens_no_trace(
+    langfuse_export: LangfuseExport,
+) -> None:
+    """A capability check is not a unit of work; the embedding it guards still is."""
     embedder = MultimodalEmbedder(
         model="voyage-multimodal-3.5",
         base_url="https://api.voyageai.com/v1",
         api_key="key",
         dim=3,
         provider=VoyageEmbedProvider(),
+        telemetry=LangfuseTelemetry(),
     )
-    embedder.embed_query_images = AsyncMock(return_value=[[0.1, 0.2, 0.3]])  # type: ignore[method-assign]
-    embedder.embed_index_fused = AsyncMock(return_value=[[0.1, 0.2, 0.3]])  # type: ignore[method-assign]
+    embedder._client.post = AsyncMock(  # pyright: ignore[reportPrivateUsage]
+        return_value=_response(
+            200, {"data": [{"embedding": [0.1, 0.2, 0.3]}], "usage": {"total_tokens": 7}}
+        )
+    )
     try:
         await embedder.probe_image_embedding()
+        traced_by_the_probe = langfuse_export.spans()
+        await embedder.embed_texts(["hello"])
     finally:
         await embedder.aclose()
 
-    embedder.embed_query_images.assert_awaited_once()  # type: ignore[attr-defined]
-    embedder.embed_index_fused.assert_awaited_once()  # type: ignore[attr-defined]
-    assert embedder.embed_index_fused.await_args.args[0][0][0] == "DlightRAG fusion probe"  # type: ignore[attr-defined]
+    query, fused, _ = (
+        call.kwargs["json"]
+        for call in embedder._client.post.await_args_list  # pyright: ignore[reportPrivateUsage]
+    )
+    assert [[part["type"] for part in item["content"]] for item in query["inputs"]] == [
+        ["image_base64"]
+    ]
+    assert query["input_type"] == "query"
+    assert [[part["type"] for part in item["content"]] for item in fused["inputs"]] == [
+        ["text", "image_base64"]
+    ]
+    assert fused["inputs"][0]["content"][0]["text"] == "DlightRAG fusion probe"
+    assert fused["input_type"] == "document"
+
+    assert traced_by_the_probe == ()
+    (span,) = langfuse_export.spans()
+    assert span.name == "embed-text"
+    assert langfuse_export.usage(span) == {"input": 7, "total": 7}
 
 
 def _record_retry_delays(monkeypatch: pytest.MonkeyPatch) -> list[float]:

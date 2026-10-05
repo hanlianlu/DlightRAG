@@ -615,8 +615,10 @@ not loaded.
 ### Cost And Recovery
 
 DlightRAG always reports tokens. Configure matching model prices in Langfuse to
-compute cost. OpenRouter can instead return charged cost when enabled only on
-its model block:
+compute cost: a Model definition whose match pattern fits the model alias (such as
+`deepseek-flash`), with prices for `input`, `output`, and `input_cached_tokens`
+([Observability](observability.md#cost)). OpenRouter can instead return charged
+cost when enabled only on its model block:
 
 ```yaml
 models:

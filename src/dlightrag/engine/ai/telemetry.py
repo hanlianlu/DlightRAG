@@ -7,7 +7,8 @@ verb-first, and never carry a model id, workspace, run, or other dynamic
 value: those belong in ``model``, ``metadata``, or attribution. One unit of
 work owns exactly one root observation, and everything it does nests inside
 it: :meth:`Telemetry.trace` attributes a trace (conversation session and user)
-for every observation opened in its scope, so no call site threads ids.
+for every observation opened in its scope, so no call site threads ids. Startup
+capability probes and sweeps are not units of work and open no observation.
 """
 
 from collections.abc import AsyncIterator, Mapping
@@ -31,8 +32,6 @@ type SpanName = Literal[
     "highlight-sources",
     "ingest-documents",
     "plan-retrieval",
-    "probe-image-capability",
-    "recover-ingestion",
     "rerank-passages",
     "retrieve-context",
     "run-answer",
@@ -61,8 +60,6 @@ SPAN_TYPES: Final[Mapping[SpanName, SpanType]] = MappingProxyType(
         "highlight-sources": "chain",
         "ingest-documents": "chain",
         "plan-retrieval": "chain",
-        "probe-image-capability": "generation",
-        "recover-ingestion": "chain",
         "rerank-passages": "span",
         "retrieve-context": "retriever",
         "run-answer": "agent",

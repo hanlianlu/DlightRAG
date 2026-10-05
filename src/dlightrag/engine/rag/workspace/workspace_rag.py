@@ -565,14 +565,15 @@ class WorkspaceRag:
             self._pipeline_recovery_task = asyncio.create_task(self._resume_lightrag_pipeline())
 
     async def _resume_lightrag_pipeline(self) -> None:
-        """Run LightRAG's native sweep for pending and interrupted documents."""
+        """Run LightRAG's native sweep for pending and interrupted documents.
+
+        A safety net that has nothing to resume on almost every start, so it is not a
+        unit of work and opens no observation. Model calls it does make have no root to
+        nest under and surface as their own traces.
+        """
         try:
             async with self.backend.coordination.pipeline_recovery():
-                async with self.telemetry.observe(
-                    "recover-ingestion",
-                    metadata={"trigger": "startup_recovery"},
-                ):
-                    await self._lightrag.apipeline_process_enqueue_documents()
+                await self._lightrag.apipeline_process_enqueue_documents()
                 logger.info("LightRAG startup pipeline recovery complete")
         except Exception:
             logger.warning("LightRAG startup pipeline recovery failed", exc_info=True)

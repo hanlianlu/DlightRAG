@@ -94,7 +94,7 @@ def bootstrap(
     """Sync local Langfuse headless init keys into DlightRAG's .env.
 
     Only the secret key pair is written to DlightRAG's ``.env``. Non-secret SDK
-    behavior (``langfuse_host``, ``langfuse_export_external_spans``, ...) belongs
+    behavior (``langfuse_host``, ``langfuse_sample_rate``, ...) belongs
     in ``config.yaml`` and is intentionally not managed here.
     """
     langfuse = read_env(langfuse_env)
