@@ -1,0 +1,213 @@
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
+
+/* The Child agents dock: a toolbar over the list and the child on show. The dock owns the whole
+ * panel (panels.css lifts the generic content padding and scroll), so the list and the child scroll
+ * apart and the child's composer stays docked (ui/inspector-children.ts). */
+
+@layer features {
+  .root {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+  }
+
+  .quiet {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-detail);
+    padding: var(--space-component) var(--space-section);
+  }
+
+  .toolbar {
+    align-items: center;
+    color: var(--color-text-muted);
+    display: flex;
+    flex: none;
+    font-size: var(--font-size-caption);
+    gap: var(--space-tight);
+    min-height: var(--size-button);
+    padding-inline: var(--space-section);
+  }
+
+  .live {
+    color: var(--color-accent-text);
+  }
+
+  .back {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius-control);
+    color: var(--color-text-muted);
+    cursor: pointer;
+    display: inline-flex;
+    font: inherit;
+    font-size: var(--font-size-detail);
+    gap: var(--space-inline);
+    margin-inline-start: calc(-1 * var(--space-tight));
+    min-height: var(--size-button);
+    padding-inline: var(--space-tight);
+  }
+
+  .back:hover {
+    background: var(--color-bg-hover);
+    color: var(--color-text-primary);
+  }
+
+  .back:focus-visible {
+    outline: 2px solid var(--focus-ring-color);
+    outline-offset: 2px;
+  }
+
+  /* ── List and child ── */
+
+  .body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .listPane {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-width: 0;
+    overflow-y: auto;
+    padding: var(--space-inline) var(--space-component) var(--space-related);
+  }
+
+  .detail {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+  }
+
+  /* An author display would otherwise outrank the hidden attribute. */
+  .listPane[hidden],
+  .detail[hidden] {
+    display: none;
+  }
+
+  .wide .listPane {
+    border-inline-end: 1px solid var(--color-divider);
+    flex: 0 0 17rem;
+  }
+
+  .list {
+    display: flex;
+    flex-direction: column;
+    list-style: none;
+  }
+
+  .row {
+    align-items: flex-start;
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius-control);
+    color: inherit;
+    cursor: pointer;
+    display: flex;
+    font: inherit;
+    gap: var(--space-component);
+    min-height: var(--control-hit-target);
+    padding: var(--space-component);
+    text-align: start;
+    transition: background var(--duration-control) var(--easing-standard);
+    width: 100%;
+  }
+
+  .row:hover {
+    background: var(--color-bg-hover);
+  }
+
+  .row[aria-current='true'] {
+    background: var(--color-selected-row);
+  }
+
+  /* The ring sits inside the row: the list pane clips what a ring outside it would draw. */
+  .row:focus-visible {
+    outline: 2px solid var(--focus-ring-color);
+    outline-offset: -2px;
+  }
+
+  .text {
+    display: grid;
+    flex: 1;
+    gap: var(--space-inline);
+    min-width: 0;
+  }
+
+  .objective {
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    color: var(--color-text-secondary);
+    display: -webkit-box;
+    font-size: var(--font-size-detail);
+    line-height: var(--line-height-control);
+    overflow: hidden;
+    overflow-wrap: anywhere;
+  }
+
+  .row[aria-current='true'] .objective {
+    color: var(--color-text-primary);
+  }
+
+  .meta {
+    align-items: center;
+    color: var(--color-text-muted);
+    display: flex;
+    font-size: var(--font-size-caption);
+    gap: var(--space-tight);
+    line-height: var(--line-height-control);
+  }
+
+  .pill {
+    background: var(--color-accent-surface);
+    border-radius: var(--radius-pill);
+    color: var(--color-accent-text);
+    padding-inline: var(--space-tight);
+  }
+
+  .summary {
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 1;
+    color: var(--color-text-muted);
+    display: -webkit-box;
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    overflow: hidden;
+    overflow-wrap: anywhere;
+  }
+
+  .older {
+    display: flex;
+    justify-content: center;
+    padding: var(--space-tight) var(--space-component);
+  }
+
+  /* ── Nothing to list ── */
+
+  .empty {
+    display: grid;
+    gap: var(--space-inline);
+    padding: var(--space-layout) var(--space-section);
+    place-items: center;
+    text-align: center;
+  }
+
+  .emptyTitle {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-detail);
+    font-weight: 500;
+    line-height: var(--line-height-control);
+  }
+
+  .emptyBody {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    max-width: 24rem;
+  }
+}

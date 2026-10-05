@@ -7,6 +7,8 @@ import {COMPACT_SHELL_MEDIA} from '../lib/breakpoints.ts';
 import {focusedElement, raise, tabbables, wrapTabFocus} from '../lib/dom.ts';
 import {LightElement, MediaController} from '../lib/lit-host.ts';
 import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
+import type {ChildrenSource, DlInspectorChildren} from './inspector-children.ts';
+import './inspector-children.ts';
 import type {DlInspectorFiles} from './inspector-files.ts';
 import './inspector-files.ts';
 import type {
@@ -16,7 +18,7 @@ import type {
 import './inspector-sources.ts';
 import './ingest-target.ts';
 
-export type InspectorKind = 'files' | 'sources';
+export type InspectorKind = 'files' | 'sources' | 'children';
 
 export interface InspectorStateDetail {
   open: boolean;
@@ -28,7 +30,7 @@ export interface InspectorOpeningDetail {
   kind: InspectorKind;
 }
 
-/** Sources/Files pane state, accessibility, focus, and content composition. */
+/** Sources/Files/Child agents pane state, accessibility, focus, and content composition. */
 export class DlInspector extends LightElement {
   static properties = {
     handles: {attribute: false},
@@ -36,6 +38,7 @@ export class DlInspector extends LightElement {
     presentation: {state: true},
     sourceHasItems: {state: true},
     sourcesExpanded: {state: true},
+    childrenSource: {state: true},
     shellInert: {state: true},
   };
 
@@ -44,6 +47,7 @@ export class DlInspector extends LightElement {
   declare presentation: AnswerPresentation | null;
   declare sourceHasItems: boolean;
   declare sourcesExpanded: boolean;
+  declare childrenSource: ChildrenSource | null;
   declare shellInert: boolean;
 
   #returnFocus: HTMLElement | null = null;
@@ -58,6 +62,7 @@ export class DlInspector extends LightElement {
     this.presentation = null;
     this.sourceHasItems = false;
     this.sourcesExpanded = false;
+    this.childrenSource = null;
     this.shellInert = false;
   }
 
@@ -114,6 +119,19 @@ export class DlInspector extends LightElement {
     await this.#focusOnCompact();
   }
 
+  /** Open one Run's Child agents. */
+  async openChildren(source: ChildrenSource, returnFocus?: HTMLElement | null): Promise<void> {
+    if (!this.#beginOpen('children', returnFocus)) return;
+    this.childrenSource = source;
+    await this.updateComplete;
+    await this.#focusOnCompact();
+  }
+
+  /** Tell an open Child agents dock that its Run's children may have moved. */
+  refreshChildrenIfFollowing(runId: string): void {
+    this.#children()?.refreshIfFollowing(runId);
+  }
+
   /** Open Files if needed, then upload through the Files content owner. */
   async uploadFiles(
     files: readonly File[],
@@ -138,6 +156,7 @@ export class DlInspector extends LightElement {
     this.presentation = null;
     this.sourceHasItems = false;
     this.sourcesExpanded = false;
+    this.childrenSource = null;
     this.#syncHostState();
     this.#publishState();
     const panel = this.querySelector<HTMLElement>('#panel');
@@ -157,9 +176,9 @@ export class DlInspector extends LightElement {
     }
   }
 
-  /** Close conversation-scoped Sources while preserving workspace Files. */
+  /** Close conversation-scoped Sources and Child agents while preserving workspace Files. */
   closeConversationContent(): void {
-    if (this.kind !== 'sources') return;
+    if (this.kind !== 'sources' && this.kind !== 'children') return;
     this.close(false);
     this.#returnFocus = null;
   }
@@ -169,6 +188,7 @@ export class DlInspector extends LightElement {
     const compact = this.#compact.matches;
     const files = this.kind === 'files';
     const sources = this.kind === 'sources';
+    const children = this.kind === 'children';
     return html`
       <aside
         class="panel inspector-surface${open ? ' open' : ''}"
@@ -182,7 +202,7 @@ export class DlInspector extends LightElement {
         @keydown=${this.#panelKeydown}
       >
         <div class="panel-header">
-          <h2 id="panel-title">${files ? msg('Files', {id: 'inspector.files'}) : sources ? msg('Sources', {id: 'inspector.sources'}) : ''}</h2>
+          <h2 id="panel-title">${this.#title()}</h2>
           <button
             class="source-toggle-all"
             id="source-toggle-all-btn"
@@ -207,6 +227,8 @@ export class DlInspector extends LightElement {
             @dl-inspector-sources-state-change=${this.#sourcesStateChanged}
           ></dl-inspector-sources>
           <dl-inspector-files .handles=${this.handles} .active=${files} ?hidden=${!files}></dl-inspector-files>
+          <dl-inspector-children .source=${this.childrenSource} .active=${children}
+            ?hidden=${!children}></dl-inspector-children>
         </div>
       </aside>
       <div class="inspector-backdrop" aria-hidden="true"
@@ -230,12 +252,25 @@ export class DlInspector extends LightElement {
     return true;
   }
 
+  #title(): string {
+    switch (this.kind) {
+      case 'files': return msg('Files', {id: 'inspector.files'});
+      case 'sources': return msg('Sources', {id: 'inspector.sources'});
+      case 'children': return msg('Child agents', {id: 'inspector.childAgents'});
+      default: return '';
+    }
+  }
+
   #sources(): DlInspectorSources | null {
     return this.querySelector<DlInspectorSources>('dl-inspector-sources');
   }
 
   #files(): DlInspectorFiles | null {
     return this.querySelector<DlInspectorFiles>('dl-inspector-files');
+  }
+
+  #children(): DlInspectorChildren | null {
+    return this.querySelector<DlInspectorChildren>('dl-inspector-children');
   }
 
   #toggleAllSources = (): void => {
@@ -290,7 +325,8 @@ export class DlInspector extends LightElement {
   }
 
   #documentKeydown = (event: KeyboardEvent): void => {
-    if (!this.open || event.key !== 'Escape' || event.defaultPrevented) return;
+    // An Escape that cancels an IME composition belongs to the composition, not to the panel.
+    if (!this.open || event.key !== 'Escape' || event.defaultPrevented || event.isComposing) return;
     if (document.querySelector('dialog[open]')) return;
     event.preventDefault();
     this.close();

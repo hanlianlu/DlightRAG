@@ -29,7 +29,6 @@ body.conversation-drawer-open {
 
 :root {
     --layout-chat-sidebar-width: 260px;
-    --layout-chat-min-width: 520px;
     --layout-shell-duration: 180ms;
     --layout-shell-easing: cubic-bezier(0.2, 0, 0, 1);
     --conversation-top-row-height: calc(var(--size-button) + (2 * var(--space-tight)));
