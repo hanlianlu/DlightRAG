@@ -30,6 +30,7 @@ export class DlToastRegion extends LightElement {
   };
 
   declare shellInert: boolean;
+  /** The receipt on screen, or the one fading out: it goes with its fade, so the pill never fades out empty. */
   declare request: ToastRequestDetail | null;
   declare visible: boolean;
   declare pending: boolean;
@@ -50,6 +51,7 @@ export class DlToastRegion extends LightElement {
     this.addEventListener('mouseleave', this.#pointerLeft);
     this.addEventListener('focusin', this.#focusEntered);
     this.addEventListener('focusout', this.#focusLeft);
+    this.addEventListener('transitionend', this.#faded);
   }
 
   override disconnectedCallback(): void {
@@ -101,7 +103,6 @@ export class DlToastRegion extends LightElement {
 
   #hide(): void {
     this.#stopTimer();
-    this.request = null;
     this.visible = false;
     this.pending = false;
     this.#remaining = 0;
@@ -136,6 +137,10 @@ export class DlToastRegion extends LightElement {
       this.#timer = null;
       this.#hide();
     }, this.#remaining);
+  };
+
+  #faded = (event: TransitionEvent): void => {
+    if (event.target === this && event.propertyName === 'opacity' && !this.visible) this.request = null;
   };
 
   #pointerEntered = (): void => {

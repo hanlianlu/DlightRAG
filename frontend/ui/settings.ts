@@ -353,7 +353,7 @@ export class DlSettingsDialog extends LightElement {
     if (this.#dialog()?.open) return;
     // A notice that still offers Undo outlives the dialog: the shell's region takes it over.
     const toast = this.querySelector('dl-toast-region');
-    const notice = toast?.request;
+    const notice = toast?.visible ? toast.request : null;
     // Focus goes back to where Settings was opened from, not to an Undo the reader never reached.
     if (notice?.action && !toast?.pending) {
       requestToast(this, {message: notice.message, action: {...notice.action, focus: false}});

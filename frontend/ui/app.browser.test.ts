@@ -252,8 +252,7 @@ it('pauses an actionable receipt while the Image Lightbox makes the app inert', 
 
   await new Promise((resolve) => originalSetTimeout(resolve, 60));
   await toast.updateComplete;
-  expect(toast.textContent?.trim()).to.equal('');
-  expect(toast.querySelector('button')).to.equal(null);
+  expect(toast.classList.contains('visible')).to.equal(false);
 });
 
 it('keeps Undo available across Settings and a sibling native modal', async () => {

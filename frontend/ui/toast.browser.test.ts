@@ -1,6 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {expect} from '@esm-bundle/chai';
+import {waitFor} from '../testing/dom.ts';
 import type {DlToastRegion} from './toast.ts';
 import './toast.ts';
 
@@ -137,7 +138,7 @@ it('does not resume while hover ends but keyboard focus remains inside', async (
   action.blur();
   await new Promise((resolve) => setTimeout(resolve, 0));
   await toast.updateComplete;
-  expect(toast.textContent?.trim()).to.equal('');
+  expect(toast.classList.contains('visible')).to.equal(false);
 });
 
 it('pauses an actionable receipt while Shell modality makes it unreachable', async () => {
@@ -162,6 +163,27 @@ it('pauses an actionable receipt while Shell modality makes it unreachable', asy
   await toast.updateComplete;
 
   expect(toast.inert).to.equal(true);
-  expect(toast.querySelector('button')).to.equal(null);
+  expect(toast.classList.contains('visible')).to.equal(false);
+});
+
+it('keeps its words through the fade-out and drops them when the fade ends', async () => {
+  const style = document.createElement('style');
+  style.textContent = '.toast { opacity: 0; transition: opacity 120ms; } .toast.visible { opacity: 1; }';
+  document.body.append(style);
+  const toast = mountToast();
+  // The region has been styled in the page long before its first receipt, so its fade-in is a real transition.
+  void getComputedStyle(toast).opacity;
+  window.setTimeout = ((handler: TimerHandler) => originalSetTimeout(handler, 200)) as typeof window.setTimeout;
+
+  toast.show({message: 'Remembered', action: {actionLabel: 'Undo', onAction: async () => {}}});
+  await toast.updateComplete;
+  await waitFor(() => !toast.classList.contains('visible'), 300);
+
+  // The receipt has expired and is fading out: its words are still on it, and nobody can reach them.
+  expect(toast.textContent).to.contain('Remembered');
+  expect(toast.inert).to.equal(true);
+  await new Promise((resolve) => toast.addEventListener('transitionend', resolve, {once: true}));
+  await toast.updateComplete;
   expect(toast.textContent?.trim()).to.equal('');
+  expect(toast.querySelector('button')).to.equal(null);
 });
