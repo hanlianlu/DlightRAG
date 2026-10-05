@@ -18,8 +18,11 @@ import type {ImageOpenDetail} from './image-lightbox.ts';
 import type {DlContinuationDialog} from './run-dialogs.ts';
 import type {DlSettingsDialog} from './settings.ts';
 import type {DlToastRegion, ToastRequestDetail} from './toast.ts';
+import {conversationRoute, newChatRoute} from '../lib/router.ts';
+import {webRouter} from './router.ts';
+import {productionHandles} from '../stores/app-handles.ts';
 import {answerSubmissionRegistry} from '../stores/answer-submission-registry.ts';
-import {waitFor} from '../testing/dom.ts';
+import {buttonNamed, waitFor} from '../testing/dom.ts';
 import {DEFAULT_CHANGES} from '../testing/workspaces.ts';
 
 const bootstrap = {
@@ -116,13 +119,16 @@ beforeEach(() => {
   } as typeof ResizeObserver;
 });
 
-afterEach(() => {
+afterEach(async () => {
   window.fetch = originalFetch;
   window.matchMedia = originalMatchMedia;
   window.setTimeout = originalSetTimeout;
   window.ResizeObserver = OriginalResizeObserver;
   document.body.replaceChildren();
   document.body.className = '';
+  // The page keeps the route and the conversation a test opened; the next app starts on a new chat.
+  productionHandles().conversations.openNew();
+  await webRouter.navigate(newChatRoute(), {replace: true, notify: false, bypassGuard: true});
 });
 
 it('renders the application shell from the typed bootstrap before resolving ready', async () => {
@@ -397,6 +403,131 @@ it('owns Shell message layout while preserving the welcome for an empty conversa
   await chat.querySelector('dl-chat-message-list')?.updateComplete;
   expect(app.querySelector('.app')?.classList.contains('has-messages')).to.equal(false);
   expect(chat.querySelector('.welcome')).not.to.equal(null);
+});
+
+function childRow(id: string): Record<string, unknown> {
+  return {
+    child_session_id: id, status: 'running', objective: `objective ${id}`, model_role: 'query',
+    usage: null, operation_id: `op-${id}`, operation_sequence: 1, operation_status: 'running',
+    cancellation_origin: null, summary: null, result_handles: [], started_at: null,
+    finished_at: null, pending_questions: 0,
+  };
+}
+
+/** A conversation whose one settled turn started two children, as the server puts it on the wire. */
+const settledTurnWire = {
+  turn_id: 'turn-1', turn_number: 1, answer_run_id: 'run-1', submission_id: 'submission-1',
+  status: 'succeeded', cancel_requested: false, user_text: 'Question', assistant_text: 'Answer.',
+  user_attachments: [], usage: {}, error_kind: null, error_message: null, child_count: 2,
+  created_at: '2026-01-01T00:00:00Z',
+  presentation: {
+    answer_text: 'Answer.',
+    parts: [{
+      type: 'markdown', text: 'Answer.', html: '<p>Answer.</p>',
+      artifact: null, evidence_image: null, inline: false,
+    }],
+    sources: [], evidence_images: [], artifacts: [], artifact_outcome: {status: 'complete', issues: []},
+  },
+};
+
+/** The app on a conversation whose settled turn started two children, with the server answering the Run's roster. */
+async function appWithChildren(roster: {requests: number}): Promise<DlApp> {
+  window.matchMedia = desktopMedia;
+  window.fetch = async (input) => {
+    const url = String(input);
+    if (url === '/web/api/conversations/with-children/history') {
+      return response({
+        conversation: {
+          conversation_id: 'with-children', title: 'Children',
+          created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
+        },
+        turns: [settledTurnWire],
+        next_cursor: null,
+      });
+    }
+    if (url === '/web/api/answer/run-1/children') {
+      roster.requests += 1;
+      return response({run_id: 'run-1', children: [childRow('a'), childRow('b')], next_cursor: null});
+    }
+    if (url.startsWith('/web/api/answer/run-1/children/')) {
+      return response({run_id: 'run-1', child: childRow('a'), transcript: [], controls: [], questions: [], result: null});
+    }
+    return bootstrapResponse(input);
+  };
+  const app = document.createElement('dl-app') as DlApp;
+  document.body.appendChild(app);
+  await app.ready;
+  await webRouter.navigate(conversationRoute('with-children'));
+  await waitFor(() => childAgentsButton(app) !== undefined);
+  return app;
+}
+
+function childAgentsButton(app: DlApp): HTMLButtonElement | undefined {
+  return Array.from(app.querySelectorAll<HTMLButtonElement>('dl-chat-message-list button'))
+    .find((button) => button.textContent?.trim() === 'Child agents');
+}
+
+it('opens a settled turn\'s Child agents beside the chat, follows its Run, and leaves them open on a click in the chat', async () => {
+  pageTimersRunFast();
+  const roster = {requests: 0};
+  const app = await appWithChildren(roster);
+  const inspector = app.querySelector('dl-inspector')!;
+
+  childAgentsButton(app)!.click();
+  await waitFor(() => inspector.querySelectorAll('[data-child-session]').length === 2);
+
+  expect(inspector.kind).to.equal('children');
+  expect(inspector.querySelector('#panel-title')?.textContent).to.equal('Child agents');
+  expect(document.body.classList.contains('children-panel-open')).to.equal(true);
+
+  // The chat reports the Run's activity, and the open dock fetches its roster again.
+  app.querySelector('dl-chat-feature')!.dispatchEvent(new CustomEvent('dl-child-activity', {
+    bubbles: true, composed: true, detail: {runId: 'run-1'},
+  }));
+  await waitFor(() => roster.requests === 2);
+
+  // The dock is watched beside the chat, so a click in the chat does not take it away.
+  app.querySelector('main[aria-label="Chat"]')?.dispatchEvent(new MouseEvent('click', {bubbles: true, composed: true}));
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+  expect(inspector.open).to.equal(true);
+  expect(inspector.kind).to.equal('children');
+
+  // The children belong to their conversation, which the Shell leaving takes them with.
+  app.querySelector('dl-conversation-sidebar')?.dispatchEvent(new CustomEvent('dl-conversation-route-change', {
+    bubbles: true, composed: true, detail: {previousConversationId: null, nextConversationId: null},
+  }));
+  await inspector.updateComplete;
+  expect(inspector.open).to.equal(false);
+  expect(document.body.classList.contains('children-panel-open')).to.equal(false);
+});
+
+it('closes the Artifact Canvas when Child agents open, and a click in the chat closes the Canvas but not them', async () => {
+  const app = await appWithChildren({requests: 0});
+  const inspector = app.querySelector('dl-inspector')!;
+  const canvas = app.querySelector('dl-artifact-canvas')!;
+  const artifact: AnswerArtifact = {
+    resourceId: 'chart-1', mediaType: 'image/png',
+    label: 'Chart', filename: 'chart.png', byteSize: 20, digest: 'c'.repeat(64),
+    presentation: 'image', status: 'available',
+    uri: 'dlightrag://answer/run-1/artifacts/chart-1', width: 100, height: 100,
+    dataUrl: '/web/api/answer/run-1/artifacts/chart-1',
+    downloadUrl: '/web/api/answer/run-1/artifacts/chart-1?download=1',
+    presentationUrl: null, issue: null,
+  };
+  await canvas.open(artifact, app.querySelector('#files-btn'));
+  // A Canvas beside the chat leaves the chat's own controls reachable.
+  buttonNamed(canvas, 'Side')!.click();
+  await canvas.updateComplete;
+  expect(canvas.classList.contains('open')).to.equal(true);
+
+  childAgentsButton(app)!.click();
+  await waitFor(() => inspector.kind === 'children');
+  expect(canvas.classList.contains('open')).to.equal(false);
+
+  await canvas.open(artifact, app.querySelector('#files-btn'));
+  app.querySelector('main[aria-label="Chat"]')?.dispatchEvent(new MouseEvent('click', {bubbles: true, composed: true}));
+  expect(canvas.classList.contains('open')).to.equal(false);
+  expect(inspector.kind).to.equal('children');
 });
 
 it('opens Sources as the only compact modal when intent originates in Canvas', async () => {

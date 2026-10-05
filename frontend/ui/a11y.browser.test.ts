@@ -2,6 +2,7 @@
 
 import {expect} from '@esm-bundle/chai';
 import {setViewport} from '@web/test-runner-commands';
+import {NOW, ago, observation, question, roster, row, serve, sourceFor} from '../testing/children.ts';
 import {buttonNamed, waitFor} from '../testing/dom.ts';
 import {
   agentAccountsView,
@@ -257,6 +258,120 @@ it('inspector Files panel has no serious axe violations', async () => {
     await waitFor(() => Boolean(inspector.querySelector('#ingest-target-trigger')
       && inspector.querySelector('[data-load-older]')));
     expect(await seriousViolations(inspector)).to.deep.equal([]);
+  });
+});
+
+// One Run's children as the dock draws them: a running child with a question, a running one, and each
+// way a child settles. Elapsed times are drawn against the fixtures' own clock.
+const dockChildren = [
+  row('c1', 'running', {
+    started_at: ago(134), pending_questions: 1,
+    objective: 'Make the strongest case for terminating the Northwind supply agreement early',
+  }),
+  row('c2', 'running', {started_at: ago(112)}),
+  row('c3', 'succeeded', {
+    started_at: ago(300), finished_at: ago(232), usage: {total_tokens: 9400}, result_handles: ['ev-1', 'ev-2'],
+    summary: 'Clause 9.2 caps the penalty at 6% of the remaining fees; notice is 90 days.',
+  }),
+  row('c4', 'failed', {
+    started_at: ago(200), finished_at: ago(159), summary: 'The PDF has no text layer, and OCR is not available for this run.',
+  }),
+  row('c5', 'cancelled', {
+    cancellation_origin: 'user', started_at: ago(400), finished_at: ago(388), summary: 'Child session cancelled.',
+  }),
+];
+
+function dockObservation(id: string): Response {
+  const child = dockChildren.find((candidate) => candidate.child_session_id === id)!;
+  const call = (callId: string, name: string, content: string, isError = false) => [
+    {role: 'assistant', content: '', tool_calls: [{id: callId, name}]},
+    {role: 'tool', content, tool_call_id: callId, name, is_error: isError},
+  ];
+  return observation(child, {
+    transcript: [
+      {role: 'user', content: String(child.objective)},
+      ...call('t1', 'search_knowledge_base', '12 results\nTop: Northwind MSA §9.2, early termination for convenience'),
+      ...call('t2', 'read', 'Document not readable: no text layer', true),
+      {role: 'assistant', content: 'The MSA allows termination for convenience after month 18.', tool_calls: [{id: 't3', name: 'read'}]},
+      {role: 'user', content: 'User steer: focus on clause 9.2 only'},
+    ],
+    controls: [{
+      control_sequence: 1, kind: 'steer', content: 'focus on clause 9.2 only', origin: 'user',
+      consumed: true, consumed_at: ago(30), created_at: ago(40), operation_id: `op-${id}`,
+    }],
+    questions: id === 'c1' ? [
+      question('q1'),
+      question('q0', {status: 'replied', reply: 'Swedish law.', reply_origin: 'parent', expires_at: null}),
+      question('q9', {expires_at: ago(5)}),
+    ] : [],
+    result: child.status === 'running' ? null : {
+      status: child.status, summary: child.summary ?? '', handles: child.result_handles, operation_id: `op-${id}`,
+    },
+  });
+}
+
+/** The dock open on its Run, in a pane `width` wide: narrow shows one of the list and a child, wide both. */
+async function openDock(width: number | null) {
+  const inspector = mountInApp(document.createElement('dl-inspector') as DlInspector);
+  if (width !== null) inspector.parentElement!.style.width = `${width}px`;
+  await inspector.openChildren(sourceFor().source);
+  await waitFor(() => inspector.querySelectorAll('[data-child-session]').length === dockChildren.length);
+  // The dock measures its pane a frame after it is shown.
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  return inspector;
+}
+
+/** Run `judge` with the dock's Run on the wire and the clock its fixtures are drawn against. */
+async function withDock<T>(judge: () => Promise<T>): Promise<T> {
+  const originalNow = Date.now;
+  const originalFetch = window.fetch;
+  Date.now = () => NOW;
+  serve({page: () => roster(dockChildren), observe: dockObservation});
+  try {
+    return await judge();
+  } finally {
+    window.fetch = originalFetch;
+    Date.now = originalNow;
+  }
+}
+
+it('Child agents has no serious axe violations as a list, narrow', async () => {
+  await withDock(async () => {
+    const inspector = await openDock(420);
+    expect(await seriousViolations(inspector)).to.deep.equal([]);
+  });
+});
+
+it('a running child with its question, activity and reply box has no serious axe violations beside the list', async () => {
+  await withDock(async () => {
+    const inspector = await openDock(null);
+    await waitFor(() => inspector.querySelector('dl-child-session [data-draft]') !== null);
+    buttonNamed(inspector, 'Answer instead')!.click();
+    await waitFor(() => inspector.querySelector('[data-reply]') !== null);
+    const reply = inspector.querySelector<HTMLTextAreaElement>('[data-reply]')!;
+    reply.value = 'Yes, include them.';
+    reply.dispatchEvent(new Event('input', {bubbles: true}));
+    // Every kind of step is on the page, one of them open to its whole result.
+    inspector.querySelector<HTMLElement>('summary:has(+ pre)')!.click();
+    expect(await seriousViolations(inspector)).to.deep.equal([]);
+  });
+});
+
+it('a settled child with every fold open, and a child the reader cancelled, have no serious axe violations, narrow', async () => {
+  await withDock(async () => {
+    const inspector = await openDock(420);
+    const open = async (id: string) => {
+      inspector.querySelector<HTMLElement>(`[data-child-session="${id}"]`)!.click();
+      await waitFor(() => inspector.querySelector('dl-child-session [data-draft]') !== null);
+      await waitFor(() => inspector.querySelector('dl-child-session details') !== null);
+      for (const fold of inspector.querySelectorAll<HTMLDetailsElement>('dl-child-session details')) fold.open = true;
+    };
+    await open('c3');
+    const settled = await seriousViolations(inspector);
+    buttonNamed(inspector, 'All child agents')!.click();
+    await open('c5');
+    expect(inspector.querySelector('dl-child-session input[type="checkbox"]')).to.not.equal(null);
+    expect([...settled, ...await seriousViolations(inspector)]).to.deep.equal([]);
   });
 });
 
