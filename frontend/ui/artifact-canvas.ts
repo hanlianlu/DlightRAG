@@ -5,7 +5,7 @@ import {html, nothing, type TemplateResult} from 'lit';
 import {type AnswerArtifact, type AnswerPresentation, getArtifactPresentationAt } from '../api/conversations.ts';
 import {apiError} from '../api/wire.ts';
 import {COMPACT_SHELL_MEDIA, MOBILE_MEDIA} from '../lib/breakpoints.ts';
-import {tabbables, wrapTabFocus} from '../lib/dom.ts';
+import {focusedElement, tabbables, wrapTabFocus} from '../lib/dom.ts';
 import {LightElement, MediaController} from '../lib/lit-host.ts';
 import {safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
 import canvasStyles from '../styles/artifact-canvas.module.css';
@@ -81,11 +81,7 @@ export class DlArtifactCanvas extends LightElement {
     const entering = !this.classList.contains('open');
     this.#controller?.abort();
     this.#destroyPreview();
-    if (entering) {
-      this.#returnFocus = returnFocus ?? (
-        document.activeElement instanceof HTMLElement ? document.activeElement : null
-      );
-    }
+    if (entering) this.#returnFocus = returnFocus ?? focusedElement();
     this.artifact = artifact;
     this.canvasState = 'loading';
     this.#setLayout(this.#suggestedLayout(artifact));
@@ -139,8 +135,8 @@ export class DlArtifactCanvas extends LightElement {
         if (focusGeneration !== this.#focusGeneration || this.classList.contains('open')) return;
         if (returnFocus?.isConnected && !returnFocus.inert) returnFocus.focus();
       });
-    } else if (focusedInside && document.activeElement instanceof HTMLElement) {
-      document.activeElement.blur();
+    } else if (focusedInside) {
+      focusedElement()?.blur();
     }
   }
 

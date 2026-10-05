@@ -18,6 +18,7 @@ import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import type {MemoryOperationEvent} from '../api/memory.ts';
 import {type IconName, icon, rovingFocusKeydown} from '../design-system/index.ts';
 import {PHONE_DIALOG_MEDIA} from '../lib/breakpoints.ts';
+import {focusedElement} from '../lib/dom.ts';
 import {LightElement, MediaController} from '../lib/lit-host.ts';
 import {type AppHandles, productionHandles} from '../stores/app-handles.ts';
 import styles from '../styles/settings-dialog.module.css';
@@ -182,9 +183,7 @@ export class DlSettingsDialog extends LightElement {
   async open(returnFocus?: HTMLElement | null, page?: SettingsSection): Promise<void> {
     const signal = this.lifetime;
     if (signal.aborted) return;
-    this.#returnFocus = returnFocus ?? (
-      document.activeElement instanceof HTMLElement ? document.activeElement : null
-    );
+    this.#returnFocus = returnFocus ?? focusedElement();
     if (this.mounted && this.#dialog()?.open === false) {
       // The last session closed and its close event is still on its way: end it here, so this
       // one reads on pages of its own and not on the ones the last left behind.

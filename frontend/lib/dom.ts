@@ -2,6 +2,12 @@
 
 /** Shared DOM helpers used across the UI modules. */
 
+/** The element that holds focus, when it is one the page can give focus back to. */
+export function focusedElement(): HTMLElement | null {
+    const element = document.activeElement;
+    return element instanceof HTMLElement ? element : null;
+}
+
 /** What Tab can reach; a <summary> is focusable although it carries no tabindex. */
 const TABBABLE = [
     'a[href]',

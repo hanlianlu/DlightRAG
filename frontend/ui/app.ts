@@ -9,6 +9,7 @@ import {onSignedOut} from '../api/wire.ts';
 import {getWorkspacesPage} from '../api/workspaces.ts';
 import {icon} from '../design-system/index.ts';
 import {authRefusalMessage} from '../lib/errors.ts';
+import {focusedElement} from '../lib/dom.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import '../styles/layout.css';
 import type {AttachmentPolicy} from '../lib/attachment-policy.ts';
@@ -334,7 +335,7 @@ export class DlApp extends LightElement {
 
   #settingsRequested(): void {
     const settings = this.querySelector<DlSettingsDialog>('dl-settings-dialog');
-    void settings?.open(document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    void settings?.open(focusedElement());
   }
 
   #requestDeleteAllConversations = async (
@@ -461,10 +462,7 @@ export class DlApp extends LightElement {
   };
 
   #workspaceDrop(event: CustomEvent<ComposerWorkspaceDropDetail>): void {
-    const returnFocus = document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : null;
-    void this.#inspector()?.uploadFiles(event.detail.files, event.detail.folderName, returnFocus);
+    void this.#inspector()?.uploadFiles(event.detail.files, event.detail.folderName, focusedElement());
   }
 
   #openArtifact(event: CustomEvent<{artifact: AnswerArtifact; returnFocus: HTMLElement}>): void {

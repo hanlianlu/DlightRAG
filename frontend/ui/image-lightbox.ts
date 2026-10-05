@@ -4,7 +4,7 @@
 import {msg} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {icon} from '../design-system/index.ts';
-import {tabbables, wrapTabFocus} from '../lib/dom.ts';
+import {focusedElement, tabbables, wrapTabFocus} from '../lib/dom.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {safeImageSrc} from '../lib/urls.ts';
 import lightboxStyles from '../styles/lightbox.module.css';
@@ -66,9 +66,7 @@ export class DlImageLightbox extends LightElement {
     const safeGallery = [...new Set(gallery.map(safeImageSrc).filter(Boolean))];
     this.gallery = safeGallery.includes(current) ? safeGallery : [current, ...safeGallery];
     this.current = current;
-    this.#returnFocus = returnFocus ?? (
-      document.activeElement instanceof HTMLElement ? document.activeElement : null
-    );
+    this.#returnFocus = returnFocus ?? focusedElement();
     this.openState = true;
     this.#syncHost();
     this.#publishState();

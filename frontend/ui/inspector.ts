@@ -4,7 +4,7 @@ import {msg} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import type {AnswerPresentation} from '../api/conversations.ts';
 import {COMPACT_SHELL_MEDIA} from '../lib/breakpoints.ts';
-import {tabbables, wrapTabFocus} from '../lib/dom.ts';
+import {focusedElement, tabbables, wrapTabFocus} from '../lib/dom.ts';
 import {LightElement, MediaController} from '../lib/lit-host.ts';
 import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
 import type {DlInspectorFiles} from './inspector-files.ts';
@@ -224,9 +224,7 @@ export class DlInspector extends LightElement {
     if (!this.dispatchEvent(event)) return false;
     this.#focusGeneration += 1;
     if (returnFocus) this.#returnFocus = returnFocus;
-    else if (!this.open && document.activeElement instanceof HTMLElement) {
-      this.#returnFocus = document.activeElement;
-    }
+    else if (!this.open) this.#returnFocus = focusedElement();
     this.kind = kind;
     this.#syncHostState();
     return true;
