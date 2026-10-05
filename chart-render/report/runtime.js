@@ -8,7 +8,6 @@
  *
  * It runs inside the product's sandbox: no storage, no dialogs, no network, no popups.
  */
-const Theme = require('theme.js');
 const Core = require('core.js');
 
 const doc = document;
@@ -17,13 +16,8 @@ const win = window;
 
 // ---- language ---------------------------------------------------------------------------------
 
-const CJK_TEXT = /[\u3400-\u9fff]/g;
-function isChinese() {
-  const lang = (root.getAttribute('lang') || '').toLowerCase();
-  if (lang) return lang.startsWith('zh');
-  const text = doc.body ? doc.body.textContent : '';
-  return (text.match(CJK_TEXT) || []).length > Math.min(40, text.length * 0.02);
-}
+// The build sets `lang` from the fragment's own text, so the controls speak the report's language.
+const isChinese = () => (root.getAttribute('lang') || '').toLowerCase().startsWith('zh');
 const STRINGS = {
   zh: {all: '全部', reset: '重置', filters: '筛选', empty: '没有符合当前筛选的数据', insight: '洞察', caution: '注意', risk: '风险', note: '说明'},
   en: {all: 'All', reset: 'Reset', filters: 'Filters', empty: 'No data matches the current filters', insight: 'Insight', caution: 'Caution', risk: 'Risk', note: 'Note'},
@@ -90,11 +84,11 @@ function readSlicerDef(node) {
   return def.field ? def : null;
 }
 
+const copy = (value) => (Array.isArray(value) ? [...value] : value);
+
 function emitSlicer(id) {
   doc.dispatchEvent(new CustomEvent('report:slicer', {detail: {id, value: copy(state[id])}}));
 }
-
-const copy = (value) => (Array.isArray(value) ? [...value] : value);
 
 function setSlicer(id, value, silent = false) {
   const entry = slicers.get(id);
@@ -108,7 +102,7 @@ function setSlicer(id, value, silent = false) {
   } else if (def.mode === 'multi') {
     next = (Array.isArray(value) ? value : value === null || value === '' ? [] : [value]).map(String);
   } else {
-    next = value === undefined || value === '' ? null : value === null ? null : String(value);
+    next = value === undefined || value === null || value === '' ? null : String(value);
     if (next === null && def.all === false) next = Core.slicerDefault(def);
   }
   state[id] = next;
@@ -216,7 +210,7 @@ function readSlicers() {
     // Choices are read from the charts' rows, so build the controls after the specs know the defs.
     slicers.set(def.id, {def, el: node, sync() {}});
   }
-  for (const [id, entry] of [...slicers]) buildSlicer(entry.el, entry.def, id);
+  for (const {el: node, def} of [...slicers.values()]) buildSlicer(node, def);
   // A page-level slicer stays in view: wrap runs of them in a sticky bar.
   const pageLevel = [...doc.querySelectorAll('.slicer.slicer-ready')].filter((n) => !n.closest('.card, figure, .callout, .kpis, .timeline, table'));
   for (const node of pageLevel) {
@@ -269,6 +263,7 @@ function readCharts() {
       themeKey: null,
       width: 0,
       dirty: true,
+      fatal: false,
       frame: 0,
       spec: {
         id,

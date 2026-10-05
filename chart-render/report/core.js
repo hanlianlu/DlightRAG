@@ -645,17 +645,4 @@ function themes(structure, colors) {
   return out;
 }
 
-module.exports = {
-  AGGREGATES,
-  PROFILES,
-  distinct,
-  filterRows,
-  filterValues,
-  prepare,
-  profileFor,
-  slicerDefault,
-  slicerValue,
-  sourceRows,
-  textWidth,
-  themes,
-};
+module.exports = {filterValues, prepare, slicerDefault, sourceRows, themes};
