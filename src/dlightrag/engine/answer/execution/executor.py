@@ -214,6 +214,7 @@ from dlightrag.engine.answer.tools.resources import (
     make_resource_viewer,
 )
 from dlightrag.engine.answer.tools.subagents import (
+    DEFAULT_CHILD_CONCURRENCY,
     ChildContextSnapshot,
     SubagentHost,
 )
@@ -382,6 +383,7 @@ class AnswerExecutorSettings:
     semantic_highlights: SemanticHighlightSettings
     publication: PublicationLimits = PublicationLimits()
     child_guidance_timeout_seconds: int = 300
+    child_concurrency: int = DEFAULT_CHILD_CONCURRENCY
     lineage_adoption: bool = True
 
 
@@ -2286,6 +2288,7 @@ class AnswerExecutor:
                 resolved_mode=resolved_mode,
                 subagent_host=(
                     SubagentHost(
+                        max_concurrency=self._settings.child_concurrency,
                         guidance_timeout_seconds=self._settings.child_guidance_timeout_seconds,
                         model_guidance=child_model_guidance(pinned_models),
                     )

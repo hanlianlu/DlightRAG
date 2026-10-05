@@ -30,6 +30,7 @@ from dlightrag.engine.ai.settings import (
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.answer.agent_browser import RunBrowsing
 from dlightrag.engine.answer.capabilities import RequestModelContext
+from dlightrag.engine.answer.execution.executor import AnswerExecutorSettings
 from dlightrag.engine.answer.execution.input import (
     PinnedModelProfile,
     child_model_guidance,
@@ -147,6 +148,7 @@ async def _prepared_executor(
     *,
     registry: ResourceRegistry | None = None,
     browsing: RunBrowsing | None = None,
+    settings: AnswerExecutorSettings | None = None,
 ):
     roles = _roles()
     pins = _pins(roles)
@@ -161,7 +163,7 @@ async def _prepared_executor(
     monkeypatch.setattr("dlightrag.engine.ai.providers.get_provider", lambda *a, **kw: provider)
     runtime = _runtime()
     runtime._settings = replace(runtime._settings, model_roles=roles)
-    executor = _executor()
+    executor = _executor() if settings is None else _executor(settings=settings)
     executor._models = runtime
     executor._model_invocation_fingerprint_for_role = lambda role: model_invocation_fingerprint(
         roles.resolve(role)

@@ -350,7 +350,7 @@ Extract chain, so they never reach the browser either.
   is optional and paid, renders on its own terms, and cannot interact. It keeps its
   place before the browser in the chain.
 - **A browser per Agent Session, or one shared across Runs.** Rejected. Per session,
-  a parent with eight Children would hold nine containers, while contexts already
+  a parent with sixteen Children would hold seventeen containers, while contexts already
   separate sessions. Shared across Runs, one renderer fault or exploit would cross
   Runs and owners, and recovery could not give a Run a fresh browser.
 - **A persistent browser profile per owner.** Rejected. A stored profile is a cookie

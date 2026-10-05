@@ -906,7 +906,7 @@ def test_child_contracts_keep_what_recovery_compares() -> None:
     # not a tool's wording.
     assert all(tool.contract_version == 5 for tool in tools.values())
     assert tools["spawn_agent"].input_schema_digest == (
-        "ea2283b72d9dce2e740dcc58abbb136c041256381956de11f00cd6aff1b65ccd"
+        "f8ffdb251a198b9ba42629109d6452975931ca7eed6e3ac899417ff2c3d9c938"
     )
 
 

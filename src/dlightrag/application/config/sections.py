@@ -604,6 +604,14 @@ class AgentExecutionConfig(BaseModel):
         le=86_400,
         description="Default expiry for a durable ask_parent request.",
     )
+    child_concurrency: int = Field(
+        default=16,  # DEFAULT_CHILD_CONCURRENCY, which this layer may not import
+        ge=1,
+        description=(
+            "How many Child Sessions one Run runs at once. Children beyond this wait for a "
+            "slot while their roster status already reads running."
+        ),
+    )
     session_notes: SessionNotesConfig = Field(default_factory=SessionNotesConfig)
     workspace_root: str | None = Field(
         default=None,

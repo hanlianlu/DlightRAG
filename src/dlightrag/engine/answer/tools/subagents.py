@@ -48,6 +48,14 @@ type ChildModelRole = Literal["query", "extract", "keyword", "vlm", "default"]
 
 logger = logging.getLogger(__name__)
 
+#: How many children one ``spawn_agent`` call may start, and how many children a Run
+#: runs at once unless ``answer.agent.child_concurrency`` says otherwise. The two agree
+#: so that no child of one call waits unseen for a slot. The configured default repeats
+#: this number: the configuration layer may not import the Answer engine, and a test
+#: holds the two together.
+MAX_CHILDREN_PER_SPAWN = 16
+DEFAULT_CHILD_CONCURRENCY = MAX_CHILDREN_PER_SPAWN
+
 
 class _ParentRunCancelled(asyncio.CancelledError):
     """A cooperative parent cancellation crossing the Tool execution seam."""
@@ -83,7 +91,7 @@ class SpawnAgentInput(BaseModel):
 
     children: tuple[ChildRequest, ...] = Field(
         min_length=1,
-        max_length=8,
+        max_length=MAX_CHILDREN_PER_SPAWN,
         description="Children to start together; their objectives must differ.",
     )
 
@@ -282,7 +290,7 @@ class SubagentHost:
     parent_session_id: SessionId | None = None
     run_id: str = ""
     owner_id: str = ""
-    max_concurrency: int = 4
+    max_concurrency: int = DEFAULT_CHILD_CONCURRENCY
     check_cancelled: Callable[[], Awaitable[None]] | None = None
     persist: PersistChild | None = None
     load_child: LoadChild | None = None

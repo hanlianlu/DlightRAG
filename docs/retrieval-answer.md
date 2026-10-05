@@ -252,8 +252,10 @@ run-local registry may include:
 - bounded asynchronous Child Sessions with explicit snapshots and Evidence
   return.
 
-`spawn_agent` admits up to eight children per call and returns durable handles
-immediately. A child runs with its parent's tools except the ones that spend the
+`spawn_agent` admits up to sixteen children per call and returns durable handles
+immediately. At most [`child_concurrency`](configuration.md#research-agent) (default
+sixteen) of a Run's children run at once; any beyond that wait for a slot while their
+roster status already reads `running`. A child runs with its parent's tools except the ones that spend the
 Run's authority: the roster controls, `remember`/`forget`, and the publication
 tools. It holds `ask_parent` instead. The parent's `tools` list narrows that set
 for one child — one without a shell, say — and can never restore what the
