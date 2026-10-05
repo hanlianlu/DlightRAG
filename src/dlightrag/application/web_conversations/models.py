@@ -33,6 +33,9 @@ class LinkedTurn:
     created_at: datetime.datetime
     run: RunView
     conversation_id: str = ""
+    #: How many Child Sessions this turn's Run has spawned, so a settled turn can
+    #: tell whether it has children to open. A turn just accepted has none.
+    child_count: int = 0
 
     @property
     def answer_run_id(self) -> str:

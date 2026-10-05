@@ -135,6 +135,7 @@ def project_conversation_turn(
         usage=dict((run.result or {}).get("usage") or {}),
         error_kind=run.error_kind,
         error_message=run.error_message,
+        child_count=turn.child_count,
         created_at=turn.created_at,
     )
 

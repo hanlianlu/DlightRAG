@@ -661,7 +661,9 @@ The Web event stream follows the same durable sequence as REST but projects a
 typed `AnswerPresentation` (`answer_text`, `parts`, `sources`,
 `evidence_images`, `artifacts`, and `artifact_outcome`). Conversation history
 uses the same shape. Pending, failed, and cancelled turns remain visible;
-only succeeded turns become model history.
+only succeeded turns become model history. Each turn carries `child_count`, the
+number of Child Sessions its Run spawned (0 for none, and for a turn just
+accepted), so a settled turn can tell whether it has children to open.
 
 History defaults to the newest 40 turns and accepts a sealed cursor plus a limit
 up to 100. Attachments are owner-scoped, content-addressed run blobs and are

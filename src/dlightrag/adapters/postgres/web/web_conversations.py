@@ -370,7 +370,11 @@ t.turn_number,
 t.submission_id::text AS submission_id,
 t.answer_run_id::text AS answer_run_id,
 t.conversation_id::text AS turn_conversation_id,
-t.created_at AS turn_created_at
+t.created_at AS turn_created_at,
+(SELECT count(*)::int
+ FROM dlightrag_answer_child_sessions AS child
+ WHERE child.owner_id = t.principal_id AND child.run_id = t.answer_run_id
+) AS child_count
 """
 
 _TURN_CONVERSATION_SUMMARY_COLUMNS = """
@@ -552,6 +556,7 @@ def _linked_turn(row: Any) -> LinkedTurn:
         created_at=row["turn_created_at"],
         run=RunView.from_runtime(run_record(row)),
         conversation_id=str(row["turn_conversation_id"]),
+        child_count=int(row["child_count"]),
     )
 
 
