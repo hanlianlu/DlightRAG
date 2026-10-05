@@ -248,14 +248,17 @@ export class DlApp extends LightElement {
         ?inert=${!ready || this.lightboxOpen}
       >
         <dl-split-layout class="panel-split" id="conversation-split" primary="start"
-                         orientation="horizontal" size="0" min="240">
+                         orientation="horizontal" size="0" min="240"
+                         label=${msg('Resize conversations', {id: 'app.resizeConversations'})}>
           <dl-conversation-sidebar id="conversation-sidebar" slot="start"
             .handles=${this.handles} .enabled=${ready} .chatFeature=${chatFeature}
             .shellInert=${this.canvasModal}></dl-conversation-sidebar>
           <dl-split-layout class="panel-split" id="panel-split" slot="end" primary="end"
-                           orientation="horizontal" size="0" min="320">
+                           orientation="horizontal" size="0" min="320"
+                           label=${msg('Resize Files or Sources', {id: 'app.resizeInspector'})}>
           <dl-split-layout class="panel-split" id="artifact-canvas-split" slot="start"
-                           primary="end" orientation="horizontal" size="0" min="320">
+                           primary="end" orientation="horizontal" size="0" min="320"
+                           label=${msg('Resize Artifact Canvas', {id: 'app.resizeArtifactCanvas'})}>
             <div class="primary-shell" slot="start">
               <div class="app-shell">
                 <header class="topbar" ?inert=${inspectorModal || this.canvasModal}>

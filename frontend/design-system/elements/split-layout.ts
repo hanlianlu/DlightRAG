@@ -100,7 +100,7 @@ template.innerHTML = `
 `;
 
 export class DlSplitLayout extends HTMLElement {
-  static readonly observedAttributes = ['size', 'min', 'max', 'primary', 'orientation', 'disabled'];
+  static readonly observedAttributes = ['size', 'min', 'max', 'primary', 'orientation', 'disabled', 'label'];
 
   readonly #divider: HTMLDivElement;
   #dragStartCoordinate = 0;
@@ -128,6 +128,10 @@ export class DlSplitLayout extends HTMLElement {
   }
 
   attributeChangedCallback(name: string): void {
+    if (name === 'label') {
+      this.#divider.setAttribute('aria-label', this.getAttribute('label') ?? '');
+      return;
+    }
     if (name === 'disabled' && this.disabled) this.#cancelDrag(false);
     this.#sync();
   }

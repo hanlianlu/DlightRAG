@@ -349,6 +349,16 @@ it('emits normalized input and commit events for keyboard resizing', () => {
   expect(split.divider.getAttribute('aria-orientation')).to.equal('vertical');
 });
 
+it('names its separator with the label its owner gives it, and follows a change', () => {
+  const split = document.createElement('dl-split-layout');
+  split.setAttribute('label', 'Resize the list');
+  document.body.append(split);
+  expect(split.divider.getAttribute('aria-label')).to.equal('Resize the list');
+
+  split.setAttribute('label', 'Resize the panel');
+  expect(split.divider.getAttribute('aria-label')).to.equal('Resize the panel');
+});
+
 it('reflects normalized bounds through size and separator ARIA', () => {
   const split = document.createElement('dl-split-layout');
   split.size = 500;

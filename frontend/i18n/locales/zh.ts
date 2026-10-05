@@ -190,6 +190,9 @@ export const templates: Record<
   'app.files': '文件',
   'app.artifactCanvasLabel': '工件画布',
   'app.answerNotificationsLabel': '回答通知',
+  'app.resizeConversations': '调整会话列表的宽度',
+  'app.resizeInspector': '调整文件或来源面板的宽度',
+  'app.resizeArtifactCanvas': '调整工件画布的宽度',
   'app.waitForFileChange': '请等待文件变更完成后再打开会话。',
   'app.signIn': '登录',
 

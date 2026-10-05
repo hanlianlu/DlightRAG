@@ -184,15 +184,8 @@ function createState(
   };
 }
 
-function resizeLabel(state: SplitState): string {
-  if (state.widthVar === '--panel-width') return 'Resize Files or Sources';
-  if (state.widthVar === '--artifact-canvas-width') return 'Resize Artifact Canvas';
-  return 'Resize conversations';
-}
-
 function bindState(state: SplitState): void {
   state.split.min = state.minWidth;
-  state.split.divider.setAttribute('aria-label', resizeLabel(state));
   state.split.divider.addEventListener('pointerdown', () => {
     if (!state.split.disabled) setResizing(true);
   });

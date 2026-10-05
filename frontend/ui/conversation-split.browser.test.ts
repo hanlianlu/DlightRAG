@@ -44,7 +44,6 @@ it('desktop conversation split is enabled and keyboard-resizable', async () => {
   expect(split.disabled, 'conversation split should not be disabled on desktop').to.equal(false);
   expect(split.hasAttribute('data-collapsed')).to.equal(false);
   expect(split.size).to.be.at.least(240);
-  expect(split.divider.getAttribute('aria-label')).to.equal('Resize conversations');
   expect(getComputedStyle(split.divider).pointerEvents).to.not.equal('none');
 
   const before = split.size;

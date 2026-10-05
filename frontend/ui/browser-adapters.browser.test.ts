@@ -49,7 +49,6 @@ describe('cold browser adapter initialization', () => {
     expect(files.size).to.equal(420);
     expect(artifact.size).to.equal(420);
     expect(files.max).to.be.within(458, 460);
-    expect(files.divider.getAttribute('aria-label')).to.equal('Resize Files or Sources');
 
     files.size = 320;
     files.dispatchEvent(new CustomEvent('dl-split-input', {

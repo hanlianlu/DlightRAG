@@ -5,6 +5,7 @@ import {type DlSplitLayout, defineDesignSystemElements } from '../design-system/
 import './app.ts';
 import type {DlApp} from './app.ts';
 import {initializeBrowserAdapters} from './browser-adapters.ts';
+import {setLanguagePreference} from '../i18n/locale.ts';
 import {DEFAULT_CHANGES} from '../testing/workspaces.ts';
 
 defineDesignSystemElements();
@@ -36,7 +37,7 @@ afterEach(() => {
   document.body.className = '';
 });
 
-it('composed desktop shell exposes a hittable conversation divider', async () => {
+async function mountDesktopShell(): Promise<DlApp> {
   window.matchMedia = ((query: string) => ({
     matches: query === '(min-width: 1200px)',
     media: query,
@@ -63,7 +64,11 @@ it('composed desktop shell exposes a hittable conversation divider', async () =>
   await initializeBrowserAdapters(app);
   await app.querySelector('dl-conversation-sidebar')?.updateComplete;
   await new Promise((resolve) => requestAnimationFrame(resolve));
+  return app;
+}
 
+it('composed desktop shell exposes a hittable conversation divider', async () => {
+  const app = await mountDesktopShell();
   const split = app.querySelector<DlSplitLayout>('#conversation-split')!;
   const sidebar = app.querySelector('#conversation-sidebar')!;
   const dump = {
@@ -87,4 +92,19 @@ it('composed desktop shell exposes a hittable conversation divider', async () =>
   split.divider.focus();
   split.divider.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowRight', bubbles: true}));
   expect(split.size).to.be.greaterThan(before);
+});
+
+it('names each divider in the language the shell is showing', async () => {
+  const app = await mountDesktopShell();
+  const labels = (): (string | null)[] => ['#conversation-split', '#panel-split', '#artifact-canvas-split']
+    .map((id) => app.querySelector<DlSplitLayout>(id)!.divider.getAttribute('aria-label'));
+
+  expect(labels()).to.deep.equal(['Resize conversations', 'Resize Files or Sources', 'Resize Artifact Canvas']);
+  try {
+    await setLanguagePreference('zh');
+    await app.updateComplete;
+    expect(labels()).to.deep.equal(['调整会话列表的宽度', '调整文件或来源面板的宽度', '调整工件画布的宽度']);
+  } finally {
+    await setLanguagePreference('en');
+  }
 });
