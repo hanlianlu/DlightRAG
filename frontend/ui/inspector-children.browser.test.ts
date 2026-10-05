@@ -945,7 +945,7 @@ it('writes nothing to a box while the reader composes in it, whether the steer b
 it('names each refusal, and says when the child is gone', async () => {
   const running = row('a', 'running', {started_at: ago(5)});
   let answer: () => Response = () => refusal('terminal_child');
-  serve({page: () => roster([running]), observe: () => observation(running), control: () => answer()});
+  const requests = serve({page: () => roster([running]), observe: () => observation(running), control: () => answer()});
   const dock = await mount(sourceFor().source, 420);
   await waitFor(() => rows(dock).length === 1);
   await openChild(dock, 'a');
@@ -955,8 +955,13 @@ it('names each refusal, and says when the child is gone', async () => {
     session(dock).querySelector('form')!.requestSubmit();
     await waitFor(() => shown(dock).includes(expected));
   };
+  const reads = (path: string) => requests.filter((request) => request.method === 'GET' && request.path === path).length;
+  const before = {roster: reads('/web/api/answer/run-1/children'), child: reads('/web/api/answer/run-1/children/a')};
   await send('one', 'This child is already terminal and was not revived.');
   expect(composer(dock).value, 'a refused command keeps what was typed').to.equal('one');
+  // A refusal says the child is not as the page shows it: the page and the roster read it again.
+  await waitFor(() => reads('/web/api/answer/run-1/children') > before.roster
+    && reads('/web/api/answer/run-1/children/a') > before.child);
   answer = () => refusal('queue_full');
   await send('two', 'The pending control queue is full.');
   answer = () => new Response('unavailable', {status: 503});
