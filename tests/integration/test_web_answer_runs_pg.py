@@ -48,6 +48,7 @@ from dlightrag.engine.runtime.records import (
     run_request_fingerprint,
 )
 from tests.conftest import FingerprintingRunStore
+from tests.support.child_sessions import settle_child, spawn_child
 from tests.support.pg import (
     PG_CONN_KWARGS,
     delete_runs,
@@ -1003,6 +1004,47 @@ async def test_a_snapshot_projects_each_turn_from_its_run(
     assert [turn.run.status for turn in page.turns] == ["queued", "succeeded"]
     assert page.turns[0].run.request_input()["query"] == "first"
     assert page.turns[1].run.result == {"answer": "done"}
+
+
+async def test_a_turn_counts_the_child_sessions_its_run_spawned(
+    store: PGWebConversationStore, runs: FingerprintingRunStore
+) -> None:
+    conversation_id = await _conversation(store)
+    plain, two, one = [
+        await _submit(store, conversation_id, request=_request(query))
+        for query in ("plain", "two", "one")
+    ]
+    assert plain is not None and two is not None and one is not None
+    # A turn just accepted has spawned nothing yet.
+    assert [created.turn.child_count for created in (plain, two, one)] == [0, 0, 0]
+
+    claims = {}
+    for _ in range(3):
+        claim = await runs.claim_next(worker_id="worker-1")
+        assert claim is not None
+        claims[claim.run.run_id] = claim
+    for creation, spawned in ((two, 2), (one, 1)):
+        run_id = creation.turn.answer_run_id
+        fenced = {
+            "owner_id": _OWNER,
+            "run_id": run_id,
+            "worker_id": "worker-1",
+            "fencing_epoch": claims[run_id].run.fencing_epoch,
+        }
+        children = [await spawn_child(runs, **fenced) for _ in range(spawned)]
+        # A settled Child still counts: the count says the turn had children, not that one runs.
+        await settle_child(runs, children[0], **fenced)
+
+    page = await store.history_page(
+        _OWNER, conversation_id, page=ConversationHistoryPageRequest(limit=_MAX_TURNS)
+    )
+    assert page is not None
+    assert [turn.child_count for turn in page.turns] == [0, 2, 1]
+    for creation, expected in ((plain, 0), (two, 2), (one, 1)):
+        found = await store.find_turn_by_run(_OWNER, creation.turn.answer_run_id)
+        assert found is not None and found.child_count == expected
+        replayed = await store.find_answer_turn_by_submission(_OWNER, creation.turn.submission_id)
+        assert replayed is not None and replayed.turn.child_count == expected
 
 
 async def test_a_run_is_only_findable_by_its_owner(store: PGWebConversationStore) -> None:

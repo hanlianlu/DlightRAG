@@ -402,8 +402,8 @@ Answer mode. `POST /retrieve` and `POST /answer` persist a Run and return HTTP
 | `POST /answer/{run_id}/follow-up` | Create a child run that appends to the selected terminal run's Lane. It injects no history; the fold at the tip is the context. |
 | `POST /answer/{run_id}/fork` | Create a sibling branch from the state that run settled at. It injects no history; the fold at the Fork Point is the context. |
 | `GET /answer/{run_id}/transcript` | Return bounded canonical ancestry. |
-| `GET /answer/{run_id}/children` | Newest-first Child Session roster page (`limit` 1–100, default 50). Public status only: no host/plan/budget envelopes or provider-private reasoning. |
-| `GET /answer/{run_id}/children/{child_session_id}` | Bounded Child Session observation: public status, transcript tail, queued/consumed controls, questions, and Evidence handles. `limit` 1–100, default 20. |
+| `GET /answer/{run_id}/children` | Newest-first Child Session roster page (`limit` 1–100, default 50). Public status only: no host/plan/budget envelopes or provider-private reasoning. Each child carries `started_at` and `finished_at` (UTC ISO 8601 with a `Z`): when its current Operation began, and when it settled, null while the Child runs; a Child with no Operation reports its own creation time. `pending_questions` counts its questions to the parent that still await a reply and have not expired. |
+| `GET /answer/{run_id}/children/{child_session_id}` | Bounded Child Session observation: public status (with the roster's `started_at`, `finished_at`, and `pending_questions`), transcript tail, queued/consumed controls, questions, and Evidence handles. `limit` 1–100, default 20. |
 | `POST /answer/{run_id}/children/{child_session_id}/control` | Steer, continue, or cancel one Child Session. Requires `Idempotency-Key`. Body `{action, content, reauthorize_user_cancelled}`. 202 for `queued` / `consumed` / `accepted` / `cancellation_requested`; 422 without `Idempotency-Key` or for invalid content or key; 409 with the explicit outcome (`terminal_child`, `run_terminal`, `reauthorization_required`, …); 404 if unknown. User-cancelled continuation requires `reauthorize_user_cancelled=true`. |
 | `POST /answer/{run_id}/child-guidance/{request_id}/reply` | Reply to one correlated `ask_parent` request. Requires `Idempotency-Key`. 202 for `replied`; 422 without `Idempotency-Key` or for invalid content or key; 404 if the request is unknown; 409 with the outcome otherwise. |
 
@@ -678,7 +678,9 @@ The Web event stream follows the same durable sequence as REST but projects a
 typed `AnswerPresentation` (`answer_text`, `parts`, `sources`,
 `evidence_images`, `artifacts`, and `artifact_outcome`). Conversation history
 uses the same shape. Pending, failed, and cancelled turns remain visible;
-only succeeded turns become model history.
+only succeeded turns become model history. Each turn carries `child_count`, the
+number of Child Sessions its Run spawned (0 for none, and for a turn just
+accepted), so a settled turn can tell whether it has children to open.
 
 History defaults to the newest 40 turns and accepts a sealed cursor plus a limit
 up to 100. Attachments are owner-scoped, content-addressed run blobs and are

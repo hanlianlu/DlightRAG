@@ -1778,6 +1778,14 @@ def test_a_pending_turn_reports_a_requested_cancellation() -> None:
     assert turn.cancel_requested is True
 
 
+def test_a_turn_carries_the_number_of_children_its_run_spawned() -> None:
+    spawned = project_conversation_turn(linked_turn(answer_run(status="succeeded"), child_count=3))
+    plain = project_conversation_turn(linked_turn(answer_run(status="succeeded")))
+
+    assert spawned.model_dump(mode="json")["child_count"] == 3
+    assert plain.model_dump(mode="json")["child_count"] == 0
+
+
 def test_a_failed_turn_stays_visible_with_its_public_error() -> None:
     turn = project_conversation_turn(
         linked_turn(

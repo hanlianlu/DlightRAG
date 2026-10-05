@@ -107,6 +107,7 @@ from .child_roster import (
     ChildRosterRowPage,
     child_result_lineage,
     public_child_status,
+    stamp,
 )
 
 #: Accepted input uploads, in the precedence one ordinal resolves against.
@@ -136,16 +137,6 @@ CHILD_CONTROL_SUCCESS_OUTCOMES: frozenset[str] = frozenset(
 def child_control_succeeded(outcome: str) -> bool:
     """Return whether one owner Child control was durably applied."""
     return outcome in CHILD_CONTROL_SUCCESS_OUTCOMES
-
-
-def _stamp(value: Any) -> str | None:
-    if value is None:
-        return None
-    isoformat = getattr(value, "isoformat", None)
-    if callable(isoformat):
-        return str(isoformat()).replace("+00:00", "Z")
-    text = str(value).strip()
-    return text or None
 
 
 def _public_transcript_message(message: Mapping[str, Any]) -> dict[str, Any]:
@@ -181,8 +172,8 @@ def _public_control_record(row: Mapping[str, Any]) -> dict[str, Any]:
         "content": str(row.get("content") or ""),
         "origin": str(row.get("origin") or ""),
         "consumed": bool(row.get("consumed") if "consumed" in row else consumed_at),
-        "consumed_at": _stamp(consumed_at),
-        "created_at": _stamp(row.get("created_at")),
+        "consumed_at": stamp(consumed_at),
+        "created_at": stamp(row.get("created_at")),
         "operation_id": (str(row["operation_id"]) if row.get("operation_id") else None),
     }
 
@@ -194,8 +185,8 @@ def _public_question_record(row: Mapping[str, Any]) -> dict[str, Any]:
         "status": str(row.get("status") or ""),
         "reply": row.get("reply"),
         "reply_origin": row.get("reply_origin"),
-        "expires_at": _stamp(row.get("expires_at")),
-        "created_at": _stamp(row.get("created_at")),
+        "expires_at": stamp(row.get("expires_at")),
+        "created_at": stamp(row.get("created_at")),
     }
 
 

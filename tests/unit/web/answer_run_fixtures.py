@@ -226,7 +226,11 @@ def answer_run(
 
 
 def linked_turn(
-    run: RunView | None = None, *, turn_number: int = 1, conversation_id: str = ""
+    run: RunView | None = None,
+    *,
+    turn_number: int = 1,
+    conversation_id: str = "",
+    child_count: int = 0,
 ) -> LinkedTurn:
     return LinkedTurn(
         turn_id=TURN_ID,
@@ -235,6 +239,7 @@ def linked_turn(
         created_at=NOW,
         run=run if run is not None else answer_run(),
         conversation_id=conversation_id,
+        child_count=child_count,
     )
 
 

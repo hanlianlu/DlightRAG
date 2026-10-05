@@ -51,6 +51,7 @@ class ConversationTurn(ClientContractModel):
     usage: dict[str, Any] = Field(default_factory=dict)
     error_kind: str | None = None
     error_message: str | None = None
+    child_count: int = 0
     created_at: datetime.datetime
 
 

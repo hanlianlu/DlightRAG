@@ -13,6 +13,7 @@ database is never mutated. Connection settings come from the shared
 integration-test PostgreSQL environment; skipped if unavailable.
 """
 
+import datetime
 import json
 import uuid
 from collections.abc import AsyncIterator, Iterator
@@ -46,6 +47,7 @@ from dlightrag.engine.ai.settings import (
 from dlightrag.engine.answer.capabilities import AnswerCapabilities, RequestModelContext
 from tests.support.agent_browser import never_registers
 from tests.support.application_double import application_double, delegate
+from tests.support.child_sessions import settle_child, spawn_child
 from tests.support.pg import PG_CONN_KWARGS, drop_database, skip_without_postgres
 
 pytestmark = [
@@ -521,3 +523,171 @@ async def test_a_trimmed_event_log_is_gone_but_the_result_remains(
     assert events.status_code == 410
     assert status.status_code == 200
     assert status.json()["result"]["answer"] == "durable"
+
+
+async def _operation_times(pool: Any, child_session_id: str) -> list[tuple[Any, Any]]:
+    """Each Operation's stored creation and last-change time, oldest first."""
+    rows = await pool.fetch(
+        "SELECT created_at, updated_at FROM dlightrag_answer_child_operations "
+        "WHERE child_session_id = $1 ORDER BY operation_sequence",
+        uuid.UUID(child_session_id),
+    )
+    return [(row["created_at"], row["updated_at"]) for row in rows]
+
+
+def _instant(text: str) -> datetime.datetime:
+    assert text.endswith("Z")
+    return datetime.datetime.fromisoformat(text)
+
+
+async def test_the_child_roster_carries_operation_times_and_waiting_questions(
+    client: AsyncClient, store: PGRunStore, pool: Any
+) -> None:
+    run_id = (await client.post("/answer", json={"query": "q"})).json()["run_id"]
+    owner = owner_id_from_user(_ANON)
+    claimed = await _claim(store, owner, run_id)
+    worker, epoch = str(claimed.run.lease_owner), int(claimed.run.fencing_epoch)
+    fenced = {"owner_id": owner, "run_id": run_id, "worker_id": worker, "fencing_epoch": epoch}
+    child = await spawn_child(store, **fenced)
+
+    async def ask(question: str) -> str:
+        request_id = str(uuid.uuid7())
+        assert await store.create_child_guidance(
+            owner_id=owner,
+            run_id=run_id,
+            request_id=request_id,
+            child_session_id=child.child_session_id,
+            child_operation_id=child.operation_id,
+            parent_session_id=child.parent_session_id,
+            question=question,
+            expires_after_seconds=300,
+            worker_id=worker,
+            fencing_epoch=epoch,
+            child_fencing_epoch=child.child_epoch,
+        )
+        return request_id
+
+    async def lapse(request_id: str) -> None:
+        await pool.execute(
+            "UPDATE dlightrag_answer_child_guidance "
+            "SET expires_at = NOW() - INTERVAL '1 minute' WHERE request_id = $1",
+            uuid.UUID(request_id),
+        )
+
+    await ask("still waiting")
+    answered = await ask("answered")
+    gave_up = await ask("given up on")
+    lapsed = await ask("lapsed unseen")
+    reply = await store.reply_child_guidance(
+        owner_id=owner,
+        run_id=run_id,
+        request_id=answered,
+        content="use the report",
+        submission_key="reply-one",
+    )
+    assert reply is not False and reply["outcome"] == "replied"
+    await lapse(gave_up)
+    assert await store.expire_child_guidance(
+        **fenced,
+        request_id=gave_up,
+        child_session_id=child.child_session_id,
+        child_operation_id=child.operation_id,
+        child_fencing_epoch=child.child_epoch,
+    )
+    await lapse(lapsed)
+
+    async def listed() -> dict[str, Any]:
+        roster = (await client.get(f"/answer/{run_id}/children")).json()["children"]
+        [row] = [row for row in roster if row["child_session_id"] == child.child_session_id]
+        observed = (await client.get(f"/answer/{run_id}/children/{child.child_session_id}")).json()
+        assert observed["child"] == row
+        return row
+
+    [(opened, _)] = await _operation_times(pool, child.child_session_id)
+    running = await listed()
+    assert _instant(running["started_at"]) == opened
+    assert running["finished_at"] is None
+    assert running["pending_questions"] == 1
+
+    await settle_child(store, child, **fenced)
+    [(_, settled)] = await _operation_times(pool, child.child_session_id)
+    done = await listed()
+    assert _instant(done["started_at"]) == opened
+    assert _instant(done["finished_at"]) == settled
+    assert _instant(done["finished_at"]) >= _instant(done["started_at"])
+
+    continuation = await store.continue_child_session(
+        owner_id=owner,
+        run_id=run_id,
+        child_session_id=child.child_session_id,
+        content="follow up",
+        submission_key="continue-one",
+    )
+    assert continuation is not False and continuation["outcome"] == "accepted"
+    [_, (reopened, _)] = await _operation_times(pool, child.child_session_id)
+    continued = await listed()
+    assert reopened > opened
+    assert _instant(continued["started_at"]) == reopened
+    assert continued["finished_at"] is None
+
+
+async def test_every_roster_page_carries_the_same_child_timing(
+    client: AsyncClient, store: PGRunStore, pool: Any
+) -> None:
+    run_id = (await client.post("/answer", json={"query": "q"})).json()["run_id"]
+    owner = owner_id_from_user(_ANON)
+    claimed = await _claim(store, owner, run_id)
+    worker, epoch = str(claimed.run.lease_owner), int(claimed.run.fencing_epoch)
+    full = await spawn_child(
+        store, owner_id=owner, run_id=run_id, worker_id=worker, fencing_epoch=epoch
+    )
+    assert await store.create_child_guidance(
+        owner_id=owner,
+        run_id=run_id,
+        request_id=str(uuid.uuid7()),
+        child_session_id=full.child_session_id,
+        child_operation_id=full.operation_id,
+        parent_session_id=full.parent_session_id,
+        question="which source?",
+        expires_after_seconds=300,
+        worker_id=worker,
+        fencing_epoch=epoch,
+        child_fencing_epoch=full.child_epoch,
+    )
+    # A Child created without an Operation yet, and the newer of the two.
+    sparse_id = str(uuid.uuid7())
+    assert await store.upsert_child_session(
+        owner_id=owner,
+        run_id=run_id,
+        child_session_id=sparse_id,
+        parent_session_id=str(uuid.uuid7()),
+        parent_call_id="call-sparse",
+        worker_id=worker,
+        fencing_epoch=epoch,
+    )
+
+    first = (await client.get(f"/answer/{run_id}/children", params={"limit": 1})).json()
+    second = (
+        await client.get(
+            f"/answer/{run_id}/children", params={"limit": 1, "cursor": first["next_cursor"]}
+        )
+    ).json()
+
+    [newest] = first["children"]
+    [oldest] = second["children"]
+    assert (newest["child_session_id"], oldest["child_session_id"]) == (
+        sparse_id,
+        full.child_session_id,
+    )
+    sparse_created = await pool.fetchval(
+        "SELECT created_at FROM dlightrag_answer_child_sessions WHERE child_session_id = $1",
+        uuid.UUID(sparse_id),
+    )
+    assert newest["operation_id"] is None
+    assert _instant(newest["started_at"]) == sparse_created
+    assert newest["finished_at"] is None
+    assert newest["pending_questions"] == 0
+    [(opened, _)] = await _operation_times(pool, full.child_session_id)
+    assert _instant(oldest["started_at"]) == opened
+    assert oldest["finished_at"] is None
+    assert oldest["pending_questions"] == 1
