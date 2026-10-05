@@ -255,7 +255,7 @@ export class DlApp extends LightElement {
             .shellInert=${this.canvasModal}></dl-conversation-sidebar>
           <dl-split-layout class="panel-split" id="panel-split" slot="end" primary="end"
                            orientation="horizontal" size="0" min="320"
-                           label=${msg('Resize Files or Sources', {id: 'app.resizeInspector'})}>
+                           label=${msg('Resize side panel', {id: 'app.resizeInspector'})}>
           <dl-split-layout class="panel-split" id="artifact-canvas-split" slot="start"
                            primary="end" orientation="horizontal" size="0" min="320"
                            label=${msg('Resize Artifact Canvas', {id: 'app.resizeArtifactCanvas'})}>

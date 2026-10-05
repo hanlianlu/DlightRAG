@@ -99,11 +99,11 @@ it('names each divider in the language the shell is showing', async () => {
   const labels = (): (string | null)[] => ['#conversation-split', '#panel-split', '#artifact-canvas-split']
     .map((id) => app.querySelector<DlSplitLayout>(id)!.divider.getAttribute('aria-label'));
 
-  expect(labels()).to.deep.equal(['Resize conversations', 'Resize Files or Sources', 'Resize Artifact Canvas']);
+  expect(labels()).to.deep.equal(['Resize conversations', 'Resize side panel', 'Resize Artifact Canvas']);
   try {
     await setLanguagePreference('zh');
     await app.updateComplete;
-    expect(labels()).to.deep.equal(['调整会话列表的宽度', '调整文件或来源面板的宽度', '调整工件画布的宽度']);
+    expect(labels()).to.deep.equal(['调整会话列表的宽度', '调整侧边面板的宽度', '调整工件画布的宽度']);
   } finally {
     await setLanguagePreference('en');
   }
