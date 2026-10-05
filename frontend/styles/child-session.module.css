@@ -239,6 +239,7 @@
     align-items: flex-start;
     display: flex;
     gap: var(--space-tight);
+    min-height: var(--size-button);
   }
 
   .summary::-webkit-details-marker,

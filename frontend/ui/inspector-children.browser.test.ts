@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {expect} from '@esm-bundle/chai';
-import {sendKeys} from '@web/test-runner-commands';
+import {sendKeys, setViewport} from '@web/test-runner-commands';
 import {CHILD_TRANSCRIPT_LIMIT} from '../api/conversations.ts';
 import {defineDesignSystemElements} from '../design-system/index.ts';
 import {NOW, ago, observation, question, receipt, refusal, roster, row, serve, sourceFor} from '../testing/children.ts';
@@ -1294,5 +1294,69 @@ describe('the page of a running child', () => {
     await waitFor(() => shown(dock).includes('Step 45'));
     expect(box.scrollTop).to.equal(stood);
     expect(below(box)).to.be.greaterThan(50);
+  });
+});
+
+// ── On a phone ──
+
+describe('on a phone', () => {
+  const originalViewport = {width: window.innerWidth, height: window.innerHeight};
+  let unlink: () => void;
+  before(async () => {
+    await setViewport({width: 390, height: 844});
+    unlink = await linkStyles([
+      '../design-system/index.css',
+      '../styles/global.css',
+      '../styles/layout.css',
+      '../styles/child-session.module.css',
+      '../styles/inspector-children.module.css',
+    ].map((href) => new URL(href, import.meta.url).href));
+  });
+  after(async () => {
+    unlink();
+    await setViewport(originalViewport);
+  });
+
+  it('gives everything the reader can press the product\'s hit target, in the list and on a child\'s page', async () => {
+    const running = row('a', 'running', {started_at: ago(5), pending_questions: 1});
+    serve({
+      page: () => roster([running, row('b', 'succeeded', {summary: 'Done.', result_handles: ['ev-1']})]),
+      observe: () => observation(running, {
+        transcript: [
+          {role: 'assistant', content: 'Looking.', tool_calls: [{id: 't1', name: 'read'}]},
+          {role: 'tool', content: 'first line\nsecond line', tool_call_id: 't1', name: 'read', is_error: false},
+        ],
+        controls: [{
+          control_sequence: 1, kind: 'steer', content: 'focus', origin: 'user', consumed: true,
+          consumed_at: ago(3), created_at: ago(4), operation_id: 'op-a',
+        }],
+        questions: [question('q1')],
+      }),
+    });
+    Date.now = () => NOW;
+    const probe = document.createElement('div');
+    probe.style.height = 'var(--control-hit-target)';
+    document.body.append(probe);
+    const target = probe.getBoundingClientRect().height;
+    probe.remove();
+    const dock = await mount(sourceFor().source, 390);
+    await waitFor(() => rows(dock).length === 2);
+    const pressable = () => [...dock.querySelectorAll<HTMLElement>('button, summary')]
+      .filter((element) => element.getClientRects().length > 0)
+      .map((element) => ({
+        name: (element.getAttribute('aria-label') ?? element.textContent!).replace(/\s+/g, ' ').trim(),
+        height: element.getBoundingClientRect().height,
+      }));
+
+    expect(target, 'the product\'s hit target is known').to.be.greaterThan(40);
+    const list = pressable();
+    expect(list).to.have.length(2);
+    await openChild(dock, 'a');
+    await waitFor(() => shown(dock).includes('Looking.') && shown(dock).includes('Control history'));
+    const page = pressable();
+    // The page offers Back, Cancel, Answer instead, Send, the Activity and Control history folds, and a step.
+    expect(page.length).to.be.greaterThan(6);
+    const short = [...list, ...page].filter((item) => item.height < target - 0.5);
+    expect(short, 'what is pressable and shorter than the hit target').to.deep.equal([]);
   });
 });
