@@ -94,10 +94,11 @@ rule the composition root already applies to the Agent Workspace, moved from the
 layout to the process view. Nothing is delayed by this that a deployment could
 otherwise do at runtime: the only surface that can name a new root is a mount, and
 a mount reaches a running process by recreating its container or pod. What lives
-*under* a declared root is picked up per Run without a restart — a published Skill
-is visible to the next Run — and the surfaces that are hot today (the runtime model
-catalogue overlay, outbound Connections and their per-Run tool bindings) never
-touch this list at all.
+*under* a declared root is picked up without a restart: `load_skill` resolves names
+as they are when it is called, so a published Skill is loadable at once, while the
+catalog the Run was started with, a stable part of its prompt prefix, lists it from
+the next Run. The surfaces that are hot today (the runtime model catalogue overlay,
+outbound Connections and their per-Run tool bindings) never touch this list at all.
 
 **Capabilities declare what they need; the core declares nothing.** Skills are
 the one capability that needs more today: they are documents the Agent reads and

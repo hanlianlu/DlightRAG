@@ -22,7 +22,7 @@ import logging
 import re
 import shutil
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from importlib.resources import files
 from importlib.resources.abc import Traversable
@@ -217,8 +217,14 @@ class SkillsBundle:
         return self._owner_root
 
     def catalog(self) -> SkillCatalog | None:
-        if self._builtin_root is None and self._global_root is None and self._owner_root is None:
-            return None
+        return self._discover() if self._configured() else None
+
+    def _configured(self) -> bool:
+        return any(
+            root is not None for root in (self._builtin_root, self._global_root, self._owner_root)
+        )
+
+    def _discover(self) -> SkillCatalog:
         return SkillCatalog.discover(
             builtin_root=self._builtin_root,
             global_root=self._global_root,
@@ -238,16 +244,15 @@ class SkillsBundle:
         return tuple(item for item in (requested, skill) if item is not None)
 
     def tools(self, *, child: bool) -> list[AgentTool]:
-        catalog = self.catalog()
         bindings = {
-            "load_skill": lambda: load_skill_tool(cast(SkillCatalog, catalog)),
+            "load_skill": lambda: load_skill_tool(self._discover),
             "publish_skill": lambda: publish_skill_tool(self._owner_root),
             "delete_skill": lambda: delete_skill_tool(self._owner_root),
         }
         return [
             bindings[declaration.name]()
             for declaration in skill_declarations(
-                load=catalog is not None, publish=self._owner_root is not None, child=child
+                load=self._configured(), publish=self._owner_root is not None, child=child
             )
         ]
 
@@ -328,12 +333,18 @@ def load_skill_declaration() -> ToolDeclaration:
     )
 
 
-def load_skill_tool(catalog: SkillCatalog) -> AgentTool:
+def load_skill_tool(catalog: Callable[[], SkillCatalog]) -> AgentTool:
+    """Read Skills by the names the catalog holds when each call is made.
+
+    The catalog message a Run starts with is a stable prompt prefix, but a Skill the
+    Run publishes or deletes must be loadable, or gone, at once.
+    """
+
     async def execute(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = cast(LoadSkillInput, raw)
         await runtime.emit_update(ToolResult.text("", subject=args.name))
         try:
-            text = catalog.read(args.name, args.path)
+            text = catalog().read(args.name, args.path)
         except (ValueError, FileNotFoundError) as exc:
             return ToolResult.text(f"Skill load failed: {exc}", is_error=True)
         return ToolResult.text(
@@ -376,7 +387,8 @@ def publish_skill_tool(owner_root: Path | None) -> AgentTool:
             return ToolResult.text(f"Skill publication failed: {exc}", is_error=True)
         return ToolResult.text(
             f"Published Agent Skill '{args.name}' with {written} file(s) "
-            f"into your owner skill directory. It is discoverable on your next answer run."
+            "into your owner skill directory. You can read it with load_skill now; it is "
+            "listed in the catalog from your next answer run."
         )
 
     return publish_skill_declaration().bind(execute)
@@ -407,7 +419,11 @@ def delete_skill_tool(owner_root: Path | None) -> AgentTool:
             return ToolResult.text(f"Skill deletion failed: {exc}", is_error=True)
         if not removed:
             return ToolResult.text(f"Agent Skill '{args.name}' does not exist; nothing to delete.")
-        return ToolResult.text(f"Deleted Agent Skill '{args.name}'.")
+        return ToolResult.text(
+            f"Deleted Agent Skill '{args.name}'. It can no longer be loaded and leaves the "
+            "catalog from your next answer run; a same-named lower-tier skill, if any, "
+            "takes its place."
+        )
 
     return delete_skill_declaration().bind(execute)
 
@@ -611,6 +627,9 @@ def _discover_root(
         return ()
     found: list[SkillMetadata] = []
     for child in sorted(root.iterdir(), key=lambda item: item.name):
+        # A publish in flight keeps its `.staging-` and `.backup-` directories here.
+        if child.name.startswith("."):
+            continue
         skill_file = child.joinpath("SKILL.md")
         if not child.is_dir() or not skill_file.is_file():
             continue

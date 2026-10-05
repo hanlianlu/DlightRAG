@@ -10,6 +10,7 @@ from dlightrag.engine.agent.skills import (
     LoadSkillInput,
     PublishSkillInput,
     SkillCatalog,
+    SkillsBundleFactory,
     delete_skill_tool,
     load_skill_tool,
     owner_skill_root,
@@ -131,7 +132,9 @@ async def test_load_skill_reads_body_on_demand_but_never_executes_it(tmp_path: P
     )
     catalog = SkillCatalog.discover(global_root=tmp_path / "none", owner_root=owner_root)
 
-    result = await load_skill_tool(catalog).execute(LoadSkillInput(name="safe"), tool_runtime())
+    result = await load_skill_tool(lambda: catalog).execute(
+        LoadSkillInput(name="safe"), tool_runtime()
+    )
 
     assert "untrusted reference context" in result.text_content
     assert "touch should-not-exist" in result.text_content
@@ -315,13 +318,62 @@ async def test_delete_skill_is_idempotent(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_published_or_deleted_skill_is_loadable_or_gone_inside_the_same_run(
+    tmp_path: Path,
+) -> None:
+    global_root = tmp_path / "global"
+    _skill(global_root, "review", name="review", description="global", body="GLOBAL")
+    factory = SkillsBundleFactory(global_root=global_root, owner_root=tmp_path / "owners")
+    run_bundle = factory("alice")
+    tools = {tool.name: tool for tool in run_bundle.tools(child=False)}
+    catalog_at_start = str(run_bundle.context_contributions(child=False)[0].messages[0]["content"])
+
+    async def load(name: str) -> ToolResult:
+        return await tools["load_skill"].execute(
+            LoadSkillInput(name=name), tool_runtime(tool_name="load_skill")
+        )
+
+    async def publish(name: str, body: str) -> None:
+        result = await tools["publish_skill"].execute(
+            PublishSkillInput(
+                name=name, files=_skill_files(name=name, description="owner", body=body)
+            ),
+            tool_runtime(tool_name="publish_skill"),
+        )
+        assert not result.is_error
+
+    async def delete(name: str) -> None:
+        result = await tools["delete_skill"].execute(
+            DeleteSkillInput(name=name), tool_runtime(tool_name="delete_skill")
+        )
+        assert not result.is_error
+
+    await publish("weekly-report", "WEEKLY")
+    await publish("review", "OWNER")
+
+    assert (await load("weekly-report")).text_content.endswith("WEEKLY")
+    assert (await load("review")).text_content.endswith("OWNER")
+    # The catalog message is the Run's stable prompt prefix; only the next Run lists the new Skill.
+    assert "weekly-report" not in catalog_at_start
+    next_run = factory("alice").context_contributions(child=False)[0].messages[0]["content"]
+    assert "weekly-report: owner (owner)" in str(next_run)
+
+    await delete("weekly-report")
+    await delete("review")
+
+    gone = await load("weekly-report")
+    assert gone.is_error and "no Agent Skill is named 'weekly-report'" in gone.text_content
+    assert (await load("review")).text_content.endswith("GLOBAL")
+
+
+@pytest.mark.asyncio
 async def test_skill_tools_report_their_subject_live(tmp_path: Path) -> None:
     updates: list[ToolResult] = []
 
     owner_root = tmp_path / "owner"
     _skill(owner_root, "review", name="review", description="reference", body="body")
     catalog = SkillCatalog.discover(owner_root=owner_root)
-    await load_skill_tool(catalog).execute(
+    await load_skill_tool(lambda: catalog).execute(
         LoadSkillInput(name="review"), recording_tool_runtime(updates, tool_name="load_skill")
     )
     await publish_skill_tool(owner_root).execute(
@@ -405,6 +457,18 @@ def test_a_malformed_skill_is_left_out_of_the_catalog(tmp_path: Path) -> None:
     assert [skill.name for skill in catalog.metadata] == ["good"]
 
 
+def test_the_directories_of_a_publish_in_flight_are_not_skills(tmp_path: Path) -> None:
+    root = tmp_path / "owner"
+    _skill(root, "review", name="review", description="Use when asked", body="LIVE")
+    _skill(root, ".staging-1f", name="weekly-report", description="Half written", body="x")
+    _skill(root, ".backup-review-1f", name="review", description="Replaced", body="OLD")
+
+    catalog = SkillCatalog.discover(owner_root=root)
+
+    assert [skill.name for skill in catalog.metadata] == ["review"]
+    assert catalog.read("review").endswith("LIVE")
+
+
 def test_a_frontmatter_the_yaml_reader_rejects_costs_only_its_own_skill(tmp_path: Path) -> None:
     root = tmp_path / "global"
     _skill(root, "good", name="good", description="Use when asked", body="b")
@@ -440,7 +504,7 @@ async def test_a_failed_skill_load_is_an_error_result_that_says_what_is_missing(
 ) -> None:
     root = tmp_path / "global"
     _skill(root, "review", name="review", description="Use when asked", body="body")
-    tool = load_skill_tool(SkillCatalog.discover(global_root=root))
+    tool = load_skill_tool(lambda: SkillCatalog.discover(global_root=root))
 
     async def load(name: str, path: str = "SKILL.md") -> ToolResult:
         return await tool.execute(

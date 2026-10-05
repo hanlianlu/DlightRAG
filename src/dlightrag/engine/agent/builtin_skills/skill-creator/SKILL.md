@@ -17,7 +17,7 @@ description: Guide the user through creating, improving, or removing personal Dl
    同时追问边界情况、输入输出格式、失败时怎么办、有没有现成的例子。
 2. **起草**：生成 `SKILL.md` 和必要的附属文件。附属文件用技能内的相对路径引用，并在正文里写明何时用 `load_skill(name, path="references/...")` 去读。
 3. **确认**：把名称、`description` 原文和文件清单讲给用户，等明确同意。没同意就不发布；用户要改就回到起草。
-4. **发布**：调用 `publish_skill(name, files)`，这是唯一的持久化通道。frontmatter 的 `name` 要与发布名一致。成功后告诉用户：下一轮回答起可以用 `/skill:<name> 具体问题` 显式触发，也可能靠 `description` 自动触发。
+4. **发布**：调用 `publish_skill(name, files)`，这是唯一的持久化通道。frontmatter 的 `name` 要与发布名一致。成功后可以立刻用 `load_skill(name)` 读回，确认 frontmatter 被识别、正文无误，再告诉用户：下一轮回答起可以用 `/skill:<name> 具体问题` 显式触发，也可能靠 `description` 自动触发。
 5. **迭代**：没触发就改 `description`，流程不对就改正文，用户不想要了就调 `delete_skill(name)`。删除只移除用户层，同名的全局或内置技能会重新出现。
 
 ## 写好 description
