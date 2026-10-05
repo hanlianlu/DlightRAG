@@ -163,13 +163,7 @@ export class RunController {
 
   /** Release a completed or failed local lifecycle if it is still current. */
   finish(runId?: string): void {
-    if (runId !== undefined && this.#runId !== runId) return;
-    this.#releaseBatch();
-    this.#clearTimer();
-    this.#lifecycleController?.abort();
-    this.#lifecycleController = null;
-    this.#cancelReaders();
-    this.#resetState();
+    if (runId === undefined || this.#runId === runId) this.detach();
   }
 
   /** Ask the server to stop the durable run; disconnecting alone never does this. */

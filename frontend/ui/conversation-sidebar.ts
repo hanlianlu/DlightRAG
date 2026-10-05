@@ -402,27 +402,22 @@ export class DlConversationSidebar extends LightElement {
     ));
   }
 
+  /** Having chosen where to be, close the drawer and let the reader type. */
+  async #backToComposer(): Promise<void> {
+    await this.close(true);
+    window.requestAnimationFrame(() => this.chatFeature?.focusComposer());
+  }
+
   async #requestSelectConversation(conversationId: string): Promise<void> {
-    if (conversationId === this.handles.conversations.activeConversationId) {
-      await this.close(true);
-      window.requestAnimationFrame(() => this.chatFeature?.focusComposer());
-      return;
-    }
-    if (await webRouter.navigate(conversationRoute(conversationId))) {
-      await this.close(true);
-      window.requestAnimationFrame(() => this.chatFeature?.focusComposer());
+    if (conversationId === this.handles.conversations.activeConversationId
+      || await webRouter.navigate(conversationRoute(conversationId))) {
+      await this.#backToComposer();
     }
   }
 
   async #requestNewConversation(): Promise<void> {
-    if (webRouter.current.kind === 'new') {
-      await this.close(true);
-      window.requestAnimationFrame(() => this.chatFeature?.focusComposer());
-      return;
-    }
-    if (await webRouter.navigate(newChatRoute())) {
-      await this.close(true);
-      window.requestAnimationFrame(() => this.chatFeature?.focusComposer());
+    if (webRouter.current.kind === 'new' || await webRouter.navigate(newChatRoute())) {
+      await this.#backToComposer();
     }
   }
 

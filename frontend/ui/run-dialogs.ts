@@ -309,19 +309,22 @@ export class DlChildrenRoster extends LightElement {
     });
   }
 
-  #captureEditors(): void {
+  /** Each editor the open child shows, with the key its draft is kept under. */
+  *#editors(): Generator<{textarea: HTMLTextAreaElement; form: HTMLFormElement; key: string}> {
     const panel = this.querySelector('.roster-observation');
     if (!panel || !this.#selectedId) return;
-    const active = document.activeElement;
-    this.#focusKey = null;
     for (const textarea of panel.querySelectorAll<HTMLTextAreaElement>('textarea')) {
       const form = textarea.closest('form');
-      if (!form) continue;
-      const kind = editorKind(form);
-      if (!kind) continue;
-      const requestId = form.dataset.requestId || null;
-      const key = this.#editorKey(kind, requestId);
-      if (!key) continue;
+      const kind = form && editorKind(form);
+      const key = form && kind ? this.#editorKey(kind, form.dataset.requestId || null) : null;
+      if (form && key) yield {textarea, form, key};
+    }
+  }
+
+  #captureEditors(): void {
+    const active = document.activeElement;
+    this.#focusKey = null;
+    for (const {textarea, form, key} of this.#editors()) {
       const reauthorize = Boolean(
         form.querySelector<HTMLInputElement>('[name="reauthorize"]')?.checked,
       );
@@ -337,19 +340,9 @@ export class DlChildrenRoster extends LightElement {
   }
 
   #restoreEditors(): void {
-    const panel = this.querySelector('.roster-observation');
-    if (!panel || !this.#selectedId) return;
-    for (const textarea of panel.querySelectorAll<HTMLTextAreaElement>('textarea')) {
-      const form = textarea.closest('form');
-      if (!form) continue;
-      const kind = editorKind(form);
-      if (!kind) continue;
-      const requestId = form.dataset.requestId || null;
-      const key = this.#editorKey(kind, requestId);
-      if (!key) continue;
+    for (const {textarea, form, key} of this.#editors()) {
       const draft = this.#drafts.get(key);
-      if (!draft) continue;
-      if (draft.element === textarea) continue;
+      if (!draft || draft.element === textarea) continue;
       textarea.value = draft.value;
       const box = form.querySelector<HTMLInputElement>('[name="reauthorize"]');
       if (box) box.checked = draft.reauthorize;
