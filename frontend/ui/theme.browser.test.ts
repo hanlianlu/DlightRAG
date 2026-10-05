@@ -1,11 +1,12 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {expect} from '@esm-bundle/chai';
+import {emulateMedia} from '@web/test-runner-commands';
 import {defineDesignSystemElements} from '../design-system/index.ts';
 import {THEME_STORAGE_KEY} from '../lib/theme.ts';
 import type {DlThemeControl} from './theme.ts';
 import './theme.ts';
-import {buttonNamed} from '../testing/dom.ts';
+import {buttonNamed, waitFor} from '../testing/dom.ts';
 
 defineDesignSystemElements();
 
@@ -52,4 +53,22 @@ it('owns its menu, roving selection, persistence, and root color capability', as
   expect(localStorage.getItem(THEME_STORAGE_KEY)).to.equal('dark');
   expect(dark.getAttribute('aria-checked')).to.equal('true');
   expect(menu.hasAttribute('hidden')).to.equal(true);
+});
+
+it('follows the system colour scheme while the preference is System', async () => {
+  const colorMode = () => document.documentElement.getAttribute('data-color-mode');
+  try {
+    await emulateMedia({colorScheme: 'light'});
+    const control = document.createElement('dl-theme-control') as DlThemeControl;
+    document.body.appendChild(control);
+    await control.updateComplete;
+    expect(colorMode()).to.equal('light');
+
+    await emulateMedia({colorScheme: 'dark'});
+    await waitFor(() => colorMode() === 'dark');
+    await emulateMedia({colorScheme: 'light'});
+    await waitFor(() => colorMode() === 'light');
+  } finally {
+    await emulateMedia({colorScheme: 'light'});
+  }
 });

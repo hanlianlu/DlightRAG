@@ -16,7 +16,7 @@ import {
   THEME_STORAGE_KEY,
   type ThemePreference,
 } from '../lib/theme.ts';
-import {LightElement} from '../lib/lit-host.ts';
+import {LightElement, MediaController} from '../lib/lit-host.ts';
 import {TriggerPopover} from '../lib/popover.ts';
 import {isLocalStorageEvent, readStored, writeStored} from '../lib/storage.ts';
 
@@ -37,7 +37,7 @@ export class DlThemeControl extends LightElement {
 
   declare preference: ThemePreference;
 
-  #media: MediaQueryList | null = null;
+  readonly #dark = new MediaController(this, '(prefers-color-scheme: dark)');
   readonly #menu = new TriggerPopover(this, {
     trigger: () => this.querySelector<HTMLButtonElement>('#theme-trigger'),
     enter: (which) => { this.querySelector<DlMenu>('#theme-menu')?.focusItem(which); },
@@ -51,15 +51,8 @@ export class DlThemeControl extends LightElement {
   override connectedCallback(): void {
     super.connectedCallback();
     this.preference = readPreference();
-    this.#media = window.matchMedia('(prefers-color-scheme: dark)');
-    this.#media.addEventListener('change', this.#mediaChanged, {signal: this.lifetime});
     window.addEventListener('storage', this.#storageChanged, {signal: this.lifetime});
     this.#apply();
-  }
-
-  override disconnectedCallback(): void {
-    this.#media = null;
-    super.disconnectedCallback();
   }
 
   protected override updated(): void {
@@ -101,7 +94,7 @@ export class DlThemeControl extends LightElement {
   #apply(): void {
     // Theme is an approved top-level browser capability; the root is its interface.
     const root = document.documentElement;
-    const colorMode = resolveColorMode(this.preference, this.#media?.matches ?? false);
+    const colorMode = resolveColorMode(this.preference, this.#dark.matches);
     root.setAttribute('data-theme', this.preference);
     root.setAttribute('data-color-mode', colorMode);
     root.style.colorScheme = colorMode;
@@ -122,10 +115,6 @@ export class DlThemeControl extends LightElement {
 
   #menuDismissed = (event: CustomEvent<MenuDismissDetail>): void => {
     this.#menu.close(event.detail.restoreFocus);
-  };
-
-  #mediaChanged = (): void => {
-    if (this.preference === 'system') this.#apply();
   };
 
   #storageChanged = (event: StorageEvent): void => {

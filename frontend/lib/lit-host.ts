@@ -76,15 +76,20 @@ export class StoreController implements ReactiveController {
     }
 }
 
-/** Re-renders its host when a media query starts or stops matching. */
+/**
+ * Re-renders its host when a media query starts or stops matching, then calls `onChange`, so the
+ * host's `updateComplete` there is the render that answers the change.
+ */
 export class MediaController implements ReactiveController {
     readonly #host: ReactiveControllerHost;
     readonly #query: string;
+    readonly #onChange: (() => void) | undefined;
     #list: MediaQueryList | null = null;
 
-    constructor(host: ReactiveControllerHost, query: string) {
+    constructor(host: ReactiveControllerHost, query: string, onChange?: () => void) {
         this.#host = host;
         this.#query = query;
+        this.#onChange = onChange;
         host.addController(this);
     }
 
@@ -103,7 +108,10 @@ export class MediaController implements ReactiveController {
         this.#list = null;
     }
 
-    readonly #changed = (): void => { this.#host.requestUpdate(); };
+    readonly #changed = (): void => {
+        this.#host.requestUpdate();
+        this.#onChange?.();
+    };
 }
 
 /**

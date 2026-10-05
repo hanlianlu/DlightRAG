@@ -6,7 +6,7 @@ import {type AnswerArtifact, type AnswerPresentation, getArtifactPresentationAt 
 import {apiError} from '../api/wire.ts';
 import {COMPACT_SHELL_MEDIA, MOBILE_MEDIA} from '../lib/breakpoints.ts';
 import {tabbables, wrapTabFocus} from '../lib/dom.ts';
-import {LightElement} from '../lib/lit-host.ts';
+import {LightElement, MediaController} from '../lib/lit-host.ts';
 import {safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
 import canvasStyles from '../styles/artifact-canvas.module.css';
 import type {DlActiveArtifactFrame} from './active-artifact-frame.ts';
@@ -47,7 +47,7 @@ export class DlArtifactCanvas extends LightElement {
 
   #controller: AbortController | null = null;
   #returnFocus: HTMLElement | null = null;
-  #compactMedia: MediaQueryList | null = null;
+  readonly #compact = new MediaController(this, COMPACT_SHELL_MEDIA, () => { this.#compactLayoutChanged(); });
   #focusGeneration = 0;
 
   constructor() {
@@ -67,12 +67,9 @@ export class DlArtifactCanvas extends LightElement {
       this.inert = true;
       this.setAttribute('aria-hidden', 'true');
     }
-    this.#compactMedia = window.matchMedia(COMPACT_SHELL_MEDIA);
-    this.#compactMedia.addEventListener('change', this.#compactLayoutChanged, {signal: this.lifetime});
   }
 
   override disconnectedCallback(): void {
-    this.#compactMedia = null;
     this.#focusGeneration += 1;
     this.#destroyPreview();
     this.#controller?.abort();
@@ -108,7 +105,7 @@ export class DlArtifactCanvas extends LightElement {
   /** Make the Inspector reachable and return focus owned by a closed compact Canvas. */
   prepareForInspector(): HTMLElement | null {
     if (!this.classList.contains('open')) return null;
-    if (this.#compactMedia?.matches ?? window.matchMedia(COMPACT_SHELL_MEDIA).matches) {
+    if (this.#compact.matches) {
       const returnFocus = this.#returnFocus;
       this.close(false);
       return returnFocus;
@@ -321,7 +318,7 @@ export class DlArtifactCanvas extends LightElement {
           open,
           modal: this.#isModal(),
           overlay: open && this.layout === 'fullscreen',
-          wide: open && this.layout === 'wide' && !this.#compactMatches(),
+          wide: open && this.layout === 'wide' && !this.#compact.matches,
         },
       },
     ));
@@ -334,20 +331,16 @@ export class DlArtifactCanvas extends LightElement {
     this.#syncModalState();
   }
 
-  #compactLayoutChanged = (): void => {
+  #compactLayoutChanged(): void {
     this.#syncModalState();
     if (this.#isModal() && !this.contains(document.activeElement)) {
       this.querySelector<HTMLButtonElement>('[data-action="close"]')?.focus();
     }
-  };
+  }
 
   #isModal(): boolean {
     return this.classList.contains('open')
-      && (this.layout === 'fullscreen' || this.#compactMatches());
-  }
-
-  #compactMatches(): boolean {
-    return this.#compactMedia?.matches ?? window.matchMedia(COMPACT_SHELL_MEDIA).matches;
+      && (this.layout === 'fullscreen' || this.#compact.matches);
   }
 
   #syncModalState(): void {

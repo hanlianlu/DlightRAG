@@ -6,7 +6,7 @@ import {clearMemory} from '../api/memory.ts';
 import {icon} from '../design-system/index.ts';
 import {DESKTOP_SHELL_MEDIA} from '../lib/breakpoints.ts';
 import {tabbables, wrapTabFocus} from '../lib/dom.ts';
-import {LightElement, StoreController} from '../lib/lit-host.ts';
+import {LightElement, MediaController, StoreController} from '../lib/lit-host.ts';
 import {conversationRoute, newChatRoute, type WebRoute} from '../lib/router.ts';
 import {type AppHandles, productionHandles } from '../stores/app-handles.ts';
 import type {
@@ -57,7 +57,6 @@ export class DlConversationSidebar extends LightElement {
     chatFeature: {attribute: false},
     drawerOpen: {state: true},
     desktopCollapsed: {state: true},
-    desktop: {state: true},
     pendingLifecycleAction: {state: true},
     shellInert: {state: true},
   };
@@ -67,11 +66,11 @@ export class DlConversationSidebar extends LightElement {
   declare chatFeature: ConversationChat | null;
   declare drawerOpen: boolean;
   declare desktopCollapsed: boolean;
-  declare desktop: boolean;
   declare pendingLifecycleAction: boolean;
   declare shellInert: boolean;
 
   #drawerReturnFocus: HTMLElement | null = null;
+  readonly #desktop = new MediaController(this, DESKTOP_SHELL_MEDIA, () => { this.#breakpointCrossed(); });
   #releaseRouter: (() => void) | null = null;
   #renderedViewRevision = -1;
   #stateSignature = '';
@@ -83,7 +82,6 @@ export class DlConversationSidebar extends LightElement {
     this.chatFeature = null;
     this.drawerOpen = false;
     this.desktopCollapsed = this.#collapsedPreference();
-    this.desktop = window.matchMedia(DESKTOP_SHELL_MEDIA).matches;
     this.pendingLifecycleAction = false;
     this.shellInert = false;
     /** Store reads: activeConversationId, fallbackConversationId, mutationPending. */
@@ -92,10 +90,7 @@ export class DlConversationSidebar extends LightElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    this.desktop = window.matchMedia(DESKTOP_SHELL_MEDIA).matches;
-    this.requestUpdate();
     document.addEventListener('keydown', this.#documentKeydown, {signal: this.lifetime});
-    window.addEventListener('resize', this.#resize, {signal: this.lifetime});
     window.addEventListener('beforeunload', this.#beforeUnload, {signal: this.lifetime});
   }
 
@@ -112,15 +107,14 @@ export class DlConversationSidebar extends LightElement {
     if (changed.has('chatFeature')) this.#renderedViewRevision = -1;
     this.#startIfReady();
     this.#renderCurrentConversationView();
-    const expanded = this.enabled && (this.desktop ? !this.desktopCollapsed : this.drawerOpen);
-    this.classList.toggle('open', expanded && this.desktop);
+    this.classList.toggle('open', this.#expanded && this.#desktop.matches);
     this.#publishSidebarState();
   }
 
   /** Opens the sidebar and moves focus to its primary action. */
   async open(trigger: HTMLElement | null = null): Promise<boolean> {
     if (!this.enabled) return false;
-    if (this.desktop) {
+    if (this.#desktop.matches) {
       this.desktopCollapsed = false;
       this.#setCollapsedPreference(false);
       await this.updateComplete;
@@ -143,7 +137,7 @@ export class DlConversationSidebar extends LightElement {
 
   /** Closes only the compact drawer; desktop collapse is an explicit user action. */
   async close(restoreFocus = false): Promise<void> {
-    if (this.desktop || !this.drawerOpen) return;
+    if (this.#desktop.matches || !this.drawerOpen) return;
     this.drawerOpen = false;
     await this.updateComplete;
     if (restoreFocus && this.#drawerReturnFocus?.isConnected) {
@@ -514,7 +508,7 @@ export class DlConversationSidebar extends LightElement {
 
 
   #toggleSidebar = (): void => {
-    if (this.desktop) {
+    if (this.#desktop.matches) {
       this.desktopCollapsed = true;
       this.#setCollapsedPreference(true);
       void this.updateComplete.then(() => { this.#openButton()?.focus(); });
@@ -524,34 +518,32 @@ export class DlConversationSidebar extends LightElement {
   };
 
   #focusTrap = (event: KeyboardEvent): void => {
-    if (this.desktop || !this.drawerOpen || event.key !== 'Tab') return;
+    if (this.#desktop.matches || !this.drawerOpen || event.key !== 'Tab') return;
     const nav = this.querySelector('nav');
     if (nav) wrapTabFocus(tabbables(nav), event);
   };
 
   #documentKeydown = (event: KeyboardEvent): void => {
-    if (event.key !== 'Escape' || this.desktop || !this.drawerOpen) return;
+    if (event.key !== 'Escape' || this.#desktop.matches || !this.drawerOpen) return;
     if (document.querySelector('dialog[open]') || this.#list()?.menuOpen) return;
     event.preventDefault();
     void this.close(true);
   };
 
-  #resize = (): void => {
-    const desktop = window.matchMedia(DESKTOP_SHELL_MEDIA).matches;
-    if (desktop === this.desktop) return;
+  /** Crossing the breakpoint: the drawer is only for the compact layout, and focus must not be stranded in it. */
+  #breakpointCrossed(): void {
     const navigation = this.querySelector<HTMLElement>('#chat-sidebar');
     const focusWasInNavigation = Boolean(
       document.activeElement instanceof Node && navigation?.contains(document.activeElement),
     );
     this.drawerOpen = false;
     this.#drawerReturnFocus = null;
-    this.desktop = desktop;
     if (focusWasInNavigation) {
       void this.updateComplete.then(() => {
         if (navigation?.inert) this.#openButton()?.focus();
       });
     }
-  };
+  }
 
   #beforeUnload = (event: BeforeUnloadEvent): void => {
     if (!this.#hasUnsavedDraft() && !this.chatFeature?.hasUnresolvedSubmission) return;
@@ -559,9 +551,14 @@ export class DlConversationSidebar extends LightElement {
     event.returnValue = '';
   };
 
+  /** Whether the conversation list shows: the column on desktop unless collapsed, the drawer when compact. */
+  get #expanded(): boolean {
+    return this.enabled && (this.#desktop.matches ? !this.desktopCollapsed : this.drawerOpen);
+  }
+
   #publishSidebarState(): void {
-    const expanded = this.enabled && (this.desktop ? !this.desktopCollapsed : this.drawerOpen);
-    const compact = !this.desktop;
+    const expanded = this.#expanded;
+    const compact = !this.#desktop.matches;
     const signature = `${expanded}:${compact}`;
     if (signature === this.#stateSignature) return;
     this.#stateSignature = signature;
@@ -599,8 +596,8 @@ export class DlConversationSidebar extends LightElement {
   };
 
   protected override render(): TemplateResult {
-    const expanded = this.enabled && (this.desktop ? !this.desktopCollapsed : this.drawerOpen);
-    const modal = this.enabled && !this.desktop && this.drawerOpen;
+    const expanded = this.#expanded;
+    const modal = this.enabled && !this.#desktop.matches && this.drawerOpen;
     return html`
       <nav
         id="chat-sidebar"
@@ -625,7 +622,7 @@ export class DlConversationSidebar extends LightElement {
           <button
             id="conversation-sidebar-toggle"
             type="button"
-            aria-label=${this.desktop
+            aria-label=${this.#desktop.matches
               ? msg('Collapse conversations', {id: 'conversationSidebar.collapseConversations'})
               : msg('Close conversations', {id: 'conversationSidebar.closeConversations'})}
             aria-controls="chat-sidebar"
