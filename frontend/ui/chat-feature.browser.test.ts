@@ -1465,6 +1465,65 @@ it('shows the answer a live done frame carries when no refresh can supply it', a
   expect(feature.querySelector('dl-answer-presentation')?.textContent).to.contain('A stored answer.');
 });
 
+it('keeps the first answer of a new conversation when the history refresh after it fails', async () => {
+  const conversationId = 'conversation-refresh-fails';
+  const runId = 'run-refresh-fails';
+  const done = {status: 'succeeded', presentation: presentationWire(presentation), usage: {}};
+  let historyReads = 0;
+  window.fetch = ((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes('/history')) historyReads += 1;
+    if (!url.endsWith('/events')) return Promise.resolve(new Response('{}', {status: 503}));
+    return Promise.resolve(new Response(
+      'id: 1\nevent: token\ndata: "A stored"\n\n'
+      + `id: 2\nevent: done\ndata: ${JSON.stringify(done)}\n\n`,
+      {status: 200, headers: {'Content-Type': 'text/event-stream'}},
+    ));
+  }) as typeof fetch;
+  const feature = document.createElement('dl-chat-feature') as DlChatFeature;
+  const sidebar = document.createElement('dl-conversation-sidebar') as DlConversationSidebar;
+  sidebar.chatFeature = feature;
+  document.body.append(feature, sidebar);
+  await sidebar.updateComplete;
+  // The first accepted answer: the store adopts the conversation without loaded
+  // history, and the live answer owns the viewport.
+  conversationStore.adoptCreatedConversation({
+    conversationId,
+    title: 'Refresh fails',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    forkedFromConversationId: null,
+    forkedFromTitle: null,
+  });
+  feature.view = {
+    kind: 'ready',
+    conversationId,
+    lineage: null,
+    history: [{
+      ...storedTurn(),
+      answerRunId: runId,
+      turnId: 'turn-refresh-fails',
+      status: 'running',
+      presentation: null,
+    }],
+  };
+
+  // The history read is the refresh that follows the finished run.
+  await waitFor(() => historyReads > 0);
+  // The failed read reaches the store a task later; let it travel to the sidebar and the Feature.
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await sidebar.updateComplete;
+  await settle(feature);
+
+  expect(historyReads).to.equal(1);
+  expect(feature.textContent).to.not.contain('Conversation history is unavailable.');
+  expect(feature.querySelector('[role="alert"]')).to.equal(null);
+  expect(feature.querySelector('dl-answer-presentation')?.textContent).to.contain('A stored answer.');
+  expect(conversationStore.canAnswer).to.equal(true);
+  expect(conversationStore.answerConversationId).to.equal(conversationId);
+});
+
 it('announces child activity for every tool event once a run has children, and for its end', async () => {
   const originalRequestFrame = window.requestAnimationFrame;
   const originalCancelFrame = window.cancelAnimationFrame;

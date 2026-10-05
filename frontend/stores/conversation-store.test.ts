@@ -421,23 +421,30 @@ test('adopting an atomically created conversation updates routing state without 
   assert.deepEqual(store.conversations.map((item) => item.conversationId), ['created']);
 });
 
-test('background refresh preserves visible history on transient failure', async () => {
-  let fail = false;
-  const store = new ConversationStore(api({
-    history: async (id) => {
-      if (fail) throw new ApiError(503, {detail: 'down'});
-      return history(id);
-    },
-  }));
-  await store.open('one');
-  const before = store.viewRevision;
-  fail = true;
+for (const onScreen of ['loaded history', 'live answer of an adopted conversation'] as const) {
+  test(`background refresh preserves the visible view on transient failure (${onScreen})`, async () => {
+    let fail = false;
+    const store = new ConversationStore(api({
+      history: async (id) => {
+        if (fail) throw new ApiError(503, {detail: 'down'});
+        return history(id);
+      },
+    }));
+    if (onScreen === 'loaded history') {
+      await store.open('one');
+    } else {
+      store.adoptCreatedConversation(summary('one'));
+    }
+    const before = store.viewRevision;
+    fail = true;
 
-  assert.equal(await store.refreshActive(), 'error');
-  assert.equal(store.viewState, 'ready');
-  assert.equal(store.history?.conversation.conversationId, 'one');
-  assert.equal(store.viewRevision, before);
-});
+    assert.equal(await store.refreshActive(), 'error');
+    assert.equal(store.viewState, 'ready');
+    assert.equal(store.answerConversationId, 'one');
+    assert.equal(store.history?.conversation.conversationId, onScreen === 'loaded history' ? 'one' : undefined);
+    assert.equal(store.viewRevision, before);
+  });
+}
 
 test('rename updates and reorders an already loaded summary', async () => {
   const store = new ConversationStore(api({

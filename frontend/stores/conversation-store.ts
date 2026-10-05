@@ -159,6 +159,7 @@ export class ConversationStore extends Store {
   ): Promise<ConversationOpenResult> {
     const sameConversation = this.#activeConversationId === conversationId;
     const hadHistory = sameConversation && this.#history !== null;
+    const showing = sameConversation && this.#viewState === 'ready';
     // A refresh in place keeps an older page the reader already asked for.
     this.#abortView({keepOlderMessages: hadHistory});
     const controller = new AbortController();
@@ -208,7 +209,10 @@ export class ConversationStore extends Store {
         this.#publishView();
         return 'unavailable';
       }
-      if (options.preserveOnError && sameConversation && this.#history !== null) {
+      // An adopted conversation is ready with its live answer on screen and no
+      // loaded history; a failed refresh leaves that view alone, as it leaves a
+      // loaded history alone.
+      if (options.preserveOnError && showing) {
         return 'error';
       }
       this.#history = null;
