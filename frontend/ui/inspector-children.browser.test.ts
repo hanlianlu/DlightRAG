@@ -570,6 +570,9 @@ it('sends a steer to a running child with the Operation it was typed for, and sa
 
   expect(controls.map(([id, action, content, reauthorize, operationId]) => [id, action, content, reauthorize, operationId]))
     .to.deep.equal([['a', 'steer', 'focus on dates', false, 'op-a']]);
+  // The command settled, so the child is read again and its roster row follows.
+  const reads = (path: string) => requests.filter((request) => request.method === 'GET' && request.path === path).length;
+  await waitFor(() => reads('/web/api/answer/run-1/children') === 2 && reads('/web/api/answer/run-1/children/a') >= 2);
   const sent = requests.find((request) => request.method === 'POST')!;
   expect(sent.path).to.equal('/web/api/answer/run-1/children/a/control');
   expect(sent.body).to.deep.equal({action: 'steer', content: 'focus on dates', reauthorize_user_cancelled: false});
