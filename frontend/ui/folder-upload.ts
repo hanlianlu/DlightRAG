@@ -9,7 +9,7 @@ interface WebkitFileSystemFileEntry {
     isFile: true;
     isDirectory: false;
     name: string;
-    file(callback: (file: File) => void): void;
+    file(callback: (file: File) => void, errorCallback?: (error: unknown) => void): void;
 }
 
 interface WebkitFileSystemDirectoryEntry {
@@ -17,7 +17,7 @@ interface WebkitFileSystemDirectoryEntry {
     isDirectory: true;
     name: string;
     createReader(): {
-        readEntries(callback: (entries: WebkitFileSystemEntry[]) => void): void;
+        readEntries(callback: (entries: WebkitFileSystemEntry[]) => void, errorCallback?: (error: unknown) => void): void;
     };
 }
 
@@ -39,15 +39,17 @@ export function withRelativePath(file: File, path: string): RelativeFile {
     return relativeFile;
 }
 
+/** The File of an entry, or null when the browser cannot read it: one unreadable file must not hold back a drop. */
+function readEntryFile(entry: WebkitFileSystemFileEntry): Promise<File | null> {
+    return new Promise((resolve) => entry.file(resolve, () => resolve(null)));
+}
+
 async function traverseDirectory(entry: WebkitFileSystemEntry, basePath: string): Promise<RelativeFile[]> {
     const files: RelativeFile[] = [];
     if (entry.isFile) {
-        return new Promise((resolve) => {
-            entry.file((file) => {
-                files.push(withRelativePath(file, basePath ? `${basePath}/${file.name}` : file.name));
-                resolve(files);
-            });
-        });
+        const file = await readEntryFile(entry);
+        if (file) files.push(withRelativePath(file, basePath ? `${basePath}/${file.name}` : file.name));
+        return files;
     }
     if (entry.isDirectory) {
         const dirPath = basePath ? `${basePath}/${entry.name}` : entry.name;
@@ -72,7 +74,7 @@ function readAllEntries(dirEntry: WebkitFileSystemDirectoryEntry): Promise<Webki
                     all.push.apply(all, entries);
                     readBatch();
                 }
-            });
+            }, () => resolve(all)); // A folder that stops answering keeps what it already gave.
         }
         readBatch();
     });
@@ -151,7 +153,7 @@ export async function detectDropItems(
             if (entry) {
                 if (entry.isDirectory) {
                     folderName = folderName || entry.name;
-                    const dirFiles2 = await traverseDirectory(entry, entry.name);
+                    const dirFiles2 = await traverseDirectory(entry, '');
                     for (let j = dirFiles2.length - 1; j >= 0; j--) {
                         if (dirFiles2[j].type.startsWith('image/') && imageHandler) {
                             imageHandler(dirFiles2[j]);
@@ -162,11 +164,9 @@ export async function detectDropItems(
                     continue;
                 }
                 if (entry.isFile) {
-                    const f2 = await new Promise<RelativeFile>((resolve) => {
-                        entry.file((file) => {
-                            resolve(withRelativePath(file, file.name));
-                        });
-                    });
+                    const file2 = await readEntryFile(entry);
+                    if (!file2) continue;
+                    const f2 = withRelativePath(file2, file2.name);
                     if (f2.type.startsWith('image/') && imageHandler) {
                         imageHandler(f2);
                     } else {
