@@ -709,9 +709,13 @@ export class DlChildSession extends LightElement {
       `;
   }
 
-  /** A steer the control records name shows as its sender wrote it, under who sent it. */
+  /** A steer the control records name shows as its sender wrote it, under who sent it. The runtime writes a
+   * steer into the transcript as "<Origin> steer: <content>", so a record is matched by exactly that. */
   #sender(text: string): {label: string; text: string} {
-    const control = this.observation?.controls.find((record) => record.content && text.includes(record.content));
+    const control = this.observation?.controls.find((record) => {
+      const origin = record.origin || 'unknown';
+      return text === `${origin.charAt(0).toUpperCase()}${origin.slice(1).toLowerCase()} steer: ${record.content}`;
+    });
     return control ? {label: senderText(control.origin), text: control.content} : {label: '', text};
   }
 

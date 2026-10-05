@@ -491,6 +491,32 @@ it('shows a running child\'s question with when it expires, and its activity as 
   expect(text).to.contain('Question q9? Expired');
 });
 
+it('says who sent each steer, even when a short one is part of an older one', async () => {
+  const running = row('a', 'running', {started_at: ago(5)});
+  const control = (sequence: number, content: string, origin: string) => ({
+    control_sequence: sequence, kind: 'steer', content, origin, consumed: true,
+    consumed_at: ago(3), created_at: ago(4), operation_id: 'op-a',
+  });
+  serve({
+    page: () => roster([running]),
+    observe: () => observation(running, {
+      transcript: [
+        {role: 'user', content: 'objective a'},
+        {role: 'user', content: 'Parent steer: Continue with the amendment review'},
+        {role: 'user', content: 'User steer: Continue'},
+      ],
+      // Newest first, as the server lists them.
+      controls: [control(2, 'Continue', 'user'), control(1, 'Continue with the amendment review', 'parent')],
+    }),
+  });
+  const dock = await mount(sourceFor().source, 420);
+  await waitFor(() => rows(dock).length === 1);
+  await openChild(dock, 'a');
+  await waitFor(() => shown(dock).includes('Continue with the amendment review'));
+
+  expect(shown(dock)).to.contain('Activity Parent Continue with the amendment review You Continue');
+});
+
 it('leads a settled child with its result, and folds its evidence and activity', async () => {
   const settled = row('a', 'succeeded', {
     started_at: ago(68), finished_at: ago(0), usage: {total_tokens: 9400}, summary: 'Clause 9.2 caps it at 6%.',
