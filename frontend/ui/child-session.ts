@@ -83,6 +83,9 @@ function outcomeText(code: string): string {
     case 'reauthorization_required': return msg('User-cancelled work needs explicit reauthorization.', {id: 'childSession.outcome.reauthorizationRequired'});
     case 'queue_full': return msg('The pending control queue is full.', {id: 'childSession.outcome.queueFull'});
     case 'idempotency_conflict': return msg('This submission id was already used for a different request.', {id: 'childSession.outcome.idempotencyConflict'});
+    case 'already_replied': return msg('This question was already answered.', {id: 'childSession.outcome.alreadyReplied'});
+    case 'expired': return msg('This question expired before the reply arrived.', {id: 'childSession.outcome.expired'});
+    case 'cancelled': return msg('This question was cancelled.', {id: 'childSession.outcome.cancelled'});
     case 'unknown_outcome': return msg('The child outcome is unknown.', {id: 'childSession.outcome.unknownOutcome'});
     case 'failed': return msg('The child intervention could not be sent.', {id: 'childSession.interventionFailed'});
     default: return code;
@@ -447,15 +450,17 @@ export class DlChildSession extends LightElement {
       }
       this.#reobserve();
     } catch (error) {
-      if (!shown() || isAbortError(error)) return;
+      if (this.source !== source || isAbortError(error)) return;
+      // A refusal means the child or the question is not as the page shows it, so the roster is told and
+      // the page reads the child again.
+      const refused = error instanceof ChildControlRejectedError;
+      if (refused) raise(this, 'dl-child-command-settled');
+      if (!shown()) return;
       if (error instanceof ApiError && error.status === 404) {
         this.missing = true;
       } else {
-        this.outcome = {
-          code: error instanceof ChildControlRejectedError ? error.outcome : 'failed',
-          childSessionId,
-          operationId,
-        };
+        this.outcome = {code: refused ? error.outcome : 'failed', childSessionId, operationId};
+        if (refused) this.#reobserve();
       }
     } finally {
       this.#sending.delete(key);

@@ -449,6 +449,9 @@ export const templates: Record<
   'childSession.outcome.reauthorizationRequired': '用户取消的工作需要明确重新授权。',
   'childSession.outcome.queueFull': '待处理控制队列已满。',
   'childSession.outcome.idempotencyConflict': '此提交标识已用于不同的请求。',
+  'childSession.outcome.alreadyReplied': '这个问题已经被回答过了。',
+  'childSession.outcome.expired': '这个问题已在你的回复送达前过期。',
+  'childSession.outcome.cancelled': '这个问题已被取消。',
   'childSession.outcome.unknownOutcome': '子代理结果未知。',
 
   // Notifications

@@ -826,6 +826,50 @@ it('answers a question for the parent through a box the reader opens', async () 
   expect(session(dock).querySelector('[data-reply]'), 'the box closes once the reply is accepted').to.equal(null);
 });
 
+it('says why a reply was refused, and shows the question as it now stands at once', async () => {
+  Date.now = () => NOW;
+  const refusals: [string, string, Record<string, unknown>, string][] = [
+    ['expired', 'This question expired before the reply arrived.', {status: 'expired', expires_at: ago(5)}, 'Expired'],
+    ['cancelled', 'This question was cancelled.', {status: 'cancelled', expires_at: null}, 'Cancelled'],
+    [
+      'already_replied', 'This question was already answered.',
+      {status: 'replied', reply: 'Swedish law.', reply_origin: 'parent', expires_at: null}, 'Answered · Parent',
+    ],
+  ];
+  for (const [outcome, sentence, standsNow, history] of refusals) {
+    let refused = false;
+    const running = row('a', 'running', {started_at: ago(5), pending_questions: 1});
+    const requests = serve({
+      page: () => roster([running]),
+      observe: () => observation(running, {questions: [question('req-a', refused ? standsNow : {})]}),
+      reply: () => {
+        refused = true;
+        return refusal(outcome);
+      },
+    });
+    const dock = await mount(sourceFor().source, 420);
+    await waitFor(() => rows(dock).length === 1);
+    await openChild(dock, 'a');
+    await waitFor(() => button(session(dock), 'Answer instead') !== null);
+    button(session(dock), 'Answer instead')!.click();
+    await waitFor(() => session(dock).querySelector('[data-reply]') !== null);
+    const reply = session(dock).querySelector<HTMLTextAreaElement>('[data-reply]')!;
+    await type(dock, reply, 'Use the report');
+    const reads = (suffix: string) => requests.filter((request) => (
+      request.method === 'GET' && request.path.endsWith(suffix)
+    )).length;
+    const before = {roster: reads('/children'), child: reads('/children/a')};
+    session(dock).querySelector<HTMLFormElement>('form[data-request]')!.requestSubmit();
+
+    await waitFor(() => session(dock).querySelector('[role="status"]')!.textContent!.trim() === sentence);
+    // The card gives way to the question's record at once, not at the next tick of the roster.
+    await waitFor(() => shown(dock).includes(history) && !shown(dock).includes('Asking the parent'));
+    expect(reads('/children'), 'the roster is asked about the child again').to.be.greaterThan(before.roster);
+    expect(reads('/children/a'), 'and so is the child').to.be.greaterThan(before.child);
+    dock.remove();
+  }
+});
+
 it('sends on Enter, breaks the line on Shift+Enter, and never sends on the Enter of an IME composition', async () => {
   const running = row('a', 'running', {started_at: ago(5)});
   serve({page: () => roster([running]), observe: () => observation(running), control: () => receipt('steer', 'queued')});
