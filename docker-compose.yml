@@ -112,6 +112,9 @@ services:
       timeout: 5s
       retries: 12
       start_period: 30s
+      # Inside start_period, check every 2s so healthy follows readiness without waiting
+      # out a 10s interval.
+      start_interval: 2s
 
   dlightrag-mcp:
     restart: unless-stopped
@@ -204,6 +207,7 @@ services:
       timeout: 5s
       retries: 12
       start_period: 30s
+      start_interval: 2s
 
   postgres:
     restart: unless-stopped

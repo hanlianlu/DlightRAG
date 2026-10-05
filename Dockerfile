@@ -30,6 +30,9 @@ FROM python:3.14.7-slim-bookworm AS builder
 
 WORKDIR /app
 ENV UV_LINK_MODE=copy
+# Ship bytecode in the venv: without it every container (re)creation compiles each imported
+# module from source (seconds on the api's first import, and a SyntaxWarning from lightrag.py).
+ENV UV_COMPILE_BYTECODE=1
 COPY --from=uv-bin /usr/local/bin/uv /bin/
 
 COPY pyproject.toml uv.lock ./
@@ -45,6 +48,10 @@ COPY src/ src/
 COPY --from=frontend /app/src/dlightrag/adapters/http/browser/static/app/ src/dlightrag/adapters/http/browser/static/app/
 RUN --mount=type=cache,target=/root/.cache/uv \
     UV_HTTP_TIMEOUT=300 uv sync --frozen --no-dev --no-editable
+
+# LightRAG's default tokenizer (tiktoken o200k_base via gpt-4o-mini) downloads its 3.6 MB
+# encoding file from the public internet at every process start; bake it into the image.
+RUN TIKTOKEN_CACHE_DIR=/opt/tiktoken /app/.venv/bin/python -c "import tiktoken; tiktoken.encoding_for_model('gpt-4o-mini')"
 
 # Charts (built-in charts Skill): the upstream resvg CLI, built from its pinned crates.io
 # release because upstream publishes no linux-aarch64 binary. The binary links its crates
@@ -108,8 +115,12 @@ RUN groupadd --gid 1000 app && useradd --uid 1000 --gid app --create-home app \
     /home/app/.dlightrag/skills /home/app/.dlightrag/owner_skills
 
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
+# The tiktoken encoding file baked in the builder stage: root-owned, read-only for app (it
+# never writes it). TIKTOKEN_CACHE_DIR points every process of the image at it.
+COPY --from=builder /opt/tiktoken /opt/tiktoken
 
-ENV PATH="/app/.venv/bin:$PATH"
+ENV PATH="/app/.venv/bin:$PATH" \
+    TIKTOKEN_CACHE_DIR=/opt/tiktoken
 
 EXPOSE 8100 8101
 
