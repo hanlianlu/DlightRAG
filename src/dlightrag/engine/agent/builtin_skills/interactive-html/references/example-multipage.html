@@ -6,9 +6,11 @@
   <p class="meta">数据期间 2018–2024 年 · 来源：委托方提供的年度货物贸易数据、合作要点与产业指标表</p>
 </header>
 
+<!-- SHARED SLICER above the tabs: it drives every chart that lists "flow" in its "filters", and hides on a page where none of them shows. -->
 <div class="slicer" data-slicer="flow" data-field="flow" data-label="流向"></div>
 
 <main>
+  <!-- PAGE 1 of 3 (data-page="overview" data-title="概览"): each section with data-page becomes one tab; ids are short ASCII. -->
   <section data-page="overview" data-title="概览">
     <section class="kpis">
       <div class="kpi"><b>215 亿美元</b><span>2024 年双边货物贸易额</span><small><span class="delta down">−11.5%</span> 较 2022 年峰值 243 亿美元</small></div>
@@ -30,12 +32,14 @@
     <p class="note">材料未提供联合论文的数量和爱立信在华研发的投入，本报告不作估算。</p>
   </section>
 
+  <!-- PAGE 2 of 3 (data-page="trend"): two charts in a .grid, then a timeline. -->
   <section data-page="trend" data-title="趋势">
     <div class="grid">
       <figure class="chart" data-chart="flows"></figure>
       <figure class="chart" data-chart="balance"></figure>
     </div>
     <h2>大事记</h2>
+    <!-- TIMELINE: li[data-tone] holding time, b, p and a .tag; the tone is the category, always written out in the tag. -->
     <ol class="timeline">
       <li data-tone="1"><time>1950-05</time><b>两国建交</b><p>瑞典是最早同新中国建立外交关系的西方国家之一。</p><span class="tag" data-tone="1">政治外交</span></li>
       <li data-tone="2"><time>1957</time><b>签订政府间贸易协定</b><p>贸易往来有了制度安排。</p><span class="tag" data-tone="2">经贸</span></li>
@@ -47,6 +51,7 @@
     </ol>
   </section>
 
+  <!-- PAGE 3 of 3 (data-page="detail"): four charts, a table, a caution callout. -->
   <section data-page="detail" data-title="明细">
     <h2>重点产业指标对照</h2>
     <p>下面六个产业是两国合作中常被提到的领域；指标取国内产业口径，三项并排对比，营收占比单列。</p>
@@ -73,6 +78,7 @@
   </section>
 </main>
 
+<!-- DATA and CHARTS below: one JSON block per dataset (id data-*) and per chart (id chart-*, paired with a figure data-chart). -->
 <script type="application/json" id="data-trade">
 [{"year":"2018","flow":"对瑞出口","value":82},{"year":"2019","flow":"对瑞出口","value":81},{"year":"2020","flow":"对瑞出口","value":79},
  {"year":"2021","flow":"对瑞出口","value":98},{"year":"2022","flow":"对瑞出口","value":115},{"year":"2023","flow":"对瑞出口","value":107},

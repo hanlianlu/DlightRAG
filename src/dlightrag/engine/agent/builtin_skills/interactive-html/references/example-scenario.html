@@ -8,6 +8,7 @@
 
 <main>
   <div class="card">
+    <!-- CONTROLS: scenario chips (a filter slicer with data-values that no chart filters; the script reads it) and two sliders (data-type="slider"). -->
     <div class="slicer" data-slicer="scenario" data-label="情景" data-all="false" data-values='["基准","乐观","悲观"]'></div>
     <div class="grid">
       <div class="slicer" data-slicer="spread" data-type="slider" data-label="利差变化（瑞典减中国）" data-min="-1" data-max="2" data-step="0.25" data-value="0.5" data-unit="pp"></div>
@@ -40,6 +41,7 @@
   </div>
 </main>
 
+<!-- CHART JSON: the band is two stacked areas (an invisible base plus the width) under the central line; legend.data hides the helper series; {spread} and {inflation} fill the subtitle. -->
 <script type="application/json" id="chart-path">
 {
   "option": {
@@ -76,6 +78,7 @@
 }
 </script>
 
+<!-- SCRIPT: arithmetic and wiring only. It computes rows from the controls and calls Report.chart(id).setRows; it draws nothing. -->
 <script>
 // The whole model: a twelve-month drift from the two controls, and a band that widens with the square root of time.
 const START = 0.667;

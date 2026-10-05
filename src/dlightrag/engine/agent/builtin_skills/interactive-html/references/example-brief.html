@@ -5,6 +5,7 @@
   <p class="meta">数据期间 2024 年 1–12 月 · 来源：公司季度经营数据</p>
 </header>
 
+<!-- KPI STRIP: .kpi holds a value, a label and a comparison; .delta carries the sign and the number. -->
 <section class="kpis">
   <div class="kpi"><b>20.1 亿元</b><span>全年营收</span><small>第四季度 6.0 亿元</small></div>
   <div class="kpi"><b>3.1 亿元</b><span>全年利润</span><small>第四季度 1.1 亿元</small></div>
@@ -13,6 +14,7 @@
 </section>
 
 <main>
+  <!-- ONE CHART, no slicer, no tabs (a brief needs neither). The figure pairs with the JSON block id="chart-trend" below. -->
   <figure class="chart wide" data-chart="trend"></figure>
 
   <div class="callout" data-kind="insight">
@@ -20,6 +22,7 @@
   </div>
 </main>
 
+<!-- CHART JSON: the same ECharts option echarts-render takes (title.text and subtext become the caption); data as tidy rows in dataset.source. -->
 <script type="application/json" id="chart-trend">
 { "aspect": "16:7",
   "option": {

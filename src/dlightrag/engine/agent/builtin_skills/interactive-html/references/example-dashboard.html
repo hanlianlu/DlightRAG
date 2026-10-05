@@ -6,11 +6,13 @@
   <p class="meta">2023 年第一至第四季度 · 来源：内部销售数据</p>
 </header>
 
+<!-- SLICERS: a filter on a field, and a metric switch. A chart obeys a slicer only if its "filters" lists it. -->
 <div class="slicer" data-slicer="region" data-field="region" data-label="地区"></div>
 <div class="slicer" data-slicer="metric" data-type="metric" data-label="指标"
      data-options='[{"label":"销售额","y":"revenue"},{"label":"利润","y":"profit"}]'></div>
 
 <main>
+  <!-- CHARTS side by side: .grid makes columns only where each gets about 360px of its own width; .wide takes the whole row. -->
   <div class="grid">
     <figure class="chart wide" data-chart="trend"></figure>
     <figure class="chart" data-chart="product"></figure>
@@ -33,6 +35,7 @@
   </div>
 </main>
 
+<!-- DATA: tidy rows in one JSON block that several charts share through "dataset": {"from": "sales"}. -->
 <script type="application/json" id="data-sales">
 [
   {"region":"华东","quarter":"2023Q1","product":"A","revenue":320,"profit":64},
@@ -70,6 +73,7 @@
 ]
 </script>
 
+<!-- CHART JSON: "filters" lists the slicers it obeys; {metric} in the title and in encode follows the metric switch; seriesBy draws one series per region. -->
 <script type="application/json" id="chart-trend">
 { "filters": ["region", "metric"],
   "option": {

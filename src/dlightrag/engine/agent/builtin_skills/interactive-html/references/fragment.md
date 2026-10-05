@@ -1,5 +1,14 @@
 # Fragment reference
 
+Which example shows what (each is a complete fragment that builds; its comments mark the mechanism where it appears):
+
+| file | shows |
+|---|---|
+| `example-brief.html` | one page: lede, KPI strip, one chart, a callout; no tabs, no slicers |
+| `example-dashboard.html` | one page: a filter and a metric switch driving three charts that share one dataset |
+| `example-multipage.html` | three `data-page` sections (tabs), a shared slicer, a tagged timeline, side-by-side charts, a table |
+| `example-scenario.html` | scenario chips and two sliders, a script that recomputes the rows, a band drawn with stacked areas |
+
 The fragment is the body of the page. `html-report` adds the document, the Mineral stylesheet, ECharts and the runtime around it, and adds nothing else: no footer, no credit, no date.
 
 ## Layout
