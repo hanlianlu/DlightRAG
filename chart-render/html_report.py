@@ -28,6 +28,8 @@ _REPORT = _HERE / "report"
 # The artifact limit of the product (active_html_max_bytes).
 _MAX_BYTES = 20 * 1024 * 1024
 _MAX_ERRORS = 10
+# The most series the palette tells apart by colour alone, measured under colour-vision deficiency.
+_COLOUR_SERIES = 6
 _PREVIEW_WIDTHS = (360, 900)
 _PREVIEW_SCALE = {360: 2, 900: 1}
 
@@ -676,9 +678,11 @@ def _warn_chart(report: _Report, chart: _Chart) -> None:
             f"{name} has no title.subtext; say the unit and the source in words, such as "
             '"单位：万元 · 来源：内部销售数据"'
         )
-    if _expanded_series(chart) > 8:
+    drawn = _expanded_series(chart)
+    if drawn > _COLOUR_SERIES:
         report.warn(
-            f"{name} draws more than 8 series; keep the top ones and fold the rest into 其他"
+            f"{name} draws {drawn} series, more than colour alone can tell apart ({_COLOUR_SERIES}); "
+            "keep the top five and fold the rest into 其他, or highlight one series"
         )
     y_axes = [a for a in _as_list(chart.option.get("yAxis")) if isinstance(a, dict)]
     if sum(a.get("type", "value") == "value" for a in y_axes) >= 2:

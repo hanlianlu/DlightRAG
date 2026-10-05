@@ -550,14 +550,13 @@ def test_warning_a_chart_without_a_title_or_a_subtitle(build) -> None:
     )
 
 
-def test_warning_more_than_eight_series_after_expansion(build) -> None:
-    rows = [{"region": f"区{n}", "quarter": "Q1", "revenue": n} for n in range(9)]
+def test_warning_more_series_than_colour_alone_tells_apart(build) -> None:
+    def drawn(count: int) -> Any:
+        rows = [{"region": f"区{n}", "quarter": "Q1", "revenue": n} for n in range(count)]
+        return build(report(chart(option={**_OPTION, "dataset": {"source": rows}})))
 
-    warned(
-        build(report(chart(option={**_OPTION, "dataset": {"source": rows}}))),
-        "draws more than 8 series",
-        "其他",
-    )
+    warned(drawn(7), "draws 7 series", "colour alone", "其他")
+    assert not drawn(6).warnings
 
 
 def test_warning_two_value_axes(build) -> None:
@@ -581,7 +580,7 @@ def test_warning_a_vertical_bar_chart_with_long_or_many_labels_says_the_runtime_
 
     warned(
         build(report(chart(option=option))),
-        "laid out horizontally on narrow widths".replace("laid out", "lays it out"),
+        "lays it out horizontally on narrow widths",
     )
     warned(build(report(chart(option=many))), "lays it out horizontally")
     assert not build(report(chart(option=option, orient="keep"))).warnings

@@ -103,12 +103,48 @@ vector file and `--html` a self-contained interactive page. The house theme
 always applies, and Noto Sans SC is the only font `resvg` loads, so a font name
 an option writes still draws.
 
+`html-report` is the interactive half. It turns an HTML fragment (prose,
+slicers, pages, and one JSON block per chart) into one self-contained report
+for an Artifact: the build checks the fragment, and writes a document that
+carries the full ECharts build, the stylesheet and the runtime, so it needs no
+network. The runtime lays each chart out for the width it has, applies the
+slicers, and follows the reader's light or dark scheme. The build refuses what
+the Artifact sandbox would refuse anyway (a remote URL, a frame, a form,
+`localStorage`, `fetch`) and warns about what makes a report worse: a chart
+without a title or a subtitle that gives the unit and the source, more series
+than colour can tell apart, and boilerplate the reader did not ask for (a
+disclaimer, an AI credit, a privacy or copyright line, a footer credit, a call
+to action). `--preview DIR` draws every chart to PNG at 360 and 900 px with the
+code the browser runs, so the author can look before the report ships. The
+fragment contract is the built-in `interactive-html` Skill's; the three reports
+under `chart-render/report/examples/` show it, and the browser tests build and
+open them.
+
+Both commands draw in one palette, the Mineral palette of the product's own
+design system. `palette.json` holds its chart colours once, for light and dark:
+the roles (surface, text, axis and grid lines, tooltip) and four palettes.
+`theme.json` is the structure of the house theme with every colour written as a
+role reference, and `theme.js` builds the ECharts theme from the two; PNGs and
+reports load the same files, so a chart cannot look different in one than in
+the other. The categorical palette leads with the product's gold and holds
+eight colours in a fixed order. Neighbouring colours differ in lightness and
+hue and none is a red beside a green; every colour keeps 3:1 against the page
+and the card in both modes; and the first six differ pairwise by at least 8
+(OKLab x 100) under protanopia and deuteranopia, which is why the build warns
+above six series: from the seventh, two colours can look the same to a reader
+with colour-vision deficiency, so fold the rest into "其他" or highlight one
+series. From four line series up each line also gets its own dash and marker.
+An option chooses another palette with `"palette": "highlight"`, `"sequential"`
+or `"diverging"`; colours an author writes win.
+`tests/unit/test_chart_palette.py` pins these properties and the match with the
+product's tokens.
+
 The image adds, all under `/usr/local`:
 
 | Path | Content |
 |---|---|
-| `bin/echarts-render` | Symlink to `lib/echarts-render/echarts_render.py` |
-| `lib/echarts-render/` | The renderer from `chart-render/` (`echarts_render.py`, `ssr.cjs`, `theme.json`), `echarts.min.js`, and the ECharts and zrender licenses |
+| `bin/echarts-render`, `bin/html-report` | Symlinks to `lib/echarts-render/echarts_render.py` and `html_report.py` |
+| `lib/echarts-render/` | The toolkit from `chart-render/`: the two commands, `ssr.cjs`, the shared `theme.js`, `theme.json` and `palette.json`, the report runtime in `report/` (`core.js`, `runtime.js`, `report.css`, `preview.cjs` and the `examples/`), `echarts.min.js`, and the ECharts and zrender licenses |
 | `bin/resvg` | The upstream resvg CLI, built from its crates.io release; the licenses of resvg and of every crate its locked build used are in `share/doc/resvg/`, one directory per crate |
 | `share/fonts/noto-sans-sc/` | Noto Sans SC Regular and Bold, with the OFL-1.1 license |
 
@@ -121,14 +157,23 @@ The pins to bump are `RESVG_VERSION` and the `rust:` builder tag in the
 that directory to refresh `package-lock.json`; and `NOTO_CJK`, one noto-cjk
 commit, together with the three `sha256` checksums taken from it.
 
-After a bump, build the image. Its smoke test renders a two-bar chart with a
-Chinese title as the `app` user and fails the build when node, ECharts, `resvg`
-or the font is missing or unreadable, so a broken renderer never reaches a Run.
-CI builds no image: the test runs wherever the image is built. Then render a
+After a bump, build the image. Its smoke tests render a two-bar chart with a
+Chinese title, and build a one-chart report with its previews, as the `app`
+user; they fail the build when node, ECharts, `resvg`, the font or a runtime
+file is missing or unreadable, so a broken toolkit never reaches a Run. CI
+builds no image: the smoke tests run wherever the image is built. Then render a
 bar chart, a horizontal bar chart with long Chinese category names and a line
-chart from the new image and look at the PNGs. A new ECharts release can change
-defaults, and `resvg` exits 0 after dropping text it cannot match to a font, so
-`echarts-render` treats its `No match for` warning as a failure.
+chart from the new image, build the three examples and look at the PNGs. A new
+ECharts release can change defaults, and `resvg` exits 0 after dropping text it
+cannot match to a font, so `echarts-render` treats its `No match for` warning
+as a failure.
+
+CI runs the toolkit's tests without the image. `make chart-render-install`
+installs ECharts for them (`make test-unit` and `make test-e2e` call it), and
+`scripts/install-chart-tools.sh` installs `resvg` and Noto Sans SC at the
+`Dockerfile`'s pins on Linux x86_64; the `fast` job puts them on `PATH` and in
+`ECHARTS_RENDER_FONT_DIR`. On a development machine without them the tests that
+draw PNGs skip, and under `CI` they fail, so a gate cannot silently not run.
 
 ## Parser Services
 
