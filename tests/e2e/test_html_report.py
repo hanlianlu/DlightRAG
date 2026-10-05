@@ -572,6 +572,13 @@ def test_a_slider_moves_by_arrow_key_and_by_tap_and_shows_each_value(
     assert page.eval("() => Report.slicer('spread').value() % 0.25") == 0, "a tap lands on a notch"
     assert abs(ratio_of(page) - 0.75) <= 0.1
 
+    # Reset appears once the slider has left its default, and takes it back.
+    on = "() => document.querySelector('[data-slicer=spread] .slicer-reset').classList.contains('on')"
+    assert page.eval(on)
+    page.frame.click("[data-slicer=spread] .slicer-reset")
+    assert page.eval("() => Report.slicer('spread').value()") == 0.5
+    assert page.eval(shown) == "+0.50pp" and not page.eval(on)
+
 
 def test_a_slider_event_goes_out_once_a_frame_with_the_latest_number(
     built: dict[str, Path], open_report
