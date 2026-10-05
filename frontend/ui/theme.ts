@@ -9,7 +9,6 @@ import {
   type IconName,
   menuButtonFocus,
   type MenuDismissDetail,
-  type MenuFocus,
 } from '../design-system/index.ts';
 import {
   parseThemePreference,
@@ -18,7 +17,7 @@ import {
   type ThemePreference,
 } from '../lib/theme.ts';
 import {LightElement} from '../lib/lit-host.ts';
-import {createAutoDismiss} from '../lib/popover.ts';
+import {TriggerPopover} from '../lib/popover.ts';
 import {isLocalStorageEvent, readStored, writeStored} from '../lib/storage.ts';
 
 function readPreference(): ThemePreference {
@@ -34,25 +33,19 @@ function writePreference(preference: ThemePreference): void {
 
 /** Owns theme preference, menu accessibility, persistence, and system changes. */
 export class DlThemeControl extends LightElement {
-  static properties = {
-    preference: {state: true},
-    menuOpen: {state: true},
-  };
+  static properties = {preference: {state: true}};
 
   declare preference: ThemePreference;
-  declare menuOpen: boolean;
 
   #media: MediaQueryList | null = null;
-  readonly #dismiss = createAutoDismiss({
-    getAnchor: () => this,
-    isOpen: () => this.menuOpen,
-    onDismiss: (reason) => this.#close(reason === 'escape'),
+  readonly #menu = new TriggerPopover(this, {
+    trigger: () => this.querySelector<HTMLButtonElement>('#theme-trigger'),
+    enter: (which) => { this.querySelector<DlMenu>('#theme-menu')?.focusItem(which); },
   });
 
   constructor() {
     super();
     this.preference = 'system';
-    this.menuOpen = false;
   }
 
   override connectedCallback(): void {
@@ -66,14 +59,11 @@ export class DlThemeControl extends LightElement {
 
   override disconnectedCallback(): void {
     this.#media = null;
-    this.#dismiss.deactivate();
     super.disconnectedCallback();
   }
 
   protected override updated(): void {
     this.#apply();
-    if (this.menuOpen) this.#dismiss.activate();
-    else this.#dismiss.deactivate();
   }
 
   protected override render(): TemplateResult {
@@ -81,13 +71,13 @@ export class DlThemeControl extends LightElement {
     return html`
       <button id="theme-trigger" type="button" aria-label=${appearance} title=${appearance}
               aria-haspopup="menu" aria-controls="theme-menu"
-              aria-expanded=${this.menuOpen ? 'true' : 'false'}
-              @click=${this.#triggerClick} @keydown=${this.#triggerKeydown}>
+              aria-expanded=${this.#menu.open ? 'true' : 'false'}
+              @click=${this.#menu.toggle} @keydown=${this.#triggerKeydown}>
         ${icon('moon', {size: 'sm', className: 'theme-icon theme-icon-moon'})}
         ${icon('sun', {size: 'sm', className: 'theme-icon theme-icon-sun'})}
       </button>
       <dl-menu id="theme-menu" class="dl-anchored dl-anchored--end" role="menu" aria-label=${appearance}
-           ?hidden=${!this.menuOpen} @dl-menu-dismiss=${this.#menuDismissed}>
+           ?hidden=${!this.#menu.open} @dl-menu-dismiss=${this.#menuDismissed}>
         ${this.#option('system', msg('System', {id: 'theme.system'}), 'system')}
         ${this.#option('light', msg('Light', {id: 'theme.light'}), 'sun')}
         ${this.#option('dark', msg('Dark', {id: 'theme.dark'}), 'moon')}
@@ -117,41 +107,21 @@ export class DlThemeControl extends LightElement {
     root.style.colorScheme = colorMode;
   }
 
-  #open(focus: MenuFocus): void {
-    this.menuOpen = true;
-    void this.updateComplete.then(() => {
-      this.querySelector<DlMenu>('#theme-menu')?.focusItem(focus);
-    });
-  }
-
-  #close(restoreFocus: boolean): void {
-    if (!this.menuOpen) return;
-    this.menuOpen = false;
-    if (restoreFocus) {
-      window.requestAnimationFrame(() => this.querySelector<HTMLButtonElement>('#theme-trigger')?.focus());
-    }
-  }
-
   #select(preference: ThemePreference): void {
     this.preference = preference;
     writePreference(preference);
-    this.#close(true);
+    this.#menu.close(true);
   }
-
-  #triggerClick = (): void => {
-    if (this.menuOpen) this.#close(false);
-    else this.#open('first');
-  };
 
   #triggerKeydown = (event: KeyboardEvent): void => {
     const focus = menuButtonFocus(event);
     if (!focus) return;
     event.preventDefault();
-    this.#open(focus);
+    this.#menu.show(focus);
   };
 
   #menuDismissed = (event: CustomEvent<MenuDismissDetail>): void => {
-    this.#close(event.detail.restoreFocus);
+    this.#menu.close(event.detail.restoreFocus);
   };
 
   #mediaChanged = (): void => {

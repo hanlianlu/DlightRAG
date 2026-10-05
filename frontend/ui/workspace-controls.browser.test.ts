@@ -110,6 +110,26 @@ it('owns a native expanded trigger and closes after typed creation intent', asyn
   expect(document.activeElement).to.equal(trigger);
 });
 
+it('closes on a click outside it and stays open for a click inside', async () => {
+  const scope = mountScope();
+  await scope.updateComplete;
+  const trigger = buttonNamed(scope, 'Choose search workspaces')!;
+  const popover = scope.querySelector<HTMLElement>('#workspace-popover')!;
+
+  trigger.click();
+  await scope.updateComplete;
+  // The outside click is armed on the next tick, after the click that opened the popover.
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  popover.click();
+  await scope.updateComplete;
+  expect(popover.hidden).to.equal(false);
+
+  document.body.click();
+  await scope.updateComplete;
+  expect(popover.hidden).to.equal(true);
+  expect(trigger.getAttribute('aria-expanded')).to.equal('false');
+});
+
 it('preserves typed confirmation and focus after a failed corpus reset', async () => {
   let calls = 0;
   window.fetch = async () => {
@@ -153,7 +173,7 @@ it('keeps submitted creation connected while its popover is dismissed', async ()
   input.value = 'Research';
   scope.querySelector<HTMLButtonElement>('[aria-label="Create workspace"]')?.click();
 
-  scope.close();
+  document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true, cancelable: true}));
   await scope.updateComplete;
   const composer = document.createElement('textarea');
   document.body.appendChild(composer);
@@ -214,7 +234,7 @@ it('reports a submitted creation failure after its popover is dismissed', async 
   input.value = 'Research';
   scope.querySelector<HTMLButtonElement>('[aria-label="Create workspace"]')?.click();
 
-  scope.close();
+  document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true, cancelable: true}));
   await scope.updateComplete;
   rejectCreate(new TypeError('network unavailable'));
   await waitFor(() => receipt !== null);
