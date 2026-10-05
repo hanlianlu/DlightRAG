@@ -12,8 +12,8 @@ chart = json.dumps(option, ensure_ascii=False)
 subprocess.run(["echarts-render", "-", "artifacts/name.png"], input=chart, text=True, check=True)
 ```
 
-- **Theme**: leave colors, fonts, background, legend and layout to it. Give every chart `title.text`, and a `title.subtext` with the unit and the source in words.
+- **Theme**: it is Mineral, DlightRAG's palette: leave colors, fonts, background, legend and layout to it. Give every chart `title.text`, and a `title.subtext` with the unit and the source in words. `"palette": "highlight"` makes one series gold and the rest graded stone, the right choice when the point is one series; `"sequential"` is for magnitude (heatmap, treemap), `"diverging"` for values around a midpoint.
 - **Option**: it is JSON, so a formatter is a template string such as `"{b}: {c} 亿元"`, never a JavaScript function; `custom` and `map` series cannot be drawn.
-- **Layout**: long or many category names go on `yAxis` (horizontal bars). Keep to eight series or fewer, folding the rest into “其他”; use one value axis, never two.
-- **Files**: the PNG is the figure in the answer, laid out at 800 × 500 unless `--width` and `--height` say otherwise. Add `--html artifacts/name.html` only when the user wants to hover or zoom, and `--svg artifacts/name.svg` for a vector file.
+- **Layout**: long or many category names go on `yAxis` (horizontal bars). Keep to six series or fewer, which is as many as the palette tells apart for every reader, folding the rest into “其他”; use one value axis, never two.
+- **Files**: the PNG is the figure in the answer, laid out at 800 × 500 unless `--width` and `--height` say otherwise. Add `--html artifacts/name.html` only when the user wants one chart to hover or zoom, and `--svg artifacts/name.svg` for a vector file. A page with several charts, filters or tabs is `interactive-html`'s job: load it, and never build a report from `--html` pages in iframes.
 - **Failures**: a failed render prints one `echarts-render:` line that says what to fix. A line naming characters without a font means they show as boxes: emoji, Korean and Arabic are not in the font.

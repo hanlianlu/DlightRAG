@@ -164,11 +164,11 @@ outside the process view, while Bash keeps network authority for the deployment
 to enforce ([ADR 0024](adr/0024-the-agent-sees-only-its-workspace.md)). Skills
 come from packaged built-ins (`council`, `office-documents`, which tells the agent
 that its workspace Python can build a requested Word, Excel or PowerPoint file,
-`charts`, and `skill-creator`), the global root (default `~/.dlightrag/skills`),
+`charts`, `interactive-html`, and `skill-creator`), the global root (default `~/.dlightrag/skills`),
 and the owner's own published Skills (default `~/.dlightrag/owner_skills`), in
 that precedence. Research parents may publish, turn off and delete their owner's
 Skills; built-in and global Skills are read-only. The image ships the renderer `charts`
-calls, `echarts-render` ([Operations](operations.md#agent-chart-rendering)).
+calls, `echarts-render`, and the report builder `interactive-html` calls, `html-report`, which turns an HTML fragment into one self-contained interactive report that runs in the Artifact sandbox ([Operations](operations.md#agent-chart-rendering), [ADR 0038](adr/0038-an-interactive-report-is-built-by-a-toolkit.md)).
 Outside tools come only from the owner's enabled Personal MCP Connections,
 pinned per Run, and the deployment's [Agent Browser](#agent-browser), which no
 owner enables and which is no Connection; Fast has no external tools
