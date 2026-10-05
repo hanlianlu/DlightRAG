@@ -9,6 +9,7 @@ import './inspector.ts';
 defineDesignSystemElements();
 import type {DlInspector, InspectorStateDetail} from './inspector.ts';
 import type {ChildrenSource} from './inspector-children.ts';
+import {observation, roster, row, serve, sourceFor} from '../testing/children.ts';
 import {buttonNamed, waitFor} from '../testing/dom.ts';
 import {DEFAULT_CHANGES, EVERY_CHANGE} from '../testing/workspaces.ts';
 
@@ -279,7 +280,7 @@ it('activates and pauses typed Files content without a legacy element alias', as
 /** One Run whose children are not the subject here: the roster is empty. */
 function childrenOf(runId: string): ChildrenSource {
   const unused = async (): Promise<never> => { throw new Error('no child is opened in this test'); };
-  return {runId, page: async () => ({children: [], nextCursor: null}), observe: unused, control: unused, reply: unused};
+  return {runId, page: async () => ({children: [], nextCursor: null, runStatus: null}), observe: unused, control: unused, reply: unused};
 }
 
 it('shows a Run\'s Child agents beside Files and Sources and switches between the three cleanly', async () => {
@@ -321,6 +322,37 @@ it('shows a Run\'s Child agents beside Files and Sources and switches between th
   expect(dock().active).to.equal(false);
 });
 
+it('keeps what the reader has open when the Run on show has its Child agents opened again, and gives another Run a fresh dock', async () => {
+  window.matchMedia = media(false);
+  const requests = serve({
+    page: () => roster([row('a', 'running')]),
+    observe: (id) => observation(row(id, 'running')),
+  });
+  const inspector = document.createElement('dl-inspector') as DlInspector;
+  document.body.appendChild(inspector);
+  const dock = () => inspector.querySelector('dl-inspector-children')!;
+  const box = () => inspector.querySelector<HTMLTextAreaElement>('dl-child-session textarea[data-draft]');
+  const first = sourceFor().source;
+
+  await inspector.openChildren(first);
+  await waitFor(() => dock().querySelector('[data-child-session="a"]') !== null);
+  dock().querySelector<HTMLElement>('[data-child-session="a"]')!.click();
+  await waitFor(() => box() !== null);
+  box()!.value = 'steer a';
+  box()!.dispatchEvent(new Event('input', {bubbles: true}));
+
+  await inspector.openChildren(sourceFor().source);
+  expect(dock().source, 'the Run on show keeps its source').to.equal(first);
+  expect(box()?.value, 'and the child that was open, with what was typed for it').to.equal('steer a');
+  expect(requests.filter((request) => request.path === '/web/api/answer/run-1/children')).to.have.length(1);
+
+  const second = childrenOf('run-2');
+  await inspector.openChildren(second);
+  expect(dock().source).to.equal(second);
+  await waitFor(() => dock().textContent!.includes('No child agents were started'));
+  expect(box()).to.equal(null);
+});
+
 it('closes Child agents with their conversation and leaves workspace Files open', async () => {
   window.matchMedia = media(false);
   window.fetch = async () => new Response(JSON.stringify({workspace: 'default', files: [], next_cursor: null}), {
@@ -344,11 +376,14 @@ it('keeps the panel open for the Escape that cancels an IME composition', async 
   const inspector = document.createElement('dl-inspector') as DlInspector;
   document.body.appendChild(inspector);
   await inspector.openChildren(childrenOf('run-1'));
-  const pressEscape = (isComposing: boolean) => document.dispatchEvent(new KeyboardEvent('keydown', {
-    key: 'Escape', isComposing, bubbles: true, cancelable: true,
+  const pressEscape = (isComposing: boolean, keyCode = 27) => document.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'Escape', isComposing, keyCode, bubbles: true, cancelable: true,
   }));
 
   pressEscape(true);
+  expect(inspector.open).to.equal(true);
+  // WebKit reports the IME's own keydown after the composition has ended, as keyCode 229.
+  pressEscape(false, 229);
   expect(inspector.open).to.equal(true);
   pressEscape(false);
   expect(inspector.open).to.equal(false);

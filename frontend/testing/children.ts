@@ -29,8 +29,15 @@ export function row(id: string, status = 'succeeded', extra: Record<string, unkn
   };
 }
 
-export function roster(children: Record<string, unknown>[], nextCursor: string | null = null): Response {
-  return Response.json({run_id: 'run-1', children, next_cursor: nextCursor});
+/** One page of the roster; `runStatus` is where the Run stands, left out as an older server leaves it out. */
+export function roster(
+  children: Record<string, unknown>[],
+  nextCursor: string | null = null,
+  runStatus: string | null = null,
+): Response {
+  return Response.json({
+    run_id: 'run-1', children, next_cursor: nextCursor, ...(runStatus === null ? {} : {run_status: runStatus}),
+  });
 }
 
 export function observation(child: Record<string, unknown>, extra: Record<string, unknown> = {}): Response {

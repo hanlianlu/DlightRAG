@@ -233,12 +233,14 @@ test('child roster pages encode the opaque cursor and normalize the continuation
         started_at: '2026-10-05T12:00:00Z', finished_at: null, pending_questions: 2,
       }],
       next_cursor: 'opaque-token',
+      run_status: 'running',
     }));
   };
 
   const first = await getAnswerRunChildrenPage('run-1');
   assert.deepEqual(first.children.map((child) => child.childSessionId), ['child-1']);
   assert.equal(first.nextCursor, 'opaque-token');
+  assert.equal(first.runStatus, 'running');
   assert.equal(requests[0], 'http://localhost/web/api/answer/run-1/children');
   assert.deepEqual(
     [first.children[0]?.startedAt, first.children[0]?.finishedAt, first.children[0]?.pendingQuestions],
@@ -248,6 +250,8 @@ test('child roster pages encode the opaque cursor and normalize the continuation
   const older = await getAnswerRunChildrenPage('run-1', 'opaque-token');
   assert.deepEqual(older.children.map((child) => child.childSessionId), ['child-2']);
   assert.equal(older.nextCursor, null);
+  // A server that does not say where the Run stands still reads: nothing known.
+  assert.equal(older.runStatus, null);
   // A server that sends no timing or question count still reads: nothing known, nothing waiting.
   assert.deepEqual(
     [older.children[0]?.startedAt, older.children[0]?.finishedAt, older.children[0]?.pendingQuestions],

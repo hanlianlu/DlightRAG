@@ -255,7 +255,7 @@ export class DlApp extends LightElement {
             .shellInert=${this.canvasModal}></dl-conversation-sidebar>
           <dl-split-layout class="panel-split" id="panel-split" slot="end" primary="end"
                            orientation="horizontal" size="0" min="320"
-                           label=${msg('Resize Files or Sources', {id: 'app.resizeInspector'})}>
+                           label=${msg('Resize side panel', {id: 'app.resizeInspector'})}>
           <dl-split-layout class="panel-split" id="artifact-canvas-split" slot="start"
                            primary="end" orientation="horizontal" size="0" min="320"
                            label=${msg('Resize Artifact Canvas', {id: 'app.resizeArtifactCanvas'})}>
@@ -450,8 +450,10 @@ export class DlApp extends LightElement {
   #chatBackgroundClick = (): void => {
     if (document.body.hasAttribute('data-resizing')) return;
     if (!this.inspectorOpen && !this.canvasOpen) return;
-    // Child agents are watched beside the chat, so a click in the chat leaves them open.
-    if (this.inspectorKind !== 'children') this.#inspector()?.close();
+    // Child agents are watched beside the chat, so a click in the chat leaves them open. A compact shell
+    // shows them as a modal drawer over the chat, where the click is on the scrim and closes them as it
+    // closes Files and Sources.
+    if (this.inspectorKind !== 'children' || this.inspectorCompact) this.#inspector()?.close();
     this.#canvas()?.close(false);
   };
 

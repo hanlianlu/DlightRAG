@@ -431,8 +431,8 @@ const settledTurnWire = {
 };
 
 /** The app on a conversation whose settled turn started two children, with the server answering the Run's roster. */
-async function appWithChildren(roster: {requests: number}): Promise<DlApp> {
-  window.matchMedia = desktopMedia;
+async function appWithChildren(roster: {requests: number}, media = desktopMedia): Promise<DlApp> {
+  window.matchMedia = media;
   window.fetch = async (input) => {
     const url = String(input);
     if (url === '/web/api/conversations/with-children/history') {
@@ -496,6 +496,20 @@ it('opens a settled turn\'s Child agents beside the chat, follows its Run, and l
   app.querySelector('dl-conversation-sidebar')?.dispatchEvent(new CustomEvent('dl-conversation-route-change', {
     bubbles: true, composed: true, detail: {previousConversationId: null, nextConversationId: null},
   }));
+  await inspector.updateComplete;
+  expect(inspector.open).to.equal(false);
+  expect(document.body.classList.contains('children-panel-open')).to.equal(false);
+});
+
+it('closes Child agents on a click in the chat when the Inspector is a modal drawer over it', async () => {
+  const app = await appWithChildren({requests: 0}, compactMedia);
+  const inspector = app.querySelector('dl-inspector')!;
+  childAgentsButton(app)!.click();
+  await waitFor(() => inspector.kind === 'children');
+  expect(inspector.querySelector('aside')!.getAttribute('aria-modal')).to.equal('true');
+
+  // There is no chat beside it to protect: the click is on the scrim, which closes it as it closes Files.
+  app.querySelector('main[aria-label="Chat"]')?.dispatchEvent(new MouseEvent('click', {bubbles: true, composed: true}));
   await inspector.updateComplete;
   expect(inspector.open).to.equal(false);
   expect(document.body.classList.contains('children-panel-open')).to.equal(false);

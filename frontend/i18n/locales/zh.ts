@@ -218,7 +218,7 @@ export const templates: Record<
   'app.artifactCanvasLabel': '工件画布',
   'app.answerNotificationsLabel': '回答通知',
   'app.resizeConversations': '调整会话列表的宽度',
-  'app.resizeInspector': '调整文件或来源面板的宽度',
+  'app.resizeInspector': '调整侧边面板的宽度',
   'app.resizeArtifactCanvas': '调整工件画布的宽度',
   'app.waitForFileChange': '请等待文件变更完成后再打开会话。',
   'app.signIn': '登录',
@@ -459,6 +459,7 @@ export const templates: Record<
   'childSession.steerHint': '将在子代理的下一个安全检查点送达。',
   'childSession.continuePlaceholder': '继续这个子代理…',
   'childSession.continueHint': '在该子代理上开始一个新操作。',
+  'childSession.finished': '该回答已结束，其子代理不能再被引导或继续。',
   'childSession.reauthorize': '重新授权此用户取消的工作',
   'childSession.loading': '正在加载子代理详情…',
   'childSession.loadFailed': '无法加载子代理详情。',
@@ -477,6 +478,9 @@ export const templates: Record<
   'childSession.outcome.reauthorizationRequired': '用户取消的工作需要明确重新授权。',
   'childSession.outcome.queueFull': '待处理控制队列已满。',
   'childSession.outcome.idempotencyConflict': '此提交标识已用于不同的请求。',
+  'childSession.outcome.alreadyReplied': '这个问题已经被回答过了。',
+  'childSession.outcome.expired': '这个问题已在你的回复送达前过期。',
+  'childSession.outcome.cancelled': '这个问题已被取消。',
   'childSession.outcome.unknownOutcome': '子代理结果未知。',
 
   // Notifications

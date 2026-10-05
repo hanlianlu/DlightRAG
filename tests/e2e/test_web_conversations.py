@@ -1306,7 +1306,7 @@ def test_wide_panel_effective_width_tracks_sidebar_and_viewport_transitions(page
     _wait_for_shell_settled(page)
     assert page.locator(".panel-resize-handle").count() == 0
     split = page.locator("#panel-split")
-    handle = split.get_by_role("separator", name="Resize Files or Sources")
+    handle = split.get_by_role("separator", name="Resize side panel")
     handle_box = handle.bounding_box()
     assert handle_box is not None
     page.mouse.move(handle_box["x"] + handle_box["width"] / 2, 180)
@@ -1422,7 +1422,7 @@ def test_split_panel_supports_touch_resize(page: Page) -> None:
     page.get_by_role("button", name="Collapse conversations").click()
     page.get_by_role("button", name="Files", exact=True).click()
 
-    divider = page.locator("#panel-split").get_by_role("separator", name="Resize Files or Sources")
+    divider = page.locator("#panel-split").get_by_role("separator", name="Resize side panel")
     divider.evaluate(
         """element => element.dispatchEvent(new PointerEvent('pointerdown', {
             bubbles: true, cancelable: true, button: 0,

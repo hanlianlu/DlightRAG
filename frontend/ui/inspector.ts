@@ -119,10 +119,12 @@ export class DlInspector extends LightElement {
     await this.#focusOnCompact();
   }
 
-  /** Open one Run's Child agents. */
+  /** Open one Run's Child agents. Asked for the Run the dock already shows, it keeps its source, and
+   * so the child the reader has open and what they have typed. */
   async openChildren(source: ChildrenSource, returnFocus?: HTMLElement | null): Promise<void> {
+    const showing = this.kind === 'children' && this.childrenSource?.runId === source.runId;
     if (!this.#beginOpen('children', returnFocus)) return;
-    this.childrenSource = source;
+    if (!showing) this.childrenSource = source;
     await this.updateComplete;
     await this.#focusOnCompact();
   }
@@ -325,8 +327,10 @@ export class DlInspector extends LightElement {
   }
 
   #documentKeydown = (event: KeyboardEvent): void => {
-    // An Escape that cancels an IME composition belongs to the composition, not to the panel.
-    if (!this.open || event.key !== 'Escape' || event.defaultPrevented || event.isComposing) return;
+    // An Escape that cancels an IME composition belongs to the composition, not to the panel. WebKit
+    // delivers the IME's keydown after `compositionend`, where `isComposing` is false and `keyCode` is 229.
+    const composing = event.isComposing || event.keyCode === 229;
+    if (!this.open || event.key !== 'Escape' || event.defaultPrevented || composing) return;
     if (document.querySelector('dialog[open]')) return;
     event.preventDefault();
     this.close();

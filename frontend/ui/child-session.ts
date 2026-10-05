@@ -10,6 +10,7 @@
 import {msg, str} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {keyed} from 'lit/directives/keyed.js';
+import {live} from 'lit/directives/live.js';
 import {repeat} from 'lit/directives/repeat.js';
 import {
   CHILD_TRANSCRIPT_LIMIT,
@@ -23,11 +24,11 @@ import {ApiError} from '../api/wire.ts';
 import {icon} from '../design-system/index.ts';
 import {getLocale} from '../i18n/locale.ts';
 import {projectActivity, type ActivityStep} from '../lib/child-activity.ts';
-import {elapsed} from '../lib/date-format.ts';
 import {raise} from '../lib/dom.ts';
 import {isAbortError} from '../lib/errors.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import styles from '../styles/child-session.module.css';
+import {childElapsed, childGlyph, childStateText} from './child-status.ts';
 import type {ChildrenSource} from './inspector-children.ts';
 
 const MINUTE_MILLISECONDS = 60_000;
@@ -47,46 +48,6 @@ interface Outcome {
   code: string;
   childSessionId: string;
   operationId: string | null;
-}
-
-/** The word for a child's state; a cancellation says who cancelled. */
-export function childStateText(child: AgentChildStatus): string {
-  switch (child.status) {
-    case 'running': return msg('Running', {id: 'childSession.state.running'});
-    case 'succeeded': return msg('Done', {id: 'childSession.state.done'});
-    case 'failed': return msg('Failed', {id: 'childSession.state.failed'});
-    case 'cancelled':
-      switch (child.cancellationOrigin) {
-        case 'user': return msg('Cancelled by you', {id: 'childSession.state.cancelledByYou'});
-        case 'parent': return msg('Cancelled by the agent', {id: 'childSession.state.cancelledByAgent'});
-        case 'run': return msg('Stopped with the run', {id: 'childSession.state.stoppedWithRun'});
-        default: return msg('Cancelled', {id: 'childSession.state.cancelled'});
-      }
-    default: return child.status;
-  }
-}
-
-/** How long the child's current Operation has run, or took; nothing when the server gave no start. */
-export function childElapsed(child: AgentChildStatus, now: number): string {
-  const start = child.startedAt === null ? Number.NaN : Date.parse(child.startedAt);
-  const end = child.status === 'running'
-    ? now
-    : child.finishedAt === null ? Number.NaN : Date.parse(child.finishedAt);
-  return Number.isNaN(start) || Number.isNaN(end) ? '' : elapsed(end - start, getLocale());
-}
-
-/** The mark that says a child's state at a glance: a pulsing dot while it runs. */
-export function childGlyph(child: AgentChildStatus): TemplateResult {
-  switch (child.status) {
-    case 'running':
-      return html`<span class=${styles.glyph} data-state="running">${icon('status-dot', {size: 'lg', className: styles.pulse})}</span>`;
-    case 'succeeded':
-      return html`<span class=${styles.glyph} data-state="done">${icon('check', {size: 'sm'})}</span>`;
-    case 'failed':
-      return html`<span class=${styles.glyph} data-state="failed">${icon('close', {size: 'sm'})}</span>`;
-    default:
-      return html`<span class=${styles.glyph} data-state="stopped">${icon('stop', {size: 'xs'})}</span>`;
-  }
 }
 
 function modelText(role: string | undefined): string {
@@ -122,10 +83,26 @@ function outcomeText(code: string): string {
     case 'reauthorization_required': return msg('User-cancelled work needs explicit reauthorization.', {id: 'childSession.outcome.reauthorizationRequired'});
     case 'queue_full': return msg('The pending control queue is full.', {id: 'childSession.outcome.queueFull'});
     case 'idempotency_conflict': return msg('This submission id was already used for a different request.', {id: 'childSession.outcome.idempotencyConflict'});
+    case 'already_replied': return msg('This question was already answered.', {id: 'childSession.outcome.alreadyReplied'});
+    case 'expired': return msg('This question expired before the reply arrived.', {id: 'childSession.outcome.expired'});
+    case 'cancelled': return msg('This question was cancelled.', {id: 'childSession.outcome.cancelled'});
     case 'unknown_outcome': return msg('The child outcome is unknown.', {id: 'childSession.outcome.unknownOutcome'});
     case 'failed': return msg('The child intervention could not be sent.', {id: 'childSession.interventionFailed'});
     default: return code;
   }
+}
+
+/** Whether the reader has scrolled a page down to within one line of its bottom. A page that has not been
+ * scrolled down is not at a bottom the reader chose, however short it is. */
+function scrolledToBottom(page: HTMLElement): boolean {
+  const line = Number.parseFloat(getComputedStyle(page).lineHeight);
+  return page.scrollTop > 0
+    && page.scrollHeight - page.scrollTop - page.clientHeight <= (Number.isFinite(line) ? line : 1);
+}
+
+/** What a Run that is over says in the place of the box that would steer or continue its children. */
+function finishedText(): string {
+  return msg('This answer has finished, so its child agents can no longer be steered or continued.', {id: 'childSession.finished'});
 }
 
 function senderText(origin: string | null): string {
@@ -151,6 +128,7 @@ export class DlChildSession extends LightElement {
     childSessionId: {attribute: false},
     entry: {attribute: false},
     now: {attribute: false},
+    commandable: {attribute: false},
     observation: {state: true},
     failed: {state: true},
     missing: {state: true},
@@ -168,6 +146,9 @@ export class DlChildSession extends LightElement {
   declare entry: AgentChildStatus | null;
   /** The roster's clock, in epoch milliseconds. */
   declare now: number;
+  /** Whether the Run can still be steered. Once it is over the page has no box and no Cancel: the server
+   * would refuse what they send. */
+  declare commandable: boolean;
   declare observation: ChildObservation | null;
   /** The first observation of this child failed, so there is nothing to show yet. */
   declare failed: boolean;
@@ -183,6 +164,15 @@ export class DlChildSession extends LightElement {
   readonly #drafts = new Map<string, Draft>();
   readonly #sending = new Set<string>();
   #allowNextLineBreak = false;
+  /** The Run ended while this page was open to its children, which the page says out loud. */
+  #runEnded = false;
+  /** The reader has scrolled a running child's page to its bottom and is still there, so the page keeps
+   * its bottom in view as steps arrive. Only the reader's own scrolling sets it: opening a child never jumps. */
+  #following = false;
+  /** Measures the title's clamp again whenever the title is resized: a settled child has no clock to redraw
+   * the page, and the dock can be narrowed at any time. */
+  readonly #titleSize = new ResizeObserver(() => { this.#measureTitle(); });
+  #watched: HTMLElement | null = null;
 
   constructor() {
     super();
@@ -190,6 +180,7 @@ export class DlChildSession extends LightElement {
     this.childSessionId = '';
     this.entry = null;
     this.now = Date.now();
+    this.commandable = true;
     this.observation = null;
     this.failed = false;
     this.missing = false;
@@ -197,6 +188,14 @@ export class DlChildSession extends LightElement {
     this.objectiveOpen = false;
     this.confirming = false;
     this.answering = null;
+  }
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.lifetime.addEventListener('abort', () => {
+      this.#titleSize.disconnect();
+      this.#watched = null;
+    }, {once: true});
   }
 
   /** Give the title focus: where a reader who has opened this child belongs. */
@@ -223,17 +222,50 @@ export class DlChildSession extends LightElement {
       const before = changed.get('entry') as AgentChildStatus | null | undefined;
       if (this.entry.status === 'running' || rowChanged(before, this.entry)) this.#reobserve();
     }
-    // Only a running child can be cancelled, so a question about it lapses when it settles.
-    if (this.confirming && this.#child()?.status !== 'running') this.confirming = false;
+    // The Run ending under a reader who has its children open is said once; opening a child of a Run
+    // that is already over says nothing, since the note on the page is there to read.
+    if (changed.has('commandable')) this.#runEnded = !this.commandable && changed.get('commandable') === true;
+    // Only a running child of a Run that is still going can be cancelled, so a question about it lapses
+    // when either ends.
+    if (this.confirming && (!this.commandable || this.#child()?.status !== 'running')) this.confirming = false;
+    // Measured before the update adds to the page: a reader who has left the bottom, or a child that has
+    // settled, is no longer followed.
+    const page = this.#page();
+    if (this.#following && !(page && this.#child()?.status === 'running' && scrolledToBottom(page))) {
+      this.#following = false;
+    }
   }
 
-  protected override updated(): void {
-    // The toggle shows only where the title is cut off, or has been opened.
+  protected override updated(changed: PropertyValues<this>): void {
+    this.#measureTitle();
+    const title = this.querySelector<HTMLElement>('[data-title]');
+    if (title !== this.#watched) {
+      this.#titleSize.disconnect();
+      this.#watched = title;
+      if (title) this.#titleSize.observe(title);
+    }
+    for (const field of this.querySelectorAll<HTMLTextAreaElement>('textarea')) this.#fit(field);
+    const page = this.#page();
+    if (!page) return;
+    // A child opens on its title, and a page that is followed keeps its bottom in view.
+    if (changed.has('source') || changed.has('childSessionId')) page.scrollTop = 0;
+    else if (this.#following) page.scrollTop = page.scrollHeight;
+  }
+
+  /** The toggle shows only where the title is cut off, or has been opened. */
+  #measureTitle(): void {
     const title = this.querySelector<HTMLElement>('[data-title]');
     const more = this.querySelector<HTMLElement>('[data-more]');
     if (title && more) more.hidden = !this.objectiveOpen && title.scrollHeight <= title.clientHeight + 1;
-    for (const field of this.querySelectorAll<HTMLTextAreaElement>('textarea')) this.#fit(field);
   }
+
+  #page(): HTMLElement | null {
+    return this.querySelector<HTMLElement>('[data-page]');
+  }
+
+  #scrolled = (event: Event): void => {
+    this.#following = this.#child()?.status === 'running' && scrolledToBottom(event.currentTarget as HTMLElement);
+  };
 
   /** Read the child where it stands; a read already in flight is not interrupted, one more follows it. */
   #reobserve(): void {
@@ -279,18 +311,30 @@ export class DlChildSession extends LightElement {
     return this.observation?.child ?? this.entry;
   }
 
+  /** No child to show: the roster's latest first page no longer lists it (`entry` is null; the server may
+   * still know it, but a Run has a handful of children, so a listed child does not drop off a page), or
+   * the server answered 404 (`missing`). */
   #gone(): boolean {
     return this.missing || this.entry === null;
   }
 
-  #draftKey(mode: 'steer' | 'continue' | 'reply', scope: string | null): string {
-    return `${this.childSessionId}:${mode}:${scope ?? ''}`;
+  /** The box of a child's Operation. It steers the Operation while the child runs and continues it once the
+   * child settles, so what was typed stays with the Operation when the child settles under the reader. */
+  #composerKey(operationId: string | null): string {
+    return `${this.childSessionId}:${operationId ?? ''}`;
+  }
+
+  #replyKey(requestId: string): string {
+    return `${this.childSessionId}:reply:${requestId}`;
   }
 
   #draft(key: string): Draft {
     return this.#drafts.get(key) ?? NO_DRAFT;
   }
 
+  // The page holds what the reader typed and binds it with `live()`, which writes a box only when the
+  // box differs from the draft: writing back text the box already holds, such as an IME's composition,
+  // would interrupt the composition.
   #typed = (event: Event): void => {
     const field = event.currentTarget as HTMLTextAreaElement;
     const key = field.dataset.draft!;
@@ -339,7 +383,7 @@ export class DlChildSession extends LightElement {
     const child = this.#child();
     if (!child) return;
     const action = child.status === 'running' ? 'steer' : 'continue';
-    const key = this.#draftKey(action, child.operationId);
+    const key = this.#composerKey(child.operationId);
     const {text, reauthorize} = this.#draft(key);
     const content = text.trim();
     if (!content) return;
@@ -359,7 +403,7 @@ export class DlChildSession extends LightElement {
   #submitReply = (event: Event): void => {
     event.preventDefault();
     const requestId = (event.currentTarget as HTMLFormElement).dataset.request!;
-    const key = this.#draftKey('reply', requestId);
+    const key = this.#replyKey(requestId);
     const content = this.#draft(key).text.trim();
     if (!content) return;
     void this.#execute('reply', requestId, key, (source) => source.reply(requestId, content));
@@ -399,22 +443,28 @@ export class DlChildSession extends LightElement {
           ? receipt.operationId
           : operationId,
       };
-      if (action === 'reply') this.answering = null;
+      if (action === 'reply') this.#closeReply();
       if (action === 'cancel') {
         this.confirming = false;
         void this.updateComplete.then(() => { this.focusTitle(); });
       }
       this.#reobserve();
     } catch (error) {
-      if (!shown() || isAbortError(error)) return;
+      if (this.source !== source || isAbortError(error)) return;
+      // A refusal means the child or the question is not as the page shows it, so the roster is told and
+      // the page reads the child again.
+      const refused = error instanceof ChildControlRejectedError;
+      if (refused) raise(this, 'dl-child-command-settled');
+      if (!shown()) return;
       if (error instanceof ApiError && error.status === 404) {
         this.missing = true;
       } else {
-        this.outcome = {
-          code: error instanceof ChildControlRejectedError ? error.outcome : 'failed',
-          childSessionId,
-          operationId,
-        };
+        this.outcome = {code: refused ? error.outcome : 'failed', childSessionId, operationId};
+        if (refused) {
+          // A reply is refused because its question is no longer open, so the box has nothing left to send.
+          if (action === 'reply') this.#closeReply();
+          this.#reobserve();
+        }
       }
     } finally {
       this.#sending.delete(key);
@@ -434,6 +484,7 @@ export class DlChildSession extends LightElement {
   /** What the page says out loud: that the child is gone, else the latest answer to a command. */
   #announcement(): string {
     if (this.#gone()) return msg('That child is no longer available.', {id: 'childSession.gone'});
+    if (this.#runEnded) return finishedText();
     const outcome = this.outcome;
     const shown = outcome
       && outcome.childSessionId === this.childSessionId
@@ -459,6 +510,15 @@ export class DlChildSession extends LightElement {
     this.answering = (event.currentTarget as HTMLElement).dataset.request!;
     void this.updateComplete.then(() => { this.querySelector<HTMLTextAreaElement>('[data-reply]')?.focus(); });
   };
+
+  /** Close the reply box once its question is settled. A reader who was in the box, or nowhere, goes to the
+   * title: the box takes their focus with it, and the sheet on a phone traps Tab only from inside. */
+  #closeReply(): void {
+    const active = document.activeElement;
+    const stranded = active === document.body || this.contains(active);
+    this.answering = null;
+    if (stranded) void this.updateComplete.then(() => { this.focusTitle(); });
+  }
 
   #closeAnswer = (): void => {
     const requestId = this.answering;
@@ -493,7 +553,7 @@ export class DlChildSession extends LightElement {
     const running = child.status === 'running';
     return html`
       <section class=${styles.session} aria-labelledby="child-session-title">
-        <div class=${styles.scroll}>
+        <div class=${styles.scroll} data-page @scroll=${this.#scrolled}>
           ${keyed(this.childSessionId, html`
             ${this.#heading(child)}
             ${this.#statusLine(child, running)}
@@ -504,7 +564,7 @@ export class DlChildSession extends LightElement {
             ${this.observation ? this.#history(this.observation) : nothing}
           `)}
         </div>
-        ${this.#composer(child, running)}
+        ${this.commandable ? this.#composer(child, running) : this.#finished()}
       </section>
     `;
   }
@@ -531,7 +591,7 @@ export class DlChildSession extends LightElement {
         ${childGlyph(child)}
         <b class=${styles.state}>${childStateText(child)}</b>
         <span>${meta}</span>
-        ${running && !this.confirming ? html`
+        ${running && this.commandable && !this.confirming ? html`
           <button type="button" class="dl-btn dl-btn-danger-text ${styles.cancel}" data-cancel
                   @click=${this.#askConfirmation}>${msg('Cancel child', {id: 'childSession.cancel'})}</button>
         ` : nothing}
@@ -564,7 +624,7 @@ export class DlChildSession extends LightElement {
     const label = question.expiresAt === null
       ? msg('Asking the parent', {id: 'childSession.asking'})
       : msg(str`Asking the parent · expires in ${minutes} min`, {id: 'childSession.askingExpires'});
-    const key = this.#draftKey('reply', question.requestId);
+    const key = this.#replyKey(question.requestId);
     const draft = this.#draft(key);
     const busy = this.#sendingNow('reply', question.requestId);
     return html`
@@ -576,7 +636,7 @@ export class DlChildSession extends LightElement {
             <div class=${styles.field}>
               <textarea rows="1" class=${styles.input} data-reply data-draft=${key}
                         aria-label=${msg('Your answer', {id: 'childSession.answerLabel'})}
-                        .value=${draft.text} ?readonly=${busy}
+                        .value=${live(draft.text)} ?readonly=${busy}
                         @input=${this.#typed} @keydown=${this.#keydown}
                         @beforeinput=${this.#beforeInput} @keyup=${this.#keyup}></textarea>
               ${this.#sendButton(draft.text, busy)}
@@ -689,9 +749,13 @@ export class DlChildSession extends LightElement {
       `;
   }
 
-  /** A steer the control records name shows as its sender wrote it, under who sent it. */
+  /** A steer the control records name shows as its sender wrote it, under who sent it. The runtime writes a
+   * steer into the transcript as "<Origin> steer: <content>", so a record is matched by exactly that. */
   #sender(text: string): {label: string; text: string} {
-    const control = this.observation?.controls.find((record) => record.content && text.includes(record.content));
+    const control = this.observation?.controls.find((record) => {
+      const origin = record.origin || 'unknown';
+      return text === `${origin.charAt(0).toUpperCase()}${origin.slice(1).toLowerCase()} steer: ${record.content}`;
+    });
     return control ? {label: senderText(control.origin), text: control.content} : {label: '', text};
   }
 
@@ -746,9 +810,13 @@ export class DlChildSession extends LightElement {
     `;
   }
 
+  #finished(): TemplateResult {
+    return html`<p class=${styles.finished}>${finishedText()}</p>`;
+  }
+
   #composer(child: AgentChildStatus, running: boolean): TemplateResult {
     const mode = running ? 'steer' : 'continue';
-    const key = this.#draftKey(mode, child.operationId);
+    const key = this.#composerKey(child.operationId);
     const draft = this.#draft(key);
     const busy = this.#sendingNow(mode);
     const userCancelled = !running && child.status === 'cancelled' && child.cancellationOrigin === 'user';
@@ -761,14 +829,14 @@ export class DlChildSession extends LightElement {
         ${said ? html`<p class=${styles.outcome}>${said}</p>` : nothing}
         ${userCancelled ? html`
           <label class="dl-dialog-checkbox ${styles.reauthorize}">
-            <input type="checkbox" data-draft=${key} .checked=${draft.reauthorize} @change=${this.#reauthorized}>
+            <input type="checkbox" data-draft=${key} .checked=${live(draft.reauthorize)} @change=${this.#reauthorized}>
             ${msg('Reauthorize this user-cancelled work', {id: 'childSession.reauthorize'})}
           </label>
         ` : nothing}
         <div class=${styles.field}>
           <textarea rows="1" class=${styles.input} data-draft=${key} aria-label=${placeholder}
                     aria-describedby="child-session-hint" placeholder=${placeholder}
-                    .value=${draft.text} ?readonly=${busy}
+                    .value=${live(draft.text)} ?readonly=${busy}
                     @input=${this.#typed} @keydown=${this.#keydown}
                     @beforeinput=${this.#beforeInput} @keyup=${this.#keyup}></textarea>
           ${this.#sendButton(draft.text, busy)}

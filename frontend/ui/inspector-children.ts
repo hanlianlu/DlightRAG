@@ -19,7 +19,8 @@ import {icon} from '../design-system/index.ts';
 import {LightElement, NarrowController} from '../lib/lit-host.ts';
 import {KeysetPager} from '../lib/paged.ts';
 import styles from '../styles/inspector-children.module.css';
-import {childElapsed, childGlyph, childStateText} from './child-session.ts';
+import './child-session.ts';
+import {childElapsed, childGlyph, childStateText} from './child-status.ts';
 import {loadOlderControl} from './load-older.ts';
 
 /** A followed roster refetches at most this often while its run streams child activity. */
@@ -27,6 +28,8 @@ const FOLLOW_REFRESH_INTERVAL_MS = 1000;
 /** From this width, in rem, the dock shows the list beside the child. */
 const WIDE_REM = 40;
 const CLOCK_MILLISECONDS = 1000;
+/** A Run in one of these statuses is over: the server refuses to steer, continue or cancel its children. */
+const OVER_RUN_STATUSES: ReadonlySet<string> = new Set(['succeeded', 'failed', 'cancelled']);
 
 /** What the dock reads and does for one Run's children. */
 export interface ChildrenSource {
@@ -58,6 +61,7 @@ export class DlInspectorChildren extends LightElement {
     entries: {state: true},
     failed: {state: true},
     picked: {state: true},
+    runStatus: {state: true},
   };
 
   declare source: ChildrenSource | null;
@@ -68,6 +72,8 @@ export class DlInspectorChildren extends LightElement {
   declare failed: boolean;
   /** The child the reader opened. */
   declare picked: string | null;
+  /** Where the Run stood at the latest refresh; null before the first, or from a server that does not say. */
+  declare runStatus: string | null;
 
   readonly #narrow = new NarrowController(this, WIDE_REM);
   readonly #pager = new KeysetPager<AgentChildRosterPage>(
@@ -90,6 +96,7 @@ export class DlInspectorChildren extends LightElement {
     this.entries = null;
     this.failed = false;
     this.picked = null;
+    this.runStatus = null;
   }
 
   override disconnectedCallback(): void {
@@ -121,6 +128,7 @@ export class DlInspectorChildren extends LightElement {
       this.entries = null;
       this.failed = false;
       this.picked = null;
+      this.runStatus = null;
       this.#newest = null;
       this.#appended = 0;
       if (this.source) void this.#refresh();
@@ -182,6 +190,7 @@ export class DlInspectorChildren extends LightElement {
     this.failed = false;
     await this.#pager.start((page) => {
       this.entries = listed(page.children);
+      this.runStatus = page.runStatus;
     }, () => {
       this.failed = true;
     });
@@ -203,6 +212,11 @@ export class DlInspectorChildren extends LightElement {
       this.entries = [...(this.entries ?? []), ...older];
     });
   };
+
+  /** Whether the Run can still be steered: until a refresh says it is over, it can. */
+  #commandable(): boolean {
+    return this.runStatus === null || !OVER_RUN_STATUSES.has(this.runStatus);
+  }
 
   /** The child on show: the one the reader opened, else, in a wide dock, the newest. */
   #shown(): string | null {
@@ -267,6 +281,7 @@ export class DlInspectorChildren extends LightElement {
           </div>
           <dl-child-session class=${styles.detail} ?hidden=${narrow && shown === null}
             .source=${source} .childSessionId=${shown ?? ''} .entry=${entry} .now=${now}
+            .commandable=${this.#commandable()}
             @dl-child-command-settled=${this.#followRefresh}></dl-child-session>
         </div>
       </div>
