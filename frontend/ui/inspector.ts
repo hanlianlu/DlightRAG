@@ -47,7 +47,6 @@ export class DlInspector extends LightElement {
   declare shellInert: boolean;
 
   #returnFocus: HTMLElement | null = null;
-  #events: AbortController | null = null;
   #compactMedia: MediaQueryList | null = null;
   #stateSignature = '';
   #focusGeneration = 0;
@@ -64,17 +63,13 @@ export class DlInspector extends LightElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    const events = new AbortController();
-    this.#events = events;
-    document.addEventListener('keydown', this.#documentKeydown, {signal: events.signal});
+    document.addEventListener('keydown', this.#documentKeydown, {signal: this.lifetime});
     this.#compactMedia = window.matchMedia(COMPACT_SHELL_MEDIA);
-    this.#compactMedia.addEventListener('change', this.#compactChanged, {signal: events.signal});
+    this.#compactMedia.addEventListener('change', this.#compactChanged, {signal: this.lifetime});
     this.#syncHostState();
   }
 
   override disconnectedCallback(): void {
-    this.#events?.abort();
-    this.#events = null;
     this.#compactMedia = null;
     this.#focusGeneration += 1;
     this.#files()?.pause();

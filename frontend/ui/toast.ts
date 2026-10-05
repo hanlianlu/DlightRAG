@@ -51,10 +51,6 @@ export class DlToastRegion extends LightElement {
     this.request = null;
     this.visible = false;
     this.pending = false;
-  }
-
-  override connectedCallback(): void {
-    super.connectedCallback();
     this.addEventListener('mouseenter', this.#pointerEntered);
     this.addEventListener('mouseleave', this.#pointerLeft);
     this.addEventListener('focusin', this.#focusEntered);
@@ -62,10 +58,6 @@ export class DlToastRegion extends LightElement {
   }
 
   override disconnectedCallback(): void {
-    this.removeEventListener('mouseenter', this.#pointerEntered);
-    this.removeEventListener('mouseleave', this.#pointerLeft);
-    this.removeEventListener('focusin', this.#focusEntered);
-    this.removeEventListener('focusout', this.#focusLeft);
     this.#stopTimer();
     this.request = null;
     this.visible = false;

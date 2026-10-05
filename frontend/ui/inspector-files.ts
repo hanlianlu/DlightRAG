@@ -305,7 +305,7 @@ export class DlInspectorFiles extends LightElement {
       str`${filename} will be permanently removed from this workspace.`,
       {id: 'inspectorFiles.deleteNotice'},
     );
-    if (await modalResult(this, dialog, () => this.#restoreDeleteTrigger()) !== 'confirm') return;
+    if (await modalResult(this, dialog, () => this.#restoreDeleteTrigger(), this.lifetime) !== 'confirm') return;
     const workspace = this.handles.ingest.workspace;
     this.#invalidateOlderFiles();
     const {controller, generation} = this.#startRequest();

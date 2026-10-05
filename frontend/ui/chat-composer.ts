@@ -177,24 +177,19 @@ export class DlChatComposer extends LightElement {
     this.#unsubscribe ??= this.handles.attachments.subscribe(() => {
       this.attachments = [...this.handles.attachments.list()];
     });
-    document.addEventListener('click', this.#closeMenus);
-    document.addEventListener('dragenter', this.#dragEnter);
-    document.addEventListener('dragleave', this.#dragLeave);
-    document.addEventListener('dragover', this.#dragOver);
-    document.addEventListener('drop', this.#drop);
-    document.addEventListener('paste', this.#paste);
+    const {lifetime: signal} = this;
+    document.addEventListener('click', this.#closeMenus, {signal});
+    document.addEventListener('dragenter', this.#dragEnter, {signal});
+    document.addEventListener('dragleave', this.#dragLeave, {signal});
+    document.addEventListener('dragover', this.#dragOver, {signal});
+    document.addEventListener('drop', this.#drop, {signal});
+    document.addEventListener('paste', this.#paste, {signal});
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     this.#unsubscribe?.();
     this.#unsubscribe = null;
-    document.removeEventListener('click', this.#closeMenus);
-    document.removeEventListener('dragenter', this.#dragEnter);
-    document.removeEventListener('dragleave', this.#dragLeave);
-    document.removeEventListener('dragover', this.#dragOver);
-    document.removeEventListener('drop', this.#drop);
-    document.removeEventListener('paste', this.#paste);
   }
 
   focusInput(): void {

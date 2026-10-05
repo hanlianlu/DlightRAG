@@ -72,7 +72,6 @@ export class DlConversationSidebar extends LightElement {
   declare shellInert: boolean;
 
   #drawerReturnFocus: HTMLElement | null = null;
-  #events: AbortController | null = null;
   #releaseRouter: (() => void) | null = null;
   #renderedViewRevision = -1;
   #stateSignature = '';
@@ -95,17 +94,13 @@ export class DlConversationSidebar extends LightElement {
     super.connectedCallback();
     this.desktop = window.matchMedia(DESKTOP_SHELL_MEDIA).matches;
     this.requestUpdate();
-    const events = new AbortController();
-    this.#events = events;
-    document.addEventListener('keydown', this.#documentKeydown, {signal: events.signal});
-    window.addEventListener('resize', this.#resize, {signal: events.signal});
-    window.addEventListener('beforeunload', this.#beforeUnload, {signal: events.signal});
+    document.addEventListener('keydown', this.#documentKeydown, {signal: this.lifetime});
+    window.addEventListener('resize', this.#resize, {signal: this.lifetime});
+    window.addEventListener('beforeunload', this.#beforeUnload, {signal: this.lifetime});
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
-    this.#events?.abort();
-    this.#events = null;
     this.#releaseRouter?.();
     this.#releaseRouter = null;
     webRouter.setGuard(null);
@@ -180,14 +175,14 @@ export class DlConversationSidebar extends LightElement {
         if (returnFocus?.isConnected && !returnFocus.inert) returnFocus.focus();
         else void this.#focusSurvivingConversation();
       },
-      this.#events?.signal,
+      this.lifetime,
     ) !== 'delete-all') {
       return false;
     }
     if (this.#lifecycleBlocked()) return false;
 
-    const signal = this.#events?.signal;
-    if (!signal || signal.aborted) return false;
+    const signal = this.lifetime;
+    if (signal.aborted) return false;
     const alsoClearMemory = this.querySelector<HTMLInputElement>(
       '#delete-all-also-clear-memory',
     )?.checked;
@@ -323,7 +318,7 @@ export class DlConversationSidebar extends LightElement {
     if (!this.#hasUnsavedDraft()) return true;
     const dialog = this.#dialog('discard-draft-dialog');
     if (!dialog) return false;
-    return await modalResult(this, dialog, restoreFocus, this.#events?.signal) === 'discard';
+    return await modalResult(this, dialog, restoreFocus, this.lifetime) === 'discard';
   }
 
   async #guardNavigation(next: WebRoute): Promise<boolean> {
@@ -441,8 +436,8 @@ export class DlConversationSidebar extends LightElement {
   }
 
   async #commitRename(conversationId: string, title: string): Promise<void> {
-    const signal = this.#events?.signal;
-    if (!signal || signal.aborted) return;
+    const signal = this.lifetime;
+    if (signal.aborted) return;
     const result = await this.handles.conversations.rename(conversationId, title, signal);
     if (signal.aborted || result === 'ok') return;
     if (result === 'missing') {
@@ -481,12 +476,12 @@ export class DlConversationSidebar extends LightElement {
       this,
       dialog,
       () => this.#focusConversationActions(conversationId),
-      this.#events?.signal,
+      this.lifetime,
     ) !== 'delete') return;
     if (this.#lifecycleBlocked()) return;
 
-    const signal = this.#events?.signal;
-    if (!signal || signal.aborted) return;
+    const signal = this.lifetime;
+    if (signal.aborted) return;
     let result: ConversationMutationResult = 'error';
     this.pendingLifecycleAction = true;
     try {

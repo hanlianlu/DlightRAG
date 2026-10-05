@@ -38,11 +38,10 @@ export class DlVideoPlayback extends LightElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    this.ownerDocument.addEventListener(ACTIVATE, this.#anotherPlayer);
+    this.ownerDocument.addEventListener(ACTIVATE, this.#anotherPlayer, {signal: this.lifetime});
   }
 
   override disconnectedCallback(): void {
-    this.ownerDocument.removeEventListener(ACTIVATE, this.#anotherPlayer);
     this.#stop();
     super.disconnectedCallback();
   }

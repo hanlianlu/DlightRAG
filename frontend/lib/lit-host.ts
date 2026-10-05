@@ -17,10 +17,35 @@ import type {SubscribableStore} from '../stores/base.ts';
  * shadows the accessor Lit installs on the prototype and updates stop firing.
  */
 export abstract class LightElement extends LitElement {
+    #lifetime = new AbortController();
+
     constructor() {
         super();
         // Every light element draws words, so none may stay behind when the language changes.
         updateWhenLocaleChanges(this);
+        // Not connected yet, so nothing may start: the signal is spent until the first connect.
+        this.#lifetime.abort();
+    }
+
+    /**
+     * Aborts when this element leaves the document, so a request or a listener bound to it ends
+     * with it. A new signal starts each time the element connects, and one that is not connected
+     * holds a signal already aborted: work that checks `aborted` before it starts never starts.
+     * Read it after `super.connectedCallback()`: before that the element is connected but the
+     * signal is still the aborted one, and a listener registered with it silently does nothing.
+     */
+    protected get lifetime(): AbortSignal {
+        return this.#lifetime.signal;
+    }
+
+    override connectedCallback(): void {
+        this.#lifetime = new AbortController();
+        super.connectedCallback();
+    }
+
+    override disconnectedCallback(): void {
+        this.#lifetime.abort();
+        super.disconnectedCallback();
     }
 
     protected override createRenderRoot(): HTMLElement {

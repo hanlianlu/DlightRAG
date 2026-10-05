@@ -46,8 +46,6 @@ export class DlConversationList extends LightElement {
   declare openMenuId: string | null;
   declare renameId: string | null;
 
-  #dismiss: AbortController | null = null;
-
   constructor() {
     super();
     this.handles = productionHandles();
@@ -60,19 +58,11 @@ export class DlConversationList extends LightElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    const dismiss = new AbortController();
-    this.#dismiss = dismiss;
     document.addEventListener('click', (event) => {
       if (!this.openMenuId || !(event.target instanceof Node)) return;
       if (this.#row(this.openMenuId)?.contains(event.target)) return;
       this.openMenuId = null;
-    }, {signal: dismiss.signal});
-  }
-
-  override disconnectedCallback(): void {
-    super.disconnectedCallback();
-    this.#dismiss?.abort();
-    this.#dismiss = null;
+    }, {signal: this.lifetime});
   }
 
   get menuOpen(): boolean {

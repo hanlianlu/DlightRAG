@@ -28,7 +28,6 @@ export class DlImageLightbox extends LightElement {
   declare gallery: readonly string[];
 
   #returnFocus: HTMLElement | null = null;
-  #events: AbortController | null = null;
   #focusGeneration = 0;
 
   constructor() {
@@ -46,15 +45,11 @@ export class DlImageLightbox extends LightElement {
     this.setAttribute('aria-modal', 'true');
     this.setAttribute('aria-label', msg('Image viewer', {id: 'imageLightbox.ariaLabel'}));
     this.tabIndex = -1;
-    const events = new AbortController();
-    this.#events = events;
-    document.addEventListener('keydown', this.#keydown, {capture: true, signal: events.signal});
+    document.addEventListener('keydown', this.#keydown, {capture: true, signal: this.lifetime});
     this.#syncHost();
   }
 
   override disconnectedCallback(): void {
-    this.#events?.abort();
-    this.#events = null;
     this.#focusGeneration += 1;
     super.disconnectedCallback();
   }

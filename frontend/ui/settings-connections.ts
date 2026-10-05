@@ -64,7 +64,6 @@ export class DlSettingsConnections extends LightElement {
   declare error: boolean;
   declare authorizationUrl: string | null;
 
-  #events: AbortController | null = null;
   #timer: ReturnType<typeof setTimeout> | null = null;
   #generation = 0;
   #acknowledged = false;
@@ -89,14 +88,11 @@ export class DlSettingsConnections extends LightElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    this.#events = new AbortController();
     void this.#load();
   }
 
   override disconnectedCallback(): void {
     this.authorizationUrl = null;
-    this.#events?.abort();
-    this.#events = null;
     this.#generation++;
     if (this.#timer) clearTimeout(this.#timer);
     this.querySelectorAll<HTMLInputElement>('input[type=password]').forEach((input) => {
@@ -116,8 +112,8 @@ export class DlSettingsConnections extends LightElement {
   }
 
   async #load(): Promise<void> {
-    const signal = this.#events?.signal;
-    if (!signal || signal.aborted || this.busy) return;
+    const signal = this.lifetime;
+    if (signal.aborted || this.busy) return;
     if (this.#timer) clearTimeout(this.#timer);
     this.#timer = null;
     const generation = ++this.#generation;
@@ -142,8 +138,8 @@ export class DlSettingsConnections extends LightElement {
 
   /** Apply one command, then restore focus so a replaced control never loses the user. */
   async #command(command: Command, returnFocus?: HTMLElement | null): Promise<ConnectionsView | null> {
-    const signal = this.#events?.signal;
-    if (!this.view || this.busy || !signal || signal.aborted) return null;
+    const signal = this.lifetime;
+    if (!this.view || this.busy || signal.aborted) return null;
     this.#generation++;
     this.busy = true;
     this.pending = command.kind === 'create' ? null : command.connectionId;
@@ -256,7 +252,7 @@ export class DlSettingsConnections extends LightElement {
   async #ask(dialogSelector: string, trigger: HTMLElement | null): Promise<string> {
     const dialog = this.querySelector<HTMLDialogElement>(dialogSelector);
     if (!dialog) return '';
-    return await modalResult(this, dialog, () => trigger?.focus(), this.#events?.signal);
+    return await modalResult(this, dialog, () => trigger?.focus(), this.lifetime);
   }
 
   async #settle(returnFocus?: HTMLElement | null): Promise<void> {
@@ -416,8 +412,8 @@ export class DlSettingsConnections extends LightElement {
   }
 
   async #beginAuthorization(connection: Connection, returnFocus: HTMLElement): Promise<void> {
-    const signal = this.#events?.signal;
-    if (!this.view || this.busy || !signal || signal.aborted) return;
+    const signal = this.lifetime;
+    if (!this.view || this.busy || signal.aborted) return;
     this.busy = true;
     this.pending = connection.connectionId;
     this.error = false;

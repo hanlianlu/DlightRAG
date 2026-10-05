@@ -68,11 +68,10 @@ export class DlArtifactCanvas extends LightElement {
       this.setAttribute('aria-hidden', 'true');
     }
     this.#compactMedia = window.matchMedia(COMPACT_SHELL_MEDIA);
-    this.#compactMedia.addEventListener('change', this.#compactLayoutChanged);
+    this.#compactMedia.addEventListener('change', this.#compactLayoutChanged, {signal: this.lifetime});
   }
 
   override disconnectedCallback(): void {
-    this.#compactMedia?.removeEventListener('change', this.#compactLayoutChanged);
     this.#compactMedia = null;
     this.#focusGeneration += 1;
     this.#destroyPreview();

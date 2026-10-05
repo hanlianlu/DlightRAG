@@ -42,7 +42,6 @@ export class DlThemeControl extends LightElement {
   declare preference: ThemePreference;
   declare menuOpen: boolean;
 
-  #events: AbortController | null = null;
   #media: MediaQueryList | null = null;
   readonly #dismiss = createAutoDismiss({
     getAnchor: () => this,
@@ -60,17 +59,12 @@ export class DlThemeControl extends LightElement {
     super.connectedCallback();
     this.preference = readPreference();
     this.#media = window.matchMedia('(prefers-color-scheme: dark)');
-    this.#media.addEventListener('change', this.#mediaChanged);
-    const events = new AbortController();
-    this.#events = events;
-    window.addEventListener('storage', this.#storageChanged, {signal: events.signal});
+    this.#media.addEventListener('change', this.#mediaChanged, {signal: this.lifetime});
+    window.addEventListener('storage', this.#storageChanged, {signal: this.lifetime});
     this.#apply();
   }
 
   override disconnectedCallback(): void {
-    this.#events?.abort();
-    this.#events = null;
-    this.#media?.removeEventListener('change', this.#mediaChanged);
     this.#media = null;
     this.#dismiss.deactivate();
     super.disconnectedCallback();

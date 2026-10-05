@@ -155,7 +155,6 @@ export class DlSettingsDialog extends LightElement {
   declare level: 'list' | 'page';
   declare summaries: Partial<Record<SettingsSection, SettingsSummary>>;
 
-  #events: AbortController | null = null;
   #returnFocus: HTMLElement | null = null;
   readonly #phone = new MediaController(this, PHONE_DIALOG_MEDIA);
 
@@ -169,14 +168,7 @@ export class DlSettingsDialog extends LightElement {
     this.summaries = {};
   }
 
-  override connectedCallback(): void {
-    super.connectedCallback();
-    this.#events = new AbortController();
-  }
-
   override disconnectedCallback(): void {
-    this.#events?.abort();
-    this.#events = null;
     document.body.classList.remove('settings-open');
     super.disconnectedCallback();
   }
@@ -188,8 +180,8 @@ export class DlSettingsDialog extends LightElement {
 
   /** Open Settings on a page. A page that is named opens on a phone too; otherwise a phone opens on the list. */
   async open(returnFocus?: HTMLElement | null, page?: SettingsSection): Promise<void> {
-    const signal = this.#events?.signal;
-    if (!signal || signal.aborted) return;
+    const signal = this.lifetime;
+    if (signal.aborted) return;
     this.#returnFocus = returnFocus ?? (
       document.activeElement instanceof HTMLElement ? document.activeElement : null
     );

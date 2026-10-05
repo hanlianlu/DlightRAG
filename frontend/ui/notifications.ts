@@ -36,7 +36,6 @@ export class DlNotificationOffer extends LightElement {
   declare visible: boolean;
 
   #missedAnswer = false;
-  #events: AbortController | null = null;
 
   constructor() {
     super();
@@ -46,20 +45,10 @@ export class DlNotificationOffer extends LightElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    const events = new AbortController();
-    this.#events = events;
-    window.addEventListener('blur', this.#leftPage, {signal: events.signal});
-    window.addEventListener('focus', this.#cameBack, {signal: events.signal});
-    document.addEventListener('visibilitychange', this.#visibilityChanged, {
-      signal: events.signal,
-    });
+    window.addEventListener('blur', this.#leftPage, {signal: this.lifetime});
+    window.addEventListener('focus', this.#cameBack, {signal: this.lifetime});
+    document.addEventListener('visibilitychange', this.#visibilityChanged, {signal: this.lifetime});
     this.#syncHost();
-  }
-
-  override disconnectedCallback(): void {
-    this.#events?.abort();
-    this.#events = null;
-    super.disconnectedCallback();
   }
 
   protected override updated(changed: PropertyValues<this>): void {

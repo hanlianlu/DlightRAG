@@ -20,8 +20,6 @@ export class DlWorkspaceCreate extends LightElement {
   declare handles: AppHandles;
   declare pending: boolean;
 
-  #lifecycle: AbortController | null = null;
-
   constructor() {
     super();
     this.handles = productionHandles();
@@ -29,14 +27,7 @@ export class DlWorkspaceCreate extends LightElement {
     this.className = 'dl-popover-create';
   }
 
-  override connectedCallback(): void {
-    super.connectedCallback();
-    this.#lifecycle = new AbortController();
-  }
-
   override disconnectedCallback(): void {
-    this.#lifecycle?.abort();
-    this.#lifecycle = null;
     this.pending = false;
     super.disconnectedCallback();
   }
@@ -44,14 +35,12 @@ export class DlWorkspaceCreate extends LightElement {
   async #submit(): Promise<void> {
     const input = this.querySelector('input');
     const displayName = input?.value.trim();
-    const lifecycle = this.#lifecycle;
-    if (!input || !displayName || !lifecycle || this.pending) return;
+    const signal = this.lifetime;
+    if (!input || !displayName || signal.aborted || this.pending) return;
     this.pending = true;
     try {
-      const created = await createWorkspaceRequest(displayName, lifecycle.signal);
-      if (
-        lifecycle.signal.aborted || this.#lifecycle !== lifecycle || !this.isConnected
-      ) return;
+      const created = await createWorkspaceRequest(displayName, signal);
+      if (signal.aborted) return;
       this.handles.workspaces.add(created);
       this.handles.ingest.set(created.workspace);
       input.value = '';
@@ -64,9 +53,7 @@ export class DlWorkspaceCreate extends LightElement {
         composed: true,
       }));
     } catch (error) {
-      if (
-        !lifecycle.signal.aborted && this.#lifecycle === lifecycle && this.isConnected
-      ) {
+      if (!signal.aborted) {
         requestToast(this, {
           message: apiErrorMessage(
             error,
@@ -76,7 +63,7 @@ export class DlWorkspaceCreate extends LightElement {
         });
       }
     } finally {
-      if (this.#lifecycle === lifecycle) this.pending = false;
+      if (!signal.aborted) this.pending = false;
     }
   }
 
