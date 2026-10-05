@@ -941,8 +941,28 @@ async def test_web_projects_steer_and_child_roster(client: AsyncClient, applicat
 
     children = await client.get(f"/web/api/answer/{RUN_ID}/children")
     assert children.status_code == 200
-    assert children.json() == {"run_id": RUN_ID, "children": [], "next_cursor": None}
+    assert children.json() == {
+        "run_id": RUN_ID,
+        "run_status": "queued",
+        "children": [],
+        "next_cursor": None,
+    }
     application.answers.steer.assert_awaited_once()
+
+
+@pytest.mark.parametrize("status", ["queued", "running", "succeeded", "failed", "cancelled"])
+async def test_web_child_roster_names_the_status_of_the_run_it_belongs_to(
+    client: AsyncClient, service: Any, status: str
+) -> None:
+    service.turn_for_run.return_value = linked_turn(
+        answer_run(status=status),  # type: ignore[arg-type]
+        conversation_id=_CID,
+    )
+
+    children = await client.get(f"/web/api/answer/{RUN_ID}/children")
+
+    assert children.status_code == 200
+    assert children.json()["run_status"] == status
 
 
 async def test_web_child_roster_passes_a_validated_page_request(
