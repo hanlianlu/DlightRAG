@@ -55,7 +55,7 @@ dependencies = [
     "nh3>=0.3.7",
     "pygments>=2.17",
     # Observability
-    "langfuse>=4.15.4",
+    "langfuse>=4.17.0",
     # The tracer provider Langfuse exports through; already present as its dependency,
     # declared here because the observability adapter imports it.
     "opentelemetry-sdk>=1.45.0",
