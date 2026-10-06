@@ -30,7 +30,7 @@ See [Architecture](docs/architecture.md) for module and storage ownership.
 
 | Path | PostgreSQL | Parser | Security |
 |---|---|---|---|
-| Local Docker | Compose PG18 | Self-hosted MinerU by default | Loopback, `auth_mode: none` |
+| Local Docker | Compose PG18 | Self-hosted MinerU by default, or Compose Docling | Loopback, `auth_mode: none` |
 | Native API | Compose or external PG18 | Any reachable MinerU or Docling | Local or explicit auth |
 | Shared service | Managed or self-hosted PG18 | Independently operated parser | `jwt`; `simple` is one owner |
 | Enterprise | Managed PG18 | Independently operated parser | `jwt` with Access Rules and workspace creators |
@@ -78,7 +78,9 @@ DLIGHTRAG_MODELS__CHAT__ROLES__VLM__API_KEY=...
 DLIGHTRAG_MODELS__RERANK__API_KEY=...
 ```
 
-Install and start MinerU, then start DlightRAG:
+Choose one parser; DlightRAG reads exactly one `corpus.sidecars` block.
+
+**MinerU on the host (the checked-in default):**
 
 ```bash
 make mineru-install
@@ -86,6 +88,27 @@ make mineru-service-install  # installs and starts the background service
 curl http://127.0.0.1:8210/health
 
 docker compose up -d
+docker compose ps
+```
+
+Use `make mineru-api` when the platform cannot install a background user
+service.
+
+**Docling in Compose (CPU, nothing installed on the host):** in `config.yaml`,
+replace the `mineru` block with
+
+```yaml
+corpus:
+  sidecars:
+    docling:
+      endpoint: http://docling:5001
+      code_formula_preset: null
+```
+
+then start the stack with the `docling` profile:
+
+```bash
+docker compose --profile docling up -d
 docker compose ps
 ```
 
@@ -97,9 +120,7 @@ Open <http://localhost:8100/web/>. The stack publishes:
 | MCP streamable HTTP | `http://127.0.0.1:8101` |
 | PostgreSQL | `127.0.0.1:5432` |
 
-Use `make mineru-api` when the platform cannot install a background user
-service. To use Docling, replace the MinerU block in `config.yaml`; a commented
-example is included there. Parser changes affect only new parses.
+Parser changes affect only new parses.
 
 Configuration fields and parser operations are documented in
 [Configuration](docs/configuration.md) and [Operations](docs/operations.md).
