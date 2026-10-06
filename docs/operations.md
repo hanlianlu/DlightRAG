@@ -619,7 +619,7 @@ password from `../langfuse-local/.env`. Traces appear after a model call.
 
 | Target | Behavior |
 |---|---|
-| `make langfuse-stack` | Download/patch the official Compose file |
+| `make langfuse-stack` | Download/patch the official Compose file, refreshing an older server major |
 | `make langfuse-bootstrap` | Sync project credentials to both env files |
 | `make langfuse-up` | Bootstrap and start |
 | `make langfuse-down` | Stop |
@@ -628,6 +628,21 @@ password from `../langfuse-local/.env`. Traces appear after a model call.
 | `make langfuse-logs` | Follow Web/worker logs |
 | `make langfuse-health` | Check host endpoint |
 | `make langfuse-reset CONFIRM=1` | Delete all local Langfuse data: traces, users, project keys, and model prices |
+
+### Version
+
+The stack tracks the Langfuse server major DlightRAG targets, not a patch version:
+`scripts/langfuse/stack.py` pins `LANGFUSE_IMAGE_MAJOR` and prepares the official
+Compose file, which means `langfuse/langfuse:4` and ClickHouse `25.12`. The Python
+SDK dependency stays on the same major, because the v4 data model is what the SDK's
+real-time ingestion and the v2 read APIs require.
+
+The Compose file is written once and only patched afterwards, so an existing stack
+is refreshed when it pins another major, and the target fails rather than starting
+a mismatched stack when upstream moves beyond `LANGFUSE_IMAGE_MAJOR` — upgrade the
+SDK dependency and the constant together. Delete
+`../langfuse-local/docker-compose.yml` to force a full re-download on a smaller
+upstream change; keep `.env` next to it so the generated keys survive.
 
 ### Connection And Keys
 
