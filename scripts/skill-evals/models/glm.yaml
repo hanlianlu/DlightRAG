@@ -1,0 +1,22 @@
+# QUERY_MODEL=glm: the answering role on the deployment's second model, z-ai/glm-5.3-flash through
+# OpenRouter (config.yaml's `models.chat.default`), by environment override only. Merged over
+# config.yaml's `models.chat.roles.query`, so provider, api_family and agentic_reasoning stay as
+# the deployment sets them; what changes is the endpoint, its credential and what the model
+# itself needs:
+#   - temperature 1.0 and structured_output auto: the `default` entry's own values for this model
+#     (the 0.7 and json_object of the query role are DeepSeek's);
+#   - reasoning low: the catalogue gives this model no `off`, and an explicit off is refused at
+#     startup, so the ordinary (non-agentic) calls take its lowest level.
+# The agent loop keeps `agentic_reasoning: high` from config.yaml, so the two models are compared
+# at the same effort. Override the three with GLM_TEMPERATURE / GLM_REASONING /
+# GLM_AGENTIC_REASONING when running stack.sh.
+services:
+  dlightrag-api:
+    environment:
+      DLIGHTRAG_MODELS__CHAT__ROLES__QUERY__MODEL: z-ai/glm-5.3-flash
+      DLIGHTRAG_MODELS__CHAT__ROLES__QUERY__BASE_URL: https://openrouter.ai/api/v1
+      DLIGHTRAG_MODELS__CHAT__ROLES__QUERY__API_KEY: ${DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY}
+      DLIGHTRAG_MODELS__CHAT__ROLES__QUERY__TEMPERATURE: ${GLM_TEMPERATURE:-1.0}
+      DLIGHTRAG_MODELS__CHAT__ROLES__QUERY__REASONING: ${GLM_REASONING:-low}
+      DLIGHTRAG_MODELS__CHAT__ROLES__QUERY__AGENTIC_REASONING: ${GLM_AGENTIC_REASONING:-high}
+      DLIGHTRAG_MODELS__CHAT__ROLES__QUERY__STRUCTURED_OUTPUT: auto

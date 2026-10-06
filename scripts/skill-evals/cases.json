@@ -1,0 +1,410 @@
+{
+  "_about": "Step 0 of the interactive-html skill (Perplexity's rule: write the evals before the skill). Sources: 'real' = the owner's own Web queries of 2026-10-05; 'failure' = a known failure from those records; 'adjacent' = a neighbouring skill the new one must not steal from.",
+  "skills": [
+    "interactive-html",
+    "charts",
+    "office-documents",
+    "council",
+    "skill-creator"
+  ],
+  "routing": [
+    {
+      "id": "r01",
+      "src": "real",
+      "q": "给我瑞典和中国的交往，关系等相关的交互性可视化报告，涵盖经贸，科技，政治，外交等",
+      "load": [
+        "interactive-html",
+        "charts"
+      ],
+      "forbid": [],
+      "max_tool_calls": 40,
+      "max_seconds": 420,
+      "allow": [
+        "charts"
+      ]
+    },
+    {
+      "id": "r02",
+      "src": "real",
+      "q": "给我可视化的推演你的国际经济金融学研判",
+      "load": [
+        "interactive-html"
+      ],
+      "forbid": [
+        "office-documents"
+      ],
+      "max_tool_calls": 40,
+      "max_seconds": 420,
+      "allow": [
+        "charts"
+      ]
+    },
+    {
+      "id": "r03",
+      "src": "failure",
+      "q": "你的html报告嵌入的图，不是应该进来用charts skill来做么？",
+      "load": [
+        "charts"
+      ],
+      "forbid": [],
+      "history": [
+        {
+          "role": "user",
+          "content": "给我瑞典和中国的交往，关系等相关的交互性可视化报告，涵盖经贸，科技，政治，外交等"
+        },
+        {
+          "role": "assistant",
+          "content": "已生成交互式报告 sweden-china-report.html：分为概览、经贸、科技、政治外交四个页签，包含贸易额走势、事件时间轴等图表，图表由页面内的脚本绘制，可悬停查看数值。"
+        }
+      ],
+      "allow": [
+        "charts",
+        "interactive-html"
+      ]
+    },
+    {
+      "id": "r04",
+      "src": "synthetic",
+      "q": "把下面这张销售表做成可以按地区筛选的交互式HTML仪表盘：\n地区,季度,销售额\n华东,2024Q1,120\n华东,2024Q2,135\n华北,2024Q1,98\n华北,2024Q2,101",
+      "load": [
+        "interactive-html",
+        "charts"
+      ],
+      "forbid": [
+        "office-documents"
+      ],
+      "allow": [
+        "charts"
+      ]
+    },
+    {
+      "id": "r05",
+      "src": "synthetic",
+      "q": "做一个多页签的网页报告，分成概览、趋势、明细三页，要能在手机上看，数据你自己查一下近五年中国新能源车销量",
+      "load": [
+        "interactive-html",
+        "charts"
+      ],
+      "forbid": [],
+      "max_tool_calls": 40,
+      "max_seconds": 420,
+      "allow": [
+        "charts"
+      ]
+    },
+    {
+      "id": "r06",
+      "src": "synthetic",
+      "q": "Build an interactive HTML dashboard from this CSV with filters and a trend chart: month,region,revenue\n2024-01,EU,10\n2024-02,EU,12\n2024-01,US,20\n2024-02,US,18",
+      "load": [
+        "interactive-html",
+        "charts"
+      ],
+      "forbid": [
+        "office-documents"
+      ],
+      "allow": [
+        "charts"
+      ]
+    },
+    {
+      "id": "r07",
+      "src": "synthetic",
+      "q": "做一个可交互的复利计算器页面，能调本金、利率、年限，并显示增长曲线",
+      "load": [
+        "interactive-html"
+      ],
+      "forbid": [],
+      "allow": [
+        "charts"
+      ]
+    },
+    {
+      "id": "r08",
+      "src": "synthetic",
+      "q": "把刚才的分析整理成一份带图表、可以筛选的网页报告",
+      "load": [
+        "interactive-html",
+        "charts"
+      ],
+      "forbid": [],
+      "history": [
+        {
+          "role": "user",
+          "content": "分析一下 2020 到 2024 年中国新能源车销量走势和主要车企份额变化"
+        },
+        {
+          "role": "assistant",
+          "content": "要点：1) 销量从 2020 年约 137 万辆升至 2024 年约 1,287 万辆，年复合增速约 75%，2023、2024 年增速分别约 36% 与 35%。2) 渗透率 2024 年超过 40%。3) 比亚迪份额由 2020 年约 12% 升至 2024 年约 34%，特斯拉中国约 8%，其余新势力合计约 20%。4) 出口 2024 年约 128 万辆。数据来源：中汽协、乘联会，口径为乘用车+商用车新能源合计，2024 年为估计值。"
+        }
+      ],
+      "allow": [
+        "charts"
+      ]
+    },
+    {
+      "id": "n01",
+      "src": "adjacent",
+      "q": "画一张2019到2024年中国GDP增速的折线图",
+      "load": [
+        "charts"
+      ],
+      "forbid": [
+        "interactive-html"
+      ]
+    },
+    {
+      "id": "n02",
+      "src": "adjacent",
+      "q": "把下面数据画成柱状图：苹果 30，香蕉 20，橙子 25",
+      "load": [
+        "charts"
+      ],
+      "forbid": [
+        "interactive-html"
+      ]
+    },
+    {
+      "id": "n03",
+      "src": "adjacent",
+      "q": "写一份Word版的行业调研报告，带一张趋势图",
+      "load": [
+        "office-documents"
+      ],
+      "forbid": [
+        "interactive-html"
+      ],
+      "allow": [
+        "charts"
+      ]
+    },
+    {
+      "id": "n04",
+      "src": "adjacent",
+      "q": "做一个PPT汇报本季度销售情况",
+      "load": [
+        "office-documents"
+      ],
+      "forbid": [
+        "interactive-html"
+      ]
+    },
+    {
+      "id": "n05",
+      "src": "adjacent",
+      "q": "给我一个预算用的Excel表格模板",
+      "load": [
+        "office-documents"
+      ],
+      "forbid": [
+        "interactive-html"
+      ]
+    },
+    {
+      "id": "n06",
+      "src": "adjacent",
+      "q": "用Markdown写一份本周工作周报，三段就行",
+      "load": [],
+      "forbid": [
+        "interactive-html",
+        "charts"
+      ]
+    },
+    {
+      "id": "n07",
+      "src": "adjacent",
+      "q": "ECharts和Chart.js有什么区别？简单说说",
+      "load": [],
+      "forbid": [
+        "interactive-html",
+        "charts"
+      ]
+    },
+    {
+      "id": "n08",
+      "src": "adjacent",
+      "q": "今天美元兑人民币汇率大概是多少？",
+      "load": [],
+      "forbid": [
+        "interactive-html"
+      ]
+    },
+    {
+      "id": "n09",
+      "src": "adjacent",
+      "q": "这个方案值不值得做？给我一个有风险有收益两面的判断",
+      "load": [
+        "council"
+      ],
+      "forbid": [
+        "interactive-html"
+      ],
+      "max_tool_calls": 40,
+      "max_seconds": 420
+    },
+    {
+      "id": "n10",
+      "src": "adjacent",
+      "q": "帮我写一个Python脚本把CSV按列去重",
+      "load": [],
+      "forbid": [
+        "interactive-html",
+        "charts"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "t1-sales",
+      "kind": "filterable-dashboard",
+      "viewports": [
+        390,
+        820,
+        1280
+      ],
+      "q": "把下面这份销售数据做成一份交互式HTML报告：要能按地区筛选，看到销售额与利润的季度趋势、各产品的构成；手机上也要能舒服地看。\n\n地区,季度,产品,销售额(万元),利润(万元)\n华东,2023Q1,A,320,64\n华东,2023Q1,B,210,38\n华东,2023Q2,A,345,70\n华东,2023Q2,B,230,41\n华东,2023Q3,A,360,75\n华东,2023Q3,B,244,45\n华东,2023Q4,A,402,88\n华东,2023Q4,B,265,50\n华北,2023Q1,A,280,50\n华北,2023Q1,B,190,30\n华北,2023Q2,A,290,53\n华北,2023Q2,B,205,34\n华北,2023Q3,A,305,58\n华北,2023Q3,B,214,36\n华北,2023Q4,A,340,66\n华北,2023Q4,B,230,40\n华南,2023Q1,A,250,48\n华南,2023Q1,B,260,52\n华南,2023Q2,A,262,51\n华南,2023Q2,B,281,57\n华南,2023Q3,A,270,53\n华南,2023Q3,B,300,63\n华南,2023Q4,A,298,60\n华南,2023Q4,B,331,70\n西南,2023Q1,A,150,24\n西南,2023Q1,B,120,18\n西南,2023Q2,A,162,27\n西南,2023Q2,B,131,20\n西南,2023Q3,A,171,29\n西南,2023Q3,B,140,22\n西南,2023Q4,A,190,34\n西南,2023Q4,B,158,26",
+      "must": [
+        "html_published",
+        "slicer_changes_chart",
+        "charts_via_echarts_runtime",
+        "no_boilerplate"
+      ]
+    },
+    {
+      "id": "t2-multipage",
+      "kind": "multi-page-report",
+      "viewports": [
+        390,
+        820,
+        1280
+      ],
+      "q": "我想要一份瑞典和中国关系的交互式可视化报告，涵盖经贸、科技、政治外交几个方面。下面是我手头的材料，数据不够的地方不要编造，标注即可。\n\n【年度货物贸易，亿美元】\n年份,中国对瑞典出口,中国自瑞典进口\n2018,82,98\n2019,81,102\n2020,79,93\n2021,98,116\n2022,115,128\n2023,107,111\n2024,109,106\n\n【科技合作要点】爱立信在华研发与5G合作；沃尔沃汽车(吉利控股)；斯德哥尔摩大学孔子学院2015年关闭；科研联合发表论文近十年增长。\n\n【大事记】1950-05 建交；1957 政府间贸易协定；1978 工业与科技合作协定；2007 胡锦涛访瑞；2010 吉利收购沃尔沃；2015 孔子学院关闭；2022 瑞典出台新中国政策审视。\n\n要求：分页（页签）组织，各页内容聚焦；有可操作的筛选；每张图都有标题和单位；看得出重点结论。",
+      "must": [
+        "html_published",
+        "pages_or_sections",
+        "slicer_changes_chart",
+        "charts_via_echarts_runtime",
+        "timeline_or_events",
+        "no_boilerplate"
+      ]
+    },
+    {
+      "id": "t3-scenario",
+      "kind": "what-if",
+      "viewports": [
+        390,
+        1280
+      ],
+      "q": "做一个可切换情景的推演页面：瑞典克朗兑人民币，未来12个月。情景有 基准/乐观/悲观 三种，可以用滑块调整利差（-1%到+2%）和通胀预期，页面上看到推演区间图和结论摘要。公式你自己合理设定，并在页面里说明假设和不确定性。",
+      "must": [
+        "html_published",
+        "controls_change_output",
+        "assumptions_stated",
+        "charts_via_echarts_runtime",
+        "no_boilerplate"
+      ]
+    },
+    {
+      "id": "t4-narrow",
+      "kind": "side-by-side-compare",
+      "viewports": [
+        360,
+        390,
+        820
+      ],
+      "q": "做一个对比页面：下面六个行业各项指标，并排对比（研发强度、利润率、人均产值），再加一个营收构成饼图。要在手机屏幕上看得清楚，不要让图被挤变形。\n\n行业,研发强度(%),利润率(%),人均产值(万元),营收占比(%)\n新能源汽车及零部件制造,6.2,7.8,185,28\n半导体及集成电路,14.5,12.1,230,17\n生物医药与医疗器械,11.8,15.3,160,15\n工业机器人与智能装备,8.4,9.6,140,14\n新型显示与光电子,7.1,6.2,120,14\n航空航天与国防装备,9.0,8.0,175,12",
+      "must": [
+        "html_published",
+        "no_horizontal_overflow",
+        "charts_via_echarts_runtime",
+        "legend_not_dominant",
+        "no_boilerplate"
+      ]
+    },
+    {
+      "id": "t5-brief",
+      "kind": "single-page-brief",
+      "viewports": [
+        390,
+        1280
+      ],
+      "q": "给我一页网页简报（HTML）：2024年公司四个季度营收分别是 4.2、4.8、5.1、6.0 亿元，利润 0.5、0.7、0.8、1.1 亿元。要有关键指标、一张趋势图、一句结论。不用搞复杂。",
+      "must": [
+        "html_published",
+        "restraint_no_tabs_no_slicers",
+        "charts_via_echarts_runtime",
+        "no_boilerplate"
+      ]
+    },
+    {
+      "id": "h1-clinic",
+      "kind": "held-out filterable dashboard",
+      "viewports": [
+        390,
+        820,
+        1280
+      ],
+      "q": "把下面医院各科室 2024 年上半年的门诊数据做成交互式 HTML 报告：能按科室筛选，能切换看门诊量和平均候诊时间，要有趋势图和科室对比，手机上也要好看。\n\n科室,月份,门诊量,平均候诊(分钟)\n内科,1,5200,42\n内科,2,4800,39\n内科,3,5600,45\n内科,4,5400,44\n内科,5,5900,48\n内科,6,6100,51\n外科,1,3100,35\n外科,2,2900,33\n外科,3,3300,36\n外科,4,3400,37\n外科,5,3600,38\n外科,6,3700,40\n儿科,1,2800,52\n儿科,2,2400,47\n儿科,3,3000,55\n儿科,4,3300,58\n儿科,5,3500,60\n儿科,6,3200,56\n骨科,1,1900,28\n骨科,2,1700,26\n骨科,3,2100,30\n骨科,4,2200,31\n骨科,5,2300,32\n骨科,6,2400,33",
+      "must": [
+        "html_published",
+        "slicer_changes_chart",
+        "charts_via_echarts_runtime",
+        "no_boilerplate"
+      ]
+    },
+    {
+      "id": "h2-energy",
+      "kind": "held-out multi-page",
+      "viewports": [
+        390,
+        820,
+        1280
+      ],
+      "q": "做一份某城市能源与用电情况的交互式可视化报告，用页签分三页：总览（关键指标和月度用电量）、结构（各行业用电占比、能源结构）、对比（近三年同月对比）。要有可操作的筛选，每张图有标题和单位。数据如下，不够的地方标注、不要编造。\n\n月度用电量（亿千瓦时）2021,2022,2023：1月 98,102,108；2月 90,95,101；3月 96,101,107；4月 94,99,106；5月 101,108,116；6月 112,121,130；7月 128,139,150；8月 131,142,155；9月 113,122,131；10月 102,108,116；11月 99,104,111；12月 103,109,118。\n行业用电占比（2023，%）：工业 58，居民 18，商业服务 16，农业 4，其他 4。\n能源结构（2023，%）：煤电 52，气电 14，水电 12，风电 11，光伏 8，核电 3。",
+      "must": [
+        "html_published",
+        "pages_or_sections",
+        "slicer_changes_chart",
+        "charts_via_echarts_runtime",
+        "no_boilerplate"
+      ]
+    },
+    {
+      "id": "h3-loan",
+      "kind": "held-out calculator",
+      "viewports": [
+        390,
+        1280
+      ],
+      "q": "做一个房贷月供计算页面：能用滑块调整贷款总额（50 万到 500 万）、年利率（2% 到 6%）、年限（5 到 30 年），显示月供和总利息，并用图展示还款构成随时间的变化（本金与利息）。页面里说明采用等额本息及其假设。",
+      "must": [
+        "html_published",
+        "controls_change_output",
+        "charts_via_echarts_runtime",
+        "assumptions_stated",
+        "no_boilerplate"
+      ]
+    }
+  ],
+  "checks": {
+    "_about": "Deterministic checks the harness runs in Chromium inside the product's own sandbox wrapper (CSP + sandbox=allow-scripts), at every viewport. Each is pass/fail and recorded; the skill is judged on these first, then on screenshots a person looks at.",
+    "load_ok": "the document runs with no uncaught error, no CSP violation, no blocked request, and no storage/dialog API call that the sandbox refuses",
+    "no_external": "no src/href/url() that leaves the document",
+    "charts_via_echarts_runtime": "every chart is an ECharts instance in this document and the document carries the ECharts library exactly once; no hand-built axes or ticks (niceTicks, createElementNS svg charts) in the report's own script; no nested iframes of chart pages",
+    "no_horizontal_overflow": "documentElement.scrollWidth <= viewport width at every viewport, on every page",
+    "pages_or_sections": "if the task asks for pages: more than one tab with working keyboard-accessible switching; each page shows its charts at the right size after switching",
+    "slicer_changes_chart": "choosing another slicer value changes the data the chart holds (dataset rows or series data), and reset restores it",
+    "legend_not_dominant": "legend and title font sizes are not larger than the chart's axis labels by more than 25%, and the legend does not take more than 30% of the chart height",
+    "chart_min_size": "no chart is narrower than min(viewport width minus 32px, 280px) or shorter than 200px; no plot area is narrower than 50% of the chart width",
+    "min_font": "no visible text under 11px",
+    "tap_targets": "interactive controls at least 36px high at phone widths",
+    "restraint_no_tabs_no_slicers": "a brief asks for neither tabs nor slicers: none are rendered",
+    "controls_change_output": "moving a slider or choosing a scenario changes the plotted series",
+    "skills_loaded": "from the Run's tool calls: which skills were loaded, in which order, and which of their reference files were read",
+    "no_boilerplate": "the visible text carries no subject-unrelated declaration: AI-generation or model/tool credits, disclaimers ('仅供参考', '不构成…建议', disclaimer, 'for reference only', 'not financial advice'), privacy / compliance / cookie / copyright notices ('隐私政策', 'cookie', 'GDPR', '版权所有', '©', 'all rights reserved'), generated-on / powered-by footers, calls to action. A data source line, an as-of date, the method, and the assumptions or limits that bear on THIS analysis are content, not boilerplate. Report every hit with the phrase and the element that holds it.",
+    "html_published": "the Run published an HTML artifact (attach_artifact of an .html file); a report pasted only into the answer text does not count",
+    "timeline_or_events": "heuristic: the document holds at least five entries that begin with a year or a date, inside a list, a table or a .timeline element",
+    "assumptions_stated": "heuristic: visible text has a heading or lead-in containing 假设 or assumption(s), followed by at least one sentence with a number"
+  },
+  "_routing_semantics": "load = skills that must ALL be loaded before the stop condition; forbid = none may be loaded; allow = skills that may be loaded without counting against precision; max_tool_calls/max_seconds override the defaults (8 calls, 180 s) for cases where the model researches before it builds; history = earlier turns the case refers to."
+}
