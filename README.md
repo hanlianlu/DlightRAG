@@ -248,8 +248,7 @@ make ci-e2e      # plus E2E smoke
 ```
 
 Use [Operations](docs/operations.md) for reset, rebuild, parser, Langfuse, and
-maintenance runbooks. RAGAS evaluation is documented in
-[Evaluation](docs/evaluation.md).
+maintenance runbooks.
 
 ## Documentation
 
@@ -267,7 +266,6 @@ maintenance runbooks. RAGAS evaluation is documented in
 | [PostgreSQL](docs/postgresql.md) | PostgreSQL requirements, schema ownership, tuning |
 | [Operations](docs/operations.md) | Executable runbooks and recovery workflows |
 | [Observability](docs/observability.md) | Trace structure, span vocabulary, attribution, redaction, deployment labels |
-| [Evaluation](docs/evaluation.md) | RAGAS workflow |
 | [Web Theme Design](docs/web-theme-design.md) | Web appearance and interaction decisions |
 
 ADRs under `docs/adr/` record design decisions; they are not required reading for

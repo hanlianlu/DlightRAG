@@ -1105,8 +1105,7 @@ are in [Security](security.md); payload contracts are in
 [Interfaces](interfaces.md).
 
 The CLI reads `DLIGHTRAG_API_URL` (default `http://localhost:8100`), optional
-`DLIGHTRAG_API_TOKEN`, and `DLIGHTRAG_CLIENT_TIMEOUT` (default 120 seconds); the
-evaluation script reads the first two ([Evaluation](evaluation.md)).
+`DLIGHTRAG_API_TOKEN`, and `DLIGHTRAG_CLIENT_TIMEOUT` (default 120 seconds).
 
 ## Observability
 

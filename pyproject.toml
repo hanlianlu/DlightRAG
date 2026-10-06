@@ -90,9 +90,6 @@ dependencies = [
 milvus = ["pymilvus>=2.6.2"]
 
 [dependency-groups]
-eval = [
-    "lightrag-hku[evaluation]>=1.5.7",
-]
 dev = [
     "bandit>=1.9.4",
     "import-linter>=2.15",

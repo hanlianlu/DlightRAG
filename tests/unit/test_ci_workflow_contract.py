@@ -124,6 +124,5 @@ def test_ci_uses_no_secret_and_calls_no_paid_service() -> None:
         "api_key",
         "openai",
         "anthropic",
-        "ragas",
     ):
         assert forbidden not in workflow
