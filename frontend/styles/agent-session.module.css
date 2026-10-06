@@ -260,7 +260,10 @@
     line-height: var(--line-height-message);
     list-style: none;
     margin-top: var(--space-tight);
+    max-height: 12rem;
     overflow-wrap: anywhere;
+    overflow-y: auto;
+    padding-inline: var(--space-tight);
   }
 
   /* A source line that opens its source reads as a link, and keeps the product's hit target. */

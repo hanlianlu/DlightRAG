@@ -3,9 +3,9 @@
  * what it was told.
  *
  * It reads the agent's transcript a page at a time, newest page first, and shows older pages on request, so
- * a reader can go back through the whole of it. The fold is open while the agent works. The page around it
- * owns the scroll (its nearest `[data-scroller]` ancestor): the reader's place is left alone until they
- * scroll to the bottom of a running agent, which keeps the bottom in view as steps arrive.
+ * a reader can go back through the whole of it. The fold is open while the agent works, and its steps scroll
+ * in a pane of their own that opens on the newest step. A reader at the bottom of a running agent is kept
+ * there as steps arrive; one who has scrolled up is left where they are.
  */
 
 import {msg, str} from '@lit/localize';
@@ -34,12 +34,10 @@ export function senderText(origin: string | null): string {
   }
 }
 
-/** Whether the reader has scrolled a pane down to within one line of its bottom. A pane that has not been
- * scrolled down is not at a bottom the reader chose, however short it is. */
+/** Whether a pane is scrolled to within one line of its bottom, as a pane that fits its content is. */
 function scrolledToBottom(pane: HTMLElement): boolean {
   const line = Number.parseFloat(getComputedStyle(pane).lineHeight);
-  return pane.scrollTop > 0
-    && pane.scrollHeight - pane.scrollTop - pane.clientHeight <= (Number.isFinite(line) ? line : 1);
+  return pane.scrollHeight - pane.scrollTop - pane.clientHeight <= (Number.isFinite(line) ? line : 1);
 }
 
 export class DlActivity extends LightElement {
@@ -75,6 +73,8 @@ export class DlActivity extends LightElement {
   );
   #head: AbortController | null = null;
   #scroller: HTMLElement | null = null;
+  /** The pane has been put on the newest step since it was last folded away. */
+  #placed = false;
   /** The reader is at the bottom of an agent that is working, so the bottom stays in view as steps arrive. */
   #following = false;
   /** Where the pane stood before older steps came in above what the reader is looking at. */
@@ -125,6 +125,7 @@ export class DlActivity extends LightElement {
       this.running = false;
       this.loaded = false;
       this.failed = false;
+      this.#placed = false;
       this.#following = false;
       this.#anchor = null;
       if (this.source) void this.#start();
@@ -141,16 +142,22 @@ export class DlActivity extends LightElement {
       this.#anchor = null;
       return;
     }
+    // A folded pane has no place to keep, so it opens on the newest step again.
+    if (pane.clientHeight === 0) this.#placed = false;
     if (this.#anchor) {
       pane.scrollTop = this.#anchor.top + (pane.scrollHeight - this.#anchor.height);
       this.#anchor = null;
+    } else if (!this.#placed && this.loaded && pane.clientHeight > 0) {
+      this.#placed = true;
+      this.#following = this.running;
+      pane.scrollTop = pane.scrollHeight;
     } else if (this.#following) {
       pane.scrollTop = pane.scrollHeight;
     }
   }
 
   #bindScroller(): HTMLElement | null {
-    const pane = this.closest<HTMLElement>('[data-scroller]');
+    const pane = this.querySelector<HTMLElement>('[data-activity-pane]');
     if (pane !== this.#scroller) {
       this.#scroller?.removeEventListener('scroll', this.#scrolled);
       this.#scroller = pane;
@@ -162,6 +169,11 @@ export class DlActivity extends LightElement {
   #scrolled = (): void => {
     const pane = this.#scroller;
     this.#following = this.running && pane !== null && scrolledToBottom(pane);
+  };
+
+  /** The fold opened or closed, which only an update can see in the pane's size. */
+  #toggled = (): void => {
+    this.requestUpdate();
   };
 
   async #start(): Promise<void> {
@@ -214,10 +226,11 @@ export class DlActivity extends LightElement {
       controls: this.controls,
     });
     return html`
-      <details class=${sessionStyles.fold} ?open=${this.running}>
+      <details class=${sessionStyles.fold} ?open=${this.running} @toggle=${this.#toggled}>
         <summary class=${sessionStyles.summary}>${icon('disclosure', {size: 'xs', className: sessionStyles.chevron})}
           ${this.#title(steps.length)}</summary>
-        ${this.#timeline(steps)}
+        <div class=${styles.pane} data-activity-pane tabindex="0" role="region"
+             aria-label=${msg('Activity', {id: 'activity.title'})}>${this.#timeline(steps)}</div>
       </details>
     `;
   }

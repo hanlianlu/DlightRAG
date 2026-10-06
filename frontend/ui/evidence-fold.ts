@@ -24,11 +24,12 @@ export function evidenceFold(
       returnFocus: trigger,
     });
   };
+  const title = msg(str`Evidence · ${handles.length}`, {id: 'evidence.title'});
   return html`
     <details class=${styles.fold}>
       <summary class=${styles.summary}>${icon('disclosure', {size: 'xs', className: styles.chevron})}
-        ${msg(str`Evidence · ${handles.length}`, {id: 'evidence.title'})}</summary>
-      <ul class=${styles.mono}>
+        ${title}</summary>
+      <ul class=${styles.mono} tabindex="0" aria-label=${title}>
         ${handles.map((handle) => {
           const reference = /^\[([^\]]+)\]/.exec(handle)?.[1];
           return reference !== undefined && known.has(reference)

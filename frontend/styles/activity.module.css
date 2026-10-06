@@ -1,6 +1,6 @@
 /* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
 
-/* One agent's activity as a timeline of steps on a rule (ui/activity.ts). The host owns the scroll. */
+/* One agent's activity as a timeline of steps on a rule, in a pane that scrolls (ui/activity.ts). */
 
 @layer features {
   @keyframes pulse {
@@ -18,6 +18,14 @@
 
   .root {
     display: block;
+  }
+
+  /* The timeline scrolls in its own pane; the inline padding leaves room for a focus ring at its edges. */
+  .pane {
+    margin-top: var(--space-tight);
+    max-height: 24rem;
+    overflow-y: auto;
+    padding-inline: var(--space-tight);
   }
 
   .older {

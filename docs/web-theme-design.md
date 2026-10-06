@@ -220,11 +220,12 @@ fold, and its Activity. The main agent's page is a child's without the commands
 (its Run is steered from the chat): its objective is the question, its Result
 the answer or why the Run failed, and its Evidence the sources the answer cites.
 Evidence lines open their source in Sources when the answer cites them, for the
-main agent and for a child alike. Activity is one timeline, newest page first,
-with the earlier steps on request, so a reader can go back through all of it;
-the main agent's spans the whole conversation. The fold is open while the agent
-works, and the page keeps its bottom in view for a reader who has scrolled
-there.
+main agent and for a child alike. Evidence and Activity each scroll in a pane of
+their own, as the Result does when it is long. Activity is one timeline, newest
+page first, with the earlier steps on request, so a reader can go back through
+all of it; the main agent's spans the whole conversation. The fold is open while
+the agent works, its pane opens on the newest step, and it keeps that step in
+view for a reader who is at the bottom.
 
 Below 1200px resizing is disabled and the panel is an overlay: the primary app
 remains full viewport width under the scrim, while modal focus, inert state,

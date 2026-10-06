@@ -637,28 +637,6 @@ it('keeps the earlier steps a reader has shown when the newest page is read agai
   expect(session(dock).querySelector('[data-load-older="activity"]')).to.not.equal(null);
 });
 
-it('shows the main agent\'s whole activity as a child\'s page does: newest steps first, the earlier ones on request', async () => {
-  const requests = serve({
-    page: () => roster([], null, 'running'),
-    transcript: (agent, before) => {
-      if (agent !== null) return undefined;
-      return before === null
-        ? activityPage([
-          ...steps(21, 39),
-          {sequence: 40, role: 'user', content: 'What changed in the amendment?'},
-        ], {nextBefore: 21, running: true})
-        : activityPage(steps(1, 20), {running: true});
-    },
-  });
-  const dock = await mount(sourceFor().source, 800);
-  await waitFor(() => shown(dock).includes('What changed in the amendment?'));
-
-  expect(shown(dock)).to.not.contain('Step 1.');
-  session(dock).querySelector<HTMLButtonElement>('[data-load-older="activity"]')!.click();
-  await waitFor(() => shown(dock).includes('Step 1.'));
-  expect(transcriptRequests(requests)).to.deep.equal(['', '?before=21']);
-});
-
 it('gives the main agent what a child has: its answer as the Result, its token count, and its cited sources as Evidence that open the source', async () => {
   serve({page: () => roster([], null, 'succeeded')});
   const presentation = {
@@ -1419,18 +1397,19 @@ describe('the page of a child', () => {
     {role: 'assistant', content: `Step ${index}`, tool_calls: []}
   ));
   const page = (dock: DlInspectorTraces) => session(dock).querySelector<HTMLElement>('[data-scroller]')!;
-  /** How far the page lies below what is on screen, in pixels. */
+  const pane = (dock: DlInspectorTraces) => session(dock).querySelector<HTMLElement>('[data-activity-pane]')!;
+  /** How far a box lies below what is on screen, in pixels. */
   const below = (box: HTMLElement) => box.scrollHeight - box.clientHeight - box.scrollTop;
   const frames = () => new Promise<void>((resolve) => {
     requestAnimationFrame(() => { requestAnimationFrame(() => { resolve(); }); });
   });
-  /** The reader scrolls: the page is moved, and given the frames it takes to see it. */
+  /** The reader scrolls: the box is moved, and given the frames it takes to see it. */
   const scrollTo = async (box: HTMLElement, top: number) => {
     box.scrollTop = top;
     await frames();
   };
 
-  it('opens on its title, keeps the bottom in view for a reader who scrolled there, and lets go when they scroll up', async () => {
+  it('opens its activity on the newest step, keeps it in view for a reader at the bottom, and lets go when they scroll up', async () => {
     immediateFollowRefreshes();
     let steps = 40;
     const running = row('a', 'running', {started_at: ago(5)});
@@ -1439,29 +1418,23 @@ describe('the page of a child', () => {
     await waitFor(() => rows(dock).length === 1);
     await openChild(dock, 'a');
     await waitFor(() => shown(dock).includes('Step 39'));
-    const box = page(dock);
-    expect(box.scrollHeight, 'the page is taller than the dock').to.be.greaterThan(box.clientHeight + 100);
+    const box = pane(dock);
+    expect(box.scrollHeight, 'the activity is taller than its pane').to.be.greaterThan(box.clientHeight + 100);
+    expect(below(box), 'it opens on the newest step').to.be.lessThan(1);
     const arrive = async (total: number) => {
       steps = total;
       dock.refreshIfFollowing('run-1');
       await waitFor(() => shown(dock).includes(`Step ${total - 1}`));
     };
 
-    // A reader who has not scrolled stays on the title as steps arrive.
-    expect(box.scrollTop).to.equal(0);
     await arrive(44);
-    expect(box.scrollTop).to.equal(0);
-
-    // One who has scrolled to the bottom is kept there.
-    await scrollTo(box, box.scrollHeight);
+    expect(below(box)).to.be.lessThan(1);
     await arrive(48);
     expect(below(box)).to.be.lessThan(1);
-    await arrive(52);
-    expect(below(box)).to.be.lessThan(1);
 
-    // And once they scroll up the page stays where they are.
+    // Once the reader scrolls up the pane stays where they are.
     await scrollTo(box, 100);
-    await arrive(56);
+    await arrive(52);
     expect(box.scrollTop).to.equal(100);
     expect(below(box)).to.be.greaterThan(100);
   });
@@ -1476,12 +1449,14 @@ describe('the page of a child', () => {
       transcript: (agent) => (agent === null ? undefined : activityPage(says(40), {running: true})),
     });
     const dock = await mount(sourceFor().source, 800);
+    // A dock shorter than the page, so the page itself scrolls.
+    dock.style.height = '360px';
     await waitFor(() => rows(dock).length === 2);
     rowFor(dock, 'a').click();
     await waitFor(() => title(dock) === 'objective a' && shown(dock).includes('Step 39'));
     const box = page(dock);
     await scrollTo(box, box.scrollHeight);
-    expect(below(box)).to.be.lessThan(1);
+    expect(box.scrollTop, 'the page is scrolled down').to.be.greaterThan(0);
 
     // The next child is still loading, so its page is short, when the scroll back to the top is seen.
     rowFor(dock, 'b').click();
@@ -1496,7 +1471,7 @@ describe('the page of a child', () => {
     expect(box.scrollTop, 'and nothing carries the earlier child\'s place over').to.equal(0);
   });
 
-  it('lets go of a reader who opens a step at the bottom, which grows the page without scrolling it', async () => {
+  it('lets go of a reader who opens a step at the bottom, which grows the pane without scrolling it', async () => {
     immediateFollowRefreshes();
     let steps = 30;
     const running = row('a', 'running', {started_at: ago(5)});
@@ -1510,10 +1485,9 @@ describe('the page of a child', () => {
     await waitFor(() => rows(dock).length === 1);
     await openChild(dock, 'a');
     await waitFor(() => shown(dock).includes('Reading a document'));
-    const box = page(dock);
-    await scrollTo(box, box.scrollHeight);
+    const box = pane(dock);
 
-    // The reader opens the last step: its whole result lengthens the page below where they stand.
+    // The reader opens the last step: its whole result lengthens the pane below where they stand.
     session(dock).querySelector<HTMLElement>('summary:has(+ pre)')!.click();
     await waitFor(() => below(box) > 100);
     const stood = box.scrollTop;
@@ -1556,15 +1530,11 @@ describe('the page of a child', () => {
     await waitFor(() => rows(dock).length === 1);
     await openChild(dock, 'a');
     await waitFor(() => shown(dock).includes('Activity · 40 steps'));
-    // Its activity is folded; the reader opens it and goes to the bottom.
-    session(dock).querySelector<HTMLDetailsElement>('details:has(ol)')!.open = true;
-    const box = page(dock);
-    await waitFor(() => box.scrollHeight > box.clientHeight + 100);
-    // WebKit lays an opened fold out a frame later, and takes back a position set before it has.
-    await frames();
-    await scrollTo(box, box.scrollHeight);
+    // Its activity is folded; the reader opens it, and it opens on the newest step.
+    session(dock).querySelector<HTMLDetailsElement>('details:has([data-activity-pane])')!.open = true;
+    const box = pane(dock);
+    await waitFor(() => box.scrollHeight > box.clientHeight + 100 && below(box) < 1);
     const stood = box.scrollTop;
-    expect(stood).to.be.greaterThan(100);
 
     steps = 46;
     summary = 'A later summary.';
@@ -1572,6 +1542,51 @@ describe('the page of a child', () => {
     await waitFor(() => shown(dock).includes('Step 45'));
     expect(box.scrollTop).to.equal(stood);
     expect(below(box)).to.be.greaterThan(50);
+  });
+
+  it('keeps the step a reader is at where it is while earlier steps come in above it', async () => {
+    const running = row('a', 'running', {started_at: ago(5)});
+    serve({
+      page: () => roster([running]),
+      observe: () => observation(running),
+      transcript: (agent, before) => {
+        if (agent !== 'a') return undefined;
+        return before === null
+          ? activityPage(steps(21, 40), {nextBefore: 21, running: true})
+          : activityPage(steps(1, 20), {running: true});
+      },
+    });
+    const dock = await mount(sourceFor().source, 420);
+    await waitFor(() => rows(dock).length === 1);
+    await openChild(dock, 'a');
+    await waitFor(() => shown(dock).includes('Step 40.'));
+    const box = pane(dock);
+    const first = [...box.querySelectorAll('li')].find((item) => item.textContent!.includes('Step 21.'))!;
+    await scrollTo(box, 60);
+    const at = () => first.getBoundingClientRect().top - box.getBoundingClientRect().top;
+    const before = at();
+
+    session(dock).querySelector<HTMLButtonElement>('[data-load-older="activity"]')!.click();
+    await waitFor(() => shown(dock).includes('Step 1.Step 2.'));
+    await frames();
+
+    expect(at()).to.be.closeTo(before, 1);
+  });
+
+  it('scrolls a long Evidence list in a pane of its own', async () => {
+    const handles = Array.from({length: 40}, (_, index) => `[${index + 1}] source-${index + 1}.pdf`);
+    const settled = row('a', 'succeeded', {started_at: ago(9), finished_at: ago(1), summary: 'Done.', result_handles: handles});
+    serve({page: () => roster([settled]), observe: () => observation(settled)});
+    const dock = await mount(sourceFor().source, 420);
+    await waitFor(() => rows(dock).length === 1);
+    await openChild(dock, 'a');
+    await waitFor(() => shown(dock).includes('Evidence · 40'));
+    session(dock).querySelector<HTMLDetailsElement>('details')!.open = true;
+    const list = session(dock).querySelector<HTMLElement>('ul[aria-label="Evidence · 40"]')!;
+    await waitFor(() => list.scrollHeight > list.clientHeight + 100);
+
+    await scrollTo(list, 50);
+    expect(list.scrollTop, 'the list scrolls within the page').to.equal(50);
   });
 });
 
@@ -1638,85 +1653,5 @@ describe('on a phone', () => {
     expect(page.length).to.be.greaterThan(6);
     const short = [...list, ...page].filter((item) => item.height < target - 0.5).map((item) => `${item.name}: ${item.height}`);
     expect(short, 'what is pressable and shorter than the hit target').to.deep.equal([]);
-  });
-});
-
-// ── An agent's whole activity, laid out ──
-
-describe('an agent\'s whole activity', () => {
-  let unlink: () => void;
-  before(async () => {
-    unlink = await linkStyles([
-      '../design-system/index.css',
-      '../styles/activity.module.css',
-      '../styles/agent-session.module.css',
-      '../styles/inspector-traces.module.css',
-    ].map((href) => new URL(href, import.meta.url).href));
-  });
-  after(() => { unlink(); });
-
-  const frames = () => new Promise<void>((resolve) => {
-    requestAnimationFrame(() => { requestAnimationFrame(() => { resolve(); }); });
-  });
-
-  it('keeps the step a reader is at where it is while earlier steps come in above it', async () => {
-    const running = row('a', 'running', {started_at: ago(5)});
-    serve({
-      page: () => roster([running]),
-      observe: () => observation(running),
-      transcript: (agent, before) => {
-        if (agent !== 'a') return undefined;
-        return before === null
-          ? activityPage(steps(21, 40), {nextBefore: 21, running: true})
-          : activityPage(steps(1, 20), {running: true});
-      },
-    });
-    const dock = await mount(sourceFor().source, 420);
-    await waitFor(() => rows(dock).length === 1);
-    await openChild(dock, 'a');
-    await waitFor(() => shown(dock).includes('Step 40.'));
-    const pane = session(dock).querySelector<HTMLElement>('[data-scroller]')!;
-    const first = [...session(dock).querySelectorAll('li')].find((item) => item.textContent!.includes('Step 21.'))!;
-    pane.scrollTop = 60;
-    await frames();
-    const at = () => first.getBoundingClientRect().top - pane.getBoundingClientRect().top;
-    const before = at();
-
-    session(dock).querySelector<HTMLButtonElement>('[data-load-older="activity"]')!.click();
-    await waitFor(() => shown(dock).includes('Step 1.Step 2.'));
-    await frames();
-
-    expect(at()).to.be.closeTo(before, 1);
-  });
-
-  it('keeps the main agent\'s newest step in view for a reader at the bottom, and leaves one who scrolled up alone', async () => {
-    const newest = (to: number) => steps(to - 29, to);
-    let to = 30;
-    serve({
-      page: () => roster([], null, 'running'),
-      transcript: (agent) => (agent === null ? activityPage(newest(to), {nextBefore: to - 29, running: true}) : undefined),
-    });
-    immediateFollowRefreshes();
-    const dock = await mount(sourceFor().source, 800);
-    await waitFor(() => shown(dock).includes('Step 30.'));
-    const pane = session(dock).querySelector<HTMLElement>('[data-scroller]')!;
-    const below = () => pane.scrollHeight - pane.clientHeight - pane.scrollTop;
-    expect(pane.scrollHeight, 'the page holds more than it shows').to.be.greaterThan(pane.clientHeight);
-    pane.scrollTop = pane.scrollHeight;
-    await frames();
-
-    to = 36;
-    dock.refreshIfFollowing('run-1');
-    await waitFor(() => shown(dock).includes('Step 36.'));
-    await frames();
-    expect(below(), 'the newest step stays in view').to.be.lessThan(2);
-
-    pane.scrollTop = 40;
-    await frames();
-    to = 40;
-    dock.refreshIfFollowing('run-1');
-    await waitFor(() => shown(dock).includes('Step 40.'));
-    await frames();
-    expect(pane.scrollTop, 'a reader who has scrolled up is left where they are').to.equal(40);
   });
 });
