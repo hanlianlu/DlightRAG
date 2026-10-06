@@ -16,7 +16,7 @@ from openpyxl import Workbook
 from openpyxl.drawing.image import Image as SheetImage
 from PIL import Image
 
-from scripts.anydoc_pilot_fixtures import _pdf, _zip_replace
+from tests.support.document_gold import _pdf, _zip_replace
 
 PDF_FACTS = ("DELTA revenue 111.25", "EPSILON count 22", "ZETA ratio 33.50")
 XLSX_FACTS = (

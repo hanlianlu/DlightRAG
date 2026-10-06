@@ -20,8 +20,7 @@ from dlightrag.engine.answer.resources.docx_assets import AssetBindingError, doc
 from dlightrag.engine.answer.resources.models import ResourceInput
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
-from scripts.anydoc_pilot import evaluate
-from scripts.anydoc_pilot_fixtures import _zip_replace, generate
+from tests.support.document_gold import _zip_replace, evaluate, generate
 
 
 @pytest.fixture(scope="module")

@@ -16,7 +16,7 @@ from dlightrag.engine.answer.resources import converters
 from dlightrag.engine.answer.resources.models import ResourceInput
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
-from scripts.format_route_fixtures import (
+from tests.support.format_route_fixtures import (
     PDF_FACTS,
     XLSX_ANCHORS,
     XLSX_FACTS,

@@ -1,16 +1,65 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Small synthetic semantic gold; no incumbent output is used to create expectations."""
+"""Small synthetic semantic gold; no converter output is used to create expectations."""
 
 from __future__ import annotations
 
 import datetime
 import hashlib
 import io
-import json
 import re
 import zipfile
 from pathlib import Path
 from typing import Any, cast
+
+
+def evaluate(gold: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    """Facts and relational regexes are source-authored, never converter-derived.
+
+    Known-incomplete/error cases do not qualify merely because text is nonempty.
+    Assets are compared by occurrence and bytes, not by unique digest count.
+    """
+    text = result.get("text", "").replace("\\|", "|")
+    missing = [fact for fact in gold["facts"] if fact not in text]
+    patterns = [pattern for pattern in gold["patterns"] if not re.search(pattern, text)]
+    assets = result.get("assets", [])
+    asset_match = len(assets) == gold["asset_occurrences"]
+    if gold.get("asset_digest"):
+        asset_match = asset_match and all(a["sha256"] == gold["asset_digest"] for a in assets)
+    anchors_match = all(anchor in [a.get("anchor") for a in assets] for anchor in gold["anchors"])
+    visual_references_match = result.get("visual_references", 0) >= gold["asset_occurrences"]
+    expected = gold["expected"]
+    error = result.get("error")
+    if expected == "host_safety_refusal":
+        passed = error == "UnsafeArchiveError" and result.get("converter_calls") == 0
+    elif expected == "malformed":
+        passed = error in {
+            "MalformedError",
+            "MissingPartError",
+            "FileConversionException",
+            "ResourceConversionError",
+        }
+    elif expected == "ocr":
+        passed = (
+            error == "NeedsOcrError"
+            and result.get("pages") == gold["ocr_pages"]
+            and result.get("page_count") == gold["pages"]
+        )
+    elif expected == "incomplete":
+        passed = error == "NeedsOcrError"
+    elif expected == "empty":
+        passed = not error and not text.strip()
+    else:
+        passed = not error and not missing and not patterns and asset_match and anchors_match
+        if expected == "rich":
+            passed = passed and visual_references_match
+    return {
+        "passed": bool(passed),
+        "missing_facts": missing,
+        "missing_patterns": patterns,
+        "asset_occurrences_match": asset_match,
+        "anchors_match": anchors_match,
+        "visual_references_match": visual_references_match,
+    }
 
 
 def _zip_replace(data: bytes, changes: dict[str, bytes | None]) -> bytes:
@@ -134,8 +183,6 @@ def generate(root: Path) -> list[dict[str, Any]]:
         gold.append(
             {
                 "name": name,
-                "sha256": hashlib.sha256(data).hexdigest(),
-                "bytes": len(data),
                 "facts": facts,
                 "patterns": [],
                 "expected": "text",
@@ -205,7 +252,6 @@ def generate(root: Path) -> list[dict[str, Any]]:
         ["FIGURE references A and B", "SCAN ONLY", "83.50"],
         expected="incomplete",
         pages=1,
-        image_occurrences=2,
     )
 
     def doc_bytes(doc: Any) -> bytes:
@@ -240,7 +286,7 @@ def generate(root: Path) -> list[dict[str, Any]]:
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         rels = archive.read("word/_rels/document.xml.rels").replace(
             b"</Relationships>",
-            b'<Relationship Id="rIdPilotFootnote" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/></Relationships>',
+            b'<Relationship Id="rIdGoldFootnote" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/></Relationships>',
         )
         types = archive.read("[Content_Types].xml").replace(
             b"</Types>",
@@ -373,5 +419,4 @@ def generate(root: Path) -> list[dict[str, Any]]:
             compress_type=zipfile.ZIP_DEFLATED,
         )
     add("docx-unsafe.docx", out.getvalue(), [], expected="host_safety_refusal")
-    (root / "gold.json").write_text(json.dumps(gold, indent=2) + "\n")
     return gold

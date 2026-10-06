@@ -422,11 +422,6 @@ claim:
   percent, date, currency, and custom ones, and drawing types other than
   embedded images, are unverified.
 
-`scripts/anydoc_pilot.py`, `scripts/docx_integration_bench.py`, and
-`scripts/format_route_bench.py` rerun these comparisons offline on generated
-fixtures; their small samples establish neither service latency nor
-completeness for arbitrary documents.
-
 ## Conversion snapshots and recovery
 
 - A Resource's first conversion in a Run is adopted as its snapshot: text,
