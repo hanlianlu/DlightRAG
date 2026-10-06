@@ -80,3 +80,9 @@ ragas_eval_results/
 
 # The chart renderer's resvg and font, installed by scripts/install-chart-tools.sh
 .chart-tools/
+
+# What scripts/skill-evals creates when it runs: the toolkit copy and stack state, the evaluation
+# results, and the checker's own test pages (built by fixtures/build.py).
+scripts/skill-evals/state/
+scripts/skill-evals/results/
+scripts/skill-evals/fixtures/out/

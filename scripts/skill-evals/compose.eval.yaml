@@ -1,0 +1,138 @@
+# The private eval stack: a copy of the application with the real models and its own
+# PostgreSQL. Brought up and down only through stack.sh, which sets the variables below.
+#
+# Secrets are never copied or written anywhere: stack.sh passes the live .env to
+# `docker compose --env-file`, which substitutes ONLY the names listed under `environment:`
+# (an allow-list), so none of the live deployment's auth, observability or database
+# settings enter the container. Never run `docker compose config` on this file: it prints
+# the substituted secrets.
+
+name: dlightrag-eval
+
+services:
+  postgres:
+    image: dlightrag-postgres:pg18
+    restart: "no"
+    shm_size: 512mb
+    mem_limit: 2g
+    ports:
+      - "127.0.0.1:${EVAL_PG_PORT:-25433}:5432"
+    environment:
+      POSTGRES_DB: dlightrag
+      POSTGRES_USER: dlightrag
+      POSTGRES_PASSWORD: eval-throwaway
+    volumes:
+      - eval_pg18_data:/var/lib/postgresql
+    command:
+      - "postgres"
+      # pg_textsearch and pg_jieba require preloading
+      - "-c"
+      - "shared_preload_libraries=pg_textsearch,pg_jieba"
+      - "-c"
+      - "pg_textsearch.filtered_seed=on"
+      - "-c"
+      - "pg_textsearch.filtered_seed_margin=3.0"
+      # Memory: the live service's settings, scaled down for a scratch database.
+      - "-c"
+      - "shared_buffers=256MB"
+      - "-c"
+      - "work_mem=32MB"
+      - "-c"
+      - "maintenance_work_mem=256MB"
+      - "-c"
+      - "effective_cache_size=1GB"
+      - "-c"
+      - "random_page_cost=1.1"
+      - "-c"
+      - "effective_io_concurrency=200"
+      - "-c"
+      - "wal_buffers=16MB"
+      - "-c"
+      - "max_parallel_workers_per_gather=2"
+      - "-c"
+      - "max_parallel_maintenance_workers=2"
+      - "-c"
+      - "max_connections=80"
+      - "-c"
+      - "jit=off"
+      - "-c"
+      - "huge_pages=off"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dlightrag -d dlightrag"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  dlightrag-api:
+    image: dlightrag:local
+    restart: "no"
+    mem_limit: 6g
+    ports:
+      - "127.0.0.1:${EVAL_API_PORT:-18100}:8100"
+    environment:
+      # PostgreSQL: the private service above, nothing of the live one.
+      DLIGHTRAG_STORAGE__POSTGRES__HOST: postgres
+      DLIGHTRAG_STORAGE__POSTGRES__DATABASE: dlightrag
+      DLIGHTRAG_STORAGE__POSTGRES__USER: dlightrag
+      DLIGHTRAG_STORAGE__POSTGRES__PASSWORD: eval-throwaway
+      # No auth, as config.yaml's own `access.auth_mode: none`. The live .env overrides it with a
+      # JWT/edge setup; none of those names is passed through, and the explicit values below keep
+      # the container's configuration valid however the environment it runs in changes.
+      DLIGHTRAG_ACCESS__AUTH_MODE: none
+      DLIGHTRAG_ACCESS__ALLOW_INSECURE_NO_AUTH: "true"
+      # The container binds 0.0.0.0; the published port is 127.0.0.1 only (above).
+      DLIGHTRAG_INTERFACES__API__HOST: "0.0.0.0"
+      # Credentials substituted from the live .env by `docker compose --env-file`.
+      # Observability, the Agent Browser pool and the Agent Mailbox are not configured: off.
+      DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY: ${DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY:?missing in the .env}
+      DLIGHTRAG_MODELS__CHAT__ROLES__EXTRACT__API_KEY: ${DLIGHTRAG_MODELS__CHAT__ROLES__EXTRACT__API_KEY:?missing in the .env}
+      DLIGHTRAG_MODELS__CHAT__ROLES__KEYWORD__API_KEY: ${DLIGHTRAG_MODELS__CHAT__ROLES__KEYWORD__API_KEY:?missing in the .env}
+      DLIGHTRAG_MODELS__CHAT__ROLES__QUERY__API_KEY: ${DLIGHTRAG_MODELS__CHAT__ROLES__QUERY__API_KEY:?missing in the .env}
+      DLIGHTRAG_MODELS__CHAT__ROLES__VLM__API_KEY: ${DLIGHTRAG_MODELS__CHAT__ROLES__VLM__API_KEY:?missing in the .env}
+      DLIGHTRAG_MODELS__EMBEDDING__API_KEY: ${DLIGHTRAG_MODELS__EMBEDDING__API_KEY:?missing in the .env}
+      DLIGHTRAG_MODELS__RERANK__API_KEY: ${DLIGHTRAG_MODELS__RERANK__API_KEY:?missing in the .env}
+      DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEY: ${DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEY:-}
+      DLIGHTRAG_ANSWER__WEB_SOURCES__TAVILY__API_KEY: ${DLIGHTRAG_ANSWER__WEB_SOURCES__TAVILY__API_KEY:-}
+    configs:
+      - source: eval_config
+        target: /app/config.yaml
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - eval_data:/app/dlightrag_storage
+      - eval_agent_workspaces:/home/app/.dlightrag/agent_workspaces
+      # Per-owner Skills (publish_skill); the operator-global tier is the image's own empty directory.
+      - eval_owner_skills:/home/app/.dlightrag/owner_skills
+      # The built-in Skills: a host directory in the packaged layout, read-only, over the packaged
+      # directory. Discovery lists it on every Run and every load_skill call, so an edit shows in the
+      # next Run without a restart.
+      - type: bind
+        source: ${SKILLS_DIR:?stack.sh sets SKILLS_DIR}
+        target: /app/.venv/lib/python3.14/site-packages/dlightrag/engine/agent/builtin_skills
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; response = urllib.request.urlopen('http://127.0.0.1:8100/ready', timeout=3); response.close()"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+      start_interval: 2s
+
+configs:
+  eval_config:
+    file: ${CONFIG_FILE:?stack.sh sets CONFIG_FILE}
+
+volumes:
+  eval_pg18_data:
+  eval_data:
+  eval_agent_workspaces:
+  eval_owner_skills:
