@@ -9,6 +9,7 @@ import type {MemoryOperationEvent} from '../api/memory.ts';
 import {
   forkAnswerRun,
   controlAnswerChild,
+  getAnswerActivityPage,
   getAnswerRunChild,
   getAnswerRunChildrenPage,
   replyAnswerChild,
@@ -27,6 +28,7 @@ import {
   type FollowResult,
 } from '../lib/run-controller.ts';
 import {LightElement} from '../lib/lit-host.ts';
+import {mainAgentStatus} from '../lib/main-agent.ts';
 import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
 import type {PendingAttachment} from '../stores/attachment-store.ts';
 import type {AgentEffort, AgentEffortOffer} from '../lib/agent-effort.ts';
@@ -83,7 +85,7 @@ export interface ChatContentChangeDetail {
   hasMessages: boolean;
 }
 
-export interface ChatChildActivityDetail {
+export interface ChatRunActivityDetail {
   runId: string;
 }
 
@@ -223,8 +225,32 @@ export class DlChatFeature extends LightElement {
     return getAnswerRunChildrenPage(runId, cursor, signal);
   }
 
+  /** The turn on show that a Run answers. */
+  #turnOfRun(runId: string): ChatTurnView | undefined {
+    return this.turns.find((turn) => turn.runId === runId);
+  }
+
+  /** The Run's main agent as a status row. */
+  runMainAgent(runId: string) {
+    return mainAgentStatus(this.#turnOfRun(runId));
+  }
+
+  /** The answer a Run produced, once a turn on show holds it. */
+  runPresentation(runId: string) {
+    return this.#turnOfRun(runId)?.presentation ?? null;
+  }
+
   async loadRunChild(runId: string, childSessionId: string, signal?: AbortSignal) {
     return getAnswerRunChild(runId, childSessionId, signal);
+  }
+
+  async loadRunActivity(
+    runId: string,
+    agent: string | null,
+    cursor: string | null,
+    signal?: AbortSignal,
+  ) {
+    return getAnswerActivityPage(runId, agent, cursor, signal);
   }
 
   async controlRunChild(
@@ -764,21 +790,21 @@ export class DlChatFeature extends LightElement {
     const nextTurns = [...this.turns];
     nextTurns[turnIndex] = projected;
     this.turns = nextTurns;
-    // Tokens stream every frame, but once a Run has children any tool event may be theirs.
-    this.#noteChildActivity(turn, projected, events.some((event) => event.kind === 'tool'));
+    // Tokens stream every frame, but a tool event is something an open dock may show.
+    this.#noteRunActivity(turn, projected, events.some((event) => event.kind === 'tool'));
   }
 
-  /** Tell an open roster its Run's children may have moved: a tool event once
-   *  children exist, or the Run settling however that became known. */
-  #noteChildActivity(previous: ChatTurnView, next: ChatTurnView, toolEvent: boolean): void {
+  /** Tell an open Agent traces dock its Run's agents may have moved: a tool event,
+   *  or the Run settling however that became known. */
+  #noteRunActivity(previous: ChatTurnView, next: ChatTurnView, toolEvent: boolean): void {
     const runId = next.runId || previous.runId;
-    if (!runId || !(previous.sawChildren || next.sawChildren)) return;
+    if (!runId) return;
     const ended = !isTerminalTurnState(previous.state) && isTerminalTurnState(next.state);
-    if (toolEvent || ended) this.#announceChildActivity(runId);
+    if (toolEvent || ended) this.#announceRunActivity(runId);
   }
 
-  #announceChildActivity(runId: string): void {
-    raise(this, 'dl-child-activity', {runId});
+  #announceRunActivity(runId: string): void {
+    raise(this, 'dl-run-activity', {runId});
   }
 
   /** A child can finish without any event on the parent's stream, so while
@@ -792,7 +818,7 @@ export class DlChatFeature extends LightElement {
     if (!live || runId === null || this.#childPulse) return;
     this.#childPulse = {
       runId,
-      timer: setInterval(() => { this.#announceChildActivity(runId); }, CHILD_PULSE_MS),
+      timer: setInterval(() => { this.#announceRunActivity(runId); }, CHILD_PULSE_MS),
     };
   }
 
@@ -821,7 +847,7 @@ export class DlChatFeature extends LightElement {
     const turns = [...this.turns];
     turns[index] = next;
     this.turns = turns;
-    this.#noteChildActivity(previous, next, false);
+    this.#noteRunActivity(previous, next, false);
   }
 }
 
@@ -836,6 +862,6 @@ declare global {
     'dl-chat-content-change': CustomEvent<ChatContentChangeDetail>;
     'dl-chat-running-change': CustomEvent<ChatRunningChangeDetail>;
     'dl-chat-memory-operation': CustomEvent<MemoryOperationEvent>;
-    'dl-child-activity': CustomEvent<ChatChildActivityDetail>;
+    'dl-run-activity': CustomEvent<ChatRunActivityDetail>;
   }
 }

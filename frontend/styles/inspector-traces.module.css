@@ -1,8 +1,9 @@
 /* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
 
-/* The Child agents dock: a toolbar over the list and the child on show. The dock owns the whole
- * panel (panels.css lifts the generic content padding and scroll), so the list and the child scroll
- * apart and the child's composer stays docked (ui/inspector-children.ts). */
+/* The Child agents dock: a toolbar over the roster tree (the main agent, its children indented beneath it)
+ * and the agent on show. The dock owns the whole panel (panels.css lifts the generic content padding and
+ * scroll), so the list and the agent scroll apart and a child's composer stays docked
+ * (ui/inspector-traces.ts). */
 
 @layer features {
   .root {
@@ -101,6 +102,15 @@
     list-style: none;
   }
 
+  /* The children hang off the main agent on a guide line, under the middle of its mark. */
+  .tree {
+    border-inline-start: 1px solid var(--color-divider);
+    display: flex;
+    flex-direction: column;
+    list-style: none;
+    margin-inline-start: calc(var(--space-component) + 0.5rem);
+  }
+
   .row {
     align-items: flex-start;
     background: transparent;
@@ -150,6 +160,11 @@
     overflow-wrap: anywhere;
   }
 
+  .leadRow .objective {
+    color: var(--color-text-primary);
+    font-weight: 500;
+  }
+
   .row[aria-current='true'] .objective {
     color: var(--color-text-primary);
   }
@@ -187,7 +202,7 @@
     padding: var(--space-tight) var(--space-component);
   }
 
-  /* ── Nothing to list ── */
+  /* ── The roster could not be read ── */
 
   .empty {
     display: grid;
@@ -202,12 +217,5 @@
     font-size: var(--font-size-detail);
     font-weight: 500;
     line-height: var(--line-height-control);
-  }
-
-  .emptyBody {
-    color: var(--color-text-muted);
-    font-size: var(--font-size-caption);
-    line-height: var(--line-height-control);
-    max-width: 24rem;
   }
 }

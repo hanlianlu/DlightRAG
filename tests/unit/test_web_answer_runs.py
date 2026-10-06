@@ -31,6 +31,7 @@ from dlightrag.adapters.http.streaming.answer_stream import follow_run_frames
 from dlightrag.application import ApplicationClosedError
 from dlightrag.application.access import owner_id_from_user
 from dlightrag.application.answer_runs import (
+    ActivityPage,
     AnswerConnectionsChangedError,
     ChildRosterCursor,
     ChildRosterCursorCodec,
@@ -1039,7 +1040,6 @@ async def test_web_observes_and_controls_a_child(client: AsyncClient, applicatio
         payload=lambda: {
             "run_id": RUN_ID,
             "child": {"child_session_id": "child-1", "status": "running"},
-            "transcript": [{"role": "user", "content": "inspect"}],
             "controls": [{"control_sequence": 1, "consumed": False, "origin": "user"}],
             "questions": [{"request_id": "req-1", "status": "pending"}],
             "result": None,
@@ -1082,11 +1082,49 @@ async def test_web_observes_and_controls_a_child(client: AsyncClient, applicatio
     )
 
     assert observed.status_code == 200
-    assert observed.json()["transcript"][0]["content"] == "inspect"
+    assert observed.json()["controls"][0]["origin"] == "user"
+    assert application.answers.observe_child.await_args.kwargs["with_transcript"] is False
     assert steered.status_code == 202
     assert steered.json()["outcome"] == "queued"
     assert replied.status_code == 202
     assert replied.json()["outcome"] == "replied"
+
+
+async def test_web_reads_a_page_of_the_main_and_of_a_child_transcript(
+    client: AsyncClient, application: Any
+) -> None:
+    application.answers.activity_page.return_value = ActivityPage(
+        messages=({"sequence": 7, "role": "user", "content": "inspect"},),
+        next_before=7,
+        running=True,
+    )
+
+    main = await client.get(
+        f"/web/api/answer/{RUN_ID}/transcript", params={"before": 9, "limit": 5}
+    )
+    child = await client.get(f"/web/api/answer/{RUN_ID}/transcript", params={"child": "child-1"})
+
+    assert main.status_code == child.status_code == 200
+    assert main.json() == {
+        "messages": [{"sequence": 7, "role": "user", "content": "inspect"}],
+        "next_before": 7,
+        "running": True,
+    }
+    asked = [call.kwargs for call in application.answers.activity_page.await_args_list]
+    assert [(item["child_session_id"], item["before"], item["limit"]) for item in asked] == [
+        (None, 9, 5),
+        ("child-1", None, 30),
+    ]
+
+
+async def test_web_transcript_page_of_an_unknown_child_is_not_found(
+    client: AsyncClient, application: Any
+) -> None:
+    application.answers.activity_page.return_value = None
+
+    response = await client.get(f"/web/api/answer/{RUN_ID}/transcript", params={"child": "missing"})
+
+    assert response.status_code == 404
 
 
 async def test_web_child_control_terminal_is_conflict(

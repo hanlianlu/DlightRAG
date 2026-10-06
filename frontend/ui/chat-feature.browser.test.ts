@@ -288,7 +288,7 @@ it('composes stored history through public properties and AnswerPresentation pro
   expect(action).to.deep.equal({action: 'fork', runId: 'run-1'});
 });
 
-it('offers Fork on every settled turn, Child agents on those whose Run had children, and no per-turn Follow-Up control', async () => {
+it('offers Fork and Agent traces on every settled turn, and no per-turn Follow-Up control', async () => {
   const feature = document.createElement('dl-chat-feature') as DlChatFeature;
   feature.view = {
     kind: 'ready',
@@ -316,9 +316,9 @@ it('offers Fork on every settled turn, Child agents on those whose Run had child
   // Fork branches from the turn it names, so every settled turn offers it. A
   // Follow-Up appends to the Lane tip, which the composer already owns, so the
   // Web offers no per-turn control for it.
-  expect(labels('turn-1')).to.deep.equal(['Fork']);
-  // A settled turn reaches its children once the server says it had any, and the entry comes first.
-  expect(labels('turn-2')).to.deep.equal(['Child agents', 'Fork']);
+  // Agent traces holds the main agent beside any children, so every turn with a Run has it, first.
+  expect(labels('turn-1')).to.deep.equal(['Agent traces', 'Fork']);
+  expect(labels('turn-2')).to.deep.equal(['Agent traces', 'Fork']);
 
   const actions: ChatRunActionDetail[] = [];
   feature.addEventListener('dl-chat-run-action', (event) => {
@@ -328,13 +328,13 @@ it('offers Fork on every settled turn, Child agents on those whose Run had child
     feature.querySelectorAll<HTMLButtonElement>('[data-turn-id="turn-2"] button'),
   ).find((button) => button.textContent?.trim() === name);
   turn2('Fork')?.click();
-  turn2('Child agents')?.click();
+  turn2('Agent traces')?.click();
   expect(actions).to.deep.equal([
     {action: 'fork', runId: 'run-2'},
-    {action: 'children', runId: 'run-2'},
+    {action: 'traces', runId: 'run-2'},
   ]);
   // Only a Run that is still going shows the live dot beside the words.
-  expect(turn2('Child agents')?.querySelectorAll('svg')).to.have.length(1);
+  expect(turn2('Agent traces')?.querySelectorAll('svg')).to.have.length(1);
 });
 
 it('raises background intent without treating interactive message controls as background', async () => {
@@ -1534,7 +1534,7 @@ it('keeps the first answer of a new conversation when the history refresh after 
   expect(conversationStore.answerConversationId).to.equal(conversationId);
 });
 
-it('announces child activity for every tool event once a run has children, and for its end', async () => {
+it('announces run activity for every tool event, and for its end', async () => {
   const originalRequestFrame = window.requestAnimationFrame;
   const originalCancelFrame = window.cancelAnimationFrame;
   let nextFrame = 1;
@@ -1554,13 +1554,11 @@ it('announces child activity for every tool event once a run has children, and f
   const conversationId = 'conversation-child-activity';
   const runId = 'run-child-activity';
   const chunks = [
-    // Before any child exists a tool call is the parent's own: nothing to announce.
     'id: 1\nevent: tool_start\ndata: {"tool_name":"search_corpus","call_id":"search-0"}\n\n',
     'id: 2\nevent: tool_start\ndata: {"tool_name":"spawn_agent","call_id":"child-1"}\n\n',
     'id: 3\nevent: token\ndata: "Deleg"\n\n',
     'id: 4\nevent: token\ndata: "ated"\n\n',
     'id: 5\nevent: progress\ndata: {"phase":"searching"}\n\n',
-    // A child's own call reaches the parent's stream without a child id.
     'id: 6\nevent: tool_start\ndata: {"tool_name":"search_corpus","call_id":"search-1"}\n\n',
     'id: 7\nevent: done\ndata: {"status":"cancelled","presentation":null}\n\n',
   ];
@@ -1593,7 +1591,7 @@ it('announces child activity for every tool event once a run has children, and f
   try {
     const feature = document.createElement('dl-chat-feature') as DlChatFeature;
     const activity: string[] = [];
-    feature.addEventListener('dl-child-activity', (event) => {
+    feature.addEventListener('dl-run-activity', (event) => {
       activity.push((event as CustomEvent<{runId: string}>).detail.runId);
     });
     feature.view = {
@@ -1614,8 +1612,8 @@ it('announces child activity for every tool event once a run has children, and f
     runFrames();
 
     expect(feature.turns[0].streamText).to.equal('Delegated');
-    // spawn_agent, the child's search, and the Run's end; never tokens or progress.
-    expect(activity).to.deep.equal([runId, runId, runId]);
+    // Each tool call and the Run's end; never tokens or progress.
+    expect(activity).to.deep.equal([runId, runId, runId, runId]);
   } finally {
     window.requestAnimationFrame = originalRequestFrame;
     window.cancelAnimationFrame = originalCancelFrame;
@@ -1662,7 +1660,7 @@ it('announces the end of a run with children that its stored row reports', async
   try {
     const feature = document.createElement('dl-chat-feature') as DlChatFeature;
     const activity: string[] = [];
-    feature.addEventListener('dl-child-activity', (event) => {
+    feature.addEventListener('dl-run-activity', (event) => {
       activity.push((event as CustomEvent<{runId: string}>).detail.runId);
     });
     feature.view = {
@@ -1721,7 +1719,7 @@ async function runWithChildren(name: string) {
   });
   const feature = document.createElement('dl-chat-feature') as DlChatFeature;
   const activity: string[] = [];
-  feature.addEventListener('dl-child-activity', (event) => {
+  feature.addEventListener('dl-run-activity', (event) => {
     activity.push((event as CustomEvent<{runId: string}>).detail.runId);
   });
   feature.view = {
@@ -1893,13 +1891,13 @@ it('Message List exposes child-agent progress and roster intent through public s
     action = (event as CustomEvent<ChatRunActionDetail>).detail;
   });
   const actions = Array.from(list.querySelectorAll('button')).filter(
-    (button) => button.textContent?.trim() === 'Child agents',
+    (button) => button.textContent?.trim() === 'Agent traces',
   );
   expect(actions.length).to.equal(1);
   // The live Run's entry carries a dot that its settled form does not, and both a chevron.
   expect(actions[0].querySelectorAll('svg')).to.have.length(2);
   actions[0].click();
-  expect(action).to.deep.equal({action: 'children', runId: 'run-with-child'});
+  expect(action).to.deep.equal({action: 'traces', runId: 'run-with-child'});
 });
 
 it('Message List announces image state and prunes it with the owning turns', async () => {

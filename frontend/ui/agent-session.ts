@@ -13,23 +13,25 @@ import {keyed} from 'lit/directives/keyed.js';
 import {live} from 'lit/directives/live.js';
 import {repeat} from 'lit/directives/repeat.js';
 import {
-  CHILD_TRANSCRIPT_LIMIT,
   ChildControlRejectedError,
   type AgentChildStatus,
   type ChildControlReceipt,
+  type ChildControlRecord,
   type ChildObservation,
   type ChildQuestion,
 } from '../api/conversations.ts';
 import {ApiError} from '../api/wire.ts';
 import {icon} from '../design-system/index.ts';
 import {getLocale} from '../i18n/locale.ts';
-import {projectActivity, type ActivityStep} from '../lib/child-activity.ts';
 import {raise} from '../lib/dom.ts';
 import {isAbortError} from '../lib/errors.ts';
 import {LightElement} from '../lib/lit-host.ts';
-import styles from '../styles/child-session.module.css';
-import {childElapsed, childGlyph, childStateText} from './child-status.ts';
-import type {ChildrenSource} from './inspector-children.ts';
+import {MAIN_AGENT} from '../lib/main-agent.ts';
+import styles from '../styles/agent-session.module.css';
+import {senderText, type DlActivity} from './activity.ts';
+import {agentElapsed, agentGlyph, agentStateText} from './agent-status.ts';
+import {evidenceFold} from './evidence-fold.ts';
+import type {TracesSource} from './inspector-traces.ts';
 
 const MINUTE_MILLISECONDS = 60_000;
 
@@ -42,6 +44,7 @@ interface Draft {
 }
 
 const NO_DRAFT: Draft = {text: '', reauthorize: false};
+const NO_CONTROLS: readonly ChildControlRecord[] = [];
 
 /** What a command answered, and the child and Operation it answered for. */
 interface Outcome {
@@ -54,11 +57,11 @@ function modelText(role: string | undefined): string {
   switch (role) {
     case undefined:
     case '': return '';
-    case 'query': return msg('Query model', {id: 'childSession.model.query'});
-    case 'extract': return msg('Extract model', {id: 'childSession.model.extract'});
-    case 'keyword': return msg('Keyword model', {id: 'childSession.model.keyword'});
-    case 'vlm': return msg('Vision model', {id: 'childSession.model.vlm'});
-    case 'default': return msg('Default model', {id: 'childSession.model.default'});
+    case 'query': return msg('Query model', {id: 'agentSession.model.query'});
+    case 'extract': return msg('Extract model', {id: 'agentSession.model.extract'});
+    case 'keyword': return msg('Keyword model', {id: 'agentSession.model.keyword'});
+    case 'vlm': return msg('Vision model', {id: 'agentSession.model.vlm'});
+    case 'default': return msg('Default model', {id: 'agentSession.model.default'});
     default: return role;
   }
 }
@@ -67,50 +70,34 @@ function tokensText(child: AgentChildStatus): string {
   const total = child.usage?.total_tokens;
   if (typeof total !== 'number' || !Number.isFinite(total)) return '';
   const count = new Intl.NumberFormat(getLocale(), {notation: 'compact', maximumFractionDigits: 1}).format(total);
-  return msg(str`${count} tokens`, {id: 'childSession.tokens'});
+  return msg(str`${count} tokens`, {id: 'agentSession.tokens'});
 }
 
 function outcomeText(code: string): string {
   switch (code) {
-    case 'queued': return msg('Queued. The child has not necessarily followed it yet.', {id: 'childSession.outcome.queued'});
-    case 'consumed': return msg('Consumed at a safe checkpoint. This does not prove the model complied.', {id: 'childSession.outcome.consumed'});
-    case 'accepted': return msg('Continuation accepted as a new operation.', {id: 'childSession.outcome.accepted'});
-    case 'cancellation_requested': return msg('Cancellation requested.', {id: 'childSession.outcome.cancellationRequested'});
-    case 'replied': return msg('Reply sent.', {id: 'childSession.outcome.replied'});
-    case 'terminal_child': return msg('This child is already terminal and was not revived.', {id: 'childSession.outcome.terminalChild'});
-    case 'run_terminal': return msg('The parent run is terminal, so this child cannot continue.', {id: 'childSession.outcome.runTerminal'});
-    case 'child_running': return msg('This child is still running.', {id: 'childSession.outcome.childRunning'});
-    case 'reauthorization_required': return msg('User-cancelled work needs explicit reauthorization.', {id: 'childSession.outcome.reauthorizationRequired'});
-    case 'queue_full': return msg('The pending control queue is full.', {id: 'childSession.outcome.queueFull'});
-    case 'idempotency_conflict': return msg('This submission id was already used for a different request.', {id: 'childSession.outcome.idempotencyConflict'});
-    case 'already_replied': return msg('This question was already answered.', {id: 'childSession.outcome.alreadyReplied'});
-    case 'expired': return msg('This question expired before the reply arrived.', {id: 'childSession.outcome.expired'});
-    case 'cancelled': return msg('This question was cancelled.', {id: 'childSession.outcome.cancelled'});
-    case 'unknown_outcome': return msg('The child outcome is unknown.', {id: 'childSession.outcome.unknownOutcome'});
-    case 'failed': return msg('The child intervention could not be sent.', {id: 'childSession.interventionFailed'});
+    case 'queued': return msg('Queued. The child has not necessarily followed it yet.', {id: 'agentSession.outcome.queued'});
+    case 'consumed': return msg('Consumed at a safe checkpoint. This does not prove the model complied.', {id: 'agentSession.outcome.consumed'});
+    case 'accepted': return msg('Continuation accepted as a new operation.', {id: 'agentSession.outcome.accepted'});
+    case 'cancellation_requested': return msg('Cancellation requested.', {id: 'agentSession.outcome.cancellationRequested'});
+    case 'replied': return msg('Reply sent.', {id: 'agentSession.outcome.replied'});
+    case 'terminal_child': return msg('This child is already terminal and was not revived.', {id: 'agentSession.outcome.terminalChild'});
+    case 'run_terminal': return msg('The parent run is terminal, so this child cannot continue.', {id: 'agentSession.outcome.runTerminal'});
+    case 'child_running': return msg('This child is still running.', {id: 'agentSession.outcome.childRunning'});
+    case 'reauthorization_required': return msg('User-cancelled work needs explicit reauthorization.', {id: 'agentSession.outcome.reauthorizationRequired'});
+    case 'queue_full': return msg('The pending control queue is full.', {id: 'agentSession.outcome.queueFull'});
+    case 'idempotency_conflict': return msg('This submission id was already used for a different request.', {id: 'agentSession.outcome.idempotencyConflict'});
+    case 'already_replied': return msg('This question was already answered.', {id: 'agentSession.outcome.alreadyReplied'});
+    case 'expired': return msg('This question expired before the reply arrived.', {id: 'agentSession.outcome.expired'});
+    case 'cancelled': return msg('This question was cancelled.', {id: 'agentSession.outcome.cancelled'});
+    case 'unknown_outcome': return msg('The child outcome is unknown.', {id: 'agentSession.outcome.unknownOutcome'});
+    case 'failed': return msg('The child intervention could not be sent.', {id: 'agentSession.interventionFailed'});
     default: return code;
   }
 }
 
-/** Whether the reader has scrolled a page down to within one line of its bottom. A page that has not been
- * scrolled down is not at a bottom the reader chose, however short it is. */
-function scrolledToBottom(page: HTMLElement): boolean {
-  const line = Number.parseFloat(getComputedStyle(page).lineHeight);
-  return page.scrollTop > 0
-    && page.scrollHeight - page.scrollTop - page.clientHeight <= (Number.isFinite(line) ? line : 1);
-}
-
 /** What a Run that is over says in the place of the box that would steer or continue its children. */
 function finishedText(): string {
-  return msg('This answer has finished, so its child agents can no longer be steered or continued.', {id: 'childSession.finished'});
-}
-
-function senderText(origin: string | null): string {
-  switch (origin) {
-    case 'user': return msg('You', {id: 'childSession.you'});
-    case 'parent': return msg('Parent', {id: 'childSession.parent'});
-    default: return '';
-  }
+  return msg('This answer has finished, so its child agents can no longer be steered or continued.', {id: 'agentSession.finished'});
 }
 
 /** Whether a row of this child differs from the last one in what an observation shows. */
@@ -122,7 +109,7 @@ function rowChanged(before: AgentChildStatus | null | undefined, after: AgentChi
     || before.pendingQuestions !== after.pendingQuestions;
 }
 
-export class DlChildSession extends LightElement {
+export class DlAgentSession extends LightElement {
   static properties = {
     source: {attribute: false},
     childSessionId: {attribute: false},
@@ -138,7 +125,7 @@ export class DlChildSession extends LightElement {
     answering: {state: true},
   };
 
-  declare source: ChildrenSource | null;
+  declare source: TracesSource | null;
   /** The child to show; empty while the roster shows its list instead. */
   declare childSessionId: string;
   /** The roster's row for this child, which heads the page before its observation arrives. A child the
@@ -166,9 +153,6 @@ export class DlChildSession extends LightElement {
   #allowNextLineBreak = false;
   /** The Run ended while this page was open to its children, which the page says out loud. */
   #runEnded = false;
-  /** The reader has scrolled a running child's page to its bottom and is still there, so the page keeps
-   * its bottom in view as steps arrive. Only the reader's own scrolling sets it: opening a child never jumps. */
-  #following = false;
   /** Measures the title's clamp again whenever the title is resized: a settled child has no clock to redraw
    * the page, and the dock can be narrowed at any time. */
   readonly #titleSize = new ResizeObserver(() => { this.#measureTitle(); });
@@ -228,12 +212,6 @@ export class DlChildSession extends LightElement {
     // Only a running child of a Run that is still going can be cancelled, so a question about it lapses
     // when either ends.
     if (this.confirming && (!this.commandable || this.#child()?.status !== 'running')) this.confirming = false;
-    // Measured before the update adds to the page: a reader who has left the bottom, or a child that has
-    // settled, is no longer followed.
-    const page = this.#page();
-    if (this.#following && !(page && this.#child()?.status === 'running' && scrolledToBottom(page))) {
-      this.#following = false;
-    }
   }
 
   protected override updated(changed: PropertyValues<this>): void {
@@ -245,11 +223,10 @@ export class DlChildSession extends LightElement {
       if (title) this.#titleSize.observe(title);
     }
     for (const field of this.querySelectorAll<HTMLTextAreaElement>('textarea')) this.#fit(field);
-    const page = this.#page();
-    if (!page) return;
-    // A child opens on its title, and a page that is followed keeps its bottom in view.
-    if (changed.has('source') || changed.has('childSessionId')) page.scrollTop = 0;
-    else if (this.#following) page.scrollTop = page.scrollHeight;
+    // A child opens on its title.
+    if (changed.has('source') || changed.has('childSessionId')) {
+      this.querySelector<HTMLElement>('[data-scroller]')?.scrollTo({top: 0});
+    }
   }
 
   /** The toggle shows only where the title is cut off, or has been opened. */
@@ -259,24 +236,18 @@ export class DlChildSession extends LightElement {
     if (title && more) more.hidden = !this.objectiveOpen && title.scrollHeight <= title.clientHeight + 1;
   }
 
-  #page(): HTMLElement | null {
-    return this.querySelector<HTMLElement>('[data-page]');
-  }
-
-  #scrolled = (event: Event): void => {
-    this.#following = this.#child()?.status === 'running' && scrolledToBottom(event.currentTarget as HTMLElement);
-  };
-
-  /** Read the child where it stands; a read already in flight is not interrupted, one more follows it. */
+  /** Read the child where it stands, and its activity with it; a read already in flight is not interrupted,
+   * one more follows it. */
   #reobserve(): void {
     if (this.#observing) this.#observing.again = true;
     else void this.#observe();
+    this.querySelector<DlActivity>('dl-activity')?.refresh();
   }
 
   async #observe(): Promise<void> {
     const source = this.source;
     const childSessionId = this.childSessionId;
-    if (!source || !childSessionId) return;
+    if (!source || !childSessionId || childSessionId === MAIN_AGENT) return;
     const flight = {controller: new AbortController(), again: false};
     this.#observing = flight;
     try {
@@ -415,7 +386,7 @@ export class DlChildSession extends LightElement {
     action: ChildAction,
     requestId: string | null,
     draftKey: string | null,
-    send: (source: ChildrenSource) => Promise<ChildControlReceipt>,
+    send: (source: TracesSource) => Promise<ChildControlReceipt>,
   ): Promise<void> {
     const source = this.source;
     const childSessionId = this.childSessionId;
@@ -483,8 +454,8 @@ export class DlChildSession extends LightElement {
 
   /** What the page says out loud: that the child is gone, else the latest answer to a command. */
   #announcement(): string {
-    if (this.#gone()) return msg('That child is no longer available.', {id: 'childSession.gone'});
-    if (this.#runEnded) return finishedText();
+    if (this.#gone()) return msg('That child is no longer available.', {id: 'agentSession.gone'});
+    if (this.#runEnded && !this.#main()) return finishedText();
     const outcome = this.outcome;
     const shown = outcome
       && outcome.childSessionId === this.childSessionId
@@ -545,55 +516,63 @@ export class DlChildSession extends LightElement {
     if (this.#gone() || !child) {
       return html`
         <div class=${styles.gone}>
-          <p class=${styles.goneTitle}>${msg('That child is no longer available.', {id: 'childSession.gone'})}</p>
-          <p class=${styles.goneHint}>${msg('Pick another from the list.', {id: 'childSession.goneHint'})}</p>
+          <p class=${styles.goneTitle}>${msg('That child is no longer available.', {id: 'agentSession.gone'})}</p>
+          <p class=${styles.goneHint}>${msg('Pick another from the list.', {id: 'agentSession.goneHint'})}</p>
         </div>
       `;
     }
     const running = child.status === 'running';
     return html`
-      <section class=${styles.session} aria-labelledby="child-session-title">
-        <div class=${styles.scroll} data-page @scroll=${this.#scrolled}>
+      <section class=${styles.session} aria-labelledby="agent-session-title">
+        <div class=${styles.scroll} data-scroller>
           ${keyed(this.childSessionId, html`
             ${this.#heading(child)}
             ${this.#statusLine(child, running)}
             ${this.confirming ? this.#confirmation() : nothing}
             ${this.observation ? this.#questions(this.observation) : nothing}
             ${running ? nothing : this.#result(child)}
-            ${this.observation ? this.#activity(this.observation, child, running) : this.#pending()}
+            ${this.observation || this.#main() ? nothing : this.#pending()}
+            <dl-activity .source=${this.source} .agent=${this.#main() ? null : this.childSessionId}
+              .objective=${this.#main() ? '' : child.objective ?? ''} .controls=${this.observation?.controls ?? NO_CONTROLS}></dl-activity>
             ${this.observation ? this.#history(this.observation) : nothing}
           `)}
         </div>
-        ${this.commandable ? this.#composer(child, running) : this.#finished()}
+        ${this.#main() ? nothing : this.commandable ? this.#composer(child, running) : this.#finished()}
       </section>
     `;
   }
 
+  /** The Run's main agent has this page too, with nothing to steer: its Run is steered from the chat. */
+  #main(): boolean {
+    return this.childSessionId === MAIN_AGENT;
+  }
+
   #heading(child: AgentChildStatus): TemplateResult {
     return html`
-      <h3 id="child-session-title" class="${styles.title} ${this.objectiveOpen ? '' : styles.clamped}"
+      ${this.#main() ? html`<p class=${styles.label}>${msg('Main agent', {id: 'tracesPanel.lead'})}</p>` : nothing}
+      <h3 id="agent-session-title" class="${styles.title} ${this.objectiveOpen ? '' : styles.clamped}"
           data-title tabindex="-1">${child.objective || this.childSessionId}</h3>
       <button type="button" class=${styles.more} data-more hidden
               aria-expanded=${this.objectiveOpen ? 'true' : 'false'}
-              aria-controls="child-session-title" @click=${this.#toggleObjective}>
+              aria-controls="agent-session-title" @click=${this.#toggleObjective}>
         ${this.objectiveOpen
-          ? msg('Show less', {id: 'childSession.showLess'})
-          : msg('Show full objective', {id: 'childSession.showFull'})}
+          ? msg('Show less', {id: 'agentSession.showLess'})
+          : msg('Show full objective', {id: 'agentSession.showFull'})}
       </button>
     `;
   }
 
   #statusLine(child: AgentChildStatus, running: boolean): TemplateResult {
-    const meta = [childElapsed(child, this.now), modelText(child.modelRole), tokensText(child)]
+    const meta = [agentElapsed(child, this.now), modelText(child.modelRole), tokensText(child)]
       .filter(Boolean).join(' · ');
     return html`
       <div class=${styles.status}>
-        ${childGlyph(child)}
-        <b class=${styles.state}>${childStateText(child)}</b>
+        ${agentGlyph(child)}
+        <b class=${styles.state}>${agentStateText(child)}</b>
         <span>${meta}</span>
-        ${running && this.commandable && !this.confirming ? html`
+        ${running && this.commandable && !this.confirming && !this.#main() ? html`
           <button type="button" class="dl-btn dl-btn-danger-text ${styles.cancel}" data-cancel
-                  @click=${this.#askConfirmation}>${msg('Cancel child', {id: 'childSession.cancel'})}</button>
+                  @click=${this.#askConfirmation}>${msg('Cancel child', {id: 'agentSession.cancel'})}</button>
         ` : nothing}
       </div>
     `;
@@ -602,11 +581,11 @@ export class DlChildSession extends LightElement {
   #confirmation(): TemplateResult {
     const busy = this.#sendingNow('cancel');
     return html`
-      <div class=${styles.confirm} role="group" aria-labelledby="child-session-confirm">
-        <p id="child-session-confirm">${msg('Cancel this child? Its work so far is kept.', {id: 'childSession.cancelConfirm'})}</p>
+      <div class=${styles.confirm} role="group" aria-labelledby="agent-session-confirm">
+        <p id="agent-session-confirm">${msg('Cancel this child? Its work so far is kept.', {id: 'agentSession.cancelConfirm'})}</p>
         <button type="button" class="dl-btn dl-btn-danger-text" aria-disabled=${busy ? 'true' : nothing}
-                @click=${() => { if (!busy) this.#cancelChild(); }}>${msg('Cancel child', {id: 'childSession.cancel'})}</button>
-        <button type="button" class="dl-btn" data-keep @click=${this.#keepRunning}>${msg('Keep running', {id: 'childSession.keepRunning'})}</button>
+                @click=${() => { if (!busy) this.#cancelChild(); }}>${msg('Cancel child', {id: 'agentSession.cancel'})}</button>
+        <button type="button" class="dl-btn" data-keep @click=${this.#keepRunning}>${msg('Keep running', {id: 'agentSession.keepRunning'})}</button>
       </div>
     `;
   }
@@ -622,8 +601,8 @@ export class DlChildSession extends LightElement {
       ? 0
       : Math.max(1, Math.ceil((Date.parse(question.expiresAt) - this.now) / MINUTE_MILLISECONDS));
     const label = question.expiresAt === null
-      ? msg('Asking the parent', {id: 'childSession.asking'})
-      : msg(str`Asking the parent · expires in ${minutes} min`, {id: 'childSession.askingExpires'});
+      ? msg('Asking the parent', {id: 'agentSession.asking'})
+      : msg(str`Asking the parent · expires in ${minutes} min`, {id: 'agentSession.askingExpires'});
     const key = this.#replyKey(question.requestId);
     const draft = this.#draft(key);
     const busy = this.#sendingNow('reply', question.requestId);
@@ -635,17 +614,17 @@ export class DlChildSession extends LightElement {
           <form class=${styles.reply} data-request=${question.requestId} @submit=${this.#submitReply}>
             <div class=${styles.field}>
               <textarea rows="1" class=${styles.input} data-reply data-draft=${key}
-                        aria-label=${msg('Your answer', {id: 'childSession.answerLabel'})}
+                        aria-label=${msg('Your answer', {id: 'agentSession.answerLabel'})}
                         .value=${live(draft.text)} ?readonly=${busy}
                         @input=${this.#typed} @keydown=${this.#keydown}
                         @beforeinput=${this.#beforeInput} @keyup=${this.#keyup}></textarea>
               ${this.#sendButton(draft.text, busy)}
             </div>
-            <button type="button" class="dl-btn" @click=${this.#closeAnswer}>${msg('Cancel answer', {id: 'childSession.cancelAnswer'})}</button>
+            <button type="button" class="dl-btn" @click=${this.#closeAnswer}>${msg('Cancel answer', {id: 'agentSession.cancelAnswer'})}</button>
           </form>
         ` : html`
           <button type="button" class="dl-btn" data-request=${question.requestId}
-                  @click=${this.#openAnswer}>${msg('Answer instead', {id: 'childSession.answerInstead'})}</button>
+                  @click=${this.#openAnswer}>${msg('Answer instead', {id: 'agentSession.answerInstead'})}</button>
         `}
       </div>
     `;
@@ -653,7 +632,7 @@ export class DlChildSession extends LightElement {
 
   #sendButton(text: string, busy: boolean): TemplateResult {
     return html`
-      <button type="submit" class=${styles.send} aria-label=${msg('Send', {id: 'childSession.send'})}
+      <button type="submit" class=${styles.send} aria-label=${msg('Send', {id: 'agentSession.send'})}
               aria-disabled=${busy || !text.trim() ? 'true' : nothing}>${icon('send', {size: 'sm'})}</button>
     `;
   }
@@ -664,15 +643,9 @@ export class DlChildSession extends LightElement {
     if (!summary && handles.length === 0) return nothing;
     return html`
       <section class=${styles.section}>
-        <h4 class=${styles.label}>${msg('Result', {id: 'childSession.result'})}</h4>
-        ${summary ? html`<p class=${styles.resultText}>${summary}</p>` : nothing}
-        ${handles.length > 0 ? html`
-          <details class=${styles.fold}>
-            <summary class=${styles.summary}>${icon('disclosure', {size: 'xs', className: styles.chevron})}
-              ${msg(str`Evidence · ${handles.length}`, {id: 'childSession.evidence'})}</summary>
-            <ul class=${styles.mono}>${handles.map((handle) => html`<li>${handle}</li>`)}</ul>
-          </details>
-        ` : nothing}
+        <h4 class=${styles.label}>${msg('Result', {id: 'agentSession.result'})}</h4>
+        ${summary ? html`<p class=${styles.resultText} tabindex="0">${summary}</p>` : nothing}
+        ${handles.length > 0 ? evidenceFold(this, handles, this.source?.presentation() ?? null) : nothing}
       </section>
     `;
   }
@@ -682,81 +655,10 @@ export class DlChildSession extends LightElement {
     return this.failed
       ? html`
         <div class=${styles.failed}>
-          <p role="alert">${msg('Child details could not be loaded.', {id: 'childSession.loadFailed'})}</p>
-          <button type="button" class="dl-btn" @click=${this.#retry}>${msg('Retry', {id: 'childSession.retry'})}</button>
+          <p role="alert">${msg('Child details could not be loaded.', {id: 'agentSession.loadFailed'})}</p>
+          <button type="button" class="dl-btn" @click=${this.#retry}>${msg('Retry', {id: 'agentSession.retry'})}</button>
         </div>`
-      : html`<p class=${styles.quiet}>${msg('Loading child details…', {id: 'childSession.loading'})}</p>`;
-  }
-
-  #activity(observation: ChildObservation, child: AgentChildStatus, running: boolean): TemplateResult {
-    const steps = projectActivity(observation.transcript, {
-      objective: child.objective ?? '',
-      childRunning: running,
-    });
-    const title = running
-      ? msg('Activity', {id: 'childSession.activity'})
-      : steps.length === 1
-        ? msg('Activity · 1 step', {id: 'childSession.activityOneStep'})
-        : msg(str`Activity · ${steps.length} steps`, {id: 'childSession.activitySteps'});
-    return html`
-      <details class=${styles.fold} ?open=${running}>
-        <summary class=${styles.summary}>${icon('disclosure', {size: 'xs', className: styles.chevron})} ${title}</summary>
-        ${observation.transcript.length >= CHILD_TRANSCRIPT_LIMIT
-          ? html`<p class=${styles.caption}>${msg(str`Latest ${steps.length} steps`, {id: 'childSession.latestSteps'})}</p>`
-          : nothing}
-        ${steps.length === 0
-          ? html`<p class=${styles.quiet}>${msg('No activity yet.', {id: 'childSession.noActivity'})}</p>`
-          : html`<ol class=${styles.steps}>${repeat(steps, (step) => step.key, (step) => this.#step(step))}</ol>`}
-      </details>
-    `;
-  }
-
-  #step(step: ActivityStep): TemplateResult {
-    if (step.kind === 'say') {
-      return html`<li class=${styles.step}><p class=${styles.say}>${step.text}</p></li>`;
-    }
-    if (step.kind === 'instruction') {
-      const sender = this.#sender(step.text);
-      return html`
-        <li class=${styles.step}>
-          ${sender.label ? html`<p class=${styles.told}>${sender.label}</p>` : nothing}
-          <p class=${styles.toldText}>${sender.text}</p>
-        </li>
-      `;
-    }
-    const state = step.state === 'running'
-      ? msg('Running', {id: 'childSession.state.running'})
-      : step.state === 'failed' ? msg('Failed', {id: 'childSession.state.failed'}) : '';
-    const line = html`
-      ${state ? html`<span class="dl-sr-only">${state}: </span>` : nothing}
-      <span class=${styles.verb}>${step.verb}</span>
-      ${step.excerpt ? html`<span class=${styles.excerpt}>${step.excerpt}</span>` : nothing}
-    `;
-    const tone = step.state === 'running' ? styles.stepRunning : step.state === 'failed' ? styles.stepFailed : '';
-    // A result that is no more than its excerpt has nothing to open.
-    return step.full.trim() === step.excerpt
-      ? html`<li class="${styles.step} ${tone}">${line}</li>`
-      : html`
-        <li class="${styles.step} ${tone}">
-          <details>
-            <summary class=${styles.stepSummary}>
-              <span class=${styles.stepLine}>${line}</span>
-              ${icon('disclosure', {size: 'xs', className: styles.chevron})}
-            </summary>
-            <pre class=${styles.full} tabindex="0">${step.full}</pre>
-          </details>
-        </li>
-      `;
-  }
-
-  /** A steer the control records name shows as its sender wrote it, under who sent it. The runtime writes a
-   * steer into the transcript as "<Origin> steer: <content>", so a record is matched by exactly that. */
-  #sender(text: string): {label: string; text: string} {
-    const control = this.observation?.controls.find((record) => {
-      const origin = record.origin || 'unknown';
-      return text === `${origin.charAt(0).toUpperCase()}${origin.slice(1).toLowerCase()} steer: ${record.content}`;
-    });
-    return control ? {label: senderText(control.origin), text: control.content} : {label: '', text};
+      : html`<p class=${styles.quiet}>${msg('Loading child details…', {id: 'agentSession.loading'})}</p>`;
   }
 
   #history(observation: ChildObservation): TemplateResult {
@@ -765,7 +667,7 @@ export class DlChildSession extends LightElement {
     return html`
       ${asked.length > 0 ? html`
         <section class=${styles.section}>
-          <h4 class=${styles.label}>${msg('Questions', {id: 'childSession.questions'})}</h4>
+          <h4 class=${styles.label}>${msg('Questions', {id: 'agentSession.questions'})}</h4>
           <ul class=${styles.history}>
             ${asked.map((question) => this.#asked(question))}
           </ul>
@@ -774,14 +676,14 @@ export class DlChildSession extends LightElement {
       ${controls.length > 0 ? html`
         <details class=${styles.fold}>
           <summary class=${styles.summary}>${icon('disclosure', {size: 'xs', className: styles.chevron})}
-            ${msg(str`Control history · ${controls.length}`, {id: 'childSession.controlHistory'})}</summary>
+            ${msg(str`Control history · ${controls.length}`, {id: 'agentSession.controlHistory'})}</summary>
           <ul class=${styles.history}>
             ${controls.map((record) => html`
               <li>
                 <p class=${styles.meta}>${[
                   record.consumed
-                    ? msg('Consumed', {id: 'childSession.control.consumed'})
-                    : msg('Queued', {id: 'childSession.control.queued'}),
+                    ? msg('Consumed', {id: 'agentSession.control.consumed'})
+                    : msg('Queued', {id: 'agentSession.control.queued'}),
                   senderText(record.origin),
                 ].filter(Boolean).join(' · ')}</p>
                 <p class=${styles.toldText}>${record.content}</p>
@@ -797,10 +699,10 @@ export class DlChildSession extends LightElement {
     // A question still marked pending past its expiry is shown as the expired one it is.
     const status = question.status === 'pending' ? 'expired' : question.status;
     const word = status === 'replied'
-      ? msg('Answered', {id: 'childSession.question.replied'})
+      ? msg('Answered', {id: 'agentSession.question.replied'})
       : status === 'cancelled'
-        ? msg('Cancelled', {id: 'childSession.question.cancelled'})
-        : msg('Expired', {id: 'childSession.question.expired'});
+        ? msg('Cancelled', {id: 'agentSession.question.cancelled'})
+        : msg('Expired', {id: 'agentSession.question.expired'});
     return html`
       <li>
         <p class=${styles.toldText}>${question.question}</p>
@@ -821,8 +723,8 @@ export class DlChildSession extends LightElement {
     const busy = this.#sendingNow(mode);
     const userCancelled = !running && child.status === 'cancelled' && child.cancellationOrigin === 'user';
     const placeholder = running
-      ? msg('Steer this child…', {id: 'childSession.steerPlaceholder'})
-      : msg('Continue this child…', {id: 'childSession.continuePlaceholder'});
+      ? msg('Steer this child…', {id: 'agentSession.steerPlaceholder'})
+      : msg('Continue this child…', {id: 'agentSession.continuePlaceholder'});
     const said = this.#announcement();
     return html`
       <form class=${styles.composer} @submit=${this.#submitComposer}>
@@ -830,30 +732,30 @@ export class DlChildSession extends LightElement {
         ${userCancelled ? html`
           <label class="dl-dialog-checkbox ${styles.reauthorize}">
             <input type="checkbox" data-draft=${key} .checked=${live(draft.reauthorize)} @change=${this.#reauthorized}>
-            ${msg('Reauthorize this user-cancelled work', {id: 'childSession.reauthorize'})}
+            ${msg('Reauthorize this user-cancelled work', {id: 'agentSession.reauthorize'})}
           </label>
         ` : nothing}
         <div class=${styles.field}>
           <textarea rows="1" class=${styles.input} data-draft=${key} aria-label=${placeholder}
-                    aria-describedby="child-session-hint" placeholder=${placeholder}
+                    aria-describedby="agent-session-hint" placeholder=${placeholder}
                     .value=${live(draft.text)} ?readonly=${busy}
                     @input=${this.#typed} @keydown=${this.#keydown}
                     @beforeinput=${this.#beforeInput} @keyup=${this.#keyup}></textarea>
           ${this.#sendButton(draft.text, busy)}
         </div>
-        <p class=${styles.hint} id="child-session-hint">${running
-          ? msg('Delivered at the child\'s next safe checkpoint.', {id: 'childSession.steerHint'})
-          : msg('Starts a new operation on this child.', {id: 'childSession.continueHint'})}</p>
+        <p class=${styles.hint} id="agent-session-hint">${running
+          ? msg('Delivered at the child\'s next safe checkpoint.', {id: 'agentSession.steerHint'})
+          : msg('Starts a new operation on this child.', {id: 'agentSession.continueHint'})}</p>
       </form>
     `;
   }
 }
 
-customElements.define('dl-child-session', DlChildSession);
+customElements.define('dl-agent-session', DlAgentSession);
 
 declare global {
   interface HTMLElementTagNameMap {
-    'dl-child-session': DlChildSession;
+    'dl-agent-session': DlAgentSession;
   }
 
   interface HTMLElementEventMap {

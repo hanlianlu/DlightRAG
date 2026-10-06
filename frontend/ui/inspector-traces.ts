@@ -1,26 +1,31 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-/** The Inspector's Child agents dock: one Run's children as a roster, and the child the reader is watching.
+/** The Inspector's Child agents dock: one Run's agents as a roster, and the one the reader is watching.
  *
- * A narrow dock shows the list or one child at a time, and a wide one shows them side by side. The
- * roster follows its Run while the dock is open: the Run's own events and the commands the reader
- * sends keep it current, and one clock a second redraws the elapsed times without asking the server.
+ * The roster is a small tree: the Run's main agent, with its children indented beneath it. A narrow dock
+ * shows the list or one agent at a time, and a wide one shows them side by side, opening on the main agent.
+ * A Run with no children has no list, only the main agent. The roster follows its Run while the dock is
+ * open: the Run's own events and the commands the reader sends keep it current, and one clock a second
+ * redraws the elapsed times without asking the server.
  */
 
 import {msg, str} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import type {
+  ActivityPage,
   AgentChildRosterPage,
   AgentChildStatus,
+  AnswerPresentation,
   ChildControlReceipt,
   ChildObservation,
 } from '../api/conversations.ts';
 import {icon} from '../design-system/index.ts';
 import {LightElement, NarrowController} from '../lib/lit-host.ts';
+import {MAIN_AGENT, mainAgentStatus} from '../lib/main-agent.ts';
 import {KeysetPager} from '../lib/paged.ts';
-import styles from '../styles/inspector-children.module.css';
-import './child-session.ts';
-import {childElapsed, childGlyph, childStateText} from './child-status.ts';
+import styles from '../styles/inspector-traces.module.css';
+import {agentElapsed, agentGlyph, agentStateText} from './agent-status.ts';
+import './agent-session.ts';
 import {loadOlderControl} from './load-older.ts';
 
 /** A followed roster refetches at most this often while its run streams child activity. */
@@ -31,11 +36,17 @@ const CLOCK_MILLISECONDS = 1000;
 /** A Run in one of these statuses is over: the server refuses to steer, continue or cancel its children. */
 const OVER_RUN_STATUSES: ReadonlySet<string> = new Set(['succeeded', 'failed', 'cancelled']);
 
-/** What the dock reads and does for one Run's children. */
-export interface ChildrenSource {
+/** What the dock reads and does for one Run's agents. */
+export interface TracesSource {
   readonly runId: string;
+  /** The Run's main agent as a status row: what the turn it answers says of it now. */
+  mainAgent(): AgentChildStatus & {childSessionId: string};
+  /** The Run's answer, once it has one: what any agent's Evidence line can open. */
+  presentation(): AnswerPresentation | null;
   page(cursor: string | null, signal: AbortSignal): Promise<AgentChildRosterPage>;
   observe(childSessionId: string, signal: AbortSignal): Promise<ChildObservation>;
+  /** One page of an agent's transcript: the Run's main agent when `agent` is null. */
+  activity(agent: string | null, cursor: string | null, signal: AbortSignal): Promise<ActivityPage>;
   control(
     childSessionId: string,
     action: 'steer' | 'continue' | 'cancel',
@@ -54,23 +65,26 @@ function listed(children: readonly AgentChildStatus[]): ListedChild[] {
   return children.filter((child): child is ListedChild => Boolean(child.childSessionId));
 }
 
-export class DlInspectorChildren extends LightElement {
+export class DlInspectorTraces extends LightElement {
   static properties = {
     source: {attribute: false},
     active: {attribute: false},
     entries: {state: true},
+    lead: {state: true},
     failed: {state: true},
     picked: {state: true},
     runStatus: {state: true},
   };
 
-  declare source: ChildrenSource | null;
+  declare source: TracesSource | null;
   /** Whether the Inspector is showing this content: a dock that is not does no background work. */
   declare active: boolean;
   /** The roster as loaded, newest first; null until its first page arrives. */
   declare entries: readonly ListedChild[] | null;
+  /** The main agent's row, drawn again from its turn at every refresh. */
+  declare lead: ListedChild;
   declare failed: boolean;
-  /** The child the reader opened. */
+  /** The agent the reader opened: a child's id, or `MAIN_AGENT`. */
   declare picked: string | null;
   /** Where the Run stood at the latest refresh; null before the first, or from a server that does not say. */
   declare runStatus: string | null;
@@ -80,8 +94,6 @@ export class DlInspectorChildren extends LightElement {
     (cursor, signal) => this.source!.page(cursor, signal),
     () => { this.requestUpdate(); },
   );
-  /** The newest child: what a wide dock shows until the reader opens another. */
-  #newest: string | null = null;
   #appended = 0;
   #refreshing = false;
   #refreshQueued = false;
@@ -94,6 +106,7 @@ export class DlInspectorChildren extends LightElement {
     this.source = null;
     this.active = false;
     this.entries = null;
+    this.lead = mainAgentStatus(undefined);
     this.failed = false;
     this.picked = null;
     this.runStatus = null;
@@ -129,15 +142,13 @@ export class DlInspectorChildren extends LightElement {
       this.failed = false;
       this.picked = null;
       this.runStatus = null;
-      this.#newest = null;
       this.#appended = 0;
-      if (this.source) void this.#refresh();
+      if (this.source) {
+        this.lead = this.source.mainAgent();
+        void this.#refresh();
+      }
     }
     if (!this.active) this.#cancelFollow();
-    const entries = this.entries;
-    if (entries && !this.#narrow.narrow && !entries.some((child) => child.childSessionId === this.#newest)) {
-      this.#newest = entries[0]?.childSessionId ?? null;
-    }
   }
 
   protected override updated(): void {
@@ -184,13 +195,15 @@ export class DlInspectorChildren extends LightElement {
   }
 
   async #refresh(): Promise<void> {
-    if (!this.source) return;
+    const source = this.source;
+    if (!source) return;
     // Opening, a retry, and followed activity share one throttle window.
     this.#lastRefresh = performance.now();
     this.failed = false;
     await this.#pager.start((page) => {
       this.entries = listed(page.children);
       this.runStatus = page.runStatus;
+      this.lead = source.mainAgent();
     }, () => {
       this.failed = true;
     });
@@ -218,17 +231,24 @@ export class DlInspectorChildren extends LightElement {
     return this.runStatus === null || !OVER_RUN_STATUSES.has(this.runStatus);
   }
 
-  /** The child on show: the one the reader opened, else, in a wide dock, the newest. */
+  /** The agent on show: the one the reader opened, else the main agent, unless a narrow dock has a list to
+   * show first. Nothing shows before the roster is known. */
   #shown(): string | null {
-    return this.picked ?? (this.#narrow.narrow ? null : this.#newest);
+    if (this.entries === null) return null;
+    if (this.picked !== null) return this.picked;
+    return this.#narrow.narrow && this.#hasChildren() ? null : MAIN_AGENT;
+  }
+
+  #hasChildren(): boolean {
+    return (this.entries?.length ?? 0) > 0;
   }
 
   #pick = (event: Event): void => {
-    this.picked = (event.currentTarget as HTMLElement).dataset.childSession!;
-    // A narrow dock has replaced the list with the child, so the reader lands on its title.
+    this.picked = (event.currentTarget as HTMLElement).dataset.agentSession!;
+    // A narrow dock has replaced the list with the agent, so the reader lands on its title.
     if (this.#narrow.narrow) {
       void this.updateComplete.then(async () => {
-        const session = this.querySelector('dl-child-session');
+        const session = this.querySelector('dl-agent-session');
         await session?.updateComplete;
         session?.focusTitle();
       });
@@ -239,65 +259,64 @@ export class DlInspectorChildren extends LightElement {
     const opener = this.picked;
     this.picked = null;
     void this.updateComplete.then(() => {
-      if (opener) this.querySelector<HTMLElement>(`[data-child-session="${CSS.escape(opener)}"]`)?.focus();
+      if (opener !== null) this.querySelector<HTMLElement>(`[data-agent-session="${CSS.escape(opener)}"]`)?.focus();
     });
   };
 
   protected override render(): TemplateResult | typeof nothing {
     const source = this.source;
     if (!source) return nothing;
-    const entries = this.entries;
-    if (entries === null || entries.length === 0) {
-      return html`<div class=${styles.root}>${this.#unlisted(entries)}</div>`;
-    }
+    const entries = this.entries ?? [];
+    const family = entries.length > 0;
     const narrow = this.#narrow.narrow;
     const shown = this.#shown();
-    const entry = entries.find((child) => child.childSessionId === shown) ?? null;
-    // One clock for the whole render, the child on show included.
+    const entry = shown === MAIN_AGENT ? this.lead : entries.find((child) => child.childSessionId === shown) ?? null;
+    // A narrow dock that shows one agent has put the list away.
+    const detail = narrow && family && shown !== null;
+    // One clock for the whole render, the agent on show included.
     const now = Date.now();
     return html`
       <div class=${styles.root}>
-        ${this.#toolbar(entries, narrow && shown !== null)}
+        ${this.failed ? this.#failure() : nothing}
+        ${family ? this.#toolbar(entries, detail) : nothing}
         <div class="${styles.body} ${narrow ? '' : styles.wide}">
-          <div class=${styles.listPane} ?hidden=${narrow && shown !== null}>
-            ${this.failed ? this.#failure() : nothing}
-            <ul class=${styles.list} role="list">
-              ${repeat(entries, (child) => child.childSessionId, (child) => this.#row(child, child.childSessionId === shown, now))}
-            </ul>
-            ${loadOlderControl({
-              list: 'children',
-              pages: this.#pager,
-              label: msg('Load older children', {id: 'childrenPanel.loadOlder'}),
-              retryLabel: msg('Retry loading older children', {id: 'childrenPanel.retryLoadOlder'}),
-              loading: msg('Loading older children…', {id: 'childrenPanel.loadingOlder'}),
-              loaded: this.#appended === 1
-                ? msg('Loaded 1 older child.', {id: 'childrenPanel.loadedOneOlder'})
-                : msg(str`Loaded ${this.#appended} older children.`, {id: 'childrenPanel.loadedOlder'}),
-              failed: msg('Older children could not be loaded.', {id: 'childrenPanel.olderFailed'}),
-              onLoad: this.#loadOlder,
-              rowClass: styles.older,
-              buttonClass: 'dl-btn',
-            })}
-          </div>
-          <dl-child-session class=${styles.detail} ?hidden=${narrow && shown === null}
-            .source=${source} .childSessionId=${shown ?? ''} .entry=${entry} .now=${now}
-            .commandable=${this.#commandable()}
-            @dl-child-command-settled=${this.#followRefresh}></dl-child-session>
+          ${family ? html`
+            <div class=${styles.listPane} ?hidden=${detail}>
+              <ul class=${styles.list} role="list">
+                <li>
+                  ${this.#row(this.lead, shown === MAIN_AGENT, now)}
+                  <ul class=${styles.tree} role="list">
+                    ${repeat(entries, (child) => child.childSessionId, (child) => html`
+                      <li>${this.#row(child, child.childSessionId === shown, now)}</li>
+                    `)}
+                  </ul>
+                </li>
+              </ul>
+              ${loadOlderControl({
+                list: 'children',
+                pages: this.#pager,
+                label: msg('Load older children', {id: 'tracesPanel.loadOlder'}),
+                retryLabel: msg('Retry loading older children', {id: 'tracesPanel.retryLoadOlder'}),
+                loading: msg('Loading older children…', {id: 'tracesPanel.loadingOlder'}),
+                loaded: this.#appended === 1
+                  ? msg('Loaded 1 older child.', {id: 'tracesPanel.loadedOneOlder'})
+                  : msg(str`Loaded ${this.#appended} older children.`, {id: 'tracesPanel.loadedOlder'}),
+                failed: msg('Older children could not be loaded.', {id: 'tracesPanel.olderFailed'}),
+                onLoad: this.#loadOlder,
+                rowClass: styles.older,
+                buttonClass: 'dl-btn',
+              })}
+            </div>
+          ` : nothing}
+          ${this.entries === null ? html`
+            <p class=${styles.quiet} role="status">${msg('Loading agents…', {id: 'tracesPanel.loading'})}</p>
+          ` : html`
+            <dl-agent-session class=${styles.detail} ?hidden=${shown === null}
+              .source=${source} .childSessionId=${shown ?? ''} .entry=${entry} .now=${now}
+              .commandable=${this.#commandable()}
+              @dl-child-command-settled=${this.#followRefresh}></dl-agent-session>
+          `}
         </div>
-      </div>
-    `;
-  }
-
-  /** What shows while no child is listed: the load, what stopped it, or the empty roster. */
-  #unlisted(entries: readonly ListedChild[] | null): TemplateResult {
-    if (this.failed) return this.#failure();
-    if (entries === null) {
-      return html`<p class=${styles.quiet} role="status">${msg('Loading child agents…', {id: 'childrenPanel.loading'})}</p>`;
-    }
-    return html`
-      <div class=${styles.empty}>
-        <h3 class=${styles.emptyTitle}>${msg('No child agents were started', {id: 'childrenPanel.emptyTitle'})}</h3>
-        <span class=${styles.emptyBody}>${msg('They appear here when the agent splits a task.', {id: 'childrenPanel.emptyBody'})}</span>
       </div>
     `;
   }
@@ -305,8 +324,8 @@ export class DlInspectorChildren extends LightElement {
   #failure(): TemplateResult {
     return html`
       <div class=${styles.empty}>
-        <p class=${styles.emptyTitle} role="alert">${msg('Child agents could not be loaded.', {id: 'childrenPanel.loadFailed'})}</p>
-        <button type="button" class="dl-btn" @click=${this.#retry}>${msg('Retry', {id: 'childrenPanel.retry'})}</button>
+        <p class=${styles.emptyTitle} role="alert">${msg('Agents could not be loaded.', {id: 'tracesPanel.loadFailed'})}</p>
+        <button type="button" class="dl-btn" @click=${this.#retry}>${msg('Retry', {id: 'tracesPanel.retry'})}</button>
       </div>
     `;
   }
@@ -316,7 +335,7 @@ export class DlInspectorChildren extends LightElement {
       return html`
         <div class=${styles.toolbar}>
           <button type="button" class=${styles.back} @click=${this.#back}>
-            ${icon('previous', {size: 'sm'})}${msg('All child agents', {id: 'childrenPanel.back'})}
+            ${icon('previous', {size: 'sm'})}${msg('All agents', {id: 'tracesPanel.back'})}
           </button>
         </div>
       `;
@@ -326,45 +345,45 @@ export class DlInspectorChildren extends LightElement {
     return html`
       <div class=${styles.toolbar}>
         <span>${entries.length === 1 && !this.#pager.hasOlder
-          ? msg('1 child', {id: 'childrenPanel.oneChild'})
-          : msg(str`${total} children`, {id: 'childrenPanel.children'})}</span>
+          ? msg('1 child', {id: 'tracesPanel.oneChild'})
+          : msg(str`${total} children`, {id: 'tracesPanel.children'})}</span>
         ${running > 0 ? html`
           <span aria-hidden="true">·</span>
-          <span class=${styles.live}>${msg(str`${running} running`, {id: 'childrenPanel.running'})}</span>
+          <span class=${styles.live}>${msg(str`${running} running`, {id: 'tracesPanel.running'})}</span>
         ` : nothing}
       </div>
     `;
   }
 
+  /** One agent's row, the main agent's too: it is named by what it is, a child by its task. */
   #row(child: ListedChild, selected: boolean, now: number): TemplateResult {
-    const meta = [childStateText(child), childElapsed(child, now)].filter(Boolean).join(' · ');
+    const main = child.childSessionId === MAIN_AGENT;
+    const meta = [agentStateText(child), agentElapsed(child, now)].filter(Boolean).join(' · ');
     return html`
-      <li>
-        <button type="button" class=${styles.row} data-child-session=${child.childSessionId}
-                aria-current=${selected ? 'true' : nothing} @click=${this.#pick}>
-          ${childGlyph(child)}
-          <span class=${styles.text}>
-            <span class=${styles.objective}>${child.objective || child.childSessionId}</span>
-            <span class=${styles.meta}>
-              <span>${meta}</span>
-              ${child.pendingQuestions > 0
-                ? html`<span class=${styles.pill}>${msg('Question', {id: 'childrenPanel.question'})}</span>`
-                : nothing}
-            </span>
-            ${child.status !== 'running' && child.summary
-              ? html`<span class=${styles.summary}>${child.summary}</span>`
+      <button type="button" class="${styles.row} ${main ? styles.leadRow : ''}" data-agent-session=${child.childSessionId}
+              aria-current=${selected ? 'true' : nothing} @click=${this.#pick}>
+        ${agentGlyph(child)}
+        <span class=${styles.text}>
+          <span class=${styles.objective}>${main ? msg('Main agent', {id: 'tracesPanel.lead'}) : child.objective || child.childSessionId}</span>
+          <span class=${styles.meta}>
+            <span>${meta}</span>
+            ${child.pendingQuestions > 0
+              ? html`<span class=${styles.pill}>${msg('Question', {id: 'tracesPanel.question'})}</span>`
               : nothing}
           </span>
-        </button>
-      </li>
+          ${child.status !== 'running' && child.summary
+            ? html`<span class=${styles.summary}>${child.summary}</span>`
+            : nothing}
+        </span>
+      </button>
     `;
   }
 }
 
-customElements.define('dl-inspector-children', DlInspectorChildren);
+customElements.define('dl-inspector-traces', DlInspectorTraces);
 
 declare global {
   interface HTMLElementTagNameMap {
-    'dl-inspector-children': DlInspectorChildren;
+    'dl-inspector-traces': DlInspectorTraces;
   }
 }

@@ -1,7 +1,7 @@
 /* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
 
 /* One child in the Child agents dock: a scrolling page (title, state, question, result, activity)
- * above the composer that stays docked at the bottom (ui/child-session.ts). */
+ * above the composer that stays docked at the bottom (ui/agent-session.ts). */
 
 @layer features {
   /* ── State mark ── */
@@ -45,14 +45,12 @@
     }
   }
 
-  .pulse,
-  .stepRunning::before {
+  .pulse {
     animation: pulse 1.6s ease-in-out infinite;
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .pulse,
-    .stepRunning::before {
+    .pulse {
       animation: none;
     }
   }
@@ -214,36 +212,26 @@
     color: var(--color-text-secondary);
     font-size: var(--font-size-detail);
     line-height: var(--line-height-message);
+    max-height: 12rem;
     overflow-wrap: anywhere;
+    overflow-y: auto;
     white-space: pre-wrap;
-  }
-
-  .summary,
-  .stepSummary {
-    border-radius: var(--radius-control);
-    cursor: pointer;
-    list-style: none;
   }
 
   .summary {
     align-items: center;
+    border-radius: var(--radius-control);
     color: var(--color-text-muted);
+    cursor: pointer;
     display: flex;
     font-size: var(--font-size-detail);
     gap: var(--space-tight);
+    list-style: none;
     min-height: var(--size-button);
     width: fit-content;
   }
 
-  .stepSummary {
-    align-items: flex-start;
-    display: flex;
-    gap: var(--space-tight);
-    min-height: var(--size-button);
-  }
-
-  .summary::-webkit-details-marker,
-  .stepSummary::-webkit-details-marker {
+  .summary::-webkit-details-marker {
     display: none;
   }
 
@@ -251,8 +239,7 @@
     color: var(--color-text-primary);
   }
 
-  .summary:focus-visible,
-  .stepSummary:focus-visible {
+  .summary:focus-visible {
     outline: 2px solid var(--focus-ring-color);
     outline-offset: 2px;
   }
@@ -260,11 +247,6 @@
   .chevron {
     flex: none;
     transition: transform var(--duration-control) var(--easing-standard);
-  }
-
-  .stepSummary > .chevron {
-    color: var(--color-text-subtle);
-    margin-top: var(--space-inline);
   }
 
   details[open] > summary > .chevron {
@@ -281,110 +263,37 @@
     overflow-wrap: anywhere;
   }
 
-  .steps {
-    border-inline-start: 1px solid var(--color-divider);
-    list-style: none;
-    margin-inline-start: var(--space-inline);
-    padding-inline-start: var(--space-related);
-  }
-
-  .step {
-    padding-block: var(--space-tight);
-    position: relative;
-  }
-
-  /* The dot sits on the rule, centered on it whatever the indent. */
-  .step::before {
-    background: var(--color-border-strong);
-    border-radius: var(--radius-circle);
-    content: '';
-    height: 0.4375rem;
-    inset-block-start: 0.9rem;
-    inset-inline-start: calc(-1 * var(--space-related) - 0.5px);
-    position: absolute;
-    translate: -50% 0;
-    width: 0.4375rem;
-  }
-
-  .stepRunning::before {
-    background: var(--color-accent-indicator);
-  }
-
-  .stepFailed::before {
-    background: var(--color-danger);
-  }
-
-  .stepLine {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .verb {
-    color: var(--color-text-secondary);
-    display: block;
-    font-size: var(--font-size-detail);
-    line-height: var(--line-height-control);
-  }
-
-  .excerpt {
-    color: var(--color-text-muted);
-    display: block;
-    font-size: var(--font-size-caption);
-    line-height: var(--line-height-control);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .stepFailed .excerpt {
-    color: var(--color-danger);
-  }
-
-  .full {
-    border: 1px solid var(--color-border-subtle);
+  /* A source line that opens its source reads as a link, and keeps the product's hit target. */
+  .evidence {
+    align-items: center;
+    background: none;
+    border: 0;
     border-radius: var(--radius-control);
-    color: var(--color-text-secondary);
-    font-family: SFMono-Regular, Consolas, monospace;
-    font-size: var(--font-size-caption);
-    line-height: var(--line-height-message);
-    margin-top: var(--space-tight);
-    max-height: 12rem;
-    overflow: auto;
-    overflow-wrap: anywhere;
-    padding: var(--space-tight) var(--space-component);
-    white-space: pre-wrap;
+    color: inherit;
+    cursor: pointer;
+    display: inline-flex;
+    font: inherit;
+    min-height: var(--size-button);
+    padding: 0;
+    text-align: start;
+    text-decoration: underline;
+    text-decoration-color: var(--color-border-strong);
+    text-underline-offset: 0.2em;
   }
 
-  .say {
+  .evidence:hover {
     color: var(--color-text-primary);
-    font-size: var(--font-size-detail);
-    line-height: var(--line-height-message);
-    overflow-wrap: anywhere;
-    white-space: pre-wrap;
   }
 
-  .told {
-    color: var(--color-text-muted);
-    font-size: var(--font-size-caption);
+  .evidence:focus-visible {
+    outline: 2px solid var(--focus-ring-color);
+    outline-offset: 2px;
   }
 
-  .toldText {
-    color: var(--color-text-tertiary);
-    font-size: var(--font-size-detail);
-    line-height: var(--line-height-control);
-    overflow-wrap: anywhere;
-    white-space: pre-wrap;
-  }
-
-  .caption,
   .meta {
     color: var(--color-text-muted);
     font-size: var(--font-size-caption);
     line-height: var(--line-height-control);
-  }
-
-  .caption {
-    margin-bottom: var(--space-inline);
   }
 
   .history {

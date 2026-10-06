@@ -40,7 +40,7 @@ export type ChatView =
 
 
 export interface ChatRunActionDetail {
-  action: 'children' | 'fork';
+  action: 'traces' | 'fork';
   runId: string;
 }
 
@@ -531,22 +531,21 @@ export class DlChatMessageList extends LightElement {
   #runActions(turn: ChatTurnView): TemplateResult | typeof nothing {
     if (!turn.runId) return nothing;
     const terminal = isTerminalTurnState(turn.state);
-    if (!terminal && !turn.sawChildren) return nothing;
-    const children = turn.sawChildren ? html`
-      <button type="button" class=${chatStyles.childAgents}
-              @click=${() => this.#runAction('children', turn.runId)}>
-        ${terminal ? nothing : html`<span class=${chatStyles.childLive} aria-hidden="true">${icon('status-dot', {size: 'xs'})}</span>`}
-        ${msg('Child agents', {id: 'chatMessageList.childAgents'})}
+    const traces = html`
+      <button type="button" class=${chatStyles.tracesButton}
+              @click=${() => this.#runAction('traces', turn.runId)}>
+        ${terminal ? nothing : html`<span class=${chatStyles.tracesLive} aria-hidden="true">${icon('status-dot', {size: 'xs'})}</span>`}
+        ${msg('Agent traces', {id: 'chatMessageList.agentTraces'})}
         ${icon('next', {size: 'xs'})}
       </button>
-    ` : nothing;
-    if (!terminal) return html`<div class=${chatStyles.runActions}>${children}</div>`;
+    `;
+    if (!terminal) return html`<div class=${chatStyles.runActions}>${traces}</div>`;
     const sourceCount = turn.presentation?.sources.length ?? 0;
     const usageDetails = turn.usage.usage_details as Record<string, unknown> | undefined;
     const tokenCount = Number(usageDetails?.total_tokens || 0);
     return html`
       <div class=${chatStyles.runActions}>
-        ${children}
+        ${traces}
         <button type="button" @click=${() => this.#runAction('fork', turn.runId)}>${msg('Fork', {id: 'chatMessageList.fork'})}</button>
         ${sourceCount > 0 ? html`
           <span class=${chatStyles.runSummary}

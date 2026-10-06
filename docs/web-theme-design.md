@@ -202,15 +202,29 @@ Opening an Artifact citation is Shell-mediated. On desktop, Side remains Side,
 Wide remains Wide, and Fullscreen reduces only to Wide while Sources opens. On
 compact screens, the Canvas closes and Sources opens in the Inspector drawer.
 
-The Inspector shows one content at a time: Files, Sources, or one Run's Child
-agents. Child agents is the content the reader watches beside the chat, so a
+The Inspector shows one content at a time: Files, Sources, or one Run's Agent
+traces. Agent traces is the content the reader watches beside the chat, so a
 click in the chat leaves it open where it would close Files or Sources (a Canvas
 still closes). Below 1200px the Inspector is a drawer over the chat, and there
-the click on the scrim closes Child agents like the others; Escape and its close
+the click on the scrim closes Agent traces like the others; Escape and its close
 button always close it. It measures its own pane rather than the viewport:
-narrower than 40rem it shows the list of children or one child, and from 40rem
-the list beside the newest child. On a phone it is the Inspector's full-bleed
-sheet.
+narrower than 40rem it shows the list of agents or one agent, and from 40rem
+the list beside the agent on show, which opens on the main agent. On a phone it
+is the Inspector's full-bleed sheet.
+
+Agent traces is one roster for a Run's whole agent family: the main agent
+first, and its children indented beneath it on a guide line. A Run that started
+no child has no list, only the main agent. Every agent has the same page: its
+objective, its state with how many tokens it used, its Result with an Evidence
+fold, and its Activity. The main agent's page is a child's without the commands
+(its Run is steered from the chat): its objective is the question, its Result
+the answer or why the Run failed, and its Evidence the sources the answer cites.
+Evidence lines open their source in Sources when the answer cites them, for the
+main agent and for a child alike. Activity is one timeline, newest page first,
+with the earlier steps on request, so a reader can go back through all of it;
+the main agent's spans the whole conversation. The fold is open while the agent
+works, and the page keeps its bottom in view for a reader who has scrolled
+there.
 
 Below 1200px resizing is disabled and the panel is an overlay: the primary app
 remains full viewport width under the scrim, while modal focus, inert state,

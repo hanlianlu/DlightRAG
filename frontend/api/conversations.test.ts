@@ -5,7 +5,7 @@ import test from 'node:test';
 import {AnswerSubmissionError} from './web-command-error.ts';
 import {ApiError} from './wire.ts';
 import {
-  CHILD_TRANSCRIPT_LIMIT,
+  getAnswerActivityPage,
   ChildControlRejectedError,
   forkAnswerRun,
   controlAnswerChild,
@@ -263,17 +263,13 @@ test('child roster pages encode the opaque cursor and normalize the continuation
   );
 });
 
-test('child observation normalizes transcript, controls, and questions', async () => {
+test('child observation normalizes controls, questions, and the result', async () => {
   let requested = '';
   globalThis.fetch = async (input) => {
     requested = String(input);
     return new Response(JSON.stringify({
       run_id: 'run-1',
       child: {child_session_id: 'child-1', status: 'running', result_handles: ['ev-1']},
-      transcript: [
-        {role: 'user', content: 'inspect'},
-        {role: 'assistant', content: '', tool_calls: [{id: 'call-1', name: 'search_knowledge_base'}, {}]},
-      ],
       controls: [{
         control_sequence: 3, kind: 'steer', content: 'focus', origin: 'user',
         consumed: false, consumed_at: null,
@@ -285,17 +281,48 @@ test('child observation normalizes transcript, controls, and questions', async (
 
   const observation = await getAnswerRunChild('run-1', 'child/1');
 
-  assert.equal(requested, `/web/api/answer/run-1/children/child%2F1?limit=${CHILD_TRANSCRIPT_LIMIT}`);
+  assert.equal(requested, '/web/api/answer/run-1/children/child%2F1');
   assert.equal(observation.child.childSessionId, 'child-1');
   assert.deepEqual(observation.child.resultHandles, ['ev-1']);
-  assert.equal(observation.transcript[0]?.content, 'inspect');
-  assert.deepEqual(observation.transcript[1]?.toolCalls, [
-    {id: 'call-1', name: 'search_knowledge_base'},
-    {id: '', name: ''},
-  ]);
   assert.equal(observation.controls[0]?.consumed, false);
   assert.equal(observation.questions[0]?.requestId, 'req-1');
   assert.deepEqual(observation.result?.handles, ['ev-1']);
+});
+
+test('an activity page names the agent and the cursor it reads, and hands back the cursor of the page before it', async () => {
+  const requests: string[] = [];
+  globalThis.fetch = async (input) => {
+    requests.push(String(input));
+    return new Response(JSON.stringify({
+      messages: [
+        {sequence: 7, role: 'user', content: 'inspect'},
+        {sequence: 9, role: 'assistant', content: '', tool_calls: [{id: 'call-1', name: 'search_knowledge_base'}, {}]},
+      ],
+      next_before: 7,
+      running: true,
+    }));
+  };
+
+  const main = await getAnswerActivityPage('run-1', null);
+  await getAnswerActivityPage('run/1', 'child/1', '7');
+
+  assert.deepEqual(requests, [
+    '/web/api/answer/run-1/transcript',
+    '/web/api/answer/run%2F1/transcript?child=child%2F1&before=7',
+  ]);
+  assert.equal(main.nextCursor, '7');
+  assert.equal(main.running, true);
+  assert.equal(main.messages[0]?.sequence, 7);
+  assert.deepEqual(main.messages[1]?.toolCalls, [
+    {id: 'call-1', name: 'search_knowledge_base'},
+    {id: '', name: ''},
+  ]);
+});
+
+test('the oldest activity page has no cursor', async () => {
+  globalThis.fetch = async () => new Response(JSON.stringify({messages: [], next_before: null, running: false}));
+
+  assert.equal((await getAnswerActivityPage('run-1', null)).nextCursor, null);
 });
 
 test('child control 409 surfaces the explicit terminal outcome', async () => {

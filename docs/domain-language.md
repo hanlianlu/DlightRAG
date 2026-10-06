@@ -259,6 +259,10 @@ _Avoid_: answer parser, incremental rendering state, second transcript
 The ordered viewer-side rows describing the Tool calls of one Answer Run while it runs: one verb, the Tool Subject the call reports, its state, and its elapsed time. It is a live affordance folded from the run's Tool events, not a durable record of its own; a reader that arrives after the run keeps no rows.
 _Avoid_: Tool log, execution history, run transcript
 
+**Agent Activity**:
+One agent's steps as the Web shows them in Agent traces: what it said, each Tool it called beside what came back, and what it was told. It is projected from the agent's durable Session transcript, so unlike Tool Activity it survives reloads and reaches the whole past. The Web reads it a page at a time, newest page first, each message carrying the Session sequence that is the cursor of the page before it. A Run's main agent has one for its whole Lane, earlier turns included, and each Child Session has its own.
+_Avoid_: Tool Activity, execution history, second transcript
+
 **Tool Subject**:
 The single bounded thing a Tool call reports it is acting on, so a viewer can name the call while it runs: a query, a workspace path, a command, a pattern, a skill name, an anonymous public URL, or a run-scoped Resource Handle. It is a producer-reported fact rather than a display string, it is one line and bounded by construction, and a Tool whose only candidate is prose rather than a name reports none.
 _Avoid_: arguments, Tool Label, display name, `object`

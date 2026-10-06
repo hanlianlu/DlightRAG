@@ -450,8 +450,11 @@ async function appWithChildren(roster: {requests: number}, media = desktopMedia)
       roster.requests += 1;
       return response({run_id: 'run-1', children: [childRow('a'), childRow('b')], next_cursor: null});
     }
+    if (url.startsWith('/web/api/answer/run-1/transcript')) {
+      return response({messages: [], next_before: null, running: false});
+    }
     if (url.startsWith('/web/api/answer/run-1/children/')) {
-      return response({run_id: 'run-1', child: childRow('a'), transcript: [], controls: [], questions: [], result: null});
+      return response({run_id: 'run-1', child: childRow('a'), controls: [], questions: [], result: null});
     }
     return bootstrapResponse(input);
   };
@@ -459,13 +462,13 @@ async function appWithChildren(roster: {requests: number}, media = desktopMedia)
   document.body.appendChild(app);
   await app.ready;
   await webRouter.navigate(conversationRoute('with-children'));
-  await waitFor(() => childAgentsButton(app) !== undefined);
+  await waitFor(() => tracesButton(app) !== undefined);
   return app;
 }
 
-function childAgentsButton(app: DlApp): HTMLButtonElement | undefined {
+function tracesButton(app: DlApp): HTMLButtonElement | undefined {
   return Array.from(app.querySelectorAll<HTMLButtonElement>('dl-chat-message-list button'))
-    .find((button) => button.textContent?.trim() === 'Child agents');
+    .find((button) => button.textContent?.trim() === 'Agent traces');
 }
 
 it('opens a settled turn\'s Child agents beside the chat, follows its Run, and leaves them open on a click in the chat', async () => {
@@ -474,15 +477,16 @@ it('opens a settled turn\'s Child agents beside the chat, follows its Run, and l
   const app = await appWithChildren(roster);
   const inspector = app.querySelector('dl-inspector')!;
 
-  childAgentsButton(app)!.click();
-  await waitFor(() => inspector.querySelectorAll('[data-child-session]').length === 2);
+  tracesButton(app)!.click();
+  // The main agent and its two children.
+  await waitFor(() => inspector.querySelectorAll('[data-agent-session]').length === 3);
 
-  expect(inspector.kind).to.equal('children');
-  expect(inspector.querySelector('#panel-title')?.textContent).to.equal('Child agents');
-  expect(document.body.classList.contains('children-panel-open')).to.equal(true);
+  expect(inspector.kind).to.equal('traces');
+  expect(inspector.querySelector('#panel-title')?.textContent).to.equal('Agent traces');
+  expect(document.body.classList.contains('traces-panel-open')).to.equal(true);
 
   // The chat reports the Run's activity, and the open dock fetches its roster again.
-  app.querySelector('dl-chat-feature')!.dispatchEvent(new CustomEvent('dl-child-activity', {
+  app.querySelector('dl-chat-feature')!.dispatchEvent(new CustomEvent('dl-run-activity', {
     bubbles: true, composed: true, detail: {runId: 'run-1'},
   }));
   await waitFor(() => roster.requests === 2);
@@ -491,7 +495,7 @@ it('opens a settled turn\'s Child agents beside the chat, follows its Run, and l
   app.querySelector('main[aria-label="Chat"]')?.dispatchEvent(new MouseEvent('click', {bubbles: true, composed: true}));
   await new Promise((resolve) => requestAnimationFrame(resolve));
   expect(inspector.open).to.equal(true);
-  expect(inspector.kind).to.equal('children');
+  expect(inspector.kind).to.equal('traces');
 
   // The children belong to their conversation, which the Shell leaving takes them with.
   app.querySelector('dl-conversation-sidebar')?.dispatchEvent(new CustomEvent('dl-conversation-route-change', {
@@ -499,21 +503,21 @@ it('opens a settled turn\'s Child agents beside the chat, follows its Run, and l
   }));
   await inspector.updateComplete;
   expect(inspector.open).to.equal(false);
-  expect(document.body.classList.contains('children-panel-open')).to.equal(false);
+  expect(document.body.classList.contains('traces-panel-open')).to.equal(false);
 });
 
 it('closes Child agents on a click in the chat when the Inspector is a modal drawer over it', async () => {
   const app = await appWithChildren({requests: 0}, compactMedia);
   const inspector = app.querySelector('dl-inspector')!;
-  childAgentsButton(app)!.click();
-  await waitFor(() => inspector.kind === 'children');
+  tracesButton(app)!.click();
+  await waitFor(() => inspector.kind === 'traces');
   expect(inspector.querySelector('aside')!.getAttribute('aria-modal')).to.equal('true');
 
   // There is no chat beside it to protect: the click is on the scrim, which closes it as it closes Files.
   app.querySelector('main[aria-label="Chat"]')?.dispatchEvent(new MouseEvent('click', {bubbles: true, composed: true}));
   await inspector.updateComplete;
   expect(inspector.open).to.equal(false);
-  expect(document.body.classList.contains('children-panel-open')).to.equal(false);
+  expect(document.body.classList.contains('traces-panel-open')).to.equal(false);
 });
 
 it('closes the Artifact Canvas when Child agents open, and a click in the chat closes the Canvas but not them', async () => {
@@ -535,14 +539,14 @@ it('closes the Artifact Canvas when Child agents open, and a click in the chat c
   await canvas.updateComplete;
   expect(canvas.classList.contains('open')).to.equal(true);
 
-  childAgentsButton(app)!.click();
-  await waitFor(() => inspector.kind === 'children');
+  tracesButton(app)!.click();
+  await waitFor(() => inspector.kind === 'traces');
   expect(canvas.classList.contains('open')).to.equal(false);
 
   await canvas.open(artifact, app.querySelector('#files-btn'));
   app.querySelector('main[aria-label="Chat"]')?.dispatchEvent(new MouseEvent('click', {bubbles: true, composed: true}));
   expect(canvas.classList.contains('open')).to.equal(false);
-  expect(inspector.kind).to.equal('children');
+  expect(inspector.kind).to.equal('traces');
 });
 
 it('opens Sources as the only compact modal when intent originates in Canvas', async () => {

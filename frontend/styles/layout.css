@@ -768,7 +768,7 @@ dl-chat-composer {
         --split-start-layer: 1;
     }
 
-    body:is(.files-panel-open, .sources-panel-open, .children-panel-open) #panel-split,
+    body:is(.files-panel-open, .sources-panel-open, .traces-panel-open) #panel-split,
     body.artifact-canvas-open #artifact-canvas-split {
         --split-end-layer: 1;
     }

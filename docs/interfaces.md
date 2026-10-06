@@ -401,7 +401,7 @@ Answer mode. `POST /retrieve` and `POST /answer` persist a Run and return HTTP
 | `POST /answer/{run_id}/steer` | Queue an instruction for live Research. |
 | `POST /answer/{run_id}/follow-up` | Create a child run that appends to the selected terminal run's Lane. It injects no history; the fold at the tip is the context. |
 | `POST /answer/{run_id}/fork` | Create a sibling branch from the state that run settled at. It injects no history; the fold at the Fork Point is the context. |
-| `GET /answer/{run_id}/transcript` | Return bounded canonical ancestry. |
+| `GET /answer/{run_id}/transcript` | Return bounded canonical ancestry. Each message carries its Session `sequence`. |
 | `GET /answer/{run_id}/children` | Newest-first Child Session roster page (`limit` 1–100, default 50). Public status only: no host/plan/budget envelopes or provider-private reasoning. Each child carries `started_at` and `finished_at` (UTC ISO 8601 with a `Z`): when its current Operation began, and when it settled, null while the Child runs; a Child with no Operation reports its own creation time. `pending_questions` counts its questions to the parent that still await a reply and have not expired. |
 | `GET /answer/{run_id}/children/{child_session_id}` | Bounded Child Session observation: public status (with the roster's `started_at`, `finished_at`, and `pending_questions`), transcript tail, queued/consumed controls, questions, and Evidence handles. `limit` 1–100, default 20. |
 | `POST /answer/{run_id}/children/{child_session_id}/control` | Steer, continue, or cancel one Child Session. Requires `Idempotency-Key`. Body `{action, content, reauthorize_user_cancelled}`. 202 for `queued` / `consumed` / `accepted` / `cancellation_requested`; 422 without `Idempotency-Key` or for invalid content or key; 409 with the explicit outcome (`terminal_child`, `run_terminal`, `reauthorization_required`, …); 404 if unknown. User-cancelled continuation requires `reauthorize_user_cancelled=true`. |
@@ -674,6 +674,16 @@ input. `service_unavailable` can also follow an accepted submission, so the
 browser reconciles through the lookup or retries with the same `submission_id`.
 Request-shape validation, sign-in, and internal failures keep the general
 envelope.
+
+The browser reads an agent's activity a page at a time with
+`GET /web/api/answer/{run_id}/transcript`: the Run's main agent, or the Child
+Session named by `child`. `limit` is 1-50 (default 30). Without `before` it
+returns the newest page; each page holds the messages older than the `before`
+sequence, oldest first, and carries `next_before` (the cursor of the page before
+it, null at the start) and `running` (whether that agent is still working, so a
+Tool call without a result is in flight). The main agent's pages span its whole
+Lane. `GET /web/api/answer/{run_id}/children/{child_session_id}` observes a
+Child without its transcript.
 
 The Web event stream follows the same durable sequence as REST but projects a
 typed `AnswerPresentation` (`answer_text`, `parts`, `sources`,

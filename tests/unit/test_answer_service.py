@@ -272,12 +272,23 @@ class _Store:
         )
 
     async def load_agent_transcript(
-        self, *, owner_id: str, run_id: str, session_id: str, limit: int
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        session_id: str,
+        limit: int,
+        before: int | None = None,
     ) -> tuple[Mapping[str, Any], ...]:
         del session_id
         if owner_id != _OWNER or run_id != self._run.run_id:
             return ()
-        return self.transcript_rows[-limit:]
+        rows = (
+            self.transcript_rows
+            if before is None
+            else tuple(row for row in self.transcript_rows if row["sequence"] < before)
+        )
+        return rows[-limit:]
 
     async def load_child_session(
         self, *, owner_id: str, run_id: str, child_session_id: str
@@ -1854,6 +1865,66 @@ async def test_observe_child_projects_lineage_without_private_reasoning() -> Non
         await service.observe_child(owner_id=_OWNER, run_id="run-1", child_session_id="missing")
         is None
     )
+
+
+def _activity_rows(count: int) -> tuple[Mapping[str, Any], ...]:
+    return tuple(
+        {"sequence": 10 * (index + 1), "role": "user", "content": f"step {index + 1}"}
+        for index in range(count)
+    )
+
+
+async def test_activity_page_walks_the_main_transcript_from_newest_to_oldest() -> None:
+    store = _Store(
+        run=_record(
+            status="running",
+            accepted_input={
+                "query": "q",
+                "workspaces": ["finance"],
+                "agent_session_id": "0199a0a0-0000-7000-8000-000000000099",
+            },
+        )
+    )
+    store.transcript_rows = _activity_rows(5)
+    service = _service(store=store)
+
+    newest = await service.activity_page(owner_id=_OWNER, run_id="run-1", limit=2)
+    assert newest is not None
+    assert [message["content"] for message in newest.messages] == ["step 4", "step 5"]
+    assert newest.next_before == 40
+    assert newest.running is True
+
+    middle = await service.activity_page(
+        owner_id=_OWNER, run_id="run-1", before=newest.next_before, limit=2
+    )
+    assert middle is not None
+    assert [message["content"] for message in middle.messages] == ["step 2", "step 3"]
+
+    oldest = await service.activity_page(
+        owner_id=_OWNER, run_id="run-1", before=middle.next_before, limit=2
+    )
+    assert oldest is not None
+    assert [message["content"] for message in oldest.messages] == ["step 1"]
+    assert oldest.next_before is None
+    assert oldest.payload()["next_before"] is None
+
+
+async def test_activity_page_reports_whether_the_child_or_the_run_is_still_working() -> None:
+    store = _Store(run=_record(status="succeeded"))
+    store.child_session_rows["child-1"] = {"child_session_id": "child-1", "status": "running"}
+    store.transcript_rows = _activity_rows(1)
+    service = _service(store=store)
+
+    child = await service.activity_page(owner_id=_OWNER, run_id="run-1", child_session_id="child-1")
+    main = await service.activity_page(owner_id=_OWNER, run_id="run-1")
+
+    assert child is not None and child.running is True
+    assert main is not None and main.running is False
+    assert (
+        await service.activity_page(owner_id=_OWNER, run_id="run-1", child_session_id="missing")
+        is None
+    )
+    assert await service.activity_page(owner_id="other", run_id="run-1") is None
 
 
 async def test_child_control_and_reply_use_typed_store_methods() -> None:

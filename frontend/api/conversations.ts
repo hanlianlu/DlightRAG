@@ -304,8 +304,8 @@ const childControlReceipt = v.pipe(
 );
 export type ChildControlReceipt = v.InferOutput<typeof childControlReceipt>;
 
-/** One tool call of a child's assistant message: the server sends its id and name, never its arguments. */
-const childToolCall = v.pipe(
+/** One tool call of an assistant message: the server sends its id and name, never its arguments. */
+const toolCall = v.pipe(
   v.object({
     id: v.optional(v.nullable(v.string())),
     name: v.optional(v.nullable(v.string())),
@@ -313,16 +313,19 @@ const childToolCall = v.pipe(
   v.transform((w) => ({id: w.id ?? '', name: w.name ?? ''})),
 );
 
-const childTranscriptMessage = v.pipe(
+const activityMessage = v.pipe(
   v.object({
+    sequence: v.number(),
     role: v.string(),
     content: v.optional(v.unknown()),
-    tool_calls: v.optional(v.array(childToolCall)),
+    tool_calls: v.optional(v.array(toolCall)),
     tool_call_id: v.optional(v.string()),
     name: v.optional(v.string()),
     is_error: v.optional(v.boolean()),
   }),
   v.transform((w) => ({
+    /** Where the message sits in its Session: the cursor of the page before it. */
+    sequence: w.sequence,
     role: w.role,
     content: typeof w.content === 'string' ? w.content : '',
     toolCalls: w.tool_calls ?? [],
@@ -331,11 +334,23 @@ const childTranscriptMessage = v.pipe(
     isError: w.is_error ?? false,
   })),
 );
-export type ChildTranscriptMessage = v.InferOutput<typeof childTranscriptMessage>;
+export type ActivityMessage = v.InferOutput<typeof activityMessage>;
 
-/** How many of a child's latest transcript messages one observation carries. */
-export const CHILD_TRANSCRIPT_LIMIT = 20;
-
+/** One page of an agent's transcript, oldest message first; the newest page has no cursor. */
+const activityPage = v.pipe(
+  v.object({
+    messages: v.array(activityMessage),
+    next_before: v.nullable(v.number()),
+    running: v.boolean(),
+  }),
+  v.transform((w) => ({
+    messages: w.messages,
+    nextCursor: w.next_before === null ? null : String(w.next_before),
+    /** Whether the agent is still working, so a call without a result is in flight. */
+    running: w.running,
+  })),
+);
+export type ActivityPage = v.InferOutput<typeof activityPage>;
 const childControlRecord = v.pipe(
   v.object({
     control_sequence: v.number(),
@@ -401,7 +416,6 @@ const childObservation = v.pipe(
   v.object({
     run_id: v.string(),
     child: agentChildStatus,
-    transcript: v.array(childTranscriptMessage),
     controls: v.array(childControlRecord),
     questions: v.array(childQuestion),
     result: v.optional(childResultLineage),
@@ -409,7 +423,6 @@ const childObservation = v.pipe(
   v.transform((w) => ({
     runId: w.run_id,
     child: w.child,
-    transcript: w.transcript,
     controls: w.controls,
     questions: w.questions,
     result: w.result ?? null,
@@ -631,11 +644,24 @@ export async function getAnswerRunChild(
 ): Promise<ChildObservation> {
   const run = encodeURIComponent(runId);
   const child = encodeURIComponent(childSessionId);
-  const response = await fetch(
-    `/web/api/answer/${run}/children/${child}?limit=${CHILD_TRANSCRIPT_LIMIT}`,
-    {signal},
-  );
+  const response = await fetch(`/web/api/answer/${run}/children/${child}`, {signal});
   return parseWire(response, childObservation);
+}
+
+/** One page of a Run's main agent transcript, or of one of its children's: the newest page without a
+ *  cursor, then each older one by the cursor its predecessor gave. */
+export async function getAnswerActivityPage(
+  runId: string,
+  childSessionId: string | null,
+  cursor: string | null = null,
+  signal?: AbortSignal,
+): Promise<ActivityPage> {
+  const query = new URLSearchParams();
+  if (childSessionId !== null) query.set('child', childSessionId);
+  if (cursor !== null) query.set('before', cursor);
+  const suffix = query.size > 0 ? `?${query.toString()}` : '';
+  const response = await fetch(`/web/api/answer/${encodeURIComponent(runId)}/transcript${suffix}`, {signal});
+  return parseWire(response, activityPage);
 }
 
 async function childCommandRefusal(response: Response): Promise<ApiError> {

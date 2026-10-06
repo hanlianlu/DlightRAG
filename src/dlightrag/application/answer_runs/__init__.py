@@ -21,7 +21,10 @@ if TYPE_CHECKING:
         ChildRosterRowPage,
     )
     from .service import (
+        ACTIVITY_PAGE_DEFAULT_LIMIT,
+        ACTIVITY_PAGE_MAX_LIMIT,
         CHILD_CONTROL_SUCCESS_OUTCOMES,
+        ActivityPage,
         AgentControlReceipt,
         AgentTranscriptTail,
         AnswerConnectionsChangedError,
@@ -38,6 +41,9 @@ if TYPE_CHECKING:
     )
 
 _SERVICE_EXPORTS = {
+    "ACTIVITY_PAGE_DEFAULT_LIMIT",
+    "ACTIVITY_PAGE_MAX_LIMIT",
+    "ActivityPage",
     "AgentControlReceipt",
     "AgentTranscriptTail",
     "AnswerConnectionsChangedError",
@@ -67,6 +73,9 @@ _CONTRACT_EXPORTS = {
 }
 
 __all__ = [
+    "ACTIVITY_PAGE_DEFAULT_LIMIT",
+    "ACTIVITY_PAGE_MAX_LIMIT",
+    "ActivityPage",
     "AgentControlReceipt",
     "AgentTranscriptTail",
     "AnswerConnectionsChangedError",
@@ -117,7 +126,10 @@ def __getattr__(name: str) -> Any:
         }[name]
     if name in _SERVICE_EXPORTS:
         from .service import (
+            ACTIVITY_PAGE_DEFAULT_LIMIT,
+            ACTIVITY_PAGE_MAX_LIMIT,
             CHILD_CONTROL_SUCCESS_OUTCOMES,
+            ActivityPage,
             AgentControlReceipt,
             AgentTranscriptTail,
             AnswerConnectionsChangedError,
@@ -135,6 +147,9 @@ def __getattr__(name: str) -> Any:
         )
 
         return {
+            "ACTIVITY_PAGE_DEFAULT_LIMIT": ACTIVITY_PAGE_DEFAULT_LIMIT,
+            "ACTIVITY_PAGE_MAX_LIMIT": ACTIVITY_PAGE_MAX_LIMIT,
+            "ActivityPage": ActivityPage,
             "AgentControlReceipt": AgentControlReceipt,
             "AgentTranscriptTail": AgentTranscriptTail,
             "AnswerConnectionsChangedError": AnswerConnectionsChangedError,

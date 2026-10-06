@@ -6,11 +6,14 @@
 
 import {
   controlAnswerChild,
+  getAnswerActivityPage,
   getAnswerRunChild,
   getAnswerRunChildrenPage,
   replyAnswerChild,
 } from '../api/conversations.ts';
-import type {ChildrenSource} from '../ui/inspector-children.ts';
+import type {ChatTurnView} from '../lib/chat-views.ts';
+import {mainAgentStatus} from '../lib/main-agent.ts';
+import type {TracesSource} from '../ui/inspector-traces.ts';
 
 /** The clock the fixtures are drawn against: a test that shows elapsed times fixes `Date.now` to it. */
 export const NOW = Date.parse('2026-10-05T12:10:00Z');
@@ -40,10 +43,19 @@ export function roster(
   });
 }
 
+/** What each child's latest observation fixture said of its transcript. The transcript route serves it as one
+ *  page, so a fixture can still describe a child in one place. */
+const transcripts = new Map<string, {messages: Record<string, unknown>[]; running: boolean}>();
+
+/** `transcript` in `extra` is the child's transcript, oldest first; it reaches the page route, not the wire
+ *  of the observation. */
 export function observation(child: Record<string, unknown>, extra: Record<string, unknown> = {}): Response {
-  return Response.json({
-    run_id: 'run-1', child, transcript: [], controls: [], questions: [], result: null, ...extra,
+  const {transcript, ...rest} = extra;
+  transcripts.set(String(child.child_session_id), {
+    messages: (transcript as Record<string, unknown>[] | undefined) ?? [],
+    running: child.status === 'running',
   });
+  return Response.json({run_id: 'run-1', child, controls: [], questions: [], result: null, ...rest});
 }
 
 export function receipt(action: string, outcome: string, extra: Record<string, unknown> = {}): Response {
@@ -78,14 +90,31 @@ interface Served {
 interface Routes {
   page?: (cursor: string | null) => Response | Promise<Response>;
   observe?: (id: string) => Response | Promise<Response>;
+  /** One page of an agent's transcript; the main agent when `agent` is null. Answering nothing leaves the
+   *  page to the child's observation fixture, which answers with its whole transcript. */
+  transcript?: (agent: string | null, before: string | null) => Response | Promise<Response> | undefined;
   control?: (id: string, body: Record<string, unknown>) => Response | Promise<Response>;
   reply?: (requestId: string, body: Record<string, unknown>) => Response | Promise<Response>;
+}
+
+/** One page of a transcript as the server puts it on the wire; messages are numbered from 1 unless they
+ *  carry a sequence. */
+export function activityPage(
+  messages: Record<string, unknown>[],
+  {nextBefore = null, running = false}: {nextBefore?: number | null; running?: boolean} = {},
+): Response {
+  return Response.json({
+    messages: messages.map((message, index) => ({sequence: index + 1, ...message})),
+    next_before: nextBefore,
+    running,
+  });
 }
 
 /** Answer the requests of Run `run-1` from `routes`, and keep the ones that came. The caller
  *  restores `window.fetch`. */
 export function serve(routes: Routes): Served[] {
   const requests: Served[] = [];
+  transcripts.clear();
   window.fetch = async (input, init) => {
     const url = new URL(String(input), window.location.origin);
     const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
@@ -100,6 +129,13 @@ export function serve(routes: Routes): Served[] {
     if (url.pathname === `${base}/children` && routes.page) {
       return routes.page(url.searchParams.get('cursor'));
     }
+    if (url.pathname === `${base}/transcript`) {
+      const agent = url.searchParams.get('child');
+      const custom = routes.transcript?.(agent, url.searchParams.get('before'));
+      if (custom !== undefined) return custom;
+      const observed = agent === null ? undefined : transcripts.get(agent);
+      return activityPage(observed?.messages ?? [], {running: observed?.running ?? false});
+    }
     if (control && routes.control) return routes.control(decodeURIComponent(control[1]!), body ?? {});
     if (reply && routes.reply) return routes.reply(decodeURIComponent(reply[1]!), body ?? {});
     if (child && routes.observe) return routes.observe(decodeURIComponent(child[1]!));
@@ -108,15 +144,29 @@ export function serve(routes: Routes): Served[] {
   return requests;
 }
 
+/** The turn a Run answers, as the chat holds it: settled, with the question that was asked and no answer
+ *  yet unless a test gives one. */
+export function answeredTurn(extra: Partial<ChatTurnView> = {}): ChatTurnView {
+  return {
+    id: 'turn-1', userText: 'What changed?', userAttachments: [], runId: 'run-1', state: 'succeeded',
+    streamText: '', presentation: null, usage: {}, error: '', progress: '', liveStatus: '',
+    sawChildren: false, cancelRequested: false, steeringMessages: [], toolRows: [], ...extra,
+  };
+}
+
 /** What the Shell hands the dock for one Run: the product's api calls, with the arguments the dock
- *  passes them kept for the test. */
-export function sourceFor(runId = 'run-1') {
-  const controls: Parameters<ChildrenSource['control']>[] = [];
-  const replies: Parameters<ChildrenSource['reply']>[] = [];
-  const source: ChildrenSource = {
+ *  passes them kept for the test. The Run's turn is what the main agent's row is drawn from: a test that
+ *  leaves it out has a main agent that is still running, with no answer. */
+export function sourceFor(runId = 'run-1', turn?: ChatTurnView) {
+  const controls: Parameters<TracesSource['control']>[] = [];
+  const replies: Parameters<TracesSource['reply']>[] = [];
+  const source: TracesSource = {
     runId,
+    mainAgent: () => mainAgentStatus(turn),
+    presentation: () => turn?.presentation ?? null,
     page: (cursor, signal) => getAnswerRunChildrenPage(runId, cursor, signal),
     observe: (id, signal) => getAnswerRunChild(runId, id, signal),
+    activity: (agent, cursor, signal) => getAnswerActivityPage(runId, agent, cursor, signal),
     control: (id, action, content, reauthorize, operationId, signal) => {
       controls.push([id, action, content, reauthorize, operationId, signal]);
       return controlAnswerChild(runId, id, action, content, crypto.randomUUID(), reauthorize, signal);

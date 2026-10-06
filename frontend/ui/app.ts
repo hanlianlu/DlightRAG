@@ -27,9 +27,9 @@ import './conversation-sidebar.ts';
 import type {AnswerSourceOpenDetail} from './answer-presentation.ts';
 import type {ComposerWorkspaceDropDetail} from './chat-composer.ts';
 import type {
-  ChatChildActivityDetail,
   ChatContentChangeDetail,
   ChatRunActionDetail,
+  ChatRunActivityDetail,
   ChatRunningChangeDetail,
   ChatViewActionDetail,
   DlChatFeature,
@@ -167,7 +167,7 @@ export class DlApp extends LightElement {
       'conversation-drawer-open',
       'files-panel-open',
       'sources-panel-open',
-      'children-panel-open',
+      'traces-panel-open',
       'artifact-canvas-open',
       'artifact-canvas-overlay',
       'artifact-canvas-wide',
@@ -297,7 +297,7 @@ export class DlApp extends LightElement {
                   @dl-chat-content-change=${this.#chatContentChanged}
                   @dl-chat-background-click=${this.#chatBackgroundClick}
                   @dl-chat-run-action=${this.#chatRunAction}
-                  @dl-child-activity=${this.#childActivity}></dl-chat-feature>
+                  @dl-run-activity=${this.#runActivity}></dl-chat-feature>
               </div>
             </div>
             <dl-artifact-canvas id="artifact-canvas" class="panel" slot="end"
@@ -440,7 +440,7 @@ export class DlApp extends LightElement {
     );
     document.body.classList.toggle('files-panel-open', this.inspectorKind === 'files');
     document.body.classList.toggle('sources-panel-open', this.inspectorKind === 'sources');
-    document.body.classList.toggle('children-panel-open', this.inspectorKind === 'children');
+    document.body.classList.toggle('traces-panel-open', this.inspectorKind === 'traces');
     document.body.classList.toggle('artifact-canvas-open', this.canvasOpen);
     document.body.classList.toggle('artifact-canvas-overlay', this.canvasOverlay);
     document.body.classList.toggle('artifact-canvas-wide', this.canvasWide);
@@ -453,7 +453,7 @@ export class DlApp extends LightElement {
     // Child agents are watched beside the chat, so a click in the chat leaves them open. A compact shell
     // shows them as a modal drawer over the chat, where the click is on the scrim and closes them as it
     // closes Files and Sources.
-    if (this.inspectorKind !== 'children' || this.inspectorCompact) this.#inspector()?.close();
+    if (this.inspectorKind !== 'traces' || this.inspectorCompact) this.#inspector()?.close();
     this.#canvas()?.close(false);
   };
 
@@ -509,14 +509,17 @@ export class DlApp extends LightElement {
   #chatRunAction(event: CustomEvent<ChatRunActionDetail>): void {
     const chat = this.querySelector<DlChatFeature>('dl-chat-feature');
     if (!chat) return;
-    if (event.detail.action === 'children') {
+    if (event.detail.action === 'traces') {
       const runId = event.detail.runId;
       const trigger = focusedElement();
       this.#canvas()?.close(false);
-      void this.#inspector()?.openChildren({
+      void this.#inspector()?.openTraces({
         runId,
+        mainAgent: () => chat.runMainAgent(runId),
+        presentation: () => chat.runPresentation(runId),
         page: (cursor, signal) => chat.loadRunChildrenPage(runId, cursor, signal),
         observe: (childSessionId, signal) => chat.loadRunChild(runId, childSessionId, signal),
+        activity: (agent, cursor, signal) => chat.loadRunActivity(runId, agent, cursor, signal),
         control: (childSessionId, action, content, reauthorize, operationId, signal) => (
           chat.controlRunChild(
             runId, childSessionId, action, content, reauthorize, operationId, signal,
@@ -530,8 +533,8 @@ export class DlApp extends LightElement {
     this.querySelector<DlContinuationDialog>('dl-continuation-dialog')?.open();
   }
 
-  #childActivity(event: CustomEvent<ChatChildActivityDetail>): void {
-    this.#inspector()?.refreshChildrenIfFollowing(event.detail.runId);
+  #runActivity(event: CustomEvent<ChatRunActivityDetail>): void {
+    this.#inspector()?.refreshTracesIfFollowing(event.detail.runId);
   }
 
   #continuationResult(event: CustomEvent<ContinuationResult>): void {

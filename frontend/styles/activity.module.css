@@ -1,0 +1,160 @@
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
+
+/* One agent's activity as a timeline of steps on a rule (ui/activity.ts). The host owns the scroll. */
+
+@layer features {
+  @keyframes pulse {
+    0%,
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+
+    50% {
+      opacity: 0.45;
+      transform: scale(0.8);
+    }
+  }
+
+  .root {
+    display: block;
+  }
+
+  .older {
+    display: flex;
+    justify-content: center;
+    padding-block: var(--space-tight);
+  }
+
+  .steps {
+    border-inline-start: 1px solid var(--color-divider);
+    list-style: none;
+    margin-inline-start: var(--space-inline);
+    padding-inline-start: var(--space-related);
+  }
+
+  .step {
+    padding-block: var(--space-tight);
+    position: relative;
+  }
+
+  /* The dot sits on the rule, centered on it whatever the indent. */
+  .step::before {
+    background: var(--color-border-strong);
+    border-radius: var(--radius-circle);
+    content: '';
+    height: 0.4375rem;
+    inset-block-start: 0.9rem;
+    inset-inline-start: calc(-1 * var(--space-related) - 0.5px);
+    position: absolute;
+    translate: -50% 0;
+    width: 0.4375rem;
+  }
+
+  .stepRunning::before {
+    animation: pulse 1.6s ease-in-out infinite;
+    background: var(--color-accent-indicator);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .stepRunning::before {
+      animation: none;
+    }
+  }
+
+  .stepFailed::before {
+    background: var(--color-danger);
+  }
+
+  .stepSummary {
+    align-items: flex-start;
+    border-radius: var(--radius-control);
+    cursor: pointer;
+    display: flex;
+    gap: var(--space-tight);
+    list-style: none;
+    min-height: var(--size-button);
+  }
+
+  .stepSummary::-webkit-details-marker {
+    display: none;
+  }
+
+  .stepSummary:focus-visible {
+    outline: 2px solid var(--focus-ring-color);
+    outline-offset: 2px;
+  }
+
+  .chevron {
+    color: var(--color-text-subtle);
+    flex: none;
+    margin-top: var(--space-inline);
+    transition: transform var(--duration-control) var(--easing-standard);
+  }
+
+  details[open] > summary > .chevron {
+    transform: rotate(90deg);
+  }
+
+  .stepLine {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .verb {
+    color: var(--color-text-secondary);
+    display: block;
+    font-size: var(--font-size-detail);
+    line-height: var(--line-height-control);
+  }
+
+  .excerpt {
+    color: var(--color-text-muted);
+    display: block;
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .stepFailed .excerpt {
+    color: var(--color-danger);
+  }
+
+  .full {
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-control);
+    color: var(--color-text-secondary);
+    font-family: SFMono-Regular, Consolas, monospace;
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-message);
+    margin-top: var(--space-tight);
+    max-height: 12rem;
+    overflow: auto;
+    overflow-wrap: anywhere;
+    padding: var(--space-tight) var(--space-component);
+    white-space: pre-wrap;
+  }
+
+  .say {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-detail);
+    line-height: var(--line-height-message);
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+
+  .told {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+  }
+
+  .toldText {
+    color: var(--color-text-tertiary);
+    font-size: var(--font-size-detail);
+    line-height: var(--line-height-control);
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+}

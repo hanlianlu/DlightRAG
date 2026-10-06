@@ -143,6 +143,8 @@ def _public_transcript_message(message: Mapping[str, Any]) -> dict[str, Any]:
     """Keep useful conversation/tool lineage and drop private reasoning fields."""
     role = str(message.get("role") or "")
     projected: dict[str, Any] = {"role": role, "content": message.get("content") or ""}
+    if "sequence" in message:
+        projected["sequence"] = int(message["sequence"])
     if role == "assistant":
         projected["tool_calls"] = [
             {
@@ -353,6 +355,32 @@ class ChildObservation:
         }
 
 
+#: One Activity page holds this many messages unless the caller asks for fewer.
+ACTIVITY_PAGE_DEFAULT_LIMIT = 30
+ACTIVITY_PAGE_MAX_LIMIT = 50
+
+
+@dataclass(frozen=True, slots=True)
+class ActivityPage:
+    """One page of an Agent Session's public transcript, oldest message first.
+
+    The page holds the newest messages older than the caller's cursor. ``next_before`` is the
+    cursor of the next older page, or None when this page reaches the start. ``running`` says
+    whether the Session's agent is still working, so a call without a result is in flight.
+    """
+
+    messages: tuple[Mapping[str, Any], ...]
+    next_before: int | None
+    running: bool
+
+    def payload(self) -> dict[str, Any]:
+        return {
+            "messages": [dict(item) for item in self.messages],
+            "next_before": self.next_before,
+            "running": self.running,
+        }
+
+
 class AnswerRequestError(ApplicationInputError):
     """A steering, child-control, or continuation request is invalid as given."""
 
@@ -401,7 +429,13 @@ class _AnswerRunRepository(AnswerRunAcceptor[RuntimeRunCreation], Protocol):
     ) -> ChildRosterRowPage: ...
 
     async def load_agent_transcript(
-        self, *, owner_id: str, run_id: str, session_id: str, limit: int
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        session_id: str,
+        limit: int,
+        before: int | None = None,
     ) -> tuple[Mapping[str, Any], ...]: ...
 
     async def load_child_session(
@@ -1368,8 +1402,12 @@ class AnswerService:
         run_id: str,
         child_session_id: str,
         limit: int = 20,
+        with_transcript: bool = True,
     ) -> ChildObservation | None:
-        """Return one bounded child observation, or None if unknown."""
+        """Return one bounded child observation, or None if unknown.
+
+        A caller that reads the transcript by page asks for none here.
+        """
         if await self._get_answer_run(owner_id=owner_id, run_id=run_id) is None:
             return None
         row = await self._store.load_child_session(
@@ -1378,11 +1416,15 @@ class AnswerService:
         if row is None:
             return None
         cap = max(1, min(int(limit), 100))
-        transcript = await self._store.load_agent_transcript(
-            owner_id=owner_id,
-            run_id=run_id,
-            session_id=child_session_id,
-            limit=cap,
+        transcript = (
+            await self._store.load_agent_transcript(
+                owner_id=owner_id,
+                run_id=run_id,
+                session_id=child_session_id,
+                limit=cap,
+            )
+            if with_transcript
+            else ()
         )
         controls = await self._store.list_child_controls(
             owner_id=owner_id,
@@ -1403,6 +1445,53 @@ class AnswerService:
             controls=tuple(_public_control_record(item) for item in controls),
             questions=tuple(_public_question_record(item) for item in questions),
             result=child_result_lineage(row),
+        )
+
+    async def activity_page(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        child_session_id: str | None = None,
+        before: int | None = None,
+        limit: int = ACTIVITY_PAGE_DEFAULT_LIMIT,
+    ) -> ActivityPage | None:
+        """Return one page of a Run's main Session, or of one of its Child Sessions, or None if unknown."""
+        record = await self._get_answer_run(owner_id=owner_id, run_id=run_id)
+        if record is None:
+            return None
+        if child_session_id is None:
+            session_id = str(record.request_input().get("agent_session_id") or "")
+            running = not record.terminal
+        else:
+            row = await self._store.load_child_session(
+                owner_id=owner_id, run_id=run_id, child_session_id=child_session_id
+            )
+            if row is None:
+                return None
+            session_id = child_session_id
+            running = public_child_status(row)["status"] == "running"
+        cap = max(1, min(int(limit), ACTIVITY_PAGE_MAX_LIMIT))
+        # One message beyond the page says whether an older page exists.
+        fetched = (
+            list(
+                await self._store.load_agent_transcript(
+                    owner_id=owner_id,
+                    run_id=run_id,
+                    session_id=session_id,
+                    limit=cap + 1,
+                    before=before,
+                )
+            )
+            if session_id
+            else []
+        )
+        older = len(fetched) > cap
+        messages = fetched[1:] if older else fetched
+        return ActivityPage(
+            messages=tuple(_public_transcript_message(message) for message in messages),
+            next_before=int(messages[0]["sequence"]) if older else None,
+            running=running,
         )
 
     @property

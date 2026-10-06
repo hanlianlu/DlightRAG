@@ -3142,8 +3142,13 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
         run_id: str,
         session_id: str,
         limit: int,
+        before: int | None = None,
     ) -> tuple[dict[str, Any], ...]:
-        """Project parent or owned child Session ancestry without exposing storage rows."""
+        """Project one page of parent or owned child Session ancestry, oldest first.
+
+        The page holds the newest ``limit`` messages older than the ``before`` sequence. Each
+        message carries its own ``sequence``, so the next older page asks for the first one's.
+        """
         owner = _require_owner(owner_id)
         run_uuid = parse_run_id(run_id)
         session_uuid = parse_run_id(session_id)
@@ -3157,16 +3162,21 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
                 run_uuid,
                 session_uuid,
                 max(1, min(int(limit), 100)),
+                before,
             )
             messages: list[dict[str, Any]] = []
             for row in reversed(rows):
                 payload = _json_object(row["payload_json"])
                 entry_type = str(row["entry_type"])
+                sequence = int(row["sequence"])
                 if entry_type in {"user_message", "control_message"}:
-                    messages.append({"role": "user", "content": payload.get("content")})
+                    messages.append(
+                        {"sequence": sequence, "role": "user", "content": payload.get("content")}
+                    )
                 elif entry_type == "assistant_message":
                     messages.append(
                         {
+                            "sequence": sequence,
                             "role": "assistant",
                             "content": payload.get("content") or "",
                             "tool_calls": list(payload.get("tool_calls") or ()),
@@ -3176,6 +3186,7 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
                     outcome = str(payload.get("outcome") or "failed")
                     messages.append(
                         {
+                            "sequence": sequence,
                             "role": "tool",
                             "tool_call_id": str(payload.get("call_id") or ""),
                             "name": str(payload.get("tool_name") or ""),

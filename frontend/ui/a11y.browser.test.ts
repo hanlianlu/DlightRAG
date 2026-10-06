@@ -2,7 +2,8 @@
 
 import {expect} from '@esm-bundle/chai';
 import {setViewport} from '@web/test-runner-commands';
-import {NOW, ago, observation, question, roster, row, serve, sourceFor} from '../testing/children.ts';
+import type {AnswerPresentation} from '../api/conversations.ts';
+import {NOW, activityPage, ago, answeredTurn, observation, question, roster, row, serve, sourceFor} from '../testing/traces.ts';
 import {buttonNamed, waitFor} from '../testing/dom.ts';
 import {
   agentAccountsView,
@@ -313,11 +314,12 @@ function dockObservation(id: string): Response {
 }
 
 /** The dock open on its Run, in a pane `width` wide: narrow shows one of the list and a child, wide both. */
-async function openDock(width: number | null) {
+async function openDock(width: number | null, turn?: ChatTurnView) {
   const inspector = mountInApp(document.createElement('dl-inspector') as DlInspector);
   if (width !== null) inspector.parentElement!.style.width = `${width}px`;
-  await inspector.openChildren(sourceFor().source);
-  await waitFor(() => inspector.querySelectorAll('[data-child-session]').length === dockChildren.length);
+  await inspector.openTraces(sourceFor('run-1', turn).source);
+  // The main agent heads the list, and the children hang off it.
+  await waitFor(() => inspector.querySelectorAll('[data-agent-session]').length === dockChildren.length + 1);
   // The dock measures its pane a frame after it is shown.
   await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   return inspector;
@@ -328,7 +330,19 @@ async function withDock<T>(judge: () => Promise<T>): Promise<T> {
   const originalNow = Date.now;
   const originalFetch = window.fetch;
   Date.now = () => NOW;
-  serve({page: () => roster(dockChildren), observe: dockObservation});
+  serve({
+    page: () => roster(dockChildren),
+    observe: dockObservation,
+    // The main agent has a long past: its newest page says there is an older one.
+    transcript: (agent) => agent === null
+      ? activityPage([
+        {role: 'user', content: 'Which clause lets Northwind leave the supply agreement early?'},
+        {role: 'assistant', content: '', tool_calls: [{id: 'm1', name: 'search_knowledge_base'}]},
+        {role: 'tool', content: '12 results\nTop: Northwind MSA §9.2', tool_call_id: 'm1', name: 'search_knowledge_base'},
+        {role: 'assistant', content: 'Clause 9.2 allows it after month 18.', tool_calls: []},
+      ], {nextBefore: 1, running: true})
+      : undefined,
+  });
   try {
     return await judge();
   } finally {
@@ -337,9 +351,26 @@ async function withDock<T>(judge: () => Promise<T>): Promise<T> {
   }
 }
 
-it('Child agents has no serious axe violations as a list, narrow', async () => {
+it('Agent traces has no serious axe violations as a list, narrow', async () => {
   await withDock(async () => {
     const inspector = await openDock(420);
+    expect(await seriousViolations(inspector)).to.deep.equal([]);
+  });
+});
+
+it('the main agent\'s page, with its answer, evidence and earlier steps to show, has no serious axe violations beside the list', async () => {
+  await withDock(async () => {
+    const answer = {
+      answerText: 'Clause 9.2 allows it after month 18.',
+      sources: [{id: '1', title: 'northwind-msa.pdf', sourceUrl: null, downloadUrl: null, chunks: []}],
+    } as unknown as AnswerPresentation;
+    const inspector = await openDock(null, answeredTurn({
+      presentation: answer, usage: {usage_details: {total_tokens: 9400}},
+    }));
+    await waitFor(() => inspector.querySelector('dl-agent-session dl-activity ol') !== null);
+    expect(inspector.querySelector('dl-agent-session [data-load-older="activity"]')).to.not.equal(null);
+    inspector.querySelector<HTMLElement>('dl-agent-session summary:has(+ pre)')!.click();
+    inspector.querySelector<HTMLDetailsElement>('dl-agent-session details')!.open = true;
     expect(await seriousViolations(inspector)).to.deep.equal([]);
   });
 });
@@ -347,7 +378,9 @@ it('Child agents has no serious axe violations as a list, narrow', async () => {
 it('a running child with its question, activity and reply box has no serious axe violations beside the list', async () => {
   await withDock(async () => {
     const inspector = await openDock(null);
-    await waitFor(() => inspector.querySelector('dl-child-session [data-draft]') !== null);
+    inspector.querySelector<HTMLElement>('[data-agent-session="c1"]')!.click();
+    await waitFor(() => inspector.querySelector('dl-agent-session [data-draft]') !== null);
+    await waitFor(() => buttonNamed(inspector, 'Answer instead') !== null);
     buttonNamed(inspector, 'Answer instead')!.click();
     await waitFor(() => inspector.querySelector('[data-reply]') !== null);
     const reply = inspector.querySelector<HTMLTextAreaElement>('[data-reply]')!;
@@ -363,16 +396,16 @@ it('a settled child with every fold open, and a child the reader cancelled, have
   await withDock(async () => {
     const inspector = await openDock(420);
     const open = async (id: string) => {
-      inspector.querySelector<HTMLElement>(`[data-child-session="${id}"]`)!.click();
-      await waitFor(() => inspector.querySelector('dl-child-session [data-draft]') !== null);
-      await waitFor(() => inspector.querySelector('dl-child-session details') !== null);
-      for (const fold of inspector.querySelectorAll<HTMLDetailsElement>('dl-child-session details')) fold.open = true;
+      inspector.querySelector<HTMLElement>(`[data-agent-session="${id}"]`)!.click();
+      await waitFor(() => inspector.querySelector('dl-agent-session [data-draft]') !== null);
+      await waitFor(() => inspector.querySelector('dl-agent-session details') !== null);
+      for (const fold of inspector.querySelectorAll<HTMLDetailsElement>('dl-agent-session details')) fold.open = true;
     };
     await open('c3');
     const settled = await seriousViolations(inspector);
-    buttonNamed(inspector, 'All child agents')!.click();
+    buttonNamed(inspector, 'All agents')!.click();
     await open('c5');
-    expect(inspector.querySelector('dl-child-session input[type="checkbox"]')).to.not.equal(null);
+    expect(inspector.querySelector('dl-agent-session input[type="checkbox"]')).to.not.equal(null);
     expect([...settled, ...await seriousViolations(inspector)]).to.deep.equal([]);
   });
 });

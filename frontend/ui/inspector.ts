@@ -7,8 +7,8 @@ import {COMPACT_SHELL_MEDIA} from '../lib/breakpoints.ts';
 import {focusedElement, raise, tabbables, wrapTabFocus} from '../lib/dom.ts';
 import {LightElement, MediaController} from '../lib/lit-host.ts';
 import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
-import type {ChildrenSource, DlInspectorChildren} from './inspector-children.ts';
-import './inspector-children.ts';
+import type {TracesSource, DlInspectorTraces} from './inspector-traces.ts';
+import './inspector-traces.ts';
 import type {DlInspectorFiles} from './inspector-files.ts';
 import './inspector-files.ts';
 import type {
@@ -18,7 +18,7 @@ import type {
 import './inspector-sources.ts';
 import './ingest-target.ts';
 
-export type InspectorKind = 'files' | 'sources' | 'children';
+export type InspectorKind = 'files' | 'sources' | 'traces';
 
 export interface InspectorStateDetail {
   open: boolean;
@@ -38,7 +38,7 @@ export class DlInspector extends LightElement {
     presentation: {state: true},
     sourceHasItems: {state: true},
     sourcesExpanded: {state: true},
-    childrenSource: {state: true},
+    tracesSource: {state: true},
     shellInert: {state: true},
   };
 
@@ -47,7 +47,7 @@ export class DlInspector extends LightElement {
   declare presentation: AnswerPresentation | null;
   declare sourceHasItems: boolean;
   declare sourcesExpanded: boolean;
-  declare childrenSource: ChildrenSource | null;
+  declare tracesSource: TracesSource | null;
   declare shellInert: boolean;
 
   #returnFocus: HTMLElement | null = null;
@@ -62,7 +62,7 @@ export class DlInspector extends LightElement {
     this.presentation = null;
     this.sourceHasItems = false;
     this.sourcesExpanded = false;
-    this.childrenSource = null;
+    this.tracesSource = null;
     this.shellInert = false;
   }
 
@@ -121,16 +121,16 @@ export class DlInspector extends LightElement {
 
   /** Open one Run's Child agents. Asked for the Run the dock already shows, it keeps its source, and
    * so the child the reader has open and what they have typed. */
-  async openChildren(source: ChildrenSource, returnFocus?: HTMLElement | null): Promise<void> {
-    const showing = this.kind === 'children' && this.childrenSource?.runId === source.runId;
-    if (!this.#beginOpen('children', returnFocus)) return;
-    if (!showing) this.childrenSource = source;
+  async openTraces(source: TracesSource, returnFocus?: HTMLElement | null): Promise<void> {
+    const showing = this.kind === 'traces' && this.tracesSource?.runId === source.runId;
+    if (!this.#beginOpen('traces', returnFocus)) return;
+    if (!showing) this.tracesSource = source;
     await this.updateComplete;
     await this.#focusOnCompact();
   }
 
   /** Tell an open Child agents dock that its Run's children may have moved. */
-  refreshChildrenIfFollowing(runId: string): void {
+  refreshTracesIfFollowing(runId: string): void {
     this.#children()?.refreshIfFollowing(runId);
   }
 
@@ -158,7 +158,7 @@ export class DlInspector extends LightElement {
     this.presentation = null;
     this.sourceHasItems = false;
     this.sourcesExpanded = false;
-    this.childrenSource = null;
+    this.tracesSource = null;
     this.#syncHostState();
     this.#publishState();
     const panel = this.querySelector<HTMLElement>('#panel');
@@ -180,7 +180,7 @@ export class DlInspector extends LightElement {
 
   /** Close conversation-scoped Sources and Child agents while preserving workspace Files. */
   closeConversationContent(): void {
-    if (this.kind !== 'sources' && this.kind !== 'children') return;
+    if (this.kind !== 'sources' && this.kind !== 'traces') return;
     this.close(false);
     this.#returnFocus = null;
   }
@@ -190,7 +190,7 @@ export class DlInspector extends LightElement {
     const compact = this.#compact.matches;
     const files = this.kind === 'files';
     const sources = this.kind === 'sources';
-    const children = this.kind === 'children';
+    const children = this.kind === 'traces';
     return html`
       <aside
         class="panel inspector-surface${open ? ' open' : ''}"
@@ -229,8 +229,8 @@ export class DlInspector extends LightElement {
             @dl-inspector-sources-state-change=${this.#sourcesStateChanged}
           ></dl-inspector-sources>
           <dl-inspector-files .handles=${this.handles} .active=${files} ?hidden=${!files}></dl-inspector-files>
-          <dl-inspector-children .source=${this.childrenSource} .active=${children}
-            ?hidden=${!children}></dl-inspector-children>
+          <dl-inspector-traces .source=${this.tracesSource} .active=${children}
+            ?hidden=${!children}></dl-inspector-traces>
         </div>
       </aside>
       <div class="inspector-backdrop" aria-hidden="true"
@@ -258,7 +258,7 @@ export class DlInspector extends LightElement {
     switch (this.kind) {
       case 'files': return msg('Files', {id: 'inspector.files'});
       case 'sources': return msg('Sources', {id: 'inspector.sources'});
-      case 'children': return msg('Child agents', {id: 'inspector.childAgents'});
+      case 'traces': return msg('Agent traces', {id: 'inspector.agentTraces'});
       default: return '';
     }
   }
@@ -271,8 +271,8 @@ export class DlInspector extends LightElement {
     return this.querySelector<DlInspectorFiles>('dl-inspector-files');
   }
 
-  #children(): DlInspectorChildren | null {
-    return this.querySelector<DlInspectorChildren>('dl-inspector-children');
+  #children(): DlInspectorTraces | null {
+    return this.querySelector<DlInspectorTraces>('dl-inspector-traces');
   }
 
   #toggleAllSources = (): void => {

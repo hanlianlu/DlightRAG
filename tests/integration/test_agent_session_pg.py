@@ -2512,6 +2512,7 @@ async def test_postgres_and_service_transcript_project_typed_tool_result_parts(p
     )
     assert [message["role"] for message in projected] == ["user", "assistant", "tool"]
     assert projected[-1] == {
+        "sequence": projected[-1]["sequence"],
         "role": "tool",
         "tool_call_id": "c1",
         "name": "lookup",

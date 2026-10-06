@@ -324,9 +324,10 @@ WITH RECURSIVE authorized AS (
     JOIN ancestry AS child ON child.parent_entry_id = parent.entry_id
     WHERE parent.owner_id = $1 AND parent.session_id = $3
 )
-SELECT entry_type, payload_json
+SELECT sequence, entry_type, payload_json
 FROM ancestry
 WHERE entry_type IN ('user_message', 'assistant_message', 'tool_result', 'control_message')
+  AND ($5::bigint IS NULL OR sequence < $5)
 ORDER BY sequence DESC
 LIMIT $4
 """

@@ -2,12 +2,12 @@
 
 import {expect} from '@esm-bundle/chai';
 import {sendKeys, setViewport} from '@web/test-runner-commands';
-import {CHILD_TRANSCRIPT_LIMIT} from '../api/conversations.ts';
 import {defineDesignSystemElements} from '../design-system/index.ts';
-import {NOW, ago, observation, question, receipt, refusal, roster, row, serve, sourceFor} from '../testing/children.ts';
+import type {AnswerPresentation} from '../api/conversations.ts';
+import {NOW, activityPage, ago, answeredTurn, observation, question, receipt, refusal, roster, row, serve, sourceFor} from '../testing/traces.ts';
 import {linkStyles, waitFor} from '../testing/dom.ts';
-import './inspector-children.ts';
-import type {ChildrenSource, DlInspectorChildren} from './inspector-children.ts';
+import './inspector-traces.ts';
+import type {TracesSource, DlInspectorTraces} from './inspector-traces.ts';
 
 defineDesignSystemElements();
 
@@ -24,8 +24,8 @@ function deferred<T>() {
   return {promise, resolve};
 }
 
-async function mount(source: ChildrenSource | null, width = 420): Promise<DlInspectorChildren> {
-  const dock = document.createElement('dl-inspector-children');
+async function mount(source: TracesSource | null, width = 420): Promise<DlInspectorTraces> {
+  const dock = document.createElement('dl-inspector-traces');
   // The dock measures itself: a pane at least 40rem wide shows the list beside the child.
   dock.style.cssText = `display:block;width:${width}px;height:600px`;
   dock.source = source;
@@ -35,32 +35,33 @@ async function mount(source: ChildrenSource | null, width = 420): Promise<DlInsp
   return dock;
 }
 
-function rows(dock: DlInspectorChildren): {id: string; text: string}[] {
-  return [...dock.querySelectorAll<HTMLElement>('[data-child-session]')].map((button) => ({
-    id: button.dataset.childSession!,
+/** The children's rows; the main agent heads the list and has its own tests. */
+function rows(dock: DlInspectorTraces): {id: string; text: string}[] {
+  return [...dock.querySelectorAll<HTMLElement>('[data-agent-session]:not([data-agent-session="main"])')].map((button) => ({
+    id: button.dataset.agentSession!,
     text: button.textContent!.replace(/\s+/g, ' ').trim(),
   }));
 }
 
-function rowFor(dock: DlInspectorChildren, id: string): HTMLButtonElement {
-  return dock.querySelector<HTMLButtonElement>(`[data-child-session="${id}"]`)!;
+function rowFor(dock: DlInspectorTraces, id: string): HTMLButtonElement {
+  return dock.querySelector<HTMLButtonElement>(`[data-agent-session="${id}"]`)!;
 }
 
-function session(dock: DlInspectorChildren) {
-  return dock.querySelector('dl-child-session')!;
+function session(dock: DlInspectorTraces) {
+  return dock.querySelector('dl-agent-session')!;
 }
 
 /** The title of the child on show, once there is one. */
-function title(dock: DlInspectorChildren): string | undefined {
-  return dock.querySelector('dl-child-session h3')?.textContent?.trim();
+function title(dock: DlInspectorTraces): string | undefined {
+  return dock.querySelector('dl-agent-session h3')?.textContent?.trim();
 }
 
 /** The text of the child on show, as a reader takes it in. */
-function shown(dock: DlInspectorChildren): string {
-  return session(dock).textContent!.replace(/\s+/g, ' ').trim();
+function shown(dock: DlInspectorTraces): string {
+  return (dock.querySelector('dl-agent-session')?.textContent ?? '').replace(/\s+/g, ' ').trim();
 }
 
-function composer(dock: DlInspectorChildren): HTMLTextAreaElement {
+function composer(dock: DlInspectorTraces): HTMLTextAreaElement {
   return session(dock).querySelector<HTMLTextAreaElement>('form textarea[data-draft]:not([data-reply])')!;
 }
 
@@ -70,7 +71,7 @@ function button(root: ParentNode, name: string): HTMLButtonElement | null {
   )) ?? null;
 }
 
-async function type(dock: DlInspectorChildren, field: HTMLTextAreaElement, text: string): Promise<void> {
+async function type(dock: DlInspectorTraces, field: HTMLTextAreaElement, text: string): Promise<void> {
   field.value = text;
   field.dispatchEvent(new Event('input', {bubbles: true}));
   await session(dock).updateComplete;
@@ -99,7 +100,7 @@ function watchWrites(field: HTMLTextAreaElement) {
   return {writes, enter};
 }
 
-async function openChild(dock: DlInspectorChildren, id: string): Promise<void> {
+async function openChild(dock: DlInspectorTraces, id: string): Promise<void> {
   rowFor(dock, id).click();
   await waitFor(() => session(dock).querySelector('[data-draft]') !== null);
 }
@@ -256,7 +257,7 @@ it('says so when the first page cannot be loaded, and loads again on Retry', asy
   const dock = await mount(sourceFor().source);
   await waitFor(() => dock.querySelector('[role="alert"]') !== null);
 
-  expect(dock.querySelector('[role="alert"]')!.textContent!.trim()).to.equal('Child agents could not be loaded.');
+  expect(dock.querySelector('[role="alert"]')!.textContent!.trim()).to.equal('Agents could not be loaded.');
   expect(rows(dock)).to.have.length(0);
 
   button(dock, 'Retry')!.click();
@@ -264,13 +265,17 @@ it('says so when the first page cannot be loaded, and loads again on Retry', asy
   expect(dock.querySelector('[role="alert"]')).to.equal(null);
 });
 
-it('says when no child was started', async () => {
-  serve({page: () => roster([])});
-  const dock = await mount(sourceFor().source);
-  await waitFor(() => dock.textContent!.includes('No child agents were started'));
+it('shows only the main agent for a Run that started no child, with no list beside it', async () => {
+  serve({page: () => roster([], null, 'succeeded')});
+  const dock = await mount(sourceFor('run-1', answeredTurn()).source, 800);
+  await waitFor(() => shown(dock).includes('No activity yet.'));
 
-  expect(dock.textContent).to.contain('They appear here when the agent splits a task.');
-  expect(dock.querySelector('dl-child-session')).to.equal(null);
+  expect(title(dock)).to.equal('What changed?');
+  expect(shown(dock)).to.contain('Main agent');
+  expect(shown(dock)).to.contain('Done');
+  expect(dock.querySelector('[data-agent-session]')).to.equal(null, 'nothing to choose between');
+  expect(button(session(dock), 'Cancel child')).to.equal(null, 'there is nothing of the main agent to cancel here');
+  expect(session(dock).querySelector('form'), 'and nothing to steer here').to.equal(null);
 });
 
 // ── Following the Run ──
@@ -368,7 +373,8 @@ it('runs one clock that redraws the elapsed times without asking the server, and
   await dock.updateComplete;
   expect(rows(dock)[0]!.text).to.contain('2m 19s');
   expect(rows(dock)[1]!.text).to.contain('1m 0s', 'a settled child\'s time does not move');
-  expect(requests).to.have.length(1);
+  // The roster once: the tick asks for nothing, and a narrow dock with children has not opened the main agent.
+  expect(requests.map((request) => request.path)).to.deep.equal(['/web/api/answer/run-1/children']);
 
   dock.active = false;
   await dock.updateComplete;
@@ -402,35 +408,42 @@ it('shows the list or one child in a narrow dock, and Back returns to the row th
   await waitFor(() => title(dock) === 'objective b');
   expect(listPane.hidden).to.equal(true);
   expect(session(dock).hidden).to.equal(false);
-  expect(button(dock, 'All child agents')).to.not.equal(null);
+  expect(button(dock, 'All agents')).to.not.equal(null);
   await waitFor(() => document.activeElement === session(dock).querySelector('h3'));
   expect(rowFor(dock, 'b').getAttribute('aria-current')).to.equal('true');
 
-  button(dock, 'All child agents')!.click();
+  button(dock, 'All agents')!.click();
   await dock.updateComplete;
   expect(listPane.hidden).to.equal(false);
   expect(session(dock).hidden).to.equal(true);
   await waitFor(() => document.activeElement === rowFor(dock, 'b'));
-  expect(button(dock, 'All child agents')).to.equal(null);
+  expect(button(dock, 'All agents')).to.equal(null);
 });
 
-it('shows the list beside the newest child in a wide dock, and the child the reader picks after that', async () => {
+it('opens a wide dock on the main agent beside the list, with the children under it, and the child the reader picks after that', async () => {
   serve({
     page: () => roster([row('a', 'running'), row('b', 'succeeded')]),
     observe: (id) => observation(row(id, id === 'a' ? 'running' : 'succeeded')),
   });
   const dock = await mount(sourceFor().source, 800);
   await waitFor(() => rows(dock).length === 2);
-  await waitFor(() => title(dock) === 'objective a');
+  await waitFor(() => !session(dock).hidden && session(dock).childSessionId === 'main');
 
-  expect(rowFor(dock, 'a').getAttribute('aria-current')).to.equal('true');
-  expect(button(dock, 'All child agents')).to.equal(null, 'both are showing, so there is nothing to go back to');
+  expect(rowFor(dock, 'main').getAttribute('aria-current')).to.equal('true');
+  expect(rowFor(dock, 'main').textContent).to.contain('Main agent');
+  // The children hang off the main agent: one list inside its item, not beside it.
+  expect(rowFor(dock, 'a').closest('li')!.parentElement!.closest('li')).to.equal(rowFor(dock, 'main').closest('li'));
+  expect(button(dock, 'All agents')).to.equal(null, 'both are showing, so there is nothing to go back to');
   expect(dock.querySelector<HTMLElement>('ul')!.parentElement!.hidden).to.equal(false);
 
   rowFor(dock, 'b').click();
   await waitFor(() => title(dock) === 'objective b');
   expect(rowFor(dock, 'b').getAttribute('aria-current')).to.equal('true');
-  expect(rowFor(dock, 'a').hasAttribute('aria-current')).to.equal(false);
+  expect(rowFor(dock, 'main').hasAttribute('aria-current')).to.equal(false);
+
+  rowFor(dock, 'main').click();
+  await waitFor(() => session(dock).childSessionId === 'main');
+  expect(rowFor(dock, 'main').getAttribute('aria-current')).to.equal('true');
 });
 
 it('follows the width of the pane: narrower shows the child the reader picked, wider shows the list too', async () => {
@@ -439,19 +452,19 @@ it('follows the width of the pane: narrower shows the child the reader picked, w
     observe: (id) => observation(row(id, id === 'a' ? 'running' : 'succeeded')),
   });
   const dock = await mount(sourceFor().source, 800);
-  await waitFor(() => title(dock) === 'objective a');
+  await waitFor(() => rows(dock).length === 2);
   const listPane = dock.querySelector<HTMLElement>('ul')!.parentElement!;
   rowFor(dock, 'b').click();
   await waitFor(() => title(dock) === 'objective b');
 
   dock.style.width = '420px';
   await waitFor(() => listPane.hidden === true);
-  expect(button(dock, 'All child agents')).to.not.equal(null);
+  expect(button(dock, 'All agents')).to.not.equal(null);
   expect(title(dock)).to.equal('objective b');
 
   dock.style.width = '800px';
   await waitFor(() => listPane.hidden === false);
-  expect(button(dock, 'All child agents')).to.equal(null);
+  expect(button(dock, 'All agents')).to.equal(null);
 });
 
 // ── The child on show ──
@@ -551,29 +564,162 @@ it('leads a settled child with its result, and folds its evidence and activity',
   expect(button(session(dock), 'Cancel child'), 'nothing is left to cancel').to.equal(null);
 });
 
-it('says its steps are the latest ones once the transcript fills the page it asked for', async () => {
-  immediateFollowRefreshes();
-  const says = (count: number) => Array.from({length: count}, (_, index) => (
-    {role: 'assistant', content: `Step ${index}`, tool_calls: []}
+/** Assistant messages numbered `from` to `to`, as the transcript route sends them. */
+function steps(from: number, to: number): Record<string, unknown>[] {
+  return Array.from({length: to - from + 1}, (_, index) => (
+    {sequence: from + index, role: 'assistant', content: `Step ${from + index}.`, tool_calls: []}
   ));
-  let count = CHILD_TRANSCRIPT_LIMIT - 1;
+}
+
+const transcriptRequests = (requests: {path: string; search: string}[]) => requests
+  .filter((request) => request.path.endsWith('/transcript'))
+  .map((request) => request.search);
+
+it('shows a child\'s newest steps first and the earlier ones on request', async () => {
   const running = row('a', 'running', {started_at: ago(5)});
   const requests = serve({
     page: () => roster([running]),
-    observe: () => observation(running, {transcript: says(count)}),
+    observe: () => observation(running),
+    transcript: (agent, before) => {
+      if (agent !== 'a') return undefined;
+      return before === null
+        ? activityPage(steps(21, 40), {nextBefore: 21, running: true})
+        : activityPage(steps(1, 20), {running: true});
+    },
   });
   const dock = await mount(sourceFor().source, 420);
   await waitFor(() => rows(dock).length === 1);
   await openChild(dock, 'a');
-  await waitFor(() => shown(dock).includes(`Step ${CHILD_TRANSCRIPT_LIMIT - 2}`));
+  await waitFor(() => shown(dock).includes('Step 40.'));
 
-  expect(shown(dock)).to.not.contain('Latest');
-  expect(requests.find((request) => request.path.endsWith('/children/a'))!.search)
-    .to.equal(`?limit=${CHILD_TRANSCRIPT_LIMIT}`);
+  expect(shown(dock)).to.not.contain('Step 20.');
+  session(dock).querySelector<HTMLButtonElement>('[data-load-older="activity"]')!.click();
+  await waitFor(() => shown(dock).includes('Step 1.Step 2.'));
 
-  count = CHILD_TRANSCRIPT_LIMIT;
+  expect(session(dock).querySelector('[data-load-older="activity"]'), 'the start has been reached').to.equal(null);
+  expect(transcriptRequests(requests)).to.deep.equal(['?child=a', '?child=a&before=21']);
+});
+
+it('keeps the earlier steps a reader has shown when the newest page is read again, and starts over when the agent has moved on by more than a page', async () => {
+  immediateFollowRefreshes();
+  let newest = steps(21, 40);
+  let cursor: number | null = 21;
+  const running = row('a', 'running', {started_at: ago(5)});
+  serve({
+    page: () => roster([running]),
+    observe: () => observation(running),
+    transcript: (agent, before) => {
+      if (agent !== 'a') return undefined;
+      return before === null
+        ? activityPage(newest, {nextBefore: cursor, running: true})
+        : activityPage(steps(1, 20), {running: true});
+    },
+  });
+  const dock = await mount(sourceFor().source, 420);
+  await waitFor(() => rows(dock).length === 1);
+  await openChild(dock, 'a');
+  await waitFor(() => shown(dock).includes('Step 40.'));
+  session(dock).querySelector<HTMLButtonElement>('[data-load-older="activity"]')!.click();
+  await waitFor(() => shown(dock).includes('Step 1.Step 2.'));
+
+  newest = steps(22, 41);
+  cursor = 22;
   dock.refreshIfFollowing('run-1');
-  await waitFor(() => shown(dock).includes(`Latest ${CHILD_TRANSCRIPT_LIMIT} steps`));
+  await waitFor(() => shown(dock).includes('Step 41.'));
+  expect(shown(dock)).to.contain('Step 1.Step 2.');
+  expect(shown(dock).match(/Step 25\./g), 'a step is shown once').to.have.length(1);
+
+  newest = steps(100, 119);
+  cursor = 100;
+  dock.refreshIfFollowing('run-1');
+  await waitFor(() => shown(dock).includes('Step 119.'));
+  expect(shown(dock), 'the older pages gave way to the page that left a gap').to.not.contain('Step 1.');
+  expect(session(dock).querySelector('[data-load-older="activity"]')).to.not.equal(null);
+});
+
+it('shows the main agent\'s whole activity as a child\'s page does: newest steps first, the earlier ones on request', async () => {
+  const requests = serve({
+    page: () => roster([], null, 'running'),
+    transcript: (agent, before) => {
+      if (agent !== null) return undefined;
+      return before === null
+        ? activityPage([
+          ...steps(21, 39),
+          {sequence: 40, role: 'user', content: 'What changed in the amendment?'},
+        ], {nextBefore: 21, running: true})
+        : activityPage(steps(1, 20), {running: true});
+    },
+  });
+  const dock = await mount(sourceFor().source, 800);
+  await waitFor(() => shown(dock).includes('What changed in the amendment?'));
+
+  expect(shown(dock)).to.not.contain('Step 1.');
+  session(dock).querySelector<HTMLButtonElement>('[data-load-older="activity"]')!.click();
+  await waitFor(() => shown(dock).includes('Step 1.'));
+  expect(transcriptRequests(requests)).to.deep.equal(['', '?before=21']);
+});
+
+it('gives the main agent what a child has: its answer as the Result, its token count, and its cited sources as Evidence that open the source', async () => {
+  serve({page: () => roster([], null, 'succeeded')});
+  const presentation = {
+    answerText: 'Clause 9.2 caps the penalty at 6%.', parts: [], linkCards: [], evidenceImages: [], artifacts: [],
+    artifactOutcome: null,
+    sources: [
+      {id: '1', title: 'northwind-msa.pdf', sourceUrl: null, downloadUrl: null, chunks: []},
+      {id: '2', title: 'amendment-3.pdf', sourceUrl: null, downloadUrl: null, chunks: []},
+    ],
+  } as unknown as AnswerPresentation;
+  const turn = answeredTurn({presentation, usage: {usage_details: {total_tokens: 9400}}});
+  const dock = await mount(sourceFor('run-1', turn).source, 800);
+  await waitFor(() => shown(dock).includes('Evidence · 2'));
+  const opened: {referenceId: string; presentation: unknown}[] = [];
+  dock.addEventListener('dl-answer-source-open', (event) => {
+    opened.push((event as CustomEvent).detail);
+  });
+
+  const text = shown(dock);
+  expect(text).to.contain('Main agent What changed? Show full objective Done 9.4K tokens');
+  expect(text).to.contain('Result Clause 9.2 caps the penalty at 6%.');
+  const fold = [...session(dock).querySelectorAll('details')].find((candidate) => candidate.textContent!.includes('Evidence'))!;
+  expect(fold.open).to.equal(false);
+  expect(fold.textContent).to.contain('[1] northwind-msa.pdf');
+  fold.querySelector<HTMLButtonElement>('[data-evidence-ref="2"]')!.click();
+
+  expect(opened.map((detail) => detail.referenceId)).to.deep.equal(['2']);
+  expect(opened[0]!.presentation).to.equal(presentation);
+});
+
+it('says why a Run failed in the main agent\'s result, and shows no Result for a Run that is still going', async () => {
+  serve({page: () => roster([], null, 'failed')});
+  const failed = await mount(sourceFor('run-1', answeredTurn({state: 'failed', error: 'Service error. Please try again.'})).source, 800);
+  await waitFor(() => shown(failed).includes('Failed'));
+  expect(shown(failed)).to.contain('Result Service error. Please try again.');
+  failed.remove();
+
+  serve({page: () => roster([], null, 'running')});
+  const going = await mount(sourceFor('run-1', answeredTurn({state: 'streaming', error: 'ignored'})).source, 800);
+  await waitFor(() => shown(going).includes('Running'));
+  expect(shown(going)).to.not.contain('Result');
+});
+
+it('opens a child\'s Evidence line on the answer\'s source it cites, and leaves a line the answer does not hold as text', async () => {
+  const settled = row('a', 'succeeded', {
+    started_at: ago(68), finished_at: ago(0), summary: 'Clause 9.2 caps it.',
+    result_handles: ['[1] northwind-msa.pdf', '[7] not-in-the-answer.pdf'],
+  });
+  serve({page: () => roster([settled]), observe: () => observation(settled)});
+  const presentation = {
+    answerText: '', parts: [], linkCards: [], evidenceImages: [], artifacts: [], artifactOutcome: null,
+    sources: [{id: '1', title: 'northwind-msa.pdf', sourceUrl: null, downloadUrl: null, chunks: []}],
+  } as unknown as AnswerPresentation;
+  const dock = await mount(sourceFor('run-1', answeredTurn({presentation})).source, 420);
+  await waitFor(() => rows(dock).length === 1);
+  await openChild(dock, 'a');
+  await waitFor(() => shown(dock).includes('Evidence · 2'));
+
+  const links = [...session(dock).querySelectorAll<HTMLElement>('[data-evidence-ref]')].map((link) => link.dataset.evidenceRef);
+  expect(links).to.deep.equal(['1']);
+  expect(shown(dock)).to.contain('[7] not-in-the-answer.pdf');
 });
 
 it('shows a token count only when the child reports a finite total', async () => {
@@ -751,7 +897,7 @@ it('offers a box and a Cancel only while the Run can take what they send', async
       expect(button(session(dock), 'Cancel child') !== null, `${where}: its Cancel`).to.equal(commandable && id === 'a');
       expect(shown(dock).includes(FINISHED_NOTE), `${where}: the note`).to.equal(!commandable);
       // Opening on a Run that is over says nothing out loud: only its ending under the reader does.
-      expect(session(dock).querySelector('[role="status"]')!.textContent!.trim()).to.equal('');
+      expect(session(dock).querySelector(':scope > [role="status"]')!.textContent!.trim()).to.equal('');
     }
     dock.remove();
   }
@@ -783,7 +929,7 @@ it('puts a note where the box was when the Run ends under a reader, and keeps wh
   expect(button(session(dock), 'Cancel child')).to.equal(null);
   expect(shown(dock), 'the question about cancelling lapses with the Run').to.not.contain('Cancel this child?');
   expect(shown(dock)).to.contain('Checking the amendment.');
-  expect(session(dock).querySelector('[role="status"]')!.textContent!.trim()).to.equal(FINISHED_NOTE);
+  expect(session(dock).querySelector(':scope > [role="status"]')!.textContent!.trim()).to.equal(FINISHED_NOTE);
   expect(requests.filter((request) => request.method === 'POST'), 'nothing was sent').to.have.length(0);
 });
 
@@ -864,7 +1010,7 @@ it('says why a reply was refused, and shows the question as it now stands at onc
     const before = {roster: reads('/children'), child: reads('/children/a')};
     session(dock).querySelector<HTMLFormElement>('form[data-request]')!.requestSubmit();
 
-    await waitFor(() => session(dock).querySelector('[role="status"]')!.textContent!.trim() === sentence);
+    await waitFor(() => session(dock).querySelector(':scope > [role="status"]')!.textContent!.trim() === sentence);
     // The card gives way to the question's record at once, not at the next tick of the roster.
     await waitFor(() => shown(dock).includes(history) && !shown(dock).includes('Asking the parent'));
     expect(reads('/children'), 'the roster is asked about the child again').to.be.greaterThan(before.roster);
@@ -966,11 +1112,11 @@ it('names each refusal, and says when the child is gone', async () => {
   await send('two', 'The pending control queue is full.');
   answer = () => new Response('unavailable', {status: 503});
   await send('three', 'The child intervention could not be sent.');
-  expect(session(dock).querySelector('[role="status"]')!.textContent!.trim()).to.equal('The child intervention could not be sent.');
+  expect(session(dock).querySelector(':scope > [role="status"]')!.textContent!.trim()).to.equal('The child intervention could not be sent.');
 
   answer = () => Response.json({detail: 'Answer child not found'}, {status: 404});
   await send('four', 'That child is no longer available.');
-  expect(session(dock).querySelector('[role="status"]')!.textContent!.trim()).to.equal('That child is no longer available.');
+  expect(session(dock).querySelector(':scope > [role="status"]')!.textContent!.trim()).to.equal('That child is no longer available.');
   expect(session(dock).querySelector('form')).to.equal(null);
 });
 
@@ -1004,7 +1150,7 @@ it('words every outcome a command can meet', async () => {
     answer = () => response.clone();
     await type(dock, composer(dock), 'go');
     session(dock).querySelector('form')!.requestSubmit();
-    await waitFor(() => session(dock).querySelector('[role="status"]')!.textContent!.trim() === words);
+    await waitFor(() => session(dock).querySelector(':scope > [role="status"]')!.textContent!.trim() === words);
     await waitFor(() => !composer(dock).readOnly);
   }
 });
@@ -1025,7 +1171,7 @@ it('keeps child A\'s late receipt, busy state and answer off child B\'s page', a
   await waitFor(() => controls.length === 1);
   expect(composer(dock).readOnly, 'A\'s own box waits for its command').to.equal(true);
 
-  button(dock, 'All child agents')!.click();
+  button(dock, 'All agents')!.click();
   await dock.updateComplete;
   await openChild(dock, 'b');
   await type(dock, composer(dock), 'child B draft');
@@ -1039,7 +1185,7 @@ it('keeps child A\'s late receipt, busy state and answer off child B\'s page', a
   expect(composer(dock).value).to.equal('child B draft');
   expect(composer(dock).readOnly).to.equal(false);
   // Back on A, its receipt has landed: the box is free and empty again.
-  button(dock, 'All child agents')!.click();
+  button(dock, 'All agents')!.click();
   await dock.updateComplete;
   await openChild(dock, 'a');
   expect(composer(dock).value).to.equal('');
@@ -1101,12 +1247,12 @@ it('keeps what the reader typed across refreshes and across children, for each O
   expect([aBox.selectionStart, aBox.selectionEnd]).to.deep.equal([4, 9]);
 
   // Another child has a box of its own, and the first one is waiting when the reader returns.
-  button(dock, 'All child agents')!.click();
+  button(dock, 'All agents')!.click();
   await dock.updateComplete;
   await openChild(dock, 'b');
   expect(composer(dock).value).to.equal('');
   await type(dock, composer(dock), 'for B');
-  button(dock, 'All child agents')!.click();
+  button(dock, 'All agents')!.click();
   await dock.updateComplete;
   await openChild(dock, 'a');
   expect(composer(dock).value).to.equal('for A, first Operation');
@@ -1169,7 +1315,7 @@ it('reads a running child again after each roster refresh, and a settled one onl
   await refreshed();
   expect(observed('a'), 'a running child\'s transcript grows without its row changing').to.equal(2);
 
-  button(dock, 'All child agents')!.click();
+  button(dock, 'All agents')!.click();
   await dock.updateComplete;
   await openChild(dock, 'b');
   await waitFor(() => observed('b') === 1);
@@ -1194,9 +1340,9 @@ it('says so when the child on show is no longer on the roster', async () => {
   await waitFor(() => shown(dock).includes('That child is no longer available.'));
 
   expect(shown(dock)).to.contain('Pick another from the list.');
-  expect(session(dock).querySelector('[role="status"]')!.textContent!.trim()).to.equal('That child is no longer available.');
+  expect(session(dock).querySelector(':scope > [role="status"]')!.textContent!.trim()).to.equal('That child is no longer available.');
   expect(session(dock).querySelector('form')).to.equal(null);
-  button(dock, 'All child agents')!.click();
+  button(dock, 'All agents')!.click();
   await dock.updateComplete;
   expect(rows(dock).map((child) => child.id)).to.deep.equal(['b']);
 });
@@ -1220,10 +1366,12 @@ it('keeps what is on screen when a later read of the child fails, and offers a r
     page: () => roster([row('a', 'running', {started_at: ago(5)})]),
     observe: () => {
       reads += 1;
-      return fail ? new Response('unavailable', {status: 503}) : observation(row('a', 'running', {started_at: ago(5)}), {
-        transcript: [{role: 'assistant', content: 'Still here.', tool_calls: []}],
-      });
+      return fail ? new Response('unavailable', {status: 503}) : observation(row('a', 'running', {started_at: ago(5)}));
     },
+    // The activity is read apart from the child's details, and is on screen whichever way they go.
+    transcript: (agent) => agent === 'a'
+      ? activityPage([{role: 'assistant', content: 'Still here.', tool_calls: []}], {running: true})
+      : undefined,
   });
   const dock = await mount(sourceFor().source, 420);
   await waitFor(() => rows(dock).length === 1);
@@ -1260,8 +1408,9 @@ describe('the page of a child', () => {
     // Scrolling needs the page laid out as the product lays it out.
     unlink = await linkStyles([
       '../design-system/index.css',
-      '../styles/child-session.module.css',
-      '../styles/inspector-children.module.css',
+      '../styles/activity.module.css',
+      '../styles/agent-session.module.css',
+      '../styles/inspector-traces.module.css',
     ].map((href) => new URL(href, import.meta.url).href));
   });
   after(() => { unlink(); });
@@ -1269,7 +1418,7 @@ describe('the page of a child', () => {
   const says = (count: number) => Array.from({length: count}, (_, index) => (
     {role: 'assistant', content: `Step ${index}`, tool_calls: []}
   ));
-  const page = (dock: DlInspectorChildren) => session(dock).querySelector<HTMLElement>('[data-page]')!;
+  const page = (dock: DlInspectorTraces) => session(dock).querySelector<HTMLElement>('[data-scroller]')!;
   /** How far the page lies below what is on screen, in pixels. */
   const below = (box: HTMLElement) => box.scrollHeight - box.clientHeight - box.scrollTop;
   const frames = () => new Promise<void>((resolve) => {
@@ -1323,10 +1472,12 @@ describe('the page of a child', () => {
     const running = (id: string) => row(id, 'running', {started_at: ago(5)});
     serve({
       page: () => roster([running('a'), running('b')]),
-      observe: (id) => (id === 'b' ? loadingB.promise : observation(running(id), {transcript: says(40)})),
+      observe: (id) => (id === 'b' ? loadingB.promise : observation(running(id))),
+      transcript: (agent) => (agent === null ? undefined : activityPage(says(40), {running: true})),
     });
     const dock = await mount(sourceFor().source, 800);
     await waitFor(() => rows(dock).length === 2);
+    rowFor(dock, 'a').click();
     await waitFor(() => title(dock) === 'objective a' && shown(dock).includes('Step 39'));
     const box = page(dock);
     await scrollTo(box, box.scrollHeight);
@@ -1336,7 +1487,7 @@ describe('the page of a child', () => {
     rowFor(dock, 'b').click();
     await waitFor(() => title(dock) === 'objective b');
     await scrollTo(box, 0);
-    loadingB.resolve(observation(running('b'), {transcript: says(40)}));
+    loadingB.resolve(observation(running('b')));
     await waitFor(() => shown(dock).includes('Step 39'));
     expect(page(dock) === box, 'the same page is on show').to.equal(true);
     expect(box.scrollTop, 'the next child opens on its title').to.equal(0);
@@ -1435,8 +1586,9 @@ describe('on a phone', () => {
       '../design-system/index.css',
       '../styles/global.css',
       '../styles/layout.css',
-      '../styles/child-session.module.css',
-      '../styles/inspector-children.module.css',
+      '../styles/activity.module.css',
+      '../styles/agent-session.module.css',
+      '../styles/inspector-traces.module.css',
     ].map((href) => new URL(href, import.meta.url).href));
   });
   after(async () => {
@@ -1477,13 +1629,94 @@ describe('on a phone', () => {
 
     expect(target, 'the product\'s hit target is known').to.be.greaterThan(40);
     const list = pressable();
-    expect(list).to.have.length(2);
+    // The main agent and its two children.
+    expect(list).to.have.length(3);
     await openChild(dock, 'a');
     await waitFor(() => shown(dock).includes('Looking.') && shown(dock).includes('Control history'));
     const page = pressable();
     // The page offers Back, Cancel, Answer instead, Send, the Activity and Control history folds, and a step.
     expect(page.length).to.be.greaterThan(6);
-    const short = [...list, ...page].filter((item) => item.height < target - 0.5);
+    const short = [...list, ...page].filter((item) => item.height < target - 0.5).map((item) => `${item.name}: ${item.height}`);
     expect(short, 'what is pressable and shorter than the hit target').to.deep.equal([]);
+  });
+});
+
+// ── An agent's whole activity, laid out ──
+
+describe('an agent\'s whole activity', () => {
+  let unlink: () => void;
+  before(async () => {
+    unlink = await linkStyles([
+      '../design-system/index.css',
+      '../styles/activity.module.css',
+      '../styles/agent-session.module.css',
+      '../styles/inspector-traces.module.css',
+    ].map((href) => new URL(href, import.meta.url).href));
+  });
+  after(() => { unlink(); });
+
+  const frames = () => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => { requestAnimationFrame(() => { resolve(); }); });
+  });
+
+  it('keeps the step a reader is at where it is while earlier steps come in above it', async () => {
+    const running = row('a', 'running', {started_at: ago(5)});
+    serve({
+      page: () => roster([running]),
+      observe: () => observation(running),
+      transcript: (agent, before) => {
+        if (agent !== 'a') return undefined;
+        return before === null
+          ? activityPage(steps(21, 40), {nextBefore: 21, running: true})
+          : activityPage(steps(1, 20), {running: true});
+      },
+    });
+    const dock = await mount(sourceFor().source, 420);
+    await waitFor(() => rows(dock).length === 1);
+    await openChild(dock, 'a');
+    await waitFor(() => shown(dock).includes('Step 40.'));
+    const pane = session(dock).querySelector<HTMLElement>('[data-scroller]')!;
+    const first = [...session(dock).querySelectorAll('li')].find((item) => item.textContent!.includes('Step 21.'))!;
+    pane.scrollTop = 60;
+    await frames();
+    const at = () => first.getBoundingClientRect().top - pane.getBoundingClientRect().top;
+    const before = at();
+
+    session(dock).querySelector<HTMLButtonElement>('[data-load-older="activity"]')!.click();
+    await waitFor(() => shown(dock).includes('Step 1.Step 2.'));
+    await frames();
+
+    expect(at()).to.be.closeTo(before, 1);
+  });
+
+  it('keeps the main agent\'s newest step in view for a reader at the bottom, and leaves one who scrolled up alone', async () => {
+    const newest = (to: number) => steps(to - 29, to);
+    let to = 30;
+    serve({
+      page: () => roster([], null, 'running'),
+      transcript: (agent) => (agent === null ? activityPage(newest(to), {nextBefore: to - 29, running: true}) : undefined),
+    });
+    immediateFollowRefreshes();
+    const dock = await mount(sourceFor().source, 800);
+    await waitFor(() => shown(dock).includes('Step 30.'));
+    const pane = session(dock).querySelector<HTMLElement>('[data-scroller]')!;
+    const below = () => pane.scrollHeight - pane.clientHeight - pane.scrollTop;
+    expect(pane.scrollHeight, 'the page holds more than it shows').to.be.greaterThan(pane.clientHeight);
+    pane.scrollTop = pane.scrollHeight;
+    await frames();
+
+    to = 36;
+    dock.refreshIfFollowing('run-1');
+    await waitFor(() => shown(dock).includes('Step 36.'));
+    await frames();
+    expect(below(), 'the newest step stays in view').to.be.lessThan(2);
+
+    pane.scrollTop = 40;
+    await frames();
+    to = 40;
+    dock.refreshIfFollowing('run-1');
+    await waitFor(() => shown(dock).includes('Step 40.'));
+    await frames();
+    expect(pane.scrollTop, 'a reader who has scrolled up is left where they are').to.equal(40);
   });
 });

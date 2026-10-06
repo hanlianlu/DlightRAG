@@ -49,6 +49,8 @@ from dlightrag.adapters.http.browser.run_resources import image_rewrites
 from dlightrag.adapters.http.streaming.answer_stream import follow_run_frames, resume_cursor
 from dlightrag.application.access import AccessAction, owner_id_from_user
 from dlightrag.application.answer_runs import (
+    ACTIVITY_PAGE_DEFAULT_LIMIT,
+    ACTIVITY_PAGE_MAX_LIMIT,
     CHILD_ROSTER_PAGE_DEFAULT_LIMIT,
     CHILD_ROSTER_PAGE_MAX_LIMIT,
     ChildRosterCursorError,
@@ -330,10 +332,36 @@ async def observe_answer_child(
         run_id=run_id,
         child_session_id=child_session_id,
         limit=limit,
+        with_transcript=False,
     )
     if observation is None:
         raise HTTPException(status_code=404, detail="Answer child not found")
     return observation.payload()
+
+
+@router.get("/answer/{run_id}/transcript")
+async def answer_run_activity(
+    run_id: str,
+    request: Request,
+    conversation_service: WebConversationService = Depends(get_web_conversation_service),
+    child: Annotated[str | None, Query(min_length=1)] = None,
+    before: Annotated[int | None, Query(ge=1)] = None,
+    limit: Annotated[int, Query(ge=1, le=ACTIVITY_PAGE_MAX_LIMIT)] = ACTIVITY_PAGE_DEFAULT_LIMIT,
+) -> dict[str, Any]:
+    """One page of the Run's main agent transcript, or of the Child named by ``child``."""
+    user = getattr(request.state, "user_context", None)
+    if await conversation_service.turn_for_run(user, run_id) is None:
+        raise HTTPException(status_code=404, detail="Answer run not found")
+    page = await get_application(request).answers.activity_page(
+        owner_id=owner_id_from_user(user),
+        run_id=run_id,
+        child_session_id=child,
+        before=before,
+        limit=limit,
+    )
+    if page is None:
+        raise HTTPException(status_code=404, detail="Answer child not found")
+    return page.payload()
 
 
 @router.post("/answer/{run_id}/children/{child_session_id}/control", status_code=202)
