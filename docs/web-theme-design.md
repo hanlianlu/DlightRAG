@@ -267,12 +267,13 @@ that owns its data and reports a short summary for its navigation row.
 
 ### Pygments
 
-The checked-in `pygments.css` contains two generated, root-scoped palettes:
+The `/static/pygments.css` stylesheet is built at runtime from the installed Pygments and
+contains two root-scoped palettes:
 
 - Pygments `xcode` for `data-color-mode="light"`;
 - Pygments `github-dark` for `data-color-mode="dark"`.
 
-Generated selectors are scoped to the effective color mode. Pygments-owned container backgrounds are removed so code blocks continue to use DlightRAG surface tokens. Two low-contrast upstream foregrounds are replaced with fixed accessible values. The file includes its deterministic regeneration command.
+Generated selectors are scoped to the effective color mode. Pygments-owned container backgrounds are removed so code blocks continue to use DlightRAG surface tokens. Two low-contrast upstream foregrounds are replaced with fixed accessible values. Building it from the Pygments that renders the markup keeps the class names and their rules on one version, and the response revalidates by ETag.
 
 This prevents light-syntax colors from being displayed on a dark code
 background before or after an appearance change.

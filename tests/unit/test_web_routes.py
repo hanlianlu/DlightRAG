@@ -621,6 +621,23 @@ async def test_vendored_assets_allow_revalidation_caching(client):
     assert "no-store" not in resp.headers.get("cache-control", "")
 
 
+async def test_code_highlight_stylesheet_is_built_from_pygments_and_revalidates(client):
+    first = await client.get("/static/pygments.css")
+
+    assert first.status_code == 200
+    assert first.headers["content-type"].startswith("text/css")
+    # One palette per colour mode, scoped to it, with no background paint of its own.
+    assert '[data-color-mode="light"] .highlight' in first.text
+    assert '[data-color-mode="dark"] .highlight' in first.text
+    assert "background" not in first.text
+
+    again = await client.get(
+        "/static/pygments.css", headers={"If-None-Match": first.headers["etag"]}
+    )
+    assert again.status_code == 304
+    assert not again.content
+
+
 async def test_an_uncaught_browser_error_is_logged_as_one_line(
     client: AsyncClient, caplog: pytest.LogCaptureFixture
 ) -> None:

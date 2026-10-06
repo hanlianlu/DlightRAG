@@ -2,9 +2,12 @@
 
 from pathlib import Path
 
+from starlette.datastructures import Headers
 from starlette.exceptions import HTTPException
 from starlette.responses import Response
 from starlette.staticfiles import StaticFiles
+
+from dlightrag.adapters.http.browser.pygments_css import pygments_css
 
 STATIC_DIR = Path(__file__).parent / "static"
 APP_DIR = STATIC_DIR / "app"
@@ -17,6 +20,12 @@ class WebStaticFiles(StaticFiles):
         # The Web's documents are served only by the /web routes, which authenticate them.
         if path.lower().endswith(".html"):
             raise HTTPException(status_code=404)
+        if path == "pygments.css":
+            body, etag = pygments_css()
+            headers = {"ETag": etag, "Cache-Control": "no-cache"}
+            if etag in Headers(scope=scope).get("if-none-match", ""):
+                return Response(status_code=304, headers=headers)
+            return Response(body, media_type="text/css", headers=headers)
         response = await super().get_response(path, scope)
         if response.status_code >= 400:
             return response

@@ -4,7 +4,6 @@
 Frontend source contracts live in frontend/ui/*.structure.test.ts.
 """
 
-import importlib.util
 import re
 from pathlib import Path
 
@@ -57,7 +56,7 @@ def test_web_static_css_build_keeps_only_served_bundles() -> None:
         for path in (*app_root.glob("*.html"), *assets.glob("*.js"))
     )
 
-    assert {path.name for path in static_root.glob("*.css")} == {"pygments.css"}
+    assert not list(static_root.glob("*.css"))
     stylesheets = {path.name for path in assets.glob("*.css")}
     assert stylesheets
     assert {name for name in stylesheets if f"assets/{name}" not in served} == set()
@@ -80,19 +79,6 @@ def test_web_static_catalog_stylesheet_reaches_only_catalog_pages() -> None:
 
     assert len(catalog) == 1
     assert referrers == ["design-system.html", "product-showcase.html"]
-
-
-def test_pygments_css_matches_generator() -> None:
-    generator_path = ROOT / "scripts" / "generate_pygments_css.py"
-    spec = importlib.util.spec_from_file_location("generate_pygments_css", generator_path)
-    assert spec is not None and spec.loader is not None
-    generator = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(generator)
-
-    css = (ROOT / "src/dlightrag/adapters/http/browser/static/pygments.css").read_text(
-        encoding="utf-8"
-    )
-    assert generator.generate_css() == css
 
 
 def test_web_static_js_build_has_no_orphan_chunks() -> None:
