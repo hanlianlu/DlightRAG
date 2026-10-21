@@ -25,25 +25,25 @@
     "@biomejs/biome": "^2.5.15",
     "@esm-bundle/chai": "^4.3.4-fix.0",
     "@types/mocha": "^10.0.10",
-    "@types/node": "^26.6.4",
+    "@types/node": "^26.6.5",
     "@web/dev-server-esbuild": "^2.0.0",
     "@web/test-runner": "^1.0.0",
     "@web/test-runner-commands": "^1.0.1",
     "@web/test-runner-playwright": "^1.0.0",
-    "axe-core": "4.13.0",
-    "lucide-static": "1.52.0",
+    "axe-core": "4.14.0",
+    "lucide-static": "1.59.0",
     "stylelint": "^17.16.0",
     "stylelint-config-standard": "^40.0.0",
     "typescript": "^7.0.2",
-    "vite": "^8.3.2"
+    "vite": "^8.3.4"
   },
   "dependencies": {
     "@lit/localize": "^0.12.2",
-    "dompurify": "^3.4.16",
+    "dompurify": "^3.4.17",
     "lit": "^3.3.3",
-    "mermaid": "^12.1.0",
+    "mermaid": "^12.2.0",
     "valibot": "^1.5.0",
-    "xstate": "^5.33.2"
+    "xstate": "^5.33.3"
   },
   "overrides": {
     "katex": "0.18.10",
