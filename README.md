@@ -226,7 +226,7 @@ uv run python your_script.py
 
 An application in its own project can add the clone as an editable path
 dependency instead (`uv add --editable /absolute/path/to/dlightrag`); the Memory
-workspace package resolves from the same clone.
+and Observability workspace packages resolve from the same clone.
 
 Create an application with `create_application(config)`, use
 `application.corpus_mutations` for durable corpus writes,
@@ -268,7 +268,7 @@ make ci-full     # plus integration tests
 make ci-e2e      # plus E2E smoke
 ```
 
-Use [Operations](docs/operations.md) for reset, rebuild, parser, Langfuse, and
+Use [Operations](docs/operations.md) for reset, rebuild, parser, ClickStack, and
 maintenance runbooks.
 
 ## Documentation
