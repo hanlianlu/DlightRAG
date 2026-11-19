@@ -5,8 +5,9 @@ Only Skill metadata is projected initially. The model must call ``load_skill``
 to read SKILL.md or a relative reference. Skill text is untrusted context: this
 loader never imports or executes Skill code.
 
-Skills merge in three tiers: packaged built-ins, operator-provisioned global
-skills, then per-owner skills. Publication is the only way a Skill's content gets in:
+Skills come from three tiers: packaged built-ins, operator-provisioned global
+skills, then per-owner skills. A name is served by exactly one Skill and the stronger
+tier keeps it; a conflicting Skill is not served. Publication is the only way a Skill's content gets in:
 ``publish_skill`` writes into the caller's owner directory through validation,
 quotas, and an atomic swap. An owner can also turn one of their own Skills off, which
 keeps it stored behind a ``.disabled`` file in its directory, or delete it; the agent's
@@ -131,11 +132,12 @@ def owner_skill_root(base: Path, owner_id: str) -> Path:
 
 
 class SkillCatalog:
-    """Merged built-in/global/owner catalog in increasing precedence.
+    """Merged built-in/global/owner catalog, each name served by exactly one Skill.
 
-    Only Skills that can be loaded are in it. The owner's Skills that are turned off are
-    left out of the merge, so a lower tier's same-named Skill shows through, and those
-    that no lower tier replaces are kept by name in ``disabled``.
+    A name belongs to the strongest tier that holds it (built-in, then global, then owner);
+    a Skill whose name is already served is a conflict and is not served. Only Skills that
+    can be loaded are in it. The owner's Skills that are turned off are left out of the
+    merge, and those whose name nothing else serves are kept by name in ``disabled``.
     """
 
     def __init__(
@@ -173,8 +175,17 @@ class SkillCatalog:
             else:
                 enabled.append(skill)
         merged = {skill.name: skill for skill in builtin_skills}
-        merged.update((skill.name, skill) for skill in global_skills)
-        merged.update((skill.name, skill) for skill in enabled)
+        for skill in (*global_skills, *enabled):
+            if skill.name in merged:
+                logger.warning(
+                    "Agent Skill %r from the %s tier is not served: the %s tier already serves "
+                    "that name",
+                    skill.name,
+                    skill.source,
+                    merged[skill.name].source,
+                )
+                continue
+            merged[skill.name] = skill
         return cls(
             tuple(merged[name] for name in sorted(merged)),
             disabled=tuple(sorted(turned_off - merged.keys())),
@@ -238,7 +249,7 @@ class SkillCatalog:
 class SkillsBundle:
     """One run's complete skills slice behind a narrow interface.
 
-    Hides three-tier discovery, precedence, context contribution ordering,
+    Hides three-tier discovery, name ownership, context contribution ordering,
     and tool membership (parents publish, children only load). Callers hold
     one object instead of resource/filesystem roots plus a directive.
     """
@@ -264,6 +275,15 @@ class SkillsBundle:
 
     def catalog(self) -> SkillCatalog | None:
         return self._discover() if self._configured() else None
+
+    def reserved_names(self) -> frozenset[str]:
+        """The names another tier serves, which an owner's own publication may not take."""
+        catalog = self.catalog()
+        return (
+            frozenset()
+            if catalog is None
+            else frozenset(skill.name for skill in catalog.metadata if skill.source != "owner")
+        )
 
     def _configured(self) -> bool:
         return any(
@@ -292,7 +312,9 @@ class SkillsBundle:
     def tools(self, *, child: bool) -> list[AgentTool]:
         bindings = {
             "load_skill": lambda: load_skill_tool(self._discover),
-            "publish_skill": lambda: publish_skill_tool(self._owner_root),
+            "publish_skill": lambda: publish_skill_tool(
+                self._owner_root, reserved=self.reserved_names()
+            ),
             "delete_skill": lambda: delete_skill_tool(self._owner_root),
             "set_skill_enabled": lambda: set_skill_enabled_tool(self._owner_root),
         }
@@ -419,14 +441,28 @@ def publish_skill_declaration() -> ToolDeclaration:
     )
 
 
-def publish_skill_tool(owner_root: Path | None) -> AgentTool:
-    """Validated, quota-bounded, atomic publication into one owner's directory."""
+def publish_skill_tool(
+    owner_root: Path | None, *, reserved: frozenset[str] = frozenset()
+) -> AgentTool:
+    """Validated, quota-bounded, atomic publication into one owner's directory.
+
+    ``reserved`` names the Skills another tier already serves. A publication that took one of
+    them would never be served, because a name belongs to the tier that owns it, so it is
+    refused here and the user is told to choose another name.
+    """
 
     async def execute(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = cast(PublishSkillInput, raw)
         await runtime.emit_update(ToolResult.text("", subject=args.name))
         if owner_root is None:
             return ToolResult.text("Skill publication is unavailable for this run.", is_error=True)
+        if args.name in reserved:
+            return ToolResult.text(
+                f"Skill publication rejected: the name '{args.name}' is already served by a "
+                "built-in or operator Skill, and a name belongs to the tier that owns it. Publish "
+                "under a name of your own.",
+                is_error=True,
+            )
         error = _validate_publish_payload(args.name, args.files)
         if error is not None:
             return ToolResult.text(f"Skill publication rejected: {error}", is_error=True)

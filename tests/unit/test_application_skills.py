@@ -59,7 +59,9 @@ def test_fresh_roots_discover_and_load_packaged_skill_without_copying(tmp_path: 
     assert list((tmp_path / "owners").iterdir()) == []
 
 
-def test_disabled_builtin_filter_does_not_hide_global_or_owner_overrides(tmp_path: Path) -> None:
+def test_a_disabled_builtin_frees_its_name_and_the_stronger_tier_keeps_it(
+    tmp_path: Path,
+) -> None:
     config = _config(tmp_path, disabled_builtin_skills=("skill-creator",))
     global_root = tmp_path / "global" / "skill-creator"
     _skill(global_root, description="Global creator.")
@@ -72,6 +74,7 @@ def test_disabled_builtin_filter_does_not_hide_global_or_owner_overrides(tmp_pat
     assert sources["council"] == "builtin"
     assert sources["skill-creator"] == "global"
 
+    # An owner's Skill of that name does not take it: the operator's already serves it.
     owner_root = owner_skill_root(tmp_path / "owners", "owner-with-override")
     _skill(owner_root / "skill-creator", description="Owner creator.")
     owner_catalog = build("owner-with-override").catalog()
@@ -79,7 +82,7 @@ def test_disabled_builtin_filter_does_not_hide_global_or_owner_overrides(tmp_pat
     assert owner_catalog is not None
     sources = {skill.name: skill.source for skill in owner_catalog.metadata}
     assert sources["council"] == "builtin"
-    assert sources["skill-creator"] == "owner"
+    assert sources["skill-creator"] == "global"
 
 
 def test_disabled_builtin_filter_removes_unoverridden_builtin(tmp_path: Path) -> None:

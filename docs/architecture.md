@@ -165,8 +165,9 @@ to enforce ([ADR 0024](adr/0024-the-agent-sees-only-its-workspace.md)). Skills
 come from packaged built-ins (`council`, `office-documents`, which tells the agent
 that its workspace Python can build a requested Word, Excel or PowerPoint file,
 `charts`, `interactive-html`, and `skill-creator`), the global root (default `~/.dlightrag/skills`),
-and the owner's own published Skills (default `~/.dlightrag/owner_skills`), in
-that precedence. Research parents may publish, turn off and delete their owner's
+and the owner's own published Skills (default `~/.dlightrag/owner_skills`). A name is
+served by one Skill, held by the strongest of those tiers, and `publish_skill` refuses a name
+another tier serves. Research parents may publish, turn off and delete their owner's
 Skills; built-in and global Skills are read-only. The image ships the commands the
 chart Skills call: `echarts-render`, and `html-report`, which turns an HTML fragment into one
 self-contained interactive report that runs in the Artifact sandbox

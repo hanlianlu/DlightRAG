@@ -391,7 +391,7 @@ async def test_the_owner_lists_only_their_own_skills_on_or_off_with_the_quota(
     }
 
 
-async def test_turning_a_skill_off_leaves_slash_completion_to_the_tier_below_it(
+async def test_turning_an_owners_skill_off_takes_only_its_own_name_out_of_completion(
     client, skill_roots: tuple[Path, Path]
 ) -> None:
     global_root, owners_root = skill_roots
@@ -407,8 +407,7 @@ async def test_turning_a_skill_off_leaves_slash_completion_to_the_tier_below_it(
     assert off.status_code == off_again.status_code == lonely.status_code == 200
     assert off.json() == off_again.json()
     assert off.json() == {"name": "review", "description": "My review.", "enabled": False}
-    # Settings still lists what is off, marked; completion offers only what can be loaded, and
-    # the Skill an override had hidden is back.
+    # Settings still lists what is off, marked; completion offers only what can be loaded.
     assert [
         (skill["name"], skill["enabled"])
         for skill in (await client.get("/web/api/skills/mine")).json()["skills"]
@@ -417,12 +416,14 @@ async def test_turning_a_skill_off_leaves_slash_completion_to_the_tier_below_it(
         {"name": "review", "description": "Global review.", "source": "global"}
     )
 
-    on = await client.put("/web/api/skills/mine/review/enabled", json={"enabled": True})
+    on = await client.put("/web/api/skills/mine/weekly-report/enabled", json={"enabled": True})
 
-    assert on.json() == {"name": "review", "description": "My review.", "enabled": True}
-    assert {"name": "review", "description": "My review.", "source": "owner"} in (
-        await client.get("/web/api/skills")
-    ).json()["skills"]
+    assert on.json() == {"name": "weekly-report", "description": "Weekly report.", "enabled": True}
+    # The name an owner holds is theirs to offer; `review` is the operator's either way.
+    assert (await client.get("/web/api/skills")).json() == _listing(
+        {"name": "review", "description": "Global review.", "source": "global"},
+        {"name": "weekly-report", "description": "Weekly report.", "source": "owner"},
+    )
 
 
 @pytest.mark.parametrize("body", [{}, {"enabled": "false"}, {"enabled": None}, {"on": True}])
