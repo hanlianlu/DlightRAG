@@ -195,3 +195,24 @@ def test_parts_derive_artifact_and_inline_evidence_placements() -> None:
     assert projected["parts"][1]["slot"] == 0
     assert projected["parts"][2]["evidence_image"]["source_ref"] == "1"
     assert projected["parts"][2]["slot"] == 1
+
+
+def test_a_projection_without_contexts_does_not_project_them() -> None:
+    """The conversation page draws no retrieval contexts, so it does not project them."""
+    stored = store_answer_result(
+        answer="An answer.",
+        contexts={
+            "chunks": [{"chunk_id": "c1", "content": "a passage", "metadata": {}}],
+            "entities": [],
+            "relationships": [],
+        },
+        sources=[],
+        evidence_images=[],
+        trace={},
+        image_descriptions=[],
+    )
+
+    assert project_answer_result(stored)["contexts"]["chunks"]
+    omitted = project_answer_result(stored, include_contexts=False)
+    assert omitted["contexts"] == {}
+    assert omitted["answer"] == "An answer."
