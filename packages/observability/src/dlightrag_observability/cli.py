@@ -707,7 +707,7 @@ def resolve_stack_ids(
             if kind is None or item.get("kind") == kind
         )
         if not found:
-            what = f"a {kind} source" if kind else "a connection"
+            what = f"{kind} source" if kind else "connection"
             raise SystemExit(
                 f"{name}: the stack has no {what}. Create the administrator and the sources in "
                 f"the UI first (the first administrator seeds them), then run `alerts push` "
