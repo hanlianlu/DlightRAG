@@ -29,12 +29,6 @@ _TIMEOUT_SECONDS = 20.0
 _SEARCH_DEPTH: dict[WebEffort, str] = {
     "fast": "basic",
     "balanced": "advanced",
-    "deep": "advanced",
-}
-_EXTRACT_DEPTH: dict[WebEffort, str] = {
-    "fast": "basic",
-    "balanced": "advanced",
-    "deep": "advanced",
 }
 _STATUS_REASONS = {401: "unauthorized", 402: "payment_required", 429: "rate_limited"}
 
@@ -57,8 +51,6 @@ class TavilyWebSource:
             "include_answer": False,
             "include_raw_content": False,
         }
-        if request.effort == "deep":
-            payload["chunks_per_source"] = 3
         if request.include_domains:
             payload["include_domains"] = list(request.include_domains)
         if request.exclude_domains:
@@ -70,13 +62,13 @@ class TavilyWebSource:
         response = await self._post(_SEARCH_ENDPOINT, payload, operation="search")
         return _read_search_result(response)
 
-    async def extract(self, url: str, *, effort: WebEffort) -> WebExtractResult:
+    async def extract(self, url: str) -> WebExtractResult:
         response = await self._post(
             _EXTRACT_ENDPOINT,
             {
                 "api_key": self._api_key,
                 "urls": [url],
-                "extract_depth": _EXTRACT_DEPTH[effort],
+                "extract_depth": "advanced",
                 "include_images": False,
                 "format": "markdown",
             },

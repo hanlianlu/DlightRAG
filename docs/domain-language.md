@@ -83,7 +83,7 @@ ladder is clamped by reasoning resolution rather than refused, and a model that
 names no non-off level ignores it. A chosen effort never fails a Run: the accepted
 Run's stored `effort` is the choice, and the run trace's `agent_effort` states the
 level that ran or why the choice was ignored.
-_Avoid_: reasoning level (the deployment setting), Web Search effort (`fast | balanced | deep`), Answer Mode
+_Avoid_: reasoning level (the deployment setting), Web Search effort (`fast | balanced`), Answer Mode
 
 **Valid Mode Set**:
 The capability-derived subset of `{fast, research}` that one Prepared Input may legally resolve to.

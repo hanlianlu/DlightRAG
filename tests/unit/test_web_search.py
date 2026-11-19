@@ -24,7 +24,6 @@ from dlightrag.engine.answer.tools.web_search import web_context_rows
 from dlightrag.engine.answer.web_sources import (
     ExaWebSource,
     TavilyWebSource,
-    WebEffort,
     WebExtractResult,
     WebSearchHit,
     WebSearchRequest,
@@ -101,10 +100,13 @@ def test_web_search_schema_exposes_provider_neutral_controls() -> None:
             "include_domains": ["EXAMPLE.ORG"],
             "start_date": "2026-01-01",
             "end_date": "2026-01-31",
-            "effort": "deep",
+            "effort": "balanced",
         }
     )
     assert parsed.model_dump()["include_domains"] == ("example.org",)
+    # The provider's own research tier is not a depth the model can ask for.
+    with pytest.raises(ValidationError):
+        tool.input_model.model_validate({"query": "q", "effort": "deep"})
     with pytest.raises(ValidationError):
         tool.input_model.model_validate({"query": "q", "max_results": 21})
     with pytest.raises(ValidationError):
@@ -255,14 +257,14 @@ async def test_exa_maps_all_search_controls_and_passages(serve) -> None:
             exclude_domains=("bad.example",),
             start_date="2026-01-01",
             end_date="2026-02-01",
-            effort="deep",
+            effort="balanced",
         )
     )
 
     assert requests == [
         {
             "query": "coefficients",
-            "type": "deep",
+            "type": "auto",
             "numResults": 7,
             "contents": {"highlights": {"maxCharacters": 4000}},
             "includeDomains": ["example.org"],
@@ -274,6 +276,22 @@ async def test_exa_maps_all_search_controls_and_passages(serve) -> None:
     assert [hit.text for hit in result.hits] == [*_PAGE["highlights"], "Full body."]
     assert result.hits[0].acquisition == "exa_search"
     assert result.cost_dollars == 0.007
+
+
+@pytest.mark.parametrize(("effort", "expected"), [("fast", "fast"), ("balanced", "auto")])
+async def test_exa_search_never_asks_for_a_research_tier(serve, effort, expected) -> None:
+    requests: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json={"results": []})
+
+    serve("exa", handler)
+
+    await ExaWebSource("k").search(WebSearchRequest("q", effort=effort))
+
+    assert requests[0]["type"] == expected
+    assert not requests[0]["type"].startswith("deep")
 
 
 async def test_exa_extract_and_malformed_partial_results(serve) -> None:
@@ -292,7 +310,7 @@ async def test_exa_extract_and_malformed_partial_results(serve) -> None:
     )
     provider = ExaWebSource("k")
 
-    result = await provider.extract("https://example.org/start", effort="balanced")
+    result = await provider.extract("https://example.org/start")
 
     assert result.url == _PAGE["url"]
     assert result.text == "  Extracted body.\n"
@@ -309,11 +327,12 @@ async def test_exa_extract_asks_for_the_whole_page(serve) -> None:
 
     serve("exa", handler)
 
-    await ExaWebSource("k").extract("https://example.org/start", effort="balanced")
+    await ExaWebSource("k").extract("https://example.org/start")
 
     # Read windows a page by the reader's own limits; a provider-side cap would cut it
     # silently, with no cursor to continue from.
     assert requests[0]["text"] is True
+    assert requests[0]["livecrawl"] == "fallback"
 
 
 async def test_exa_missing_results_is_provider_failure_not_empty_success(serve) -> None:
@@ -367,13 +386,14 @@ async def test_tavily_maps_effort_filters_and_drops_only_bad_items(serve) -> Non
             max_results=5,
             include_domains=("a.example",),
             exclude_domains=("b.example",),
-            effort="deep",
+            effort="balanced",
         )
     )
 
     assert requests[0]["api_key"] == "tk"
     assert requests[0]["search_depth"] == "advanced"
-    assert requests[0]["chunks_per_source"] == 3
+    assert "chunks_per_source" not in requests[0]
+    assert "auto_parameters" not in requests[0]
     assert requests[0]["include_answer"] is False
     assert result.provider == "tavily"
     assert result.dropped_results == 2
@@ -381,20 +401,26 @@ async def test_tavily_maps_effort_filters_and_drops_only_bad_items(serve) -> Non
 
 
 async def test_tavily_extract_keeps_one_exact_representation(serve) -> None:
-    serve(
-        "tavily",
-        _responds(
-            {
+    requests: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
                 "results": [
                     {"url": "https://a.example/page", "raw_content": "  exact body\n"},
                     {"url": "https://b.example/page", "raw_content": "wrong body"},
                 ]
-            }
-        ),
-    )
+            },
+        )
+
+    serve("tavily", handler)
     provider = TavilyWebSource("tk")
 
-    result = await provider.extract("https://a.example/start", effort="balanced")
+    result = await provider.extract("https://a.example/start")
+
+    assert requests[0]["extract_depth"] == "advanced"
 
     assert result.url == "https://a.example/page"
     assert result.text == "  exact body\n"
@@ -432,7 +458,7 @@ class _StubProvider:
             raise self._search
         return self._search
 
-    async def extract(self, url: str, *, effort: WebEffort) -> WebExtractResult:
+    async def extract(self, url: str) -> WebExtractResult:
         self.extract_calls += 1
         if isinstance(self._extract, Exception):
             raise self._extract
@@ -464,9 +490,7 @@ async def test_search_and_extract_fail_over_in_independent_orders() -> None:
     )
 
     searched = await service.search(WebSearchRequest("q"))
-    extracted = await service.extract(
-        "https://a.example", effort="fast", providers=("exa", "tavily")
-    )
+    extracted = await service.extract("https://a.example", providers=("exa", "tavily"))
 
     assert searched.provider == "tavily"
     assert searched.degradation == "Provider fallback: exa (timeout); used tavily."

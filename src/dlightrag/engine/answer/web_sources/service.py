@@ -8,7 +8,6 @@ import logging
 from dataclasses import replace
 
 from dlightrag.engine.answer.web_sources.contracts import (
-    WebEffort,
     WebExtractProvider,
     WebExtractResult,
     WebSearchProvider,
@@ -60,7 +59,6 @@ class WebSourceService:
         self,
         url: str,
         *,
-        effort: WebEffort = "balanced",
         providers: tuple[str, ...],
     ) -> WebExtractResult:
         """Extract ``url`` with the configured providers that ``providers`` names, in order.
@@ -74,7 +72,7 @@ class WebSourceService:
                 continue
             try:
                 async with public_network_admission():
-                    result = await provider.extract(url, effort=effort)
+                    result = await provider.extract(url)
             except asyncio.CancelledError:
                 raise
             except WebSourceUnavailable as exc:

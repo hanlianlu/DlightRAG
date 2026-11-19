@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
-type WebEffort = Literal["fast", "balanced", "deep"]
+type WebEffort = Literal["fast", "balanced"]
 
 
 class WebSourceUnavailable(Exception):
@@ -78,7 +78,7 @@ class WebSearchProvider(Protocol):
 class WebExtractProvider(Protocol):
     name: str
 
-    async def extract(self, url: str, *, effort: WebEffort) -> WebExtractResult: ...
+    async def extract(self, url: str) -> WebExtractResult: ...
     async def aclose(self) -> None: ...
 
 

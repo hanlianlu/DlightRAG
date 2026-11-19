@@ -30,7 +30,6 @@ _TIMEOUT_SECONDS = 15.0
 _EFFORT_TYPE: dict[WebEffort, str] = {
     "fast": "fast",
     "balanced": "auto",
-    "deep": "deep",
 }
 _STATUS_REASONS = {401: "unauthorized", 402: "payment_required", 429: "rate_limited"}
 
@@ -62,13 +61,13 @@ class ExaWebSource:
         response = await self._post(_SEARCH_ENDPOINT, payload, operation="search")
         return _read_search_result(response)
 
-    async def extract(self, url: str, *, effort: WebEffort) -> WebExtractResult:
+    async def extract(self, url: str) -> WebExtractResult:
         response = await self._post(
             _EXTRACT_ENDPOINT,
             {
                 "urls": [url],
                 "text": True,
-                "livecrawl": "always" if effort == "deep" else "fallback",
+                "livecrawl": "fallback",
             },
             operation="extract",
         )
