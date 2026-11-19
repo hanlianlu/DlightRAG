@@ -62,6 +62,19 @@ assert not loaded, loaded
     )
 
 
+def test_the_api_entry_does_not_load_the_conversion_stack(tmp_path: Path) -> None:
+    """The server answers without MarkItDown's detector and ONNX runtime loaded."""
+    _run_import_probe(
+        """
+import importlib
+importlib.import_module("dlightrag.adapters.http.server")
+loaded = [name for name in ("magika", "onnxruntime") if name in sys.modules]
+assert not loaded, f"the API entry loaded {loaded}"
+""",
+        tmp_path,
+    )
+
+
 def test_resources_facade_exports_resolve_actual_definitions(tmp_path: Path) -> None:
     _run_import_probe(
         """

@@ -156,6 +156,9 @@ def _identify_media_type(content: bytes) -> str:
     global _MEDIA_IDENTIFIER
     with _MEDIA_IDENTIFIER_LOCK:
         if _MEDIA_IDENTIFIER is None:
+            from dlightrag.engine.answer.resources.converters import disable_model_telemetry
+
+            disable_model_telemetry()
             import magika
 
             _MEDIA_IDENTIFIER = magika.Magika()
