@@ -461,8 +461,8 @@ Tool effect.
 
 ### Leases And Fencing
 
-A claim sets a 60-second lease and increments the Run's fencing epoch. The
-worker renews the lease every 20 seconds, and each fenced write extends it.
+A claim sets a 300-second lease and increments the Run's fencing epoch. The
+worker renews the lease every 30 seconds, and each fenced write extends it.
 Every write a worker makes (event, checkpoint, settlement, terminal transition)
 requires its own lease owner and epoch on a running Run, whether or not the lease
 window has lapsed: only a reclaim, which bumps the epoch, takes a Run from its
