@@ -204,6 +204,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.engine.rag.retrieval.federation import FederatedReranker
     from dlightrag.engine.rag.retrieval.language import ProfileBM25Languages
     from dlightrag.engine.rag.retrieval.rerank import build_rerank_func
+    from dlightrag.engine.rag.retrieval.rerank_breaker import RerankBreaker
     from dlightrag.engine.rag.retrieval.runtime import RetrievalPlannerRuntime
     from dlightrag.engine.rag.workspace.pool import WorkspacePool
     from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
@@ -227,6 +228,9 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     health.set_agent_shell_confinement(confinement_state(config.answer.agent.execution_environment))
     scheduler = ModelScheduler(max_concurrency=config.models.max_concurrency)
     telemetry = LangfuseTelemetry()
+    # Every workspace and the federation pass rerank through one configured endpoint, so
+    # they share one breaker: a down reranker is noticed once, not once per workspace.
+    rerank_breaker = RerankBreaker()
     corpus_backend = build_pg_corpus_backend(config)
 
     # Image capability is role-specific but cached per resolved model config,
@@ -256,6 +260,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
                 scheduler=scheduler,
                 telemetry=LangfuseTelemetry(),
                 rerank_supports_vision=capabilities.rerank_supports_vision,
+                rerank_breaker=rerank_breaker,
             )
         except CorpusSchemaError:
             raise
@@ -353,6 +358,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
             scheduler=scheduler,
             supports_vision=capabilities.rerank_supports_vision,
             telemetry=telemetry,
+            breaker=rerank_breaker,
         )
 
     model_selectors: dict[str, ChatModelSelector] = {name: name for name in CHAT_MODEL_SELECTORS}

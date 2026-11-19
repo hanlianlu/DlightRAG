@@ -157,6 +157,15 @@ receives canonical text and calls
 ([ADR 0027](adr/0027-api-family-selects-the-provider-wire.md),
 [ADR 0030](adr/0030-gemini-uses-the-stateless-interactions-api.md)).
 
+A model that re-issues an identical `bash` or `search_web` call after it
+returned is refused: the duplicate settles as a synthetic `repeated_call`
+ToolResult against the previous two turns' calls instead of executing again, so
+one retry cannot burn a Run. The guard is also bounded: after three refusals of
+one identical call, a fourth one fails the Operation
+(`kind: repeated_call_loop`) rather than being refused again. The bound is
+needed because the guard's own window includes the refused turns, so a model
+that keeps re-issuing the call would otherwise be refused for ever.
+
 Recovery settles each pending effect by its contract: a `replayable` effect
 reconciles or dispatches again when its contract is unchanged and settles
 `tool_contract_changed` without dispatch when it changed, while a pending

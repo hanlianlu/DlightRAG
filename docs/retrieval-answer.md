@@ -188,6 +188,19 @@ workspace then contributes none. Runtime reranker failure falls back to the
 pre-rerank fused order. Configuration failures (for example, a selected provider
 without credentials) fail startup instead of changing strategy.
 
+A reranker that fails three times in a row is skipped for 30 seconds: queries fall
+back at once and record `RerankCircuitOpen` as the error type, so they stop
+waiting on a reranker whose own timeout has just run out three times in a row. A
+single trial call then tests it, and every failed trial doubles the wait, up to
+five minutes. A 4xx other than 408 and 429 counts as an answer, never as a
+failure: the reranker replied at once, so it resets the count and can close a
+trial. A rerank call is cut after 270 seconds, inside the default 300-second
+`corpus.retrieval.timeout`: the cut counts as a failure and the fused order is
+used. A `timeout` of 270 seconds or less is refused at load, because the Run would
+cancel a hanging rerank first and the breaker would never see it fail. One such
+breaker serves every Workspace and the federation pass in a process, and none of
+this is configured.
+
 Reranking has its own image budget. Oversized visual candidates fall back to
 text where available; unbounded data URIs are never sent.
 

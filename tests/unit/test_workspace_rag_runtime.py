@@ -29,6 +29,7 @@ from dlightrag.engine.rag.corpus.ingestion.paths import (
     retained_remote_source_path,
 )
 from dlightrag.engine.rag.corpus.sources.base import AsyncDataSource, SourceDocument
+from dlightrag.engine.rag.retrieval.rerank_breaker import RerankBreaker
 from dlightrag.engine.rag.workspace.pool import WorkspacePool, WorkspaceUnavailableError
 from dlightrag.engine.rag.workspace.workspace_rag import RemoteIngestWindowProgress, WorkspaceRag
 from dlightrag.engine.rag.workspace.workspaces import normalize_workspace
@@ -52,6 +53,7 @@ def _service(
         ),
         scheduler=ModelScheduler(max_concurrency=1),
         telemetry=telemetry or NoopTelemetry(),
+        rerank_breaker=RerankBreaker(),
     )
 
 
@@ -657,6 +659,7 @@ class TestWorkspaceRagAingest:
                 ),
                 scheduler=ModelScheduler(max_concurrency=1),
                 telemetry=NoopTelemetry(),
+                rerank_breaker=RerankBreaker(),
             )
 
         close.assert_awaited_once()
@@ -946,6 +949,7 @@ class TestWorkspaceRagRetrieve:
                 backend=cast(Any, _backend(workspace, read_only=False)),
                 scheduler=ModelScheduler(max_concurrency=1),
                 telemetry=NoopTelemetry(),
+                rerank_breaker=RerankBreaker(),
             )
             service._initialized = True
             service._metadata_index = index
@@ -1731,6 +1735,7 @@ class TestWorkspaceRagLightRAGMainPath:
                 backend=cast(Any, backend),
                 scheduler=ModelScheduler(max_concurrency=1),
                 telemetry=NoopTelemetry(),
+                rerank_breaker=RerankBreaker(),
             )
 
         assert events[:5] == [

@@ -16,6 +16,7 @@ from dlightrag.engine.ai.settings import (
     RerankSettings,
 )
 from dlightrag.engine.ai.telemetry import NoopTelemetry
+from dlightrag.engine.rag.retrieval.rerank_breaker import RerankBreaker
 from dlightrag.engine.rag.workspace.ports import WorkspaceCorpusBackend
 from dlightrag.engine.rag.workspace.settings import (
     CorpusSettings,
@@ -86,6 +87,7 @@ def _make_service(*, workspace: str = "test_ws") -> WorkspaceRag:
         backend=backend,
         scheduler=ModelScheduler(max_concurrency=1),
         telemetry=NoopTelemetry(),
+        rerank_breaker=RerankBreaker(),
     )
     service._initialized = True
 

@@ -27,6 +27,7 @@ type SyntheticToolDisposition = Literal[
     "plan_denied",
     "truncated_call",
     "contract_changed",
+    "repeated_call",
 ]
 type SyntheticToolResultOutcome = Literal[
     "unknown_tool",
@@ -34,6 +35,7 @@ type SyntheticToolResultOutcome = Literal[
     "plan_denied",
     "truncated_arguments",
     "tool_contract_changed",
+    "repeated_call",
 ]
 
 TOOL_DISPOSITION_OUTCOME: dict[SyntheticToolDisposition, SyntheticToolResultOutcome] = {
@@ -42,6 +44,7 @@ TOOL_DISPOSITION_OUTCOME: dict[SyntheticToolDisposition, SyntheticToolResultOutc
     "plan_denied": "plan_denied",
     "truncated_call": "truncated_arguments",
     "contract_changed": "tool_contract_changed",
+    "repeated_call": "repeated_call",
 }
 
 #: Most read-only calls one Tool Batch runs at once. A web-heavy turn issues four

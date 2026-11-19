@@ -15,6 +15,7 @@ from dlightrag.application.config import set_config
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.rag.retrieval import MetadataFilter, MetadataScope
 from dlightrag.engine.rag.retrieval.filtering import metadata_filter_scope
+from dlightrag.engine.rag.retrieval.rerank_breaker import RerankBreaker
 from tests.config_helpers import clone_config, mutate_config
 from tests.e2e.pg18_harness import (
     RUN_E2E_ENV,
@@ -103,6 +104,7 @@ async def test_initialized_default_runtime_does_not_capture_tenant_workspace(
         backend=build_pg_corpus_backend(deployment_cfg),
         scheduler=scheduler,
         telemetry=LangfuseTelemetry(),
+        rerank_breaker=RerankBreaker(),
     )
     tenant = None
     try:
@@ -112,6 +114,7 @@ async def test_initialized_default_runtime_does_not_capture_tenant_workspace(
             backend=build_pg_corpus_backend(tenant_cfg),
             scheduler=scheduler,
             telemetry=LangfuseTelemetry(),
+            rerank_breaker=RerankBreaker(),
         )
         doc_path = tmp_path / "workspace-isolation.md"
         doc_path.write_text("Tenant workspace isolation marker.", encoding="utf-8")
@@ -185,6 +188,7 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
         backend=build_pg_corpus_backend(cfg),
         scheduler=ModelScheduler(max_concurrency=cfg.models.max_concurrency),
         telemetry=LangfuseTelemetry(),
+        rerank_breaker=RerankBreaker(),
     )
     doc_path = tmp_path / "pg18-native-smoke.md"
     doc_text = (
@@ -586,6 +590,7 @@ async def test_nested_local_sources_are_parsed_from_their_flat_inputs_never_a_de
         backend=build_pg_corpus_backend(cfg),
         scheduler=ModelScheduler(max_concurrency=cfg.models.max_concurrency),
         telemetry=LangfuseTelemetry(),
+        rerank_breaker=RerankBreaker(),
     )
     try:
         batch = await service.aingest(
@@ -698,6 +703,7 @@ async def test_a_document_is_listed_while_the_rest_of_its_batch_is_still_parsing
         backend=build_pg_corpus_backend(cfg),
         scheduler=ModelScheduler(max_concurrency=cfg.models.max_concurrency),
         telemetry=LangfuseTelemetry(),
+        rerank_breaker=RerankBreaker(),
     )
     try:
         batch = await service.aingest(
@@ -846,6 +852,7 @@ async def test_a_parser_outage_defers_a_corpus_run_that_resumes_what_it_did_not_
         backend=build_pg_corpus_backend(cfg),
         scheduler=ModelScheduler(max_concurrency=cfg.models.max_concurrency),
         telemetry=LangfuseTelemetry(),
+        rerank_breaker=RerankBreaker(),
     )
     degraded: list[str] = []
     recovered: list[str] = []
@@ -928,6 +935,7 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
         backend=build_pg_corpus_backend(writer_cfg),
         scheduler=model_scheduler,
         telemetry=LangfuseTelemetry(),
+        rerank_breaker=RerankBreaker(),
     )
     try:
         doc_path = tmp_path / "reader-smoke.md"
@@ -963,6 +971,7 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
         backend=build_pg_corpus_backend(reader_cfg),
         scheduler=model_scheduler,
         telemetry=LangfuseTelemetry(),
+        rerank_breaker=RerankBreaker(),
     )
     store = PGRunStore()
     run_owner = "reader-owner"
@@ -1034,6 +1043,7 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
         backend=build_pg_corpus_backend(writer_cfg),
         scheduler=model_scheduler,
         telemetry=LangfuseTelemetry(),
+        rerank_breaker=RerankBreaker(),
     )
     try:
         await cleanup.areset()

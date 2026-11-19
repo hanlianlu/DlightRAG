@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from dlightrag.engine.rag.retrieval import ContextRow
+from dlightrag.engine.rag.retrieval.rerank_breaker import RerankCircuitOpen
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,9 @@ async def rerank_with_fallback(
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        logger.warning("Rerank failed; returning fused chunks", exc_info=True)
+        # An open circuit logs its own state changes; a traceback per skipped query is noise.
+        if not isinstance(exc, RerankCircuitOpen):
+            logger.warning("Rerank failed; returning fused chunks", exc_info=True)
         if isinstance(exc, RerankBatchError):
             error_type = exc.error_type
             failed_batch = exc.batch_ordinal

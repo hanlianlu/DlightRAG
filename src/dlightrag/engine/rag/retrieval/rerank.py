@@ -20,7 +20,9 @@ from dlightrag.engine.ai.rerank import RerankModel, create_rerank_model, rerank_
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelSettings, RerankSettings
 from dlightrag.engine.ai.telemetry import Telemetry, bounded_telemetry_text
+from dlightrag.engine.rag.retrieval.rerank_breaker import RerankBreaker
 from dlightrag.engine.rag.retrieval.rerank_fallback import RerankBatchError
+from dlightrag.engine.rag.workspace.settings import RERANK_DEADLINE_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -160,8 +162,6 @@ async def _chat_llm_rerank(
     image_min_quality: int = _DEFAULT_IMAGE_MIN_QUALITY,
 ) -> list[dict[str, Any]]:
     """Score chunks in bounded-concurrency listwise model batches."""
-    if not chunks:
-        return []
 
     async def score_batch(
         batch_start: int,
@@ -287,8 +287,6 @@ async def _run_http_rerank(
     budget_factory: Callable[[], ImagePayloadBudget],
 ) -> list[dict[str, Any]]:
     """Prepare chunk documents and delegate wire execution to AI."""
-    if not chunks:
-        return []
     prepared = await asyncio.to_thread(_prepare_documents, chunks, modality, budget_factory)
     scores = await model.score(query, prepared, top_n=min(top_k, len(prepared)))
     return _build_scored_chunks(
@@ -300,7 +298,7 @@ async def _run_http_rerank(
 
 
 class _RerankCallable:
-    __slots__ = ("_closeable", "_fn", "_telemetry")
+    __slots__ = ("_breaker", "_closeable", "_fn", "_telemetry")
 
     def __init__(
         self,
@@ -308,10 +306,12 @@ class _RerankCallable:
         *,
         closeable: Any,
         telemetry: Telemetry,
+        breaker: RerankBreaker,
     ) -> None:
         self._fn = fn
         self._closeable = closeable
         self._telemetry = telemetry
+        self._breaker = breaker
 
     async def __call__(
         self,
@@ -328,9 +328,32 @@ class _RerankCallable:
             ),
             metadata={"chunk_count": len(chunks), "top_k": top_k},
         ) as observation:
-            result = await self._fn(query, chunks, top_k)
+            result = await self._rerank(query, chunks, top_k)
             observation.update(output={"result_count": len(result)})
             return result
+
+    async def _rerank(
+        self,
+        query: str,
+        chunks: list[dict[str, Any]],
+        top_k: int,
+    ) -> list[dict[str, Any]]:
+        if not chunks:
+            # Nothing reaches the reranker, so there is nothing for the breaker to learn.
+            # No strategy below ever sees an empty pool.
+            return []
+        return await self._breaker.call(lambda: self._within_deadline(query, chunks, top_k))
+
+    async def _within_deadline(
+        self,
+        query: str,
+        chunks: list[dict[str, Any]],
+        top_k: int,
+    ) -> list[dict[str, Any]]:
+        # Inside the breaker's call, so the expiry (a TimeoutError) counts as a failure, while
+        # a cancel from outside still propagates as a CancelledError and counts as nothing.
+        async with asyncio.timeout(RERANK_DEADLINE_SECONDS):
+            return await self._fn(query, chunks, top_k)
 
     async def aclose(self) -> None:
         await self._closeable.aclose()
@@ -352,12 +375,14 @@ def build_rerank_func(
     scoring_settings: ModelSettings | None = None,
     supports_vision: bool | None = None,
     telemetry: Telemetry,
+    breaker: RerankBreaker,
 ) -> Callable[..., Any] | None:
     """Build one closeable rerank orchestration from immutable settings.
 
     Workspace runtimes and the federation pass share this one construction: only
     the chat-listwise strategy reads ``scoring_settings``, and a disabled rerank
-    yields None without any model wiring.
+    yields None without any model wiring. They all talk to one endpoint, so the
+    composition root passes them one ``breaker``; none builds its own.
     """
     if not settings.enabled:
         return None
@@ -388,6 +413,7 @@ def build_rerank_func(
             fn,
             closeable=scoring_model,
             telemetry=telemetry,
+            breaker=breaker,
         )
 
     modality = resolve_rerank_input_modality(settings.input_modality)
@@ -422,6 +448,7 @@ def build_rerank_func(
         fn,
         closeable=model,
         telemetry=telemetry,
+        breaker=breaker,
     )
 
 

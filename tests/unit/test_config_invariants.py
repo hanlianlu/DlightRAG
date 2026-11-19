@@ -41,6 +41,7 @@ from dlightrag.engine.ai.settings import (
 from dlightrag.engine.ai.telemetry import is_secret_key
 from dlightrag.engine.answer.model_runtime import WebSourceRuntimeSettings
 from dlightrag.engine.rag.workspace.settings import (
+    RERANK_DEADLINE_SECONDS,
     BM25ProfileSettings,
     CorpusSettings,
     DoclingSidecarSettings,
@@ -298,6 +299,20 @@ def test_milvus_rejects_postgres_only_promotion_configuration() -> None:
                 promotion={"chunk_threshold": 100},  # type: ignore[arg-type]
             ),
         )
+
+
+@pytest.mark.parametrize("timeout", [1, RERANK_DEADLINE_SECONDS - 1, RERANK_DEADLINE_SECONDS])
+def test_a_retrieval_timeout_the_rerank_deadline_cannot_fit_inside_is_refused(
+    timeout: int,
+) -> None:
+    with pytest.raises(ValidationError, match="corpus.retrieval.timeout must exceed"):
+        DlightragConfig(corpus=CorpusSettings(retrieval=RetrievalSettings(timeout=timeout)))
+
+
+def test_a_retrieval_timeout_just_past_the_rerank_deadline_is_accepted() -> None:
+    timeout = RERANK_DEADLINE_SECONDS + 1
+    config = DlightragConfig(corpus=CorpusSettings(retrieval=RetrievalSettings(timeout=timeout)))
+    assert config.corpus.retrieval.timeout == timeout
 
 
 def test_bm25_defaults_cover_languages_and_one_fallback() -> None:

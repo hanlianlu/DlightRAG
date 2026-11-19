@@ -1459,7 +1459,8 @@ async def test_completion_model_strips_cross_model_anthropic_thinking() -> None:
     finally:
         await model.aclose()
     content = capture.body["messages"][1]["content"]
-    assert content == [{"type": "text", "text": "hi"}]
+    # The thinking is gone; the cache breakpoint every Anthropic request carries is not.
+    assert content == [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]
     serialized = json.dumps(capture.body)
     assert _ANTHROPIC_THINKING_SIGNATURE not in serialized
     assert "Think." not in serialized

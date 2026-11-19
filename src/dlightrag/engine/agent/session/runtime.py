@@ -1014,7 +1014,12 @@ class AgentSessionRuntime[HostDeltaT]:
             provider_state=assistant.provider_state,
             parent_entry_id=_lane_head(view.context.snapshot, view.context.lane_id).entry_id,
         )
-        batch, arguments = self._tool_batch_for_meta(view.context.meta, entry, assistant)
+        repeated = _repeated_search_calls(view, assistant)
+        trip = _repeated_call_trip(view, assistant, repeated)
+        if trip:
+            await self._fail(view, kind="repeated_call_loop", detail=trip)
+            return
+        batch, arguments = self._tool_batch_for_meta(view.context.meta, entry, assistant, repeated)
         if batch.items:
             next_state: RunOperationState = ToolBatchReady(
                 view.context.operation_id,
@@ -1086,6 +1091,7 @@ class AgentSessionRuntime[HostDeltaT]:
         meta: OperationMeta,
         assistant_entry: AssistantMessageEntry,
         assistant: AssistantTurn,
+        repeated: frozenset[str],
     ) -> tuple[ToolBatchPlan, tuple[ToolArguments, ...]]:
         import json
 
@@ -1142,7 +1148,17 @@ class AgentSessionRuntime[HostDeltaT]:
                     contract_version = pinned_tool.contract_version
                     schema = pinned_tool.input_schema_digest
                     effective = sha256(canonical_input.encode("utf-8")).hexdigest()
-                    arguments.append(ToolArguments(intent_id, canonical_input))
+                    if call.id in repeated:
+                        disposition = "repeated_call"
+                        synthetic = (
+                            f'Tool "{call.name}" was not executed: the identical call already '
+                            "returned in the previous two turns. Use that result or change the "
+                            "command/query; repeating it cannot add evidence."
+                        )
+                        intent_id = None
+                        read_only = False
+                    else:
+                        arguments.append(ToolArguments(intent_id, canonical_input))
             items.append(
                 ToolBatchItem(
                     source_index=index,
@@ -2084,6 +2100,91 @@ def _settlement_facts(
 
 def _digest(value: Any) -> str:
     return sha256(canonical_json(value).encode("utf-8")).hexdigest()
+
+
+_LOOP_GUARD_TOOLS = frozenset({"search_web", "bash"})
+_LOOP_GUARD_TURNS = 2
+#: How many identical calls the guard may refuse before the Run is stopped instead. The guard's own
+#: window includes the refused turns, so without the cap a model that re-issues the call is refused
+#: for ever and the Run never ends.
+_LOOP_GUARD_BLOCK_LIMIT = 3
+
+
+def _repeated_search_calls(view: OperationView, assistant: AssistantTurn) -> frozenset[str]:
+    """Tool-call ids that repeat an identical guarded call from the previous two turns.
+
+    A model that retries the same search or shell command can burn a Run on one call; the guard
+    turns a repeated identical call into a synthetic Tool result so the next turn has to change
+    strategy (and `_repeated_call_trip` stops the Run when the model does not).
+    """
+    graph = view.context.snapshot.graph
+    if graph is None:
+        return frozenset()
+    previous = [item for item in graph.ancestry() if isinstance(item, AssistantMessageEntry)]
+    prior = previous[-_LOOP_GUARD_TURNS:]
+    if not prior:
+        return frozenset()
+    seen = {
+        (call.name, canonical_json(call.arguments))
+        for entry in prior
+        for call in entry.tool_calls
+        if call.name in _LOOP_GUARD_TOOLS
+    }
+    return frozenset(
+        call.id
+        for call in assistant.tool_calls
+        if call.name in _LOOP_GUARD_TOOLS and (call.name, canonical_json(call.arguments)) in seen
+    )
+
+
+def _repeated_call_trip(
+    view: OperationView, assistant: AssistantTurn, repeated: frozenset[str]
+) -> str:
+    """The failure detail when the model has had the same call refused too often, else "".
+
+    The Run is stopped at `_LOOP_GUARD_BLOCK_LIMIT` refusals of one call digest instead of issuing
+    one more synthetic result: a refused duplicate is not new evidence, and a model that keeps
+    re-issuing it would otherwise be refused until the Run's budget ran out.
+    """
+    if not repeated:
+        return ""
+    graph = view.context.snapshot.graph
+    if graph is None:
+        return ""
+    entries = list(graph.ancestry())
+    digests: dict[str, tuple[str, str]] = {}
+    for entry in entries:
+        if isinstance(entry, AssistantMessageEntry):
+            for call in entry.tool_calls:
+                digests[call.id] = (call.name, canonical_json(call.arguments))
+    # The turn being committed is not in the ancestry yet, so its own digests are read here.
+    current = {
+        call.id: (call.name, canonical_json(call.arguments)) for call in assistant.tool_calls
+    }
+    targets = {current[call_id] for call_id in repeated if call_id in current}
+    if not targets:
+        return ""
+    refused = 0
+    for entry in reversed(entries):
+        if isinstance(entry, AssistantMessageEntry):
+            continue
+        if (
+            isinstance(entry, ToolResultMessageEntry)
+            and entry.result.outcome == "repeated_call"
+            and digests.get(entry.result.call_id) in targets
+        ):
+            refused += 1
+            continue
+        break
+    if refused < _LOOP_GUARD_BLOCK_LIMIT:
+        return ""
+    matched = next(call for call in assistant.tool_calls if call.id in repeated)
+    return (
+        f'Tool "{matched.name}" was refused {refused} times in a row: the model kept issuing the '
+        "identical call after it had already returned, so every retry was a refused duplicate and "
+        "not new evidence. The Run is stopped so the repetition cannot consume it; change the "
+        "command, or answer with the evidence already held."
+    )
 
 
 def _duplicates(values: Iterable[str]) -> list[str]:

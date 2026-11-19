@@ -25,6 +25,7 @@ type ToolResultOutcome = Literal[
     "invalid_arguments",
     "plan_denied",
     "truncated_arguments",
+    "repeated_call",
 ]
 type JsonValue = Any
 
