@@ -12,11 +12,16 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import io
 import json
 import os
 import pkgutil
 import re
+import subprocess
+import urllib.error
+import urllib.parse
 import urllib.request
+from email.message import Message
 from pathlib import Path
 from typing import Any
 
@@ -320,6 +325,10 @@ def test_an_unreadable_retention_falls_back_to_the_documented_default() -> None:
     assert cli.retention_ttl("0h") == cli.DEFAULT_RETENTION
     assert cli.retention_ttl("0") == cli.DEFAULT_RETENTION
     assert cli.retention_ttl("1.5h") == cli.DEFAULT_RETENTION
+    # `str.isdigit` is true of a superscript, which `int` then refuses: a duration is ASCII
+    # digits, and anything else is unreadable rather than an exception.
+    assert cli.retention_ttl("²h") == cli.DEFAULT_RETENTION
+    assert cli.retention_ttl("٣d") == cli.DEFAULT_RETENTION
 
 
 def test_configured_retention_prefers_the_environment_then_the_stack_env_file(
@@ -359,8 +368,20 @@ def test_the_shipped_env_example_states_the_default_retention() -> None:
 # ── The alerting artifacts: what a push sends ────────────────────────────────
 
 
-def _stack(tmp_path: Path, *, alert_id: str | None, dashboard_id: str | None) -> Path:
-    """A miniature stack: one channel, one alert, one dashboard file."""
+_ENVIRON = {"TELEGRAM_URL": "https://example.invalid/bot", "HYPERDX_CONNECTION_ID": "connection-1"}
+
+#: Every variable the shipped artifacts name, as a deployment's `stack/.env` would hold them.
+_SHIPPED_ENVIRON = {
+    "DLIGHTRAG_TELEGRAM_CHAT_ID": "chat-1",
+    "DLIGHTRAG_TELEGRAM_WEBHOOK_URL": "https://example.invalid/bot",
+    "HYPERDX_CONNECTION_ID": "connection-1",
+    "HYPERDX_SOURCE_TRACES": "source-traces",
+    "HYPERDX_SOURCE_METRICS": "source-metrics",
+}
+
+
+def _stack(tmp_path: Path) -> Path:
+    """A miniature stack: one channel, one alert, one dashboard file, none carrying an id."""
     alerts = tmp_path / "stack" / "alerts"
     dashboards = tmp_path / "stack" / "dashboards"
     alerts.mkdir(parents=True)
@@ -368,8 +389,7 @@ def _stack(tmp_path: Path, *, alert_id: str | None, dashboard_id: str | None) ->
     (alerts / "channel.json").write_text(
         json.dumps(
             {
-                "id": "webhook-1",
-                "name": "Telegram",
+                "name": "Product · Telegram",
                 "service": "generic",
                 "url": "${TELEGRAM_URL}",
                 "body": '{"chat_id": "1", "text": "{{title}}"}',
@@ -378,119 +398,244 @@ def _stack(tmp_path: Path, *, alert_id: str | None, dashboard_id: str | None) ->
         encoding="utf-8",
     )
     alert: dict[str, Any] = {
-        "name": "the api is answering 5xx",
+        "name": "Product · the api is answering 5xx",
+        "displayName": "Product · api 5xx",
         "source": "inline",
         "interval": "5m",
         "threshold": 0.02,
         "thresholdType": "above",
-        "channel": {"type": "webhook", "webhookId": "webhook-1"},
-        "chartConfig": {"configType": "sql", "displayType": "number"},
+        "channel": {"type": "webhook", "webhookId": "${HYPERDX_WEBHOOK_ID}"},
+        "chartConfig": {
+            "configType": "sql",
+            "displayType": "number",
+            "connectionId": "${HYPERDX_CONNECTION_ID}",
+        },
     }
-    if alert_id is not None:
-        alert["id"] = alert_id
     (alerts / "api-5xx.json").write_text(json.dumps(alert), encoding="utf-8")
-    dashboard: dict[str, Any] = {"name": "DlightRAG", "tiles": []}
-    if dashboard_id is not None:
-        dashboard["id"] = dashboard_id
-    (dashboards / "dlightrag.json").write_text(json.dumps(dashboard), encoding="utf-8")
+    (dashboards / "product.json").write_text(
+        json.dumps({"name": "Product", "tiles": []}), encoding="utf-8"
+    )
     return tmp_path
 
 
-def test_an_artifact_with_an_id_is_updated_and_one_without_is_created(tmp_path: Path) -> None:
-    """A file that names its id is the same alert on the next run, not a second one."""
-    pushes = cli.alerting_artifacts(
-        _stack(tmp_path, alert_id="alert-1", dashboard_id="dash-1"),
-        environ={"TELEGRAM_URL": "https://example.invalid/bot"},
-    )
-    assert [(push.method, push.path) for push in pushes] == [
-        ("PUT", "/api/v2/webhooks/webhook-1"),
-        ("PUT", "/api/v2/alerts/alert-1"),
-        ("PUT", "/api/v2/dashboards/dash-1"),
-    ]
+class _Response:
+    status = 200
 
-    created = cli.alerting_artifacts(
-        _stack(tmp_path / "fresh", alert_id=None, dashboard_id=None),
-        environ={"TELEGRAM_URL": "https://example.invalid/bot"},
+    def __init__(self, document: object) -> None:
+        self._body = json.dumps(document).encode("utf-8")
+
+    def __enter__(self) -> _Response:
+        return self
+
+    def __exit__(self, *_exc: object) -> bool:
+        return False
+
+    def read(self) -> bytes:
+        return self._body
+
+
+class _FakeApi:
+    """The slice of ClickStack's external API a push talks to: list, create, and update.
+
+    ``documents`` is what the stack already holds, as ``{collection: {name: id}}``. A
+    create answers with a new id, an update answers with the id its path names, and every
+    request is kept so a test can read what was sent and in what order.
+    """
+
+    def __init__(self, documents: dict[str, dict[str, str]] | None = None) -> None:
+        self.documents = {
+            collection: dict(names) for collection, names in (documents or {}).items()
+        }
+        self.sent: list[tuple[str, str, dict[str, Any] | None, urllib.request.Request]] = []
+
+    def __call__(self, request: urllib.request.Request, **_kwargs: Any) -> _Response:
+        method, path = request.get_method(), urllib.parse.urlsplit(request.full_url).path
+        body = json.loads(request.data) if isinstance(request.data, bytes) else None
+        self.sent.append((method, path, body, request))
+        collection = path.split("/")[3]
+        names = self.documents.setdefault(collection, {})
+        key = cli._COLLECTION_KEYS[collection]  # noqa: SLF001 - the contract under test
+        if method == "GET":
+            data = [{"id": identifier, key: name} for name, identifier in names.items()]
+            return _Response({"data": data, "meta": {"total": len(data)}})
+        if method == "POST":
+            assert body is not None
+            names[body[key]] = identifier = f"new-{len(names) + 1}"
+            return _Response({"data": {"id": identifier}})
+        return _Response({"data": {"id": path.rpartition("/")[2]}})
+
+    @property
+    def writes(self) -> list[tuple[str, str]]:
+        return [(method, path) for method, path, _body, _request in self.sent if method != "GET"]
+
+
+def _push(root: Path, api: _FakeApi, lines: list[str] | None = None) -> int:
+    return cli.push_artifacts(
+        cli.alerting_artifacts(root, environ=_ENVIRON),
+        api_url="http://127.0.0.1:8000/",
+        api_key="access-key",
+        opener=api,
+        echo=(lines if lines is not None else []).append,
     )
-    assert [(push.method, push.path) for push in created] == [
-        ("PUT", "/api/v2/webhooks/webhook-1"),
+
+
+def test_a_first_push_creates_every_artifact_and_hands_the_new_webhook_to_the_alerts(
+    tmp_path: Path,
+) -> None:
+    """On a stack that holds nothing the push is three creates, the channel first.
+
+    The alert names its webhook as a variable the push fills in once the channel exists:
+    the id is the one the stack just minted, not one a file carried from another stack.
+    """
+    api = _FakeApi()
+    lines: list[str] = []
+
+    assert _push(_stack(tmp_path), api, lines) == 3
+
+    assert api.writes == [
+        ("POST", "/api/v2/webhooks"),
         ("POST", "/api/v2/alerts"),
         ("POST", "/api/v2/dashboards"),
     ]
-
-
-def test_the_channel_is_pushed_before_the_alerts_that_name_it(tmp_path: Path) -> None:
-    """An alert that names an id the API has not seen yet has no destination."""
-    pushes = cli.alerting_artifacts(
-        _stack(tmp_path, alert_id="alert-1", dashboard_id="dash-1"),
-        environ={"TELEGRAM_URL": "https://example.invalid/bot"},
+    alert = next(
+        body for method, path, body, _ in api.sent if method == "POST" and "alerts" in path
     )
-    assert pushes[0].path.startswith("/api/v2/webhooks")
-    assert pushes[-1].path.startswith("/api/v2/dashboards")
-    # The id belongs to the path, not to the body: the API writes what the path names.
-    assert "id" not in pushes[0].payload
-    assert "id" not in pushes[1].payload
-    assert pushes[1].payload["channel"] == {"type": "webhook", "webhookId": "webhook-1"}
+    assert alert is not None
+    assert alert["channel"] == {"type": "webhook", "webhookId": "new-1"}
+    assert alert["chartConfig"]["connectionId"] == "connection-1"
+    assert lines[0] == "200 POST /api/v2/webhooks — channel Product · Telegram"
+
+
+def test_a_later_push_updates_what_carries_its_name_and_creates_the_rest(tmp_path: Path) -> None:
+    """The name is the identity: a file that was pushed before is the same document now."""
+    api = _FakeApi(
+        {
+            "webhooks": {"Product · Telegram": "hook-7"},
+            "alerts": {"Product · api 5xx": "alert-1", "Someone else's alert": "alert-2"},
+        }
+    )
+
+    _push(_stack(tmp_path), api)
+
+    assert api.writes == [
+        ("PUT", "/api/v2/webhooks/hook-7"),
+        ("PUT", "/api/v2/alerts/alert-1"),
+        ("POST", "/api/v2/dashboards"),
+    ]
+    alert = next(body for method, path, body, _ in api.sent if path.endswith("alerts/alert-1"))
+    assert alert is not None
+    assert alert["channel"]["webhookId"] == "hook-7"
+    # A stack that holds other documents loses none of them, and a push twice is a push once.
+    assert api.documents["alerts"] == {
+        "Product · api 5xx": "alert-1",
+        "Someone else's alert": "alert-2",
+    }
+    before = len(api.sent)
+    _push(tmp_path, api)
+    assert [method for method, *_ in api.sent[before:]].count("POST") == 0
+
+
+def test_each_collection_is_listed_once_and_before_it_is_written(tmp_path: Path) -> None:
+    api = _FakeApi()
+    _push(_stack(tmp_path), api)
+    assert [(method, path) for method, path, _body, _ in api.sent if method == "GET"] == [
+        ("GET", "/api/v2/webhooks"),
+        ("GET", "/api/v2/alerts"),
+        ("GET", "/api/v2/dashboards"),
+    ]
+    assert [method for method, *_ in api.sent] == ["GET", "POST", "GET", "POST", "GET", "POST"]
+
+
+def test_a_push_never_sends_an_id_in_a_body_or_a_variable_it_could_not_fill(tmp_path: Path) -> None:
+    api = _FakeApi({"alerts": {"Product · api 5xx": "alert-1"}})
+    _push(_stack(tmp_path), api)
+    for method, _path, body, _request in api.sent:
+        if method != "GET":
+            assert body is not None
+            assert "id" not in body
+            assert "${" not in json.dumps(body)
+
+
+def test_a_listing_shorter_than_its_total_stops_the_push(tmp_path: Path) -> None:
+    """Creating what a truncated listing hid would be a duplicate, so the push stops."""
+
+    def truncated(request: urllib.request.Request, **_kwargs: Any) -> _Response:
+        assert request.get_method() == "GET"
+        return _Response({"data": [], "meta": {"total": 5}})
+
+    with pytest.raises(SystemExit, match="more exist than one listing returns"):
+        cli.push_artifacts(
+            cli.alerting_artifacts(_stack(tmp_path), environ=_ENVIRON),
+            api_url="http://127.0.0.1:8000",
+            api_key="access-key",
+            opener=truncated,
+            echo=lambda _line: None,
+        )
+
+
+def test_an_artifact_without_its_name_is_refused_naming_the_file(tmp_path: Path) -> None:
+    root = _stack(tmp_path)
+    document = json.loads((root / "stack" / "alerts" / "api-5xx.json").read_text(encoding="utf-8"))
+    del document["displayName"]
+    (root / "stack" / "alerts" / "api-5xx.json").write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(SystemExit, match=r"api-5xx\.json names no `displayName`"):
+        cli.alerting_artifacts(root, environ=_ENVIRON)
+
+
+def test_a_variable_set_to_nothing_is_a_variable_nobody_set() -> None:
+    """An empty id would be pushed as an empty string and refused by the API far from here."""
+    with pytest.raises(SystemExit, match="HYPERDX_CONNECTION_ID"):
+        cli.expand_environment("${HYPERDX_CONNECTION_ID}", environ={"HYPERDX_CONNECTION_ID": ""})
+    assert cli.expand_environment("${LATER}", environ={}, keep=("LATER",)) == "${LATER}"
 
 
 def test_a_webhook_url_comes_from_the_environment_not_the_file(tmp_path: Path) -> None:
     """A bot token is a credential; the artifact names the variable that holds it."""
-    root = _stack(tmp_path, alert_id="alert-1", dashboard_id="dash-1")
-    pushes = cli.alerting_artifacts(root, environ={"TELEGRAM_URL": "https://example.invalid/bot"})
+    pushes = cli.alerting_artifacts(_stack(tmp_path), environ=_ENVIRON)
     assert pushes[0].payload["url"] == "https://example.invalid/bot"
     assert "${TELEGRAM_URL}" not in json.dumps([push.payload for push in pushes])
 
 
 def test_a_missing_variable_stops_the_push_naming_it(tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as raised:
-        cli.alerting_artifacts(_stack(tmp_path, alert_id=None, dashboard_id=None), environ={})
+        cli.alerting_artifacts(_stack(tmp_path), environ={})
     assert "TELEGRAM_URL" in str(raised.value)
 
 
 def test_a_push_sends_the_key_as_a_bearer_token_and_the_artifact_as_its_body(
     tmp_path: Path,
 ) -> None:
-    """One request per artifact, and the status the API answered is reported."""
-    pushes = cli.alerting_artifacts(
-        _stack(tmp_path, alert_id="alert-1", dashboard_id="dash-1"),
-        environ={"TELEGRAM_URL": "https://example.invalid/bot"},
-    )
-    sent: list[urllib.request.Request] = []
+    """One write per artifact, authenticated, and the status the API answered is reported."""
+    api = _FakeApi()
     lines: list[str] = []
 
-    class _Response:
-        status = 200
+    _push(_stack(tmp_path), api, lines)
 
-        def __enter__(self) -> _Response:
-            return self
+    requests = [request for *_, request in api.sent]
+    assert all(request.get_header("Authorization") == "Bearer access-key" for request in requests)
+    assert all(request.get_header("Content-type") == "application/json" for request in requests)
+    assert {request.full_url.partition("/api")[0] for request in requests} == {
+        "http://127.0.0.1:8000"
+    }
+    assert len(lines) == 3 and all(line.startswith("200 ") for line in lines)
 
-        def __exit__(self, *_exc: object) -> bool:
-            return False
 
-    def opener(request: urllib.request.Request, **_kwargs: Any) -> _Response:
-        sent.append(request)
-        return _Response()
+def test_a_rejected_write_names_the_artifact_the_api_refused(tmp_path: Path) -> None:
+    def refuse(request: urllib.request.Request, **_kwargs: Any) -> _Response:
+        if request.get_method() == "GET":
+            return _Response({"data": []})
+        raise urllib.error.HTTPError(
+            request.full_url, 400, "Bad Request", Message(), io.BytesIO(b'{"message": "no"}')
+        )
 
-    count = cli.push_artifacts(
-        pushes,
-        api_url="http://127.0.0.1:8000/",
-        api_key="access-key",
-        opener=opener,
-        echo=lines.append,
-    )
-
-    assert count == len(pushes) == 3
-    assert [request.full_url for request in sent] == [
-        "http://127.0.0.1:8000/api/v2/webhooks/webhook-1",
-        "http://127.0.0.1:8000/api/v2/alerts/alert-1",
-        "http://127.0.0.1:8000/api/v2/dashboards/dash-1",
-    ]
-    assert all(request.get_header("Authorization") == "Bearer access-key" for request in sent)
-    assert all(request.get_header("Content-type") == "application/json" for request in sent)
-    alert = sent[1].data
-    assert isinstance(alert, bytes)
-    assert json.loads(alert)["name"] == "the api is answering 5xx"
-    assert len(lines) == 3 and lines[0].startswith("200 PUT ")
+    with pytest.raises(SystemExit, match=r"channel Product · Telegram: HTTP 400 .*no"):
+        cli.push_artifacts(
+            cli.alerting_artifacts(_stack(tmp_path), environ=_ENVIRON),
+            api_url="http://127.0.0.1:8000",
+            api_key="access-key",
+            opener=refuse,
+            echo=lambda _line: None,
+        )
 
 
 def test_the_shipped_artifacts_are_pushable_and_each_alert_watches_a_window() -> None:
@@ -500,31 +645,23 @@ def test_the_shipped_artifacts_are_pushable_and_each_alert_watches_a_window() ->
     window it is evaluated over (it would count every span ever recorded), and an
     alert pointing at a webhook the stack does not ship.
     """
-    pushes = cli.alerting_artifacts(
-        cli.stack_root(),
-        environ={
-            "DLIGHTRAG_TELEGRAM_WEBHOOK_ID": "webhook-1",
-            "DLIGHTRAG_TELEGRAM_CHAT_ID": "chat-1",
-            "DLIGHTRAG_TELEGRAM_WEBHOOK_URL": "https://example.invalid/bot",
-        },
-    )
-    channel = next(push for push in pushes if push.path.startswith("/api/v2/webhooks"))
-    channel_id = channel.path.rpartition("/")[2]
-    assert channel_id and channel.payload["service"] == "generic"
+    pushes = cli.alerting_artifacts(cli.stack_root(), environ=_SHIPPED_ENVIRON)
+    channel = next(push for push in pushes if push.collection == "webhooks")
+    assert channel.payload["service"] == "generic"
 
-    alerts = [push for push in pushes if push.path.startswith("/api/v2/alerts")]
+    alerts = [push for push in pushes if push.collection == "alerts"]
     # The browser channel's `front-end-errors` alert is not shipped, because the product
     # has no browser channel; and no 5xx share is computable from what the api exports.
     assert len(alerts) == 6
     for push in alerts:
-        assert push.method == "PUT"
-        assert push.payload["channel"]["webhookId"] == channel_id
+        # The webhook is the one the push has just written: the file names the variable.
+        assert push.payload["channel"]["webhookId"] == f"${{{cli.CHANNEL_ID_VARIABLE}}}"
         assert push.payload["thresholdType"] == "above"
         assert push.payload["interval"] in {"5m", "15m", "1h"}
         query = push.payload["chartConfig"]["sqlTemplate"]
         assert "$__timeFilter" in query, f"{push.label} does not filter to its evaluation window"
 
-    dashboards = [push for push in pushes if push.path.startswith("/api/v2/dashboards")]
+    dashboards = [push for push in pushes if push.collection == "dashboards"]
     assert [push.payload["name"] for push in dashboards] == ["DlightRAG"]
     tiles = dashboards[0].payload["tiles"]
     assert len(tiles) == 10
@@ -582,6 +719,46 @@ def test_the_postgres_alert_counts_backends_rather_than_label_combinations() -> 
     assert "greatest(1 - max(up)," in query
 
 
+def test_the_postgres_alert_fires_when_the_server_answers_nothing_but_pg_up() -> None:
+    """A server that is down reports `pg_up = 0` and none of the other series.
+
+    `maxconn` is then 0, and the shipped query once returned 0 for any scrape whose
+    `maxconn` was 0: the very scrape that says the server is down. The connection ratio is
+    the branch that needs a ceiling to divide by, so only it is guarded; `1 - max(up)` is
+    read whether or not the scrape carried anything else. Worked through the query: a scrape
+    of `pg_up = 0` alone is `greatest(1 - 0, 0) = 1`, over the 0.8 threshold, and a healthy
+    scrape of 28 backends under an 80-connection ceiling is `greatest(0, 0.35) = 0.35`.
+    """
+    document = json.loads(
+        (cli.stack_root() / "stack" / "alerts" / "postgres-health.json").read_text(encoding="utf-8")
+    )
+    query = document["chartConfig"]["sqlTemplate"]
+
+    assert "if(max(maxconn) = 0, 0, max(backends) / max(maxconn))" in query
+    assert "if(max(maxconn) = 0, 0,\n" not in query, "the ceiling guard must not wrap the outage"
+    # No scrape at all is a deployment that is not watching Postgres, and stays quiet.
+    assert "if(count() = 0, 0, max(pressure))" in query
+
+
+def test_the_disk_alert_keeps_a_mountpoint_that_has_no_free_space_left() -> None:
+    """A full disk is `free = 0`, which is the row this alert exists to report.
+
+    `HAVING free > 0` dropped it before the utilization was computed, so a mountpoint at
+    100% vanished from the result and the alert stayed `OK`. The filter now removes only a
+    mountpoint that reported nothing at all (`used + free = 0`, which would divide by zero).
+    """
+    document = json.loads(
+        (cli.stack_root() / "stack" / "alerts" / "host-disk-pressure.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    query = document["chartConfig"]["sqlTemplate"]
+
+    assert "HAVING used + free > 0" in query
+    assert "HAVING free > 0" not in query
+    assert "used / (used + free) AS utilization" in query
+
+
 def test_the_postgres_alert_states_its_threshold_as_a_ceiling() -> None:
     """0.8 of `max_connections` is a level the deployment approaches, not one it sits at.
 
@@ -607,20 +784,13 @@ def _shipped_queries() -> list[tuple[str, str, str]]:
     The artifacts are read through the same `alerting_artifacts` a push uses, so what is
     checked here is what would reach the API rather than what is on disk.
     """
-    pushes = cli.alerting_artifacts(
-        cli.stack_root(),
-        environ={
-            "DLIGHTRAG_TELEGRAM_WEBHOOK_ID": "webhook-1",
-            "DLIGHTRAG_TELEGRAM_CHAT_ID": "chat-1",
-            "DLIGHTRAG_TELEGRAM_WEBHOOK_URL": "https://example.invalid/bot",
-        },
-    )
+    pushes = cli.alerting_artifacts(cli.stack_root(), environ=_SHIPPED_ENVIRON)
     queries: list[tuple[str, str, str]] = []
     for push in pushes:
-        if push.path.startswith("/api/v2/alerts"):
+        if push.collection == "alerts":
             config = push.payload["chartConfig"]
             queries.append((push.label, config["sqlTemplate"], config.get("displayType", "")))
-        elif push.path.startswith("/api/v2/dashboards"):
+        elif push.collection == "dashboards":
             for tile in push.payload["tiles"]:
                 config = tile.get("config", {})
                 if "sqlTemplate" in config:
@@ -752,27 +922,131 @@ def test_no_shipped_artifact_carries_a_bot_token() -> None:
     assert offenders == []
 
 
-def test_a_push_resolves_the_webhook_and_chat_ids_from_the_environment() -> None:
+_OBJECT_ID = re.compile(r"\b[0-9a-f]{24}\b")
+
+
+def _shipped_artifact_files() -> list[Path]:
+    stack = cli.stack_root() / "stack"
+    files = sorted((stack / "alerts").glob("*.json")) + sorted(
+        (stack / "dashboards").glob("*.json")
+    )
+    assert len(files) >= 8, "every alert, the channel, and the dashboard are covered"
+    return files
+
+
+def test_no_shipped_artifact_names_a_stack_instance() -> None:
+    """An id belongs to the stack whose Mongo minted it, so no file may carry one.
+
+    The alerts and the dashboard once held a connection id, a source id, their own ids, and
+    the webhook's, all minted by one stack's first seeding. On any other stack a push wrote
+    to documents that did not exist or read a source that held nothing. What a file names
+    instead is a variable, and every variable is one `bootstrap` writes or an operator sets.
+    """
+    known = {
+        *cli.STACK_IDS,
+        cli.CHANNEL_ID_VARIABLE,
+        "DLIGHTRAG_TELEGRAM_CHAT_ID",
+        "DLIGHTRAG_TELEGRAM_WEBHOOK_URL",
+    }
+    for path in _shipped_artifact_files():
+        text = path.read_text(encoding="utf-8")
+        document = json.loads(text)
+        assert not _OBJECT_ID.search(text), f"{path.name} carries an ObjectId"
+        assert "id" not in document, f"{path.name} names its own id"
+        assert all("id" not in tile for tile in document.get("tiles", [])), path.name
+        assert set(cli._ENV_REFERENCE.findall(text)) <= known, path.name  # noqa: SLF001
+
+    example = (cli.stack_root() / "stack" / ".env.example").read_text(encoding="utf-8")
+    declared = {line.partition("=")[0] for line in example.splitlines() if "=" in line}
+    assert set(cli.STACK_IDS) <= declared
+    assert "DLIGHTRAG_TELEGRAM_WEBHOOK_ID" not in declared, "the push learns the webhook's id"
+
+
+def test_every_shipped_name_carries_the_product_so_two_products_can_share_a_stack() -> None:
+    """Names are the identity of a push, so a name another product could also use would be
+    overwritten by it: a webhook is unique per service and name, and an alert is found by its
+    display name."""
+    pushes = cli.alerting_artifacts(cli.stack_root(), environ=_SHIPPED_ENVIRON)
+    for push in pushes:
+        assert push.name.startswith("DlightRAG"), push.label
+        if push.collection == "alerts":
+            assert push.name.startswith("DlightRAG · "), push.label
+            assert push.payload["name"].startswith("DlightRAG · "), push.label
+
+
+def test_every_query_over_product_signals_is_scoped_to_the_products_services() -> None:
+    """Another product exporting into the same ClickStack must not be counted here.
+
+    The per-process service names are `dlightrag-api`, `dlightrag-mcp` and
+    `dlightrag-reader`, so the scope is a prefix.
+    A query over host or collector metrics has no product to scope to and is left alone.
+    """
+    for label, query, _display in _shipped_queries():
+        if "SpanName" in query or "SpanAttributes" in query or "otel_logs" in query:
+            assert "startsWith(ServiceName, 'dlightrag')" in query, (
+                f"{label} reads product signals without naming the product's services"
+            )
+    dashboard = next(
+        push
+        for push in cli.alerting_artifacts(cli.stack_root(), environ=_SHIPPED_ENVIRON)
+        if push.collection == "dashboards"
+    )
+    for tile in dashboard.payload["tiles"]:
+        config = tile["config"]
+        if config.get("sourceId") == "${HYPERDX_SOURCE_TRACES}" and "select" in config:
+            for item in config["select"]:
+                assert "startsWith(ServiceName, 'dlightrag')" in item["where"], tile["name"]
+
+
+def test_the_failing_runs_tile_reads_the_attribute_the_alert_reads() -> None:
+    """The tile and the alert of one name once classified a failure by different fields.
+
+    The alert reads `dlightrag.error.kind` and falls back to the status description for
+    a span recorded before that attribute existed; the tile read only the description, so
+    a failure the executor classified could show under a different kind than the one that
+    paged.
+    """
+    pushes = cli.alerting_artifacts(cli.stack_root(), environ=_SHIPPED_ENVIRON)
+    tile = next(
+        tile
+        for push in pushes
+        if push.collection == "dashboards"
+        for tile in push.payload["tiles"]
+        if tile["name"] == "failing runs by kind"
+    )["config"]["sqlTemplate"]
+    alert = next(push for push in pushes if push.label == "alert DlightRAG · failing runs by kind")
+    alerted = alert.payload["chartConfig"]["sqlTemplate"]
+    attribute = "notEmpty(SpanAttributes['dlightrag.error.kind'])"
+    assert attribute in tile and attribute in alerted
+    # The same classification: everything between `multiIf(` and its alias is one text.
+    assert (
+        tile.partition("multiIf(")[2].partition(" AS error_kind")[0]
+        == (alerted.partition("multiIf(")[2].partition(" AS error_kind")[0])
+    )
+
+
+def test_a_push_resolves_the_stack_ids_and_chat_from_the_environment() -> None:
     """The ids reach the push through the environment it is given."""
     pushes = cli.alerting_artifacts(
-        cli.stack_root(),
-        environ={
-            "DLIGHTRAG_TELEGRAM_WEBHOOK_ID": "webhook-123",
-            "DLIGHTRAG_TELEGRAM_CHAT_ID": "chat-456",
-            "DLIGHTRAG_TELEGRAM_WEBHOOK_URL": "https://example.invalid/bot",
-        },
+        cli.stack_root(), environ={**_SHIPPED_ENVIRON, "HYPERDX_CONNECTION_ID": "connection-123"}
     )
-    channel = next(push for push in pushes if push.path.startswith("/api/v2/webhooks"))
-    assert channel.path == "/api/v2/webhooks/webhook-123"
-    assert '"chat_id": "chat-456"' in channel.payload["body"]
-    alerts = [push for push in pushes if push.path.startswith("/api/v2/alerts")]
-    assert all(push.payload["channel"]["webhookId"] == "webhook-123" for push in alerts)
+    channel = next(push for push in pushes if push.collection == "webhooks")
+    assert '"chat_id": "chat-1"' in channel.payload["body"]
+    alerts = [push for push in pushes if push.collection == "alerts"]
+    assert len(alerts) == 6
+    for push in alerts:
+        assert push.payload["chartConfig"]["connectionId"] == "connection-123"
+    tracked = [push for push in alerts if "sourceId" in push.payload["chartConfig"]]
+    assert {push.payload["chartConfig"]["sourceId"] for push in tracked} <= {
+        "source-traces",
+        "source-metrics",
+    }
 
 
 def test_a_push_reads_the_stack_env_file_the_operator_edits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """`stack/.env` is where the operator puts the ids; nobody has to export them."""
+    """`stack/.env` is where `bootstrap` and the operator put the values; nobody has to export them."""
     import argparse
 
     alerts = tmp_path / "stack" / "alerts"
@@ -780,8 +1054,7 @@ def test_a_push_reads_the_stack_env_file_the_operator_edits(
     (alerts / "channel.json").write_text(
         json.dumps(
             {
-                "id": "${DLIGHTRAG_TELEGRAM_WEBHOOK_ID}",
-                "name": "Telegram",
+                "name": "Product · Telegram",
                 "service": "generic",
                 "url": "${DLIGHTRAG_TELEGRAM_WEBHOOK_URL}",
                 "body": '{"chat_id": "${DLIGHTRAG_TELEGRAM_CHAT_ID}", "text": "{{title}}"}',
@@ -792,16 +1065,17 @@ def test_a_push_reads_the_stack_env_file_the_operator_edits(
     (alerts / "one-alert.json").write_text(
         json.dumps(
             {
-                "name": "the api is answering 5xx",
-                "channel": {"type": "webhook", "webhookId": "${DLIGHTRAG_TELEGRAM_WEBHOOK_ID}"},
+                "name": "Product · the api is answering 5xx",
+                "displayName": "Product · api 5xx",
+                "chartConfig": {"connectionId": "${HYPERDX_CONNECTION_ID}"},
             }
         ),
         encoding="utf-8",
     )
     variables = {
-        "DLIGHTRAG_TELEGRAM_WEBHOOK_ID": "webhook-9",
         "DLIGHTRAG_TELEGRAM_CHAT_ID": "chat-9",
         "DLIGHTRAG_TELEGRAM_WEBHOOK_URL": "https://example.invalid/bot",
+        "HYPERDX_CONNECTION_ID": "connection-9",
     }
     (tmp_path / "stack" / ".env").write_text(
         "".join(f"{key}={value}\n" for key, value in variables.items()), encoding="utf-8"
@@ -810,9 +1084,192 @@ def test_a_push_reads_the_stack_env_file_the_operator_edits(
     for key in variables:
         monkeypatch.delenv(key, raising=False)
 
-    assert cli._push_alerts(argparse.Namespace(dry_run=True)) == 0
-    assert "webhook-9" in capsys.readouterr().out
+    assert cli._push_alerts(argparse.Namespace(dry_run=True)) == 0  # noqa: SLF001
+    printed = capsys.readouterr().out
+    assert "UPSERT /api/v2/webhooks — channel Product · Telegram" in printed
+    assert "UPSERT /api/v2/alerts — alert Product · api 5xx" in printed
 
-    (tmp_path / "stack" / ".env").unlink()
-    with pytest.raises(SystemExit, match="DLIGHTRAG_TELEGRAM_WEBHOOK_ID"):
-        cli._push_alerts(argparse.Namespace(dry_run=True))
+    # An id `bootstrap` has not written yet is named, rather than pushed as an empty string.
+    (tmp_path / "stack" / ".env").write_text(
+        "DLIGHTRAG_TELEGRAM_CHAT_ID=chat-9\n"
+        "DLIGHTRAG_TELEGRAM_WEBHOOK_URL=https://example.invalid/bot\n"
+        "HYPERDX_CONNECTION_ID=\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(SystemExit, match="HYPERDX_CONNECTION_ID"):
+        cli._push_alerts(argparse.Namespace(dry_run=True))  # noqa: SLF001
+
+
+# ── bootstrap: the stack's own ids ───────────────────────────────────────────
+
+_SEEDED = {
+    "HYPERDX_CONNECTION_ID": "6ac9470bc0696e82a108098f",
+    "HYPERDX_SOURCE_TRACES": "6ac9470bc0696e82a1080995",
+    "HYPERDX_SOURCE_METRICS": "6ac9470bc0696e82a1080997",
+}
+
+
+class _FakeMongo:
+    """A `subprocess.run` that answers the way `mongosh --eval` does, and keeps the command."""
+
+    def __init__(self, printed: str, *, returncode: int = 0, stderr: str = "") -> None:
+        self.printed, self.returncode, self.stderr = printed, returncode, stderr
+        self.commands: list[list[str]] = []
+
+    def __call__(self, command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        self.commands.append(command)
+        return subprocess.CompletedProcess(command, self.returncode, self.printed, self.stderr)
+
+
+def _env_file(tmp_path: Path) -> Path:
+    stack = tmp_path / "stack"
+    stack.mkdir(exist_ok=True)
+    (stack / ".env.example").write_text(
+        "HYPERDX_API_KEY=\nEXPRESS_SESSION_SECRET=\n# the ids\nHYPERDX_CONNECTION_ID=\n"
+        "HYPERDX_SOURCE_TRACES=\nHYPERDX_SOURCE_METRICS=\nHYPERDX_APP_PORT=8300\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "compose.yaml").write_text("services: {}\n", encoding="utf-8")
+    return cli.ensure_env(tmp_path)
+
+
+def test_bootstrap_reads_the_ids_from_the_stacks_own_mongo_and_writes_them_to_the_env(
+    tmp_path: Path,
+) -> None:
+    env_path = _env_file(tmp_path)
+    secrets_before = {
+        key: value
+        for key, value in cli._read_env(env_path).items()  # noqa: SLF001
+        if key in {"HYPERDX_API_KEY", "EXPRESS_SESSION_SECRET", "HYPERDX_APP_PORT"}
+    }
+    # mongosh may print a banner or a warning before the result: the last line is the answer.
+    mongo = _FakeMongo("warning: something unrelated\n" + json.dumps(_SEEDED) + "\n")
+
+    ok, report = cli.sync_stack_ids(tmp_path, env_path, run=mongo)
+
+    assert ok and report == f"stack ids written to {env_path}"
+    values = cli._read_env(env_path)  # noqa: SLF001
+    assert {name: values[name] for name in cli.STACK_IDS} == _SEEDED
+    assert {key: values[key] for key in secrets_before} == secrets_before
+    assert env_path.stat().st_mode & 0o777 == 0o600
+    # The one command asks the `db` service of this stack's own Compose project.
+    command = mongo.commands[0]
+    assert command[:2] == ["docker", "compose"]
+    assert command[command.index("exec") :][:6] == [
+        "exec",
+        "-T",
+        "db",
+        "mongosh",
+        "--quiet",
+        "hyperdx",
+    ]
+
+
+def test_a_second_bootstrap_on_the_same_stack_finds_the_same_ids_and_changes_nothing(
+    tmp_path: Path,
+) -> None:
+    env_path = _env_file(tmp_path)
+    cli.sync_stack_ids(tmp_path, env_path, run=_FakeMongo(json.dumps(_SEEDED)))
+    written = env_path.read_text(encoding="utf-8")
+
+    ok, report = cli.sync_stack_ids(tmp_path, env_path, run=_FakeMongo(json.dumps(_SEEDED)))
+
+    assert ok and report == f"stack ids already in {env_path}"
+    assert env_path.read_text(encoding="utf-8") == written
+
+
+def test_the_mongo_query_takes_the_oldest_document_of_each_kind() -> None:
+    """Oldest-first is what makes a re-run find the seeded id after an operator adds a source."""
+    script = cli.mongo_ids_script()
+    for name, (collection, query) in cli.STACK_IDS.items():
+        assert f"{name}: oldest('{collection}', {query})" in script
+    assert "sort({_id: 1}).limit(1)" in script
+    assert script.endswith("}));")
+
+
+def test_a_stack_nobody_has_opened_yet_has_no_ids_and_bootstrap_says_how_to_get_them(
+    tmp_path: Path,
+) -> None:
+    """The team, and with it the sources, is created when the first administrator is."""
+    env_path = _env_file(tmp_path)
+    before = env_path.read_text(encoding="utf-8")
+    empty = dict.fromkeys(cli.STACK_IDS, "")
+
+    ok, report = cli.sync_stack_ids(tmp_path, env_path, run=_FakeMongo(json.dumps(empty)))
+
+    assert not ok
+    assert "create the administrator" in report and "HYPERDX_SOURCE_TRACES" in report
+    assert env_path.read_text(encoding="utf-8") == before
+
+
+def test_ids_a_stack_has_are_written_even_when_another_is_still_missing(tmp_path: Path) -> None:
+    env_path = _env_file(tmp_path)
+    partial = {**_SEEDED, "HYPERDX_SOURCE_METRICS": ""}
+
+    ok, report = cli.sync_stack_ids(tmp_path, env_path, run=_FakeMongo(json.dumps(partial)))
+
+    assert not ok and "HYPERDX_SOURCE_METRICS" in report
+    values = cli._read_env(env_path)  # noqa: SLF001
+    assert values["HYPERDX_SOURCE_TRACES"] == _SEEDED["HYPERDX_SOURCE_TRACES"]
+    assert values["HYPERDX_SOURCE_METRICS"] == ""
+
+
+@pytest.mark.parametrize(
+    "mongo",
+    [
+        _FakeMongo("", returncode=1, stderr="service db is not running"),
+        _FakeMongo("not json at all"),
+        _FakeMongo("[1, 2]"),
+        _FakeMongo(""),
+    ],
+    ids=["compose exec failed", "not json", "not an object", "nothing printed"],
+)
+def test_a_mongo_that_cannot_be_asked_is_reported_and_leaves_the_env_alone(
+    tmp_path: Path, mongo: _FakeMongo
+) -> None:
+    env_path = _env_file(tmp_path)
+    before = env_path.read_text(encoding="utf-8")
+
+    ok, report = cli.sync_stack_ids(tmp_path, env_path, run=mongo)
+
+    assert not ok and report.startswith("stack ids not read (")
+    assert env_path.read_text(encoding="utf-8") == before
+
+
+def test_an_env_value_is_replaced_in_place_and_a_missing_one_is_appended(tmp_path: Path) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text("# comment\nA=old\nB = keep\n", encoding="utf-8")
+
+    assert cli.write_env_values(env_path, {"A": "new", "C": "added"})
+
+    assert env_path.read_text(encoding="utf-8") == "# comment\nA=new\nB = keep\nC=added\n"
+    assert not cli.write_env_values(env_path, {"A": "new", "C": "added"})
+
+
+# ── What the stack ships beside the artifacts ────────────────────────────────
+
+
+def test_every_shipped_ttl_default_is_the_week_the_cli_and_the_example_state() -> None:
+    """Four statements of one retention once said two things: 720h and 168h."""
+    root = cli.stack_root()
+    default = re.compile(rf"{cli.RETENTION_VARIABLE}:-(\w+)\}}")
+    for relative in ("compose.yaml", "stack/collector-standalone.yaml"):
+        found = default.findall((root / relative).read_text(encoding="utf-8"))
+        assert found, f"{relative} states no default"
+        for value in found:
+            assert cli.retention_ttl(value).seconds == cli.DEFAULT_RETENTION.seconds, relative
+
+
+def test_the_generated_secrets_never_reach_a_docker_build_context() -> None:
+    """`COPY packages/ packages/` would otherwise carry `stack/.env` into a builder layer."""
+    assert "**/stack/.env" in Path(".dockerignore").read_text(encoding="utf-8").splitlines()
+
+
+def test_each_application_process_has_its_own_service_name() -> None:
+    """One name for three processes would put them on one line of the service map."""
+    import yaml
+
+    services = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))["services"]
+    for service in ("dlightrag-api", "dlightrag-mcp", "dlightrag-reader"):
+        environment = services[service]["environment"]
+        assert environment["DLIGHTRAG_OBSERVABILITY__SERVICE_NAME"] == service

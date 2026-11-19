@@ -25,6 +25,8 @@ htmlcov/
 .env
 .env.*
 !.env.example
+# The generated ClickStack secrets: `COPY packages/ packages/` would carry them into a layer.
+**/stack/.env
 
 # IDE
 .vscode/

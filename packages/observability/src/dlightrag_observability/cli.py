@@ -11,7 +11,9 @@ just started actually ingests.
 It also owns the alerting half: the notification channel, the alerts, and the
 dashboard tiles ship as JSON under ``stack/``, and ``alerts push`` writes them
 through the REST API, so changing what a deployment watches is a file change and
-one command rather than a session of clicking.
+one command rather than a session of clicking. The files name no instance: the ids a
+stack hands out when it is seeded are read from the stack's own Mongo by ``bootstrap``
+and reach the files as ``${VARIABLES}``, and a push finds what it wrote by name.
 
 Everything is standard library: a stack that needs a pip install to start is a
 stack that fails on the machine that matters.
@@ -29,7 +31,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, NamedTuple
@@ -49,6 +51,29 @@ _DEFAULT_CH_PORT = 8123
 ALERTS_DIRECTORY = "alerts"
 DASHBOARDS_DIRECTORY = "dashboards"
 CHANNEL_FILENAME = "channel.json"
+
+#: The API collection each artifact is written to, and the field a push matches on when
+#: it looks for the document it wrote last time. A name is the identity: a file carries
+#: no id, because an id belongs to one stack and a name belongs to the file.
+_COLLECTION_KEYS: Final[Mapping[str, str]] = {
+    "webhooks": "name",
+    "alerts": "displayName",
+    "dashboards": "name",
+}
+
+#: The webhook an alert delivers to. Its id exists only after the channel is written, so
+#: a push fills it in between the channel and the alerts instead of loading it.
+CHANNEL_ID_VARIABLE = "HYPERDX_WEBHOOK_ID"
+
+#: The ids the artifacts name that a stack hands out when its first team is seeded
+#: (`DEFAULT_CONNECTIONS`, `DEFAULT_SOURCES`): where `bootstrap` finds each in the stack's own
+#: Mongo, as a collection and a filter. The oldest document that matches is the one the seeding
+#: wrote, so a second run on the same stack finds the same ids.
+STACK_IDS: Final[Mapping[str, tuple[str, str]]] = {
+    "HYPERDX_CONNECTION_ID": ("connections", "{}"),
+    "HYPERDX_SOURCE_TRACES": ("sources", '{"kind": "trace"}'),
+    "HYPERDX_SOURCE_METRICS": ("sources", '{"kind": "metric"}'),
+}
 
 #: The REST API a push talks to, and the environment variables it reads. The key is a
 #: user's ClickStack access key (Team Settings mints it); it is never written into an
@@ -163,6 +188,28 @@ def _read_env(env_path: Path) -> dict[str, str]:
     return values
 
 
+def write_env_values(env_path: Path, values: Mapping[str, str]) -> bool:
+    """Set each variable in the env file, leaving every other line alone.
+
+    A variable the file already assigns is replaced in place and one it does not is
+    appended. The file is rewritten, never recreated, so it keeps the owner-only mode
+    `ensure_env` gave it. Returns whether anything changed.
+    """
+    original = env_path.read_text(encoding="utf-8")
+    pending = dict(values)
+    lines = original.splitlines()
+    for index, line in enumerate(lines):
+        name, separator, _value = line.partition("=")
+        if separator and name.strip() in pending:
+            lines[index] = f"{name.strip()}={pending.pop(name.strip())}"
+    lines.extend(f"{name}={value}" for name, value in pending.items())
+    rendered = "\n".join(lines) + "\n"
+    if rendered == original:
+        return False
+    env_path.write_text(rendered, encoding="utf-8")
+    return True
+
+
 def probe_payload(
     *, service: str = PROBE_SERVICE, span_name: str = PROBE_SPAN_NAME
 ) -> dict[str, Any]:
@@ -211,9 +258,8 @@ def send_probe(*, otlp_port: int, api_key: str, timeout: float = 10.0) -> None:
         headers={"Content-Type": "application/json", "authorization": api_key},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - literal http loopback URL
-        if response.status >= 300:
-            raise SystemExit(f"probe rejected: HTTP {response.status}")
+    # urllib raises HTTPError for a 4xx or 5xx, and `_bootstrap` reports that: a return is success.
+    urllib.request.urlopen(request, timeout=timeout).close()  # noqa: S310 - literal http loopback URL
 
 
 def clickhouse_query(statement: str, *, port: int = _DEFAULT_CH_PORT, timeout: float = 10.0) -> str:
@@ -321,7 +367,7 @@ def retention_ttl(value: str | None, *, fallback: Retention = DEFAULT_RETENTION)
     number, unit = text[:-1], text[-1:]
     if unit not in _TTL_UNITS:
         number, unit = text, "s"
-    if not number.isdigit():
+    if not (number.isascii() and number.isdigit()):
         return fallback
     count = int(number)
     if count < 1:
@@ -452,6 +498,79 @@ def wait_for_stack(app_port: int, *, seconds: float, delay: float = 3.0) -> bool
         time.sleep(delay)
 
 
+def mongo_ids_script() -> str:
+    """The mongosh program that prints the stack's own ids as one JSON object.
+
+    Each id is the oldest document in its collection that matches its filter, or an empty
+    string when there is none yet. Everything interpolated is a constant of `STACK_IDS`.
+    """
+    lookups = ", ".join(
+        f"{name}: oldest('{collection}', {query})"
+        for name, (collection, query) in STACK_IDS.items()
+    )
+    return (
+        "const oldest = (collection, query) => {"
+        " const found = db.getCollection(collection).find(query, {_id: 1}).sort({_id: 1}).limit(1).toArray();"
+        " return found.length ? found[0]._id.toString() : ''; };"
+        f" print(JSON.stringify({{{lookups}}}));"
+    )
+
+
+def stack_ids(
+    root: Path, env_path: Path, *, run: Callable[..., Any] = subprocess.run
+) -> dict[str, str]:
+    """The ids this stack's own Mongo holds, for every variable of `STACK_IDS` it has one for.
+
+    Raises `OSError` when the Mongo cannot be asked (no container, Docker down) and
+    `ValueError` when it answers with something that is not the JSON object requested.
+    """
+    command = compose_command(
+        root,
+        env_path,
+        "exec",
+        "-T",
+        "db",
+        "mongosh",
+        "--quiet",
+        "hyperdx",
+        "--eval",
+        mongo_ids_script(),
+    )
+    completed = run(command, capture_output=True, text=True, check=False, timeout=60)  # noqa: S603
+    if completed.returncode != 0:
+        raise OSError(completed.stderr.strip() or f"mongosh exited {completed.returncode}")
+    found = json.loads(
+        completed.stdout.strip().splitlines()[-1] if completed.stdout.strip() else ""
+    )
+    if not isinstance(found, dict):
+        raise ValueError("mongosh did not print a JSON object")
+    return {name: value for name, value in found.items() if name in STACK_IDS and value}
+
+
+def sync_stack_ids(
+    root: Path, env_path: Path, *, run: Callable[..., Any] = subprocess.run
+) -> tuple[bool, str]:
+    """Write the stack's own ids into `stack/.env`, and say what happened.
+
+    The artifacts name these ids as variables, so this is what ties one set of files to
+    this stack. A stack nobody has opened yet has no team, hence no sources: that is the
+    first-run state (`False`, with the way out), not an error. A second run on a seeded
+    stack finds the same ids and changes nothing.
+    """
+    try:
+        ids = stack_ids(root, env_path, run=run)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        return False, f"stack ids not read ({exc})"
+    missing = [name for name in STACK_IDS if name not in ids]
+    changed = write_env_values(env_path, ids) if ids else False
+    if missing:
+        return False, (
+            f"the stack has no {', '.join(missing)} yet; create the administrator in the UI, "
+            f"then run this command again"
+        )
+    return True, f"stack ids {'written to' if changed else 'already in'} {env_path}"
+
+
 def _bootstrap(args: argparse.Namespace) -> int:
     root = stack_root()
     env_path = ensure_env(root)
@@ -467,6 +586,10 @@ def _bootstrap(args: argparse.Namespace) -> int:
             f"the UI did not answer in {args.wait_seconds:.0f}s; is the stack up?", file=sys.stderr
         )
         return 1
+    # Before the probe: the ids need a seeded team, not a collector that accepts OTLP, and
+    # they are what `alerts push` is waiting for.
+    seeded, report = sync_stack_ids(root, env_path)
+    print(report, file=sys.stdout if seeded else sys.stderr)
     if args.skip_probe:
         return 0
     try:
@@ -507,107 +630,142 @@ def _compose(args: argparse.Namespace, *command: str) -> int:
     return completed.returncode
 
 
-def expand_environment(value: Any, *, environ: Mapping[str, str]) -> Any:
+def expand_environment(
+    value: Any, *, environ: Mapping[str, str], keep: Collection[str] = ()
+) -> Any:
     """Replace every ``${VAR}`` a loaded artifact carries with its environment value.
 
-    A webhook URL holds a bot token and the API key belongs to an operator, so
-    neither is committed: the file names the variable, and the push resolves it. A
-    file that names a variable nobody set fails here, naming it, rather than
-    creating a webhook that points nowhere.
+    A webhook URL holds a bot token, the API key belongs to an operator, and a connection
+    or source id belongs to one stack, so none is committed: the file names the variable,
+    and the push resolves it. A file that names a variable nobody set (or set to nothing)
+    fails here, naming it, rather than creating a webhook that points nowhere. The names
+    in ``keep`` are left as written, for a value that only exists later in the push.
     """
 
     def replace(match: re.Match[str]) -> str:
         name = match.group(1)
-        if name not in environ:
+        if name in keep:
+            return match.group(0)
+        if not environ.get(name):
             raise SystemExit(
-                f"{name} is not set, and an artifact under stack/ names it; export it first"
+                f"{name} is not set, and an artifact under stack/ names it; export it or set it "
+                f"in stack/.env (`bootstrap` writes the ids a stack hands out there)"
             )
         return environ[name]
 
     if isinstance(value, str):
         return _ENV_REFERENCE.sub(replace, value)
     if isinstance(value, dict):
-        return {key: expand_environment(item, environ=environ) for key, item in value.items()}
+        return {
+            key: expand_environment(item, environ=environ, keep=keep) for key, item in value.items()
+        }
     if isinstance(value, list):
-        return [expand_environment(item, environ=environ) for item in value]
+        return [expand_environment(item, environ=environ, keep=keep) for item in value]
     return value
 
 
 @dataclass(frozen=True)
 class ArtifactPush:
-    """One artifact, and the request that writes it."""
+    """One artifact, and the collection and name it is written under."""
 
     label: str
-    method: str
-    path: str
+    collection: str
     payload: dict[str, Any]
 
-    def request(self, *, api_url: str, api_key: str) -> urllib.request.Request:
-        return urllib.request.Request(  # noqa: S310 - the operator's own API URL
-            f"{api_url.rstrip('/')}{self.path}",
-            data=json.dumps(self.payload).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}",
-            },
-            method=self.method,
-        )
+    @property
+    def name(self) -> str:
+        return str(self.payload[_COLLECTION_KEYS[self.collection]])
 
 
-def _write_request(collection: str, document: Mapping[str, Any]) -> tuple[str, str]:
-    """The method and path that create a document, or update the one it names."""
-    path = f"/api/{API_VERSION}/{collection}"
-    identifier = document.get("id")
-    return ("PUT", f"{path}/{identifier}") if identifier else ("POST", path)
-
-
-def _load_artifact(path: Path, *, environ: Mapping[str, str]) -> dict[str, Any]:
+def _load_artifact(path: Path, *, collection: str, environ: Mapping[str, str]) -> ArtifactPush:
     document = json.loads(path.read_text(encoding="utf-8"))
-    expanded = expand_environment(document, environ=environ)
+    expanded = expand_environment(document, environ=environ, keep=(CHANNEL_ID_VARIABLE,))
     if not isinstance(expanded, dict):  # a document is an object; anything else is a broken file
         raise SystemExit(f"{path} does not hold a JSON object")
-    return expanded
+    key = _COLLECTION_KEYS[collection]
+    if not isinstance(expanded.get(key), str) or not expanded[key]:
+        raise SystemExit(f"{path} names no `{key}`, and a push finds what it wrote by that name")
+    singular = "channel" if path.name == CHANNEL_FILENAME else collection[:-1]
+    return ArtifactPush(
+        label=f"{singular} {expanded[key]}", collection=collection, payload=expanded
+    )
 
 
 def alerting_artifacts(root: Path, *, environ: Mapping[str, str]) -> list[ArtifactPush]:
     """Every artifact the stack ships, in the order the API has to receive them.
 
-    The channel comes first: an alert names its webhook by id, so a deployment that
-    pushed alerts first would hold alerts with no destination. Files are sorted by
-    name, so one run and the next send the same requests in the same order.
+    The channel comes first: an alert names its webhook, so a deployment that pushed
+    alerts first would hold alerts with no destination. Files are sorted by name, so one
+    run and the next send the same requests in the same order.
     """
     pushes: list[ArtifactPush] = []
     alerting = root / "stack" / ALERTS_DIRECTORY
     channel = alerting / CHANNEL_FILENAME
     if channel.is_file():
-        document = _load_artifact(channel, environ=environ)
-        method, path = _write_request("webhooks", document)
-        pushes.append(
-            ArtifactPush(
-                label=f"channel {document.get('name', CHANNEL_FILENAME)}",
-                method=method,
-                path=path,
-                payload={key: value for key, value in document.items() if key != "id"},
-            )
-        )
-    for kind, directory in (
+        pushes.append(_load_artifact(channel, collection="webhooks", environ=environ))
+    for collection, directory in (
         ("alerts", alerting),
         ("dashboards", root / "stack" / DASHBOARDS_DIRECTORY),
     ):
         for path in sorted(directory.glob("*.json")):
-            if kind == "alerts" and path.name == CHANNEL_FILENAME:
+            if collection == "alerts" and path.name == CHANNEL_FILENAME:
                 continue
-            document = _load_artifact(path, environ=environ)
-            method, route = _write_request(kind, document)
-            pushes.append(
-                ArtifactPush(
-                    label=f"{kind[:-1]} {document.get('name', path.stem)}",
-                    method=method,
-                    path=route,
-                    payload={key: value for key, value in document.items() if key != "id"},
-                )
-            )
+            pushes.append(_load_artifact(path, collection=collection, environ=environ))
     return pushes
+
+
+def _call(
+    opener: Callable[..., Any],
+    method: str,
+    path: str,
+    *,
+    api_url: str,
+    api_key: str,
+    label: str,
+    payload: Mapping[str, Any] | None = None,
+) -> tuple[int, Any]:
+    """One API request: the status it got, and the JSON it answered with.
+
+    A rejection is fatal and carries the API's own message: the point of the command is
+    to learn which file the server refused, not to walk past it.
+    """
+    request = urllib.request.Request(  # noqa: S310 - the operator's own API URL
+        f"{api_url.rstrip('/')}{path}",
+        data=None if payload is None else json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+        method=method,
+    )
+    try:
+        with opener(request, timeout=_PUSH_TIMEOUT) as response:
+            return response.status, json.loads(response.read() or b"null")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")
+        raise SystemExit(f"{label}: HTTP {exc.code} {detail}") from exc
+
+
+def _written_ids(
+    opener: Callable[..., Any], collection: str, *, api_url: str, api_key: str
+) -> dict[str, str]:
+    """The id of every document in a collection, by the name a push matches on.
+
+    ClickStack's external API lists all three collections (`GET /api/v2/webhooks`,
+    `/alerts`, `/dashboards`, each as ``{"data": [...]}``). A listing that is shorter than
+    the total it states would make a push create a duplicate of what it failed to see, so
+    that stops the push instead.
+    """
+    key = _COLLECTION_KEYS[collection]
+    _, body = _call(
+        opener,
+        "GET",
+        f"/api/{API_VERSION}/{collection}?limit=1000",
+        api_url=api_url,
+        api_key=api_key,
+        label=f"list {collection}",
+    )
+    items = body["data"]
+    if body.get("meta", {}).get("total", len(items)) > len(items):
+        raise SystemExit(f"{collection}: more exist than one listing returns; remove some first")
+    return {str(item[key]): str(item["id"]) for item in items if key in item and "id" in item}
 
 
 def push_artifacts(
@@ -618,29 +776,44 @@ def push_artifacts(
     opener: Callable[..., Any] = urllib.request.urlopen,
     echo: Callable[[str], None] = print,
 ) -> int:
-    """Send every request, and report the answer each one got.
+    """Write every artifact, updating the one that carries its name and creating the rest.
 
-    A rejection is fatal and carries the API's own message: the point of the
-    command is to learn which file the server refused, not to walk past it.
+    Each collection is listed once, before its first write. The channel's id is learned
+    when it is written and handed to the artifacts after it, which name it as
+    ``${HYPERDX_WEBHOOK_ID}``.
     """
-    sent = 0
+    existing: dict[str, dict[str, str]] = {}
+    channel_id: str | None = None
     for push in pushes:
-        request = push.request(api_url=api_url, api_key=api_key)
-        try:
-            with opener(request, timeout=_PUSH_TIMEOUT) as response:
-                status = response.status
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", "replace")
-            raise SystemExit(f"{push.label}: HTTP {exc.code} {detail}") from exc
-        echo(f"{status} {push.method} {push.path} — {push.label}")
-        sent += 1
-    return sent
+        if push.collection not in existing:
+            existing[push.collection] = _written_ids(
+                opener, push.collection, api_url=api_url, api_key=api_key
+            )
+        identifier = existing[push.collection].get(push.name)
+        route = f"/api/{API_VERSION}/{push.collection}"
+        method, path = ("PUT", f"{route}/{identifier}") if identifier else ("POST", route)
+        payload = push.payload
+        if push.collection == "alerts":
+            payload = expand_environment(payload, environ={CHANNEL_ID_VARIABLE: channel_id or ""})
+        status, body = _call(
+            opener,
+            method,
+            path,
+            api_url=api_url,
+            api_key=api_key,
+            label=push.label,
+            payload=payload,
+        )
+        if push.collection == "webhooks":
+            channel_id = identifier or str(body["data"]["id"])
+        echo(f"{status} {method} {path} — {push.label}")
+    return len(pushes)
 
 
 def _push_alerts(args: argparse.Namespace) -> int:
     root = stack_root()
-    # The alert artifacts name their webhook and chat as ${VAR} placeholders. Those
-    # values live in stack/.env (written by bootstrap and edited by the operator), so
+    # The artifacts name the stack's ids, the webhook's URL, and the chat as ${VAR}
+    # placeholders. Those values live in stack/.env (written by bootstrap and edited by the operator), so
     # read that file too: the process environment still wins, which keeps an explicit
     # export working, and a `docker compose --env-file` operator is not required to
     # have exported anything.
@@ -656,7 +829,7 @@ def _push_alerts(args: argparse.Namespace) -> int:
         return 1
     if args.dry_run:
         for push in pushes:
-            print(f"{push.method} {push.path} — {push.label}")
+            print(f"UPSERT /api/{API_VERSION}/{push.collection} — {push.label}")
         return 0
     api_key = os.environ.get(API_KEY_VARIABLE, "") or stacked.get(API_KEY_VARIABLE, "")
     if not api_key:
@@ -712,7 +885,8 @@ def main(argv: list[str] | None = None) -> int:
         description=(
             "Read the channel, the alerts, and the dashboard tiles that ship under stack/, "
             "resolve the ${VARIABLES} they name, and write them through ClickStack's REST "
-            "API. An artifact with an id is updated; one without is created."
+            "API. An artifact is matched by its name: one that exists is updated, one that "
+            "does not is created."
         ),
     )
     push.add_argument(

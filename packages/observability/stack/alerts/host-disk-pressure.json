@@ -1,14 +1,13 @@
 {
-  "id": "6ac96071dc43457266685653",
-  "name": "a mountpoint is at least 85% full",
-  "displayName": "host disk pressure",
+  "name": "DlightRAG · a mountpoint is at least 85% full",
+  "displayName": "DlightRAG · host disk pressure",
   "source": "inline",
   "interval": "15m",
   "threshold": 0.85,
   "thresholdType": "above",
   "channel": {
     "type": "webhook",
-    "webhookId": "${DLIGHTRAG_TELEGRAM_WEBHOOK_ID}"
+    "webhookId": "${HYPERDX_WEBHOOK_ID}"
   },
   "message": "a read-write mountpoint is at least 85% full; the fullest one in the bucket that breached reads {{value}} (used over used plus free). free space on the host before the next write fails, and find what grew.",
   "tags": [
@@ -18,9 +17,9 @@
   "chartConfig": {
     "configType": "sql",
     "displayType": "line",
-    "connectionId": "6ac9470bc0696e82a108098f",
-    "sourceId": "6ac9470bc0696e82a1080997",
+    "connectionId": "${HYPERDX_CONNECTION_ID}",
+    "sourceId": "${HYPERDX_SOURCE_METRICS}",
     "name": "filesystem utilization per mountpoint",
-    "sqlTemplate": "SELECT ts, mountpoint, used / (used + free) AS utilization\nFROM (\n  SELECT $__timeInterval(TimeUnix) AS ts,\n         Attributes['mountpoint'] AS mountpoint,\n         maxIf(Value, Attributes['state'] = 'used') AS used,\n         maxIf(Value, Attributes['state'] = 'free') AS free\n  FROM otel_metrics_sum\n  WHERE MetricName = 'system.filesystem.usage'\n    AND Attributes['mode'] = 'rw'\n    AND $__timeFilter_ms(TimeUnix)\n  GROUP BY ts, mountpoint\n  HAVING free > 0\n)\nORDER BY ts\nLIMIT 1000"
+    "sqlTemplate": "SELECT ts, mountpoint, used / (used + free) AS utilization\nFROM (\n  SELECT $__timeInterval(TimeUnix) AS ts,\n         Attributes['mountpoint'] AS mountpoint,\n         maxIf(Value, Attributes['state'] = 'used') AS used,\n         maxIf(Value, Attributes['state'] = 'free') AS free\n  FROM otel_metrics_sum\n  WHERE MetricName = 'system.filesystem.usage'\n    AND Attributes['mode'] = 'rw'\n    AND $__timeFilter_ms(TimeUnix)\n  GROUP BY ts, mountpoint\n  HAVING used + free > 0\n)\nORDER BY ts\nLIMIT 1000"
   }
 }

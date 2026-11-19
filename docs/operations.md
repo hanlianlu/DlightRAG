@@ -624,7 +624,7 @@ but its collector does not accept OTLP yet.
 
 | Target | Behavior |
 |---|---|
-| `make hyperdx-bootstrap` | Write `stack/.env` once (generated secrets), send a probe span, apply retention to every telemetry table, and report whether the probe landed |
+| `make hyperdx-bootstrap` | Write `stack/.env` once (generated secrets), read the stack's own connection and source ids into it, send a probe span, apply retention to every telemetry table, and report whether the probe landed |
 | `make hyperdx-up` | Start the four containers, then bootstrap |
 | `make hyperdx-down` | Stop |
 | `make hyperdx-status` | Show containers |
@@ -746,35 +746,53 @@ records are dropped from a bounded queue while the process keeps printing.
 The notification channel, the alerts, and the dashboard tiles are files, not
 clicks: they ship under `packages/observability/stack/alerts/` (one JSON document
 per alert, `channel.json` for the webhook) and `.../stack/dashboards/`, and one
-command writes them through ClickStack's REST API. An artifact that names an `id`
-is updated and one that does not is created, the channel goes first because every
-alert names it, and a file that changes is the change:
+command writes them through ClickStack's REST API. A file carries **no instance id**:
+the connection and the sources a query reads are `${HYPERDX_CONNECTION_ID}`,
+`${HYPERDX_SOURCE_TRACES}` and `${HYPERDX_SOURCE_METRICS}`, which are the ids *this*
+stack's MongoDB minted when its first team was seeded. `bootstrap` reads them from
+that Mongo (`docker compose exec db mongosh`, the oldest connection and the oldest
+source of each kind, so a re-run on the same stack finds the same ids) and writes them
+into `stack/.env`; on a stack nobody has opened yet it says to create the administrator
+and run it again. A push finds what it wrote **by name**: it lists the collection once
+(`GET /api/v2/webhooks`, `/alerts`, `/dashboards`, which ClickStack 2.42 serves), updates
+the document that carries the file's name (`PUT`) and creates the rest (`POST`). The
+channel goes first because every alert names it, as `${HYPERDX_WEBHOOK_ID}`, which the
+push fills in with the id the channel just got. A file that changes is the change:
 
 ```bash
 export DLIGHTRAG_OBSERVABILITY_API_KEY=<the access key the UI mints under Team Settings>
 uv run dlightrag-observability alerts push
 ```
 
-The artifacts carry the `id`, `connectionId`, and `sourceId` values of the ClickStack
-they were written against. ClickStack mints those per stack, so on a stack of your
-own the connection and source ids must be set to that stack's before the first push:
-an alert that names a source the stack does not have evaluates nothing.
-
 `alerts push --dry-run` prints the same requests without sending them;
 `DLIGHTRAG_OBSERVABILITY_API_URL` points the command at another stack
 (`http://127.0.0.1:8000` by default). The webhook's URL carries a bot token and is
 therefore a credential: `channel.json` names `${DLIGHTRAG_TELEGRAM_WEBHOOK_URL}`
-and the push resolves it, so nothing secret lives in the repository. Three
-variables supply it, and the command reads `stack/.env` when the process
-environment does not (`packages/observability/stack/.env.example` declares them):
-`DLIGHTRAG_TELEGRAM_WEBHOOK_ID` (the channel the alerts name),
-`DLIGHTRAG_TELEGRAM_CHAT_ID` (the conversation the bot posts to), and
-`DLIGHTRAG_TELEGRAM_WEBHOOK_URL` (which carries the token). The artifacts are
-checked with:
+and the push resolves it, so nothing secret lives in the repository. The operator
+sets two variables, and the command reads `stack/.env` when the process environment
+does not (`packages/observability/stack/.env.example` declares them):
+`DLIGHTRAG_TELEGRAM_CHAT_ID` (the conversation the bot posts to) and
+`DLIGHTRAG_TELEGRAM_WEBHOOK_URL` (which carries the token). The webhook has no id to
+keep: the push creates it and finds it again by its name. A push with an id still
+missing from `stack/.env` stops and names it. The artifacts are checked with:
 
 ```bash
 uv run pytest tests/unit/test_observability_stack.py -q
 ```
+
+**One ClickStack can serve DlightRAG and DlightAgent.** Every alert, the channel, and the
+dashboard carries the product's name (`DlightRAG · host disk pressure`), so a push from
+either repository finds only its own documents, and every query over product signals
+is scoped to the product's services with `startsWith(ServiceName, 'dlightrag')` (DlightAgent's
+say `dlightagent`). That is why each process has its own `service.name`: Compose sets
+`dlightrag-api`, `dlightrag-mcp` and `dlightrag-reader`. The host, collector and Postgres
+alerts watch the machine and the database the stack's `metrics` profile scrapes, not a
+product, so with two products pushing into one stack they would each page for the same
+event: run the `metrics` profile and push those from one of them, or delete the duplicates
+in the UI. Moving from an earlier push: alerts and the channel were found by id and had no
+product in their names, so the first push after this change creates the prefixed ones
+beside them, and the old ones are deleted in the UI (the dashboard keeps its name, so it is
+updated in place).
 
 What the stack watches, and what it cannot: p95 answer duration, failing runs by
 kind, runs lost to an outage or an abandoned lease, Postgres availability and

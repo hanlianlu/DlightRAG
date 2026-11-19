@@ -1,14 +1,13 @@
 {
-  "id": "6ac96071dc43457266685644",
-  "name": "three or more runs failed in the window",
-  "displayName": "failing runs by kind",
+  "name": "DlightRAG · three or more runs failed in the window",
+  "displayName": "DlightRAG · failing runs by kind",
   "source": "inline",
   "interval": "5m",
   "threshold": 3,
   "thresholdType": "above",
   "channel": {
     "type": "webhook",
-    "webhookId": "${DLIGHTRAG_TELEGRAM_WEBHOOK_ID}"
+    "webhookId": "${HYPERDX_WEBHOOK_ID}"
   },
   "message": "at least three run-answer spans ended in error in the bucket that breached ({{value}} there). the kind is the span's own dlightrag.error.kind where the executor classified it, and its status description otherwise, which is what a span recorded before that attribute existed carries; open the run by the id in its metadata for the cause.",
   "tags": [
@@ -18,9 +17,9 @@
   "chartConfig": {
     "configType": "sql",
     "displayType": "line",
-    "connectionId": "6ac9470bc0696e82a108098f",
-    "sourceId": "6ac9470bc0696e82a1080995",
+    "connectionId": "${HYPERDX_CONNECTION_ID}",
+    "sourceId": "${HYPERDX_SOURCE_TRACES}",
     "name": "failing run-answer spans by kind",
-    "sqlTemplate": "SELECT $__timeInterval(Timestamp) AS ts,\n  multiIf(notEmpty(SpanAttributes['dlightrag.error.kind']), SpanAttributes['dlightrag.error.kind'],\n          StatusMessage ILIKE '%run_abandoned%' OR StatusMessage ILIKE '%abandoned%', 'run_abandoned',\n          StatusMessage ILIKE '%dependency_unavailable%' OR StatusMessage ILIKE '%unavailable%', 'dependency_unavailable',\n          empty(StatusMessage), '(no message)',\n          'other') AS error_kind,\n  count() AS errors\nFROM otel_traces\nWHERE SpanName = 'run-answer'\n  AND StatusCode = 'Error'\n  AND $__timeFilter_ms(Timestamp)\nGROUP BY ts, error_kind\nORDER BY ts\nLIMIT 1000"
+    "sqlTemplate": "SELECT $__timeInterval(Timestamp) AS ts,\n  multiIf(notEmpty(SpanAttributes['dlightrag.error.kind']), SpanAttributes['dlightrag.error.kind'],\n          StatusMessage ILIKE '%run_abandoned%' OR StatusMessage ILIKE '%abandoned%', 'run_abandoned',\n          StatusMessage ILIKE '%dependency_unavailable%' OR StatusMessage ILIKE '%unavailable%', 'dependency_unavailable',\n          empty(StatusMessage), '(no message)',\n          'other') AS error_kind,\n  count() AS errors\nFROM otel_traces\nWHERE startsWith(ServiceName, 'dlightrag')\n  AND SpanName = 'run-answer'\n  AND StatusCode = 'Error'\n  AND $__timeFilter_ms(Timestamp)\nGROUP BY ts, error_kind\nORDER BY ts\nLIMIT 1000"
   }
 }
