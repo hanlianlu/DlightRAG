@@ -1015,7 +1015,7 @@ class AgentSessionRuntime[HostDeltaT]:
             parent_entry_id=_lane_head(view.context.snapshot, view.context.lane_id).entry_id,
         )
         repeated = _repeated_search_calls(view, assistant)
-        trip = _repeated_call_trip(view, assistant, repeated)
+        trip = _repeated_call_trip(view, repeated)
         if trip:
             await self._fail(view, kind="repeated_call_loop", detail=trip)
             return
@@ -2104,9 +2104,9 @@ def _digest(value: Any) -> str:
 
 _LOOP_GUARD_TOOLS = frozenset({"search_web", "bash"})
 _LOOP_GUARD_TURNS = 2
-#: How many identical calls the guard may refuse before the Run is stopped instead. The guard's own
-#: window includes the refused turns, so without the cap a model that re-issues the call is refused
-#: for ever and the Run never ends.
+#: How many repeated calls in a row, of any digest, the guard may refuse before the Run is stopped
+#: instead. The guard's own window includes the refused turns, so without the cap a model that
+#: re-issues the call (or alternates between a few) is refused for ever and the Run never ends.
 _LOOP_GUARD_BLOCK_LIMIT = 3
 
 
@@ -2137,53 +2137,34 @@ def _repeated_search_calls(view: OperationView, assistant: AssistantTurn) -> fro
     )
 
 
-def _repeated_call_trip(
-    view: OperationView, assistant: AssistantTurn, repeated: frozenset[str]
-) -> str:
-    """The failure detail when the model has had the same call refused too often, else "".
+def _repeated_call_trip(view: OperationView, repeated: frozenset[str]) -> str:
+    """The failure detail when the model's calls have been refused too often in a row, else "".
 
-    The Run is stopped at `_LOOP_GUARD_BLOCK_LIMIT` refusals of one call digest instead of issuing
-    one more synthetic result: a refused duplicate is not new evidence, and a model that keeps
-    re-issuing it would otherwise be refused until the Run's budget ran out.
+    Counts the unbroken run of `repeated_call` refusals at the end of the branch, whichever calls
+    they refused: a model alternating between a few identical calls (A, B, A, B) has each turn
+    refused against the other's. The Run is stopped at `_LOOP_GUARD_BLOCK_LIMIT` of them instead of
+    issuing one more synthetic result, since a refused duplicate is not new evidence. A result that
+    really executed, or any other entry, ends the run.
     """
-    if not repeated:
-        return ""
     graph = view.context.snapshot.graph
-    if graph is None:
-        return ""
-    entries = list(graph.ancestry())
-    digests: dict[str, tuple[str, str]] = {}
-    for entry in entries:
-        if isinstance(entry, AssistantMessageEntry):
-            for call in entry.tool_calls:
-                digests[call.id] = (call.name, canonical_json(call.arguments))
-    # The turn being committed is not in the ancestry yet, so its own digests are read here.
-    current = {
-        call.id: (call.name, canonical_json(call.arguments)) for call in assistant.tool_calls
-    }
-    targets = {current[call_id] for call_id in repeated if call_id in current}
-    if not targets:
+    if not repeated or graph is None:
         return ""
     refused = 0
-    for entry in reversed(entries):
+    for entry in reversed(list(graph.ancestry())):
         if isinstance(entry, AssistantMessageEntry):
             continue
-        if (
-            isinstance(entry, ToolResultMessageEntry)
-            and entry.result.outcome == "repeated_call"
-            and digests.get(entry.result.call_id) in targets
+        if not (
+            isinstance(entry, ToolResultMessageEntry) and entry.result.outcome == "repeated_call"
         ):
-            refused += 1
-            continue
-        break
+            break
+        refused += 1
     if refused < _LOOP_GUARD_BLOCK_LIMIT:
         return ""
-    matched = next(call for call in assistant.tool_calls if call.id in repeated)
     return (
-        f'Tool "{matched.name}" was refused {refused} times in a row: the model kept issuing the '
-        "identical call after it had already returned, so every retry was a refused duplicate and "
-        "not new evidence. The Run is stopped so the repetition cannot consume it; change the "
-        "command, or answer with the evidence already held."
+        f"{refused} repeated calls in a row were refused: the model kept re-issuing calls it had "
+        "already made, alone or alternating between several, so every retry was a refused "
+        "duplicate and not new evidence. The Run is stopped so the repetition cannot consume it; "
+        "change the command, or answer with the evidence already held."
     )
 
 
