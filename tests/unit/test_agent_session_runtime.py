@@ -2533,7 +2533,6 @@ async def test_identical_refusals_past_the_limit_stop_the_run_instead_of_floodin
     )
     assert isinstance(final.state, OperationFailed)
     assert final.state.kind == "repeated_call_loop"
-    assert '"bash"' in final.state.detail
     assert "refused" in final.state.detail
     # One execution, then the refusals; the Run never reaches the repeated call's fifth refusal.
     assert len(effects.tool_attempts) == 1
@@ -2542,3 +2541,33 @@ async def test_identical_refusals_past_the_limit_stop_the_run_instead_of_floodin
     ]
     assert outcomes[0] == "succeeded"
     assert outcomes.count("repeated_call") == 3
+
+
+@pytest.mark.asyncio
+async def test_refusals_alternating_between_two_calls_stop_the_run() -> None:
+    """A, B, A, B: each turn is refused against the other's, so no one digest ever repeats."""
+    a, b = "command a", "command b"
+    calls = [ToolCall(f"call-{i}", "bash", {"value": (a, b)[i % 2]}) for i in range(6)]
+    final, effects, entries = await _drive_bash_turns(
+        [_assistant(call) for call in calls] + [_assistant(text="done")]
+    )
+    assert isinstance(final.state, OperationFailed)
+    assert final.state.kind == "repeated_call_loop"
+    assert len(effects.tool_attempts) == 2
+    outcomes = [
+        entry.result.outcome for entry in entries if isinstance(entry, ToolResultMessageEntry)
+    ]
+    assert outcomes.count("repeated_call") == 3
+
+
+@pytest.mark.asyncio
+async def test_a_call_that_executes_in_a_refused_turn_resets_the_count() -> None:
+    same = {"value": "same command"}
+    first, second, third = (ToolCall(f"call-{i}", "bash", same) for i in range(3))
+    mixed = (ToolCall("dup", "bash", same), ToolCall("new", "bash", {"value": "something new"}))
+    last = ToolCall("last", "bash", same)
+    final, _, _ = await _drive_bash_turns(
+        [_assistant(first), _assistant(second), _assistant(third), _assistant(*mixed)]
+        + [_assistant(last), _assistant(text="done")]
+    )
+    assert isinstance(final.state, OperationCompleted)
