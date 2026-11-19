@@ -64,6 +64,9 @@ _CLAIM = """
 WITH claimer AS (
     SELECT 1 FROM dlightrag_runs
     WHERE owner_id = $1 AND run_id = $2 AND lease_owner = $3 AND fencing_epoch = $4
+      -- A browser lease is a *resource* lease, not ownership of a Run: its expiry is what returns
+      -- the endpoint to the pool, so the clock belongs in this predicate. Run ownership is fenced by
+      -- lease_owner + fencing_epoch alone (see run_store._WRITE_CHECKPOINT).
       AND status = 'running' AND lease_expires_at > NOW()
 ),
 held AS (

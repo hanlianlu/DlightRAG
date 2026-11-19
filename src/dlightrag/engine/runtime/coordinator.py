@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 #: How often an idle worker rechecks the queue for another host's work.
 SWEEP_SECONDS = 1.0
 #: Cadence for renewing an owned run's storage lease.
-RUN_HEARTBEAT_SECONDS = 20.0
+RUN_HEARTBEAT_SECONDS = 30.0
 #: How often each process runs the retention-floor event trim and run/artifact prune.
 #: Every pass is bounded, ``SKIP LOCKED``, and idempotent, so running it on every
 #: run-owning process needs no leader election and exposes no operator knob.
@@ -830,11 +830,18 @@ class RunCoordinator:
             await session.aclose()
 
     async def _heartbeat_forever(self, session: RunSession) -> None:
-        """Renew an unexpired fenced lease and surface pending cancellation.
+        """Renew this worker's fenced lease and surface pending cancellation.
 
-        A store that fails to answer is a transient fault, not lease loss: the
-        renewal is retried on the next cadence and the run stays owned until the
-        store authoritatively refuses to renew.
+        A store that fails to answer is a transient fault, not lease loss: the renewal is retried
+        on the next cadence. A refused renewal means another worker holds the Run -- the fencing
+        epoch moved -- not that this one was slow, because the store renews any Run this worker
+        still owns and is not itself a clock.
+
+        That is a race this worker usually wins and cannot be promised: a stall or an outage longer
+        than the lease leaves the row reclaimable, and another worker's sweep (one second, against
+        this cadence) may take it before this renewal lands. What the timer guarantees is that a
+        live owner is not declared dead for being busy; a release longer than the lease is a Run
+        handed over, which is what a lease is for.
         """
         while True:
             await asyncio.sleep(self._heartbeat_seconds)

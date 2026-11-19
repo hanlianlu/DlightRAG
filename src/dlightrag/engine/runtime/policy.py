@@ -10,7 +10,11 @@ RETRIEVAL_RUN_RETENTION_SECONDS = 7 * 24 * 3600
 #: Corpus Mutation lifecycle and accepted inputs are retained for seven days.
 CORPUS_MUTATION_RUN_RETENTION_SECONDS = 7 * 24 * 3600
 #: A worker renews this window while it holds a run; expiry makes the row reclaimable.
-RUN_LEASE_SECONDS = 60
+#: Sized for the work a Run actually does: a Research Run hosts tools that take minutes of
+#: synchronous time (document parsing, spreadsheet and report builds), and a lease that expires
+#: because the process was busy hands a live Run's work to a second owner. The window is the
+#: reclamation delay for a worker that has genuinely died, not a cap on how long a Run may last.
+RUN_LEASE_SECONDS = 300
 #: Consecutive expired-lease reclaims allowed without durable progress before abandon.
 MAX_RECLAIMS_WITHOUT_PROGRESS = 4
 RUN_ABANDONED_ERROR_KIND = "run_abandoned"

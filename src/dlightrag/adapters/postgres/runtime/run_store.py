@@ -1791,6 +1791,9 @@ ORDER BY created_at, run_id
 LIMIT $6
 """
 
+# The cancel-pending listings keep their clock on purpose: they answer "which Run currently holds a
+# lease and has a cancellation waiting", and a lapsed lease means nobody is holding it. Cancellation
+# itself travels on the heartbeat, which is fenced by ownership and reaches a busy worker.
 _CANCEL_PENDING_FRONTIER = """
 SELECT created_at, run_id
 FROM dlightrag_runs
@@ -1961,7 +1964,7 @@ FROM dlightrag_runs AS r
 WHERE rt.owner_id = r.owner_id AND rt.run_id = r.run_id
   AND rt.owner_id = $1 AND rt.run_id = $2
   AND r.lease_owner = $3 AND r.fencing_epoch = $4
-  AND r.status = 'running' AND r.lease_expires_at > NOW()
+  AND r.status = 'running'
 RETURNING TRUE
 """
 
@@ -1973,7 +1976,7 @@ FROM dlightrag_runs AS r
 WHERE rt.owner_id = r.owner_id AND rt.run_id = r.run_id
   AND rt.owner_id = $1 AND rt.run_id = $2
   AND r.lease_owner = $3 AND r.fencing_epoch = $4
-  AND r.status = 'running' AND r.lease_expires_at > NOW()
+  AND r.status = 'running'
   AND (rt.resolved_mode IS NULL OR rt.resolved_mode = $5)
 RETURNING rt.resolved_mode
 """
@@ -1994,16 +1997,29 @@ WHERE owner_id = $1 AND run_id = $2
 RETURNING {_RUN_COLUMNS}
 """  # noqa: S608 - interpolates only the trusted _RUN_COLUMNS constant
 
+# Renewal is fenced by ownership, not by the clock: a worker that still holds the row -- same
+# lease_owner, same fencing_epoch, still running -- may re-assert its lease even after the window
+# lapsed, because the epoch, bumped only by a reclaim, is what decides who owns the Run. Requiring
+# an unexpired lease here made a stall fatal: a busy process lost a Run it was actively working on,
+# and a reclaim it did not need handed that Run to a second worker. Expiry still marks the row
+# reclaimable, and a reclaim still takes it -- it just cannot take it out from under a live owner
+# that re-asserts first.
 _HEARTBEAT = """
 UPDATE dlightrag_runs
 SET lease_expires_at = NOW() + ($5 * INTERVAL '1 second'),
     updated_at = NOW()
 WHERE owner_id = $1 AND run_id = $2
   AND lease_owner = $3 AND fencing_epoch = $4
-  AND status = 'running' AND lease_expires_at > NOW()
+  AND status = 'running'
 RETURNING (cancel_requested_at IS NOT NULL) AS cancel_requested
 """
 
+# Every durable write below is fenced by ownership alone -- owner id, lease_owner and
+# fencing_epoch, on a running row -- and never by the clock. The lease window says when a Run may
+# be reclaimed by another worker; it does not say when its own worker stopped owning it, which only
+# a reclaim (the epoch bump) can say. A worker that stalled past the window and came back therefore
+# finishes its write and extends its lease, while a worker whose Run was reclaimed is refused by the
+# epoch.
 _WRITE_CHECKPOINT = """
 UPDATE dlightrag_runs
 SET checkpoint_json = $5::jsonb,
@@ -2013,7 +2029,7 @@ SET checkpoint_json = $5::jsonb,
     updated_at = NOW()
 WHERE owner_id = $1 AND run_id = $2
   AND lease_owner = $3 AND fencing_epoch = $4
-  AND status = 'running' AND lease_expires_at > NOW()
+  AND status = 'running'
 RETURNING 1
 """
 
@@ -2026,7 +2042,7 @@ SET handoff_started_at = COALESCE(handoff_started_at, NOW()),
     updated_at = NOW()
 WHERE owner_id = $1 AND run_id = $2
   AND lease_owner = $3 AND fencing_epoch = $4
-  AND status = 'running' AND lease_expires_at > NOW()
+  AND status = 'running'
   AND (handoff_started_at IS NOT NULL OR cancel_requested_at IS NULL)
 RETURNING 1
 """
@@ -2040,7 +2056,7 @@ WITH bumped AS (
         updated_at = NOW()
     WHERE owner_id = $1 AND run_id = $2
       AND lease_owner = $3 AND fencing_epoch = $4
-      AND status = 'running' AND lease_expires_at > NOW()
+      AND status = 'running'
     RETURNING next_event_sequence - 1 AS event_sequence
 ), inserted AS (
     INSERT INTO dlightrag_run_events (
@@ -2147,7 +2163,7 @@ SET status = 'queued',
     updated_at = NOW()
 WHERE owner_id = $1 AND run_id = $2
   AND lease_owner = $3 AND fencing_epoch = $4
-  AND status = 'running' AND lease_expires_at > NOW()
+  AND status = 'running'
   AND cancel_requested_at IS NULL
 RETURNING 1
 """
@@ -2158,7 +2174,7 @@ SET status = 'queued', phase = 'deferred', checkpoint_json = $5::jsonb,
     next_attempt_at = $6, lease_owner = NULL, lease_expires_at = NULL,
     updated_at = NOW()
 WHERE owner_id = $1 AND run_id = $2 AND lease_owner = $3
-  AND fencing_epoch = $4 AND status = 'running' AND lease_expires_at > NOW()
+  AND fencing_epoch = $4 AND status = 'running'
 RETURNING 1
 """
 
@@ -2192,7 +2208,7 @@ SET phase = 'waiting_for_repair', checkpoint_json = $5::jsonb,
     next_attempt_at = NULL, lease_owner = NULL, lease_expires_at = NULL,
     updated_at = NOW()
 WHERE owner_id = $1 AND run_id = $2 AND lease_owner = $3
-  AND fencing_epoch = $4 AND status = 'running' AND lease_expires_at > NOW()
+  AND fencing_epoch = $4 AND status = 'running'
 RETURNING 1
 """
 
