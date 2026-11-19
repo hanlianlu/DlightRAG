@@ -401,7 +401,7 @@ Answer mode. `POST /retrieve` and `POST /answer` persist a Run and return HTTP
 | `POST /answer/{run_id}/steer` | Queue an instruction for live Research. |
 | `POST /answer/{run_id}/follow-up` | Create a child run that appends to the selected terminal run's Lane. It injects no history; the fold at the tip is the context. |
 | `POST /answer/{run_id}/fork` | Create a sibling branch from the state that run settled at. It injects no history; the fold at the Fork Point is the context. |
-| `GET /answer/{run_id}/transcript` | Return bounded canonical ancestry. Each message carries its Session `sequence`. |
+| `GET /answer/{run_id}/transcript` | Return bounded canonical ancestry. Each message carries its Session `sequence`. A message states what was said and done, never the model, parameters, prompt digests or timings of the call that made it: those stay in the Session ([ADR 0041](adr/0041-a-step-records-the-model-parameters-and-prompt-digests-it-ran-on.md)). |
 | `GET /answer/{run_id}/children` | Newest-first Child Session roster page (`limit` 1–100, default 50). Public status only: no host/plan/budget envelopes or provider-private reasoning. Each child carries `started_at` and `finished_at` (UTC ISO 8601 with a `Z`): when its current Operation began, and when it settled, null while the Child runs; a Child with no Operation reports its own creation time. `pending_questions` counts its questions to the parent that still await a reply and have not expired. |
 | `GET /answer/{run_id}/children/{child_session_id}` | Bounded Child Session observation: public status (with the roster's `started_at`, `finished_at`, and `pending_questions`), transcript tail, queued/consumed controls, questions, and Evidence handles. `limit` 1–100, default 20. |
 | `POST /answer/{run_id}/children/{child_session_id}/control` | Steer, continue, or cancel one Child Session. Requires `Idempotency-Key`. Body `{action, content, reauthorize_user_cancelled}`. 202 for `queued` / `consumed` / `accepted` / `cancellation_requested`; 422 without `Idempotency-Key` or for invalid content or key; 409 with the explicit outcome (`terminal_child`, `run_terminal`, `reauthorization_required`, …); 404 if unknown. User-cancelled continuation requires `reauthorize_user_cancelled=true`. |
@@ -492,6 +492,15 @@ the Run, so a Run recovered after a crash reports only the calls made after its 
 fails and the other succeeds, the result continues with `bm25_error_type` or
 `lightrag_error_type`; `lightrag_mix_chunk_count` records the pre-fusion
 LightRAG count.
+
+A Research Run's `trace.tool_observations` is one row per root-agent tool call: `tool`, `call_id`,
+`outcome`, `cached`, `is_error`, `content_chars`, `capacity_tokens`, and `subject` — the first
+subject the Tool reports in a progress update (later updates, and a subject present only on the
+settled result, are ignored): a bounded, tool-reported line naming what the call acted on (a search
+query, a read URL or path, a shell command, a browser action; at most 64 characters, absent when the
+tool reports none, and never inferred from its arguments). The trace is a bounded summary of what the
+Run did, not its durable call log: the event log carries call metadata and the subject only, while
+full tool arguments and model-visible (fitted) tool results live in the Session transcript.
 
 ### In-process Application
 

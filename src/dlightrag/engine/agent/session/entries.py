@@ -61,7 +61,13 @@ class UserMessageEntry(SessionEntry):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AssistantMessageEntry(SessionEntry):
-    """One complete validated provider response; partial streams are never durable."""
+    """One complete validated provider response; partial streams are never durable.
+
+    ``call`` is the model, parameters, prompt digests and timings the response was made with
+    (ADR 0041). It is written in the entry's own transaction, and is absent on an entry written
+    before it existed, on one whose model call left no record, and on one a recovery wrote from
+    a result whose call was gone with its process.
+    """
 
     content: str
     stop_reason: Literal["stop", "length", "tool_use"]
@@ -70,6 +76,7 @@ class AssistantMessageEntry(SessionEntry):
     usage: JsonValue | None = None
     cost: JsonValue | None = None
     provider_state: JsonValue | None = None
+    call: JsonValue | None = None
     acceptance_id: str | None = None
 
     entry_type: ClassVar[str] = "assistant_message"
@@ -100,6 +107,8 @@ class AssistantMessageEntry(SessionEntry):
             payload["cost"] = self.cost
         if self.provider_state is not None:
             payload["provider_state"] = self.provider_state
+        if self.call is not None:
+            payload["call"] = self.call
         if self.acceptance_id is not None:
             payload["acceptance_id"] = self.acceptance_id
         return payload
@@ -168,7 +177,11 @@ class ControlMessageEntry(SessionEntry):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CompactionEntry(SessionEntry):
-    """One branch-local immutable context projection checkpoint."""
+    """One branch-local immutable context projection checkpoint.
+
+    ``call`` is the model, parameters, prompt digests and timings of the call that wrote its
+    summary (ADR 0041), absent where the entry predates it or that call left no record.
+    """
 
     projection_id: ProjectionId
     summary: str | None
@@ -177,6 +190,7 @@ class CompactionEntry(SessionEntry):
     covered_through_entry_id: EntryId | None = None
     first_retained_entry_id: EntryId | None = None
     source_digest: str = ""
+    call: JsonValue | None = None
 
     entry_type: ClassVar[str] = "compaction"
 
@@ -196,7 +210,7 @@ class CompactionEntry(SessionEntry):
             raise ValueError("compaction requires branch Entry identity and source digest")
 
     def canonical_payload(self) -> JsonValue:
-        return {
+        payload: dict[str, Any] = {
             "projection_id": self.projection_id.value,
             "summary": self.summary,
             "covered_through_sequence": self.covered_through_sequence,
@@ -213,6 +227,9 @@ class CompactionEntry(SessionEntry):
             ),
             "source_digest": self.source_digest,
         }
+        if self.call is not None:
+            payload["call"] = self.call
+        return payload
 
 
 type SessionEntryKind = (
@@ -277,6 +294,7 @@ def decode_entry_payload(
             usage=payload.get("usage"),
             cost=payload.get("cost"),
             provider_state=payload.get("provider_state"),
+            call=payload.get("call"),
             acceptance_id=(str(payload["acceptance_id"]) if payload.get("acceptance_id") else None),
         )
     if entry_type == "tool_result":
@@ -324,6 +342,7 @@ def decode_entry_payload(
                 else None
             ),
             source_digest=str(payload.get("source_digest") or ""),
+            call=payload.get("call"),
         )
     raise ValueError(f"unknown Entry type: {entry_type}")
 

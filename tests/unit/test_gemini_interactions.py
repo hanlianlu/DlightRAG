@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import dataclasses
 import json
 import re
 from datetime import UTC, datetime
@@ -842,13 +843,25 @@ async def test_a_turn_cut_off_by_its_token_cap_keeps_its_text_and_reports_its_ca
     finally:
         await model.aclose()
 
-    assert turn == AssistantTurn(
+    # The wrapper adds the call it made beside what the interaction held.
+    assert turn.call is not None
+    assert dataclasses.replace(turn, call=None) == AssistantTurn(
         text="The table shows",
         reasoning="Page 2 holds the table.",
         tool_calls=(ToolCall(id="call-1", name="view", arguments={}),),
         stop_reason="length",
         usage_details=_COUNTERS,
     )
+
+
+async def test_the_model_an_interaction_names_is_the_model_that_served_the_turn() -> None:
+    model = _tool_model(_Gemini(_interaction(_text("Hello."), model="gemini-3.8-flash-001")))
+    try:
+        turn = await model(messages=[_QUESTION], tools=[_VIEW])
+    finally:
+        await model.aclose()
+
+    assert turn.served_model == "gemini-3.8-flash-001"
 
 
 async def test_a_stream_cut_off_mid_call_keeps_its_text_and_reports_the_call() -> None:

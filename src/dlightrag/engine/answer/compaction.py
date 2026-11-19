@@ -29,6 +29,7 @@ from dlightrag.engine.agent.session.projection import (
     render_compaction_summary,
     validate_projection_commit,
 )
+from dlightrag.engine.agent.session.provenance import PendingCall, prompt_digests
 from dlightrag.engine.agent.session.repository import AgentSessionSnapshot
 from dlightrag.engine.ai.capacity import ContextPolicy, ModelProfile
 from dlightrag.engine.ai.reasoning import cheapest_supported_reasoning
@@ -62,7 +63,12 @@ _KNOWN_HEADINGS = {
 
 @dataclass(frozen=True, slots=True)
 class CompactionOutcome:
-    """What one committed compaction covered, for the operator trace."""
+    """What one committed compaction covered, for the operator trace.
+
+    ``call`` is the summarizer call that wrote the summary, which the entry that commits the
+    projection records (ADR 0041). It is the call of this attempt alone: an earlier attempt that
+    failed left no projection and no record.
+    """
 
     covered_through_sequence: int
     first_retained_sequence: int
@@ -71,6 +77,7 @@ class CompactionOutcome:
     summary_chars: int
     hierarchical: bool
     tail_target_tokens: int
+    call: PendingCall | None = None
 
 
 class _CompactionAttemptFailed(Exception):
@@ -311,7 +318,7 @@ class CompactionCoordinator:
             [entry.entry_id for entry in branch_entries[: covered_index + 1]]
         )
 
-        summary_text = await self._summarize(covered, previous_summary=previous.summary)
+        summary_text, call = await self._summarize(covered, previous_summary=previous.summary)
         try:
             parsed = parse_compaction_summary(summary_text)
         except ValueError as exc:
@@ -356,6 +363,7 @@ class CompactionCoordinator:
             summary_chars=len(summary_json),
             hierarchical=hierarchical,
             tail_target_tokens=tail_target_tokens,
+            call=call,
         )
         trace.setdefault("compactions", []).append(
             {
@@ -376,7 +384,7 @@ class CompactionCoordinator:
         covered: Sequence[SessionEntry],
         *,
         previous_summary: str | None,
-    ) -> str:
+    ) -> tuple[str, PendingCall]:
         rendered_previous = (
             render_compaction_summary(previous_summary) if previous_summary is not None else None
         )
@@ -400,16 +408,18 @@ class CompactionCoordinator:
         kwargs: dict[str, Any] = {}
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
+        call = PendingCall(prompt=prompt_digests(messages))
         stream = self._stream_model(
             messages=messages,
             model_kwargs=kwargs,
             reasoning=cheapest_supported_reasoning(self._model_profile.reasoning),
             model_profile=self._model_profile,
+            call_holder=call.holder,
         )  # type: ignore[call-arg]
         chunks: list[str] = []
         async for chunk in stream:
             chunks.append(chunk)
-        return "".join(chunks)
+        return "".join(chunks), call
 
     def _fit_summary_slice(
         self,

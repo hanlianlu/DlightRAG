@@ -28,6 +28,7 @@ from dlightrag.application.errors import CorpusUnavailableError
 from dlightrag.application.settings import answer_model_runtime_settings
 from dlightrag.engine.agent.environment import SearchToolchain
 from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
+from dlightrag.engine.agent.session.entries import AssistantMessageEntry
 from dlightrag.engine.agent.session.ids import EntryId, LaneId, ProjectionId, SessionId
 from dlightrag.engine.agent.session.plan import AgentRunPlan
 from dlightrag.engine.agent.session.registers import (
@@ -100,6 +101,7 @@ from dlightrag.engine.runtime.records import (
     artifact_digest,
 )
 from tests.in_memory_session_repository import MemoryAgentSessionRepository
+from tests.support import model_provider as mp
 from tests.support.agent_browser import FakeProvider, browser_settings, idle_accounts_binding
 from tests.support.dns import public_dns
 from tests.unit.conftest import OtlpExport, answer_image_policy
@@ -2355,6 +2357,7 @@ async def _drive_fast_execute(
     memory_capability_current: Any = None,
     contexts: Mapping[str, Any] | None = None,
     answer: str | None = None,
+    model_func: Any = None,
 ) -> tuple[Any, Any, list[dict[str, Any]]]:
     """Execute one Fast Run and return the requests its answer model received.
 
@@ -2395,7 +2398,7 @@ async def _drive_fast_execute(
         synthesizer=AnswerSynthesizer(
             image_policy=answer_image_policy(),
             model_profile=ModelProfile(context_window_tokens=1_000_000),
-            model_func=answer_model,
+            model_func=model_func or answer_model,
         ),
         retrieve_knowledge_base=AsyncMock(
             return_value=MagicMock(
@@ -2584,6 +2587,27 @@ async def test_a_fast_answer_resolves_its_citations_to_the_documents_it_was_show
     assert [
         (source["id"], source["title"], source["cited_chunk_ids"]) for source in stored["sources"]
     ] == [("1", "report.pdf", ["a1"]), ("2", "other.pdf", ["b2"])]
+
+
+@pytest.mark.asyncio
+async def test_a_fast_answer_states_the_call_that_wrote_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    provider = mp.RecordingProvider(text="Revenue grew.")
+    settings = ModelSettings(provider="openai", model="answer-model", temperature=0.3)
+    model = mp.completion_model_over(monkeypatch, provider, settings)
+    executor, session, _ = await _drive_fast_execute(tmp_path=tmp_path, model_func=model)
+
+    await executor.execute(cast(RunSession, session))
+
+    repository = session.execution.session_repository
+    snapshot = await repository.load(SessionId(session.prepared_input["agent_session_id"]))
+    [answer] = [entry for entry in snapshot.entries if isinstance(entry, AssistantMessageEntry)]
+    (sent,) = provider.requests
+    # Fast answers on the query role, over no tools, and states no Plan.
+    assert mp.untimed(answer.call) == mp.expected_call(
+        sent, role="query", endpoint=None, plan_digest=None, reasoning=None
+    )
 
 
 @pytest.mark.parametrize(

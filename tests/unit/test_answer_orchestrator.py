@@ -851,7 +851,7 @@ async def test_compaction_carries_the_spill_handles_into_the_projection(tmp_path
                     covered_through_sequence=0,
                     summary=None,
                 ),
-                None,
+                SimpleNamespace(call=None),  # a coordinator outcome whose summary left no call
             )
 
     orchestrator._compaction_coordinator = lambda _run: _RecordingCoordinator()  # type: ignore[method-assign]

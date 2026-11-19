@@ -18,9 +18,11 @@ from dlightrag.engine.ai.messages import (
     ToolStopReason,
     content_with_attachments,
 )
+from dlightrag.engine.ai.provenance import served_model_name
 from dlightrag.engine.ai.providers.base import (
     CompletionOutput,
     CompletionProvider,
+    capture_served_model,
     closing_stream,
     usage_to_dict,
 )
@@ -411,6 +413,7 @@ class AnthropicProvider(CompletionProvider):
             ),
             usage_details=usage_to_dict(getattr(response, "usage", None)),
             provider_state={"thinking_blocks": thinking_blocks} if thinking_blocks else None,
+            served_model=served_model_name(getattr(response, "model", None)),
         )
 
     async def complete_tool_turn_streaming(
@@ -458,11 +461,14 @@ class AnthropicProvider(CompletionProvider):
         block_parts: dict[int, dict[str, Any]] = {}
         usage_parts: list[Any] = []
         stop_reason: Any = None
+        served: Any = None
         async with closing_stream(response):
             async for event in response:
                 event_type = getattr(event, "type", None)
                 if event_type == "message_start":
-                    usage_parts.append(getattr(getattr(event, "message", None), "usage", None))
+                    started = getattr(event, "message", None)
+                    usage_parts.append(getattr(started, "usage", None))
+                    served = getattr(started, "model", None)
                     continue
                 if event_type == "message_delta":
                     usage_parts.append(getattr(event, "usage", None))
@@ -573,6 +579,7 @@ class AnthropicProvider(CompletionProvider):
             stop_reason=_anthropic_stop_reason(stop_reason, has_tool_calls=bool(calls)),
             usage_details=usage or None,
             provider_state={"thinking_blocks": thinking_blocks} if thinking_blocks else None,
+            served_model=served_model_name(served),
         )
 
     async def stream_tool_text(
@@ -630,11 +637,14 @@ class AnthropicProvider(CompletionProvider):
         reasoning_parts: list[str] = []
         usage_start: Any = None
         usage_delta: Any = None
+        served: Any = None
         async with closing_stream(response):
             async for event in response:
                 etype = getattr(event, "type", None)
                 if etype == "message_start":
-                    usage_start = getattr(getattr(event, "message", None), "usage", None)
+                    started = getattr(event, "message", None)
+                    usage_start = getattr(started, "usage", None)
+                    served = getattr(started, "model", None)
                 elif etype == "message_delta":
                     event_usage = getattr(event, "usage", None)
                     if event_usage is not None:
@@ -647,6 +657,7 @@ class AnthropicProvider(CompletionProvider):
                 elif delta.type == "thinking_delta":
                     reasoning_parts.append(delta.thinking)
         self.last_reasoning = "".join(reasoning_parts)
+        capture_served_model(usage_holder, served)
         if usage_holder is not None:
             merged: dict[str, int] = {}
             for src in (usage_start, usage_delta):

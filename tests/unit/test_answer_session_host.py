@@ -49,6 +49,7 @@ from dlightrag.engine.agent.session.transactions import (
     TransactionLeaseLost,
 )
 from dlightrag.engine.ai.capacity import ContextPolicy, ModelProfile
+from dlightrag.engine.ai.settings import ModelSettings
 from dlightrag.engine.answer.compaction import CompactionCoordinator
 from dlightrag.engine.answer.execution.executor import (
     AnswerExecutor,
@@ -61,6 +62,7 @@ from dlightrag.engine.answer.history import HistoryProjectionTarget
 from dlightrag.engine.runtime.errors import RunExecutionError
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
 from tests.in_memory_session_repository import MemoryAgentSessionRepository
+from tests.support.model_provider import RecordingProvider, expected_call, tool_model_over, untimed
 from tests.support.workspace_store import InMemoryWorkspaceStore
 
 
@@ -1152,7 +1154,9 @@ async def test_fast_replay_reinstalls_reservation_on_durable_compaction_checkpoi
 
 
 @pytest.mark.asyncio
-async def test_fast_compaction_satisfies_smaller_extract_and_larger_query_profiles() -> None:
+async def test_fast_compaction_satisfies_smaller_extract_and_larger_query_profiles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     store = _CountingFastRepository()
     session_id = SessionId.new()
     host = await _fast_host(store, session_id)
@@ -1188,15 +1192,16 @@ async def test_fast_compaction_satisfies_smaller_extract_and_larger_query_profil
         del messages, projected_summary
         return 100
 
-    class _ToolModel:
-        @staticmethod
-        async def stream_text(**_kwargs):
-            yield "## Goal\nPreserve the prior turn."
+    # The real wrapper over a recording provider, so the summary's `call` is the real one.
+    provider = RecordingProvider(text="## Goal\nPreserve the prior turn.")
+    tool_model = tool_model_over(
+        monkeypatch, provider, ModelSettings(provider="openai", model="query-model")
+    )
 
     class _Models:
         @staticmethod
         def query_tool_model():
-            return _ToolModel()
+            return tool_model
 
     executor = object.__new__(AnswerExecutor)
     executor._models = cast(Any, _Models())
@@ -1235,10 +1240,16 @@ async def test_fast_compaction_satisfies_smaller_extract_and_larger_query_profil
     assert generation_trace["input_tokens_before"] <= generation_trace["input_limit_tokens"]
     assert all(message.get("content") != "current question" for message in compacted.messages)
     snapshot = await host.snapshot(session_id)
-    assert isinstance(snapshot.tree.ancestry()[-1], CompactionEntry)
+    checkpoint = snapshot.tree.ancestry()[-1]
+    assert isinstance(checkpoint, CompactionEntry)
     assert snapshot.active_projection is not None
     assert store.load_calls == 1
     assert store.decoded_rows == 0
+    # Fast summarizes on the query role, and the checkpoint states the call that wrote it.
+    (summarizer,) = provider.requests
+    assert untimed(checkpoint.call) == expected_call(
+        summarizer, role="query", endpoint=None, plan_digest=None, reasoning=None
+    )
 
 
 @pytest.mark.asyncio

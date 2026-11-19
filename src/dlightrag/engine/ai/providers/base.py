@@ -17,6 +17,7 @@ from dlightrag.engine.ai.messages import (
     ToolDefinition,
     ToolStopReason,
 )
+from dlightrag.engine.ai.provenance import served_model_name
 
 logger = logging.getLogger(__name__)
 
@@ -395,6 +396,18 @@ def capture_stream_usage(
         holder["cost_details"] = cost
 
 
+def capture_served_model(holder: dict[str, Any] | None, model: object) -> None:
+    """Record the model name a streaming call's server stated, when it stated a plain one.
+
+    The holder is the wrapper's, one per request, like the usage a stream captures. The name
+    is a note about the call and never usage: it is kept apart from the counters so nothing
+    that sums them can meet it.
+    """
+    name = served_model_name(model)
+    if holder is not None and name is not None:
+        holder["served_model"] = name
+
+
 @asynccontextmanager
 async def closing_stream[S](stream: S) -> AsyncIterator[S]:
     """Close one SDK response stream however its consumer leaves it.
@@ -584,6 +597,7 @@ class CompletionProvider(ABC):
 __all__ = [
     "CompletionOutput",
     "CompletionProvider",
+    "capture_served_model",
     "capture_stream_usage",
     "closing_stream",
     "is_provider_context_overflow",

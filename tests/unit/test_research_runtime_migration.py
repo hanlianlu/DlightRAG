@@ -680,6 +680,7 @@ async def test_research_runtime_projects_a_reported_subject_into_tool_updates() 
 
     async def execute(_input: BaseModel, runtime: ToolRuntime) -> ToolResult:
         await runtime.emit_update(ToolResult.text("", subject="quarterly revenue 2026"))
+        await runtime.emit_update(ToolResult.text("", subject="a later update"))
         return ToolResult.text("added 3 new passages.")
 
     tool = AgentTool("search_knowledge_base", "Search.", _EmptyToolInput, execute=execute)
@@ -731,10 +732,21 @@ async def test_research_runtime_projects_a_reported_subject_into_tool_updates() 
     )
 
     updates = [event for event in emitted if getattr(event, "kind", None) == "tool_update"]
-    assert len(updates) == 1
+    assert len(updates) == 2
     assert updates[0].data["tool_name"] == "search_knowledge_base"
     assert updates[0].data["call_id"] == "search-call"
     assert updates[0].data["object_label"] == "quarterly revenue 2026"
+    # The trace row keeps the first subject the Tool reported.
+    observation = prepared.trace["tool_observations"][0]
+    assert observation["call_id"] == "search-call"
+    assert observation["subject"] == "quarterly revenue 2026"
+
+
+@pytest.mark.asyncio
+async def test_a_tool_that_reports_no_subject_keeps_the_trace_key_absent() -> None:
+    _, prepared = await _settle_bounded_research_tool(answer_model_profile(), "done")
+
+    assert "subject" not in prepared.trace["tool_observations"][0]
 
 
 @pytest.mark.asyncio
@@ -1634,6 +1646,7 @@ async def _drive_research_run(
     question: str,
     *,
     model: Any,
+    stream_model: Any = None,
     resource_manifest: tuple[ResourceManifestEntry, ...] = (),
     query_images: list[dict[str, Any]] | None = None,
     injected_tools: tuple[AgentTool, ...] = (),
@@ -1650,7 +1663,7 @@ async def _drive_research_run(
         synthesizer=cast(Any, SimpleNamespace()),
         retrieve_knowledge_base=_one_fact,
         model_func=model,
-        stream_model_func=cast(Any, None),
+        stream_model_func=stream_model,
         injected_tools=list(injected_tools),
         model_profile=profile,
         telemetry=NOOP_TELEMETRY,

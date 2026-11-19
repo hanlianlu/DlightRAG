@@ -3,14 +3,17 @@
 
 import asyncio
 import logging
+import time
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import aclosing
+from dataclasses import replace
 from typing import Any
 
 from dlightrag.engine.ai.capacity import ModelCapabilityError, ModelProfile
 from dlightrag.engine.ai.catalog import resolve_model_profile
 from dlightrag.engine.ai.fingerprints import model_invocation_fingerprint
 from dlightrag.engine.ai.messages import AssistantTurn, ToolChoice, ToolDefinition
+from dlightrag.engine.ai.provenance import ModelCall
 from dlightrag.engine.ai.providers import provider_for
 from dlightrag.engine.ai.providers.base import CompletionProvider
 from dlightrag.engine.ai.reasoning import (
@@ -55,6 +58,7 @@ class ToolModel:
         max_tokens: int | None = None,
         model_profile: ModelProfile | None = None,
     ) -> AssistantTurn:
+        asked = time.monotonic()
         return await self._scheduler.run(
             lambda: self._complete_tool_turn(
                 messages=messages,
@@ -62,6 +66,7 @@ class ToolModel:
                 tool_choice=tool_choice,
                 max_tokens=max_tokens,
                 model_profile=model_profile,
+                asked=asked,
             )
         )
 
@@ -76,6 +81,7 @@ class ToolModel:
         model_profile: ModelProfile | None = None,
     ) -> AssistantTurn:
         """Run one tool-capable turn and forward native provider text deltas."""
+        asked = time.monotonic()
         return await self._scheduler.run(
             lambda: self._complete_tool_turn(
                 messages=messages,
@@ -83,6 +89,7 @@ class ToolModel:
                 tool_choice=tool_choice,
                 max_tokens=max_tokens,
                 model_profile=model_profile,
+                asked=asked,
                 emit_text=emit_text,
             )
         )
@@ -95,8 +102,12 @@ class ToolModel:
         tool_choice: ToolChoice,
         max_tokens: int | None,
         model_profile: ModelProfile | None,
+        asked: float,
         emit_text: Callable[[str], Awaitable[None]] | None = None,
     ) -> AssistantTurn:
+        # The scheduler starts this the moment it admits the request, so the time since the
+        # caller asked is the time the request waited for a slot.
+        queued = time.monotonic() - asked
         self._validate_image_inputs(messages, model_profile)
         resolved = self._resolve_reasoning(
             self.settings.effective_agentic_reasoning,
@@ -133,12 +144,26 @@ class ToolModel:
                 }
                 if emit_text is not None:
                     provider_kwargs["emit_text"] = emit_text
-                turn = await provider_method(
-                    messages_for_model(messages, self.fingerprint),
-                    self.settings.model,
-                    **provider_kwargs,
-                )
+                outbound = messages_for_model(messages, self.fingerprint)
+                sent_at = time.monotonic()
+                turn = await provider_method(outbound, self.settings.model, **provider_kwargs)
+                took = time.monotonic() - sent_at
                 turn = bind_provider_replay(turn, self.fingerprint)
+                turn = replace(
+                    turn,
+                    call=ModelCall.of(
+                        self.fingerprint,
+                        served_model=turn.served_model,
+                        temperature=self.settings.temperature,
+                        max_tokens=max_tokens,
+                        tool_choice=tool_choice,
+                        response_format=None,
+                        reasoning=resolved,
+                        model_kwargs=model_kwargs,
+                        queued_seconds=queued,
+                        duration_seconds=took,
+                    ),
+                )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -166,18 +191,25 @@ class ToolModel:
         model_kwargs: dict[str, Any] | None = None,
         reasoning: ReasoningLevel | None = None,
         model_profile: ModelProfile | None = None,
+        call_holder: dict[str, Any] | None = None,
     ) -> AsyncGenerator[str]:
         """Stream the compaction summary of a rich tool transcript.
 
         Explicit ``model_kwargs`` selects one attempt. Typed ``reasoning`` is
         still resolved from the pinned profile and owns its provider fields.
+        ``call_holder`` receives, under ``call``, the model, parameters and timings of the
+        attempt that produced the text. A stream waits for its slot from the moment it is
+        requested, as the scheduler binds its owner then, and every caller reads it at once.
         """
+        asked = time.monotonic()
         return self._scheduler.stream(
             lambda: self._stream_text(
                 messages=messages,
                 model_kwargs=model_kwargs,
                 reasoning=reasoning,
                 model_profile=model_profile,
+                call_holder=call_holder,
+                asked=asked,
             )
         )
 
@@ -188,7 +220,12 @@ class ToolModel:
         model_kwargs: dict[str, Any] | None = None,
         reasoning: ReasoningLevel | None = None,
         model_profile: ModelProfile | None = None,
+        call_holder: dict[str, Any] | None = None,
+        asked: float,
     ) -> AsyncGenerator[str]:
+        # The scheduler starts this the moment it admits the stream, so the time since the
+        # caller asked is the time the stream waited for a slot.
+        queued = time.monotonic() - asked
         streamed: list[str] = []
         usage_details: dict[str, int | float] = {}
         cost_details: dict[str, int | float] = {}
@@ -225,6 +262,7 @@ class ToolModel:
                         reasoning_attempts.append(self._reasoning_metadata(resolved))
                     attempt_usage: dict[str, Any] = {}
                     substantive_text = False
+                    sent_at = time.monotonic()
                     stream = self._provider.stream_tool_text(
                         prepared_messages,
                         self.settings.model,
@@ -239,9 +277,23 @@ class ToolModel:
                             substantive_text = substantive_text or bool(token.strip())
                             streamed.append(token)
                             yield token
+                    took = time.monotonic() - sent_at
                     _accumulate_metrics(usage_details, attempt_usage.get("usage_details"))
                     _accumulate_metrics(cost_details, attempt_usage.get("cost_details"))
                     if substantive_text:
+                        if call_holder is not None:
+                            call_holder["call"] = ModelCall.of(
+                                self.fingerprint,
+                                served_model=attempt_usage.get("served_model"),
+                                temperature=self.settings.temperature,
+                                max_tokens=max_tokens,
+                                tool_choice=None,
+                                response_format=None,
+                                reasoning=resolved,
+                                model_kwargs=attempt_kwargs,
+                                queued_seconds=queued,
+                                duration_seconds=took,
+                            )
                         return
                     if attempts == 1 and len(attempt_options) > 1:
                         logger.warning(

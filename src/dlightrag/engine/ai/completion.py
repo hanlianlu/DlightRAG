@@ -3,6 +3,7 @@
 
 import asyncio
 import logging
+import time
 from collections.abc import AsyncGenerator
 from contextlib import aclosing
 from datetime import UTC, datetime
@@ -11,6 +12,7 @@ from typing import Any
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.catalog import resolve_model_profile
 from dlightrag.engine.ai.fingerprints import model_invocation_fingerprint
+from dlightrag.engine.ai.provenance import ModelCall
 from dlightrag.engine.ai.providers import provider_for
 from dlightrag.engine.ai.reasoning import (
     REASONING_LEVELS,
@@ -109,12 +111,27 @@ class CompletionModel:
         self._provider = provider_for(settings)
 
     async def __call__(self, messages: list[dict[str, Any]], **kwargs: Any) -> Any:
-        """Complete one chat request or return a telemetry-owned token stream."""
+        """Complete one chat request or return a telemetry-owned token stream.
+
+        A stream's caller may pass two holders, both out-parameters and neither a provider
+        option: ``usage_holder`` receives the usage and cost the provider stated, and
+        ``call_holder`` the model, parameters and timings of the attempt that produced the
+        stream, under ``call``. A stream waits for its slot from the moment it is requested, as
+        the scheduler binds its owner then, and every caller reads it at once.
+        """
         stream = bool(kwargs.pop("stream", False))
+        call_holder = kwargs.pop("call_holder", None)
         if stream:
             usage_holder = kwargs.pop("usage_holder", None)
+            asked = time.monotonic()
             return self._scheduler.stream(
-                lambda: self._stream(messages, kwargs, usage_holder=usage_holder)
+                lambda: self._stream(
+                    messages,
+                    kwargs,
+                    asked=asked,
+                    usage_holder=usage_holder,
+                    call_holder=call_holder,
+                )
             )
         kwargs.pop("usage_holder", None)
         return await self._scheduler.run(lambda: self._complete(messages, kwargs))
@@ -338,15 +355,30 @@ class CompletionModel:
         messages: list[dict[str, Any]],
         request: dict[str, Any],
         *,
+        asked: float,
         usage_holder: dict[str, Any] | None = None,
+        call_holder: dict[str, Any] | None = None,
     ) -> AsyncGenerator[str]:
+        # The scheduler starts this the moment it admits the stream, so the time since the
+        # caller asked is the time the stream waited for a slot.
+        queued = time.monotonic() - asked
         model_kwargs, response_format, max_tokens, resolved = self._request_options(dict(request))
         observation_kwargs = self._observation_kwargs(
             messages,
             {**request, **self._reasoning_metadata(resolved)},
         )
         structured_output = request.get("structured_output")
-        active_usage_holder = usage_holder if usage_holder is not None else {}
+        # The provider writes into a holder of this call's own. What it states beyond usage and
+        # cost, the model that served the request, is the call's and never reaches the caller's
+        # usage; the caller's holder receives only the counters.
+        provider_holder: dict[str, Any] = {}
+        # The response format of the attempt that produced the stream, which a refused strict
+        # schema changes to a JSON object.
+        sent_format = response_format
+        completed = False
+        # How long the attempt that produced the stream took, from sending its request to the
+        # last chunk read; a refused first attempt does not count towards the fallback's.
+        took = 0.0
         chunks: list[str] = []
         text_length = 0
         first_chunk = True
@@ -366,18 +398,21 @@ class CompletionModel:
                 chunks.append(chunk)
 
             try:
+                sent_at = time.monotonic()
                 stream = self._provider_stream(
                     messages=prepared,
                     response_format=response_format,
                     max_tokens=max_tokens,
                     model_kwargs=model_kwargs,
-                    usage_holder=active_usage_holder,
+                    usage_holder=provider_holder,
                 )
                 async with aclosing(stream):
                     async for chunk in stream:
                         yielded = True
                         _record_chunk(chunk)
                         yield chunk
+                took = time.monotonic() - sent_at
+                completed = True
             except asyncio.CancelledError, GeneratorExit:
                 raise
             except BaseException as exc:
@@ -392,19 +427,23 @@ class CompletionModel:
                         error_type=type(exc).__name__,
                     )
                     raise
+                sent_format = _JSON_OBJECT_FORMAT
                 try:
+                    sent_at = time.monotonic()
                     stream = self._provider_stream(
                         messages=prepared,
                         response_format=_JSON_OBJECT_FORMAT,
                         max_tokens=max_tokens,
                         model_kwargs=model_kwargs,
-                        usage_holder=active_usage_holder,
+                        usage_holder=provider_holder,
                     )
                     async with aclosing(stream):
                         async for chunk in stream:
                             yielded = True
                             _record_chunk(chunk)
                             yield chunk
+                    took = time.monotonic() - sent_at
+                    completed = True
                 except asyncio.CancelledError, GeneratorExit:
                     raise
                 except BaseException as fallback_exc:
@@ -416,10 +455,27 @@ class CompletionModel:
                     raise
             finally:
                 output: dict[str, Any] = {"text_length": text_length, "text": "".join(chunks)}
+                if usage_holder is not None:
+                    for counter in ("usage_details", "cost_details"):
+                        if counter in provider_holder:
+                            usage_holder[counter] = provider_holder[counter]
+                if completed and call_holder is not None:
+                    call_holder["call"] = ModelCall.of(
+                        self.fingerprint,
+                        served_model=provider_holder.get("served_model"),
+                        temperature=self.settings.temperature,
+                        max_tokens=max_tokens,
+                        tool_choice=None,
+                        response_format=sent_format,
+                        reasoning=resolved,
+                        model_kwargs=model_kwargs,
+                        queued_seconds=queued,
+                        duration_seconds=took,
+                    )
                 observation.update(
                     output=output,
-                    usage_details=active_usage_holder.get("usage_details"),
-                    cost_details=active_usage_holder.get("cost_details"),
+                    usage_details=provider_holder.get("usage_details"),
+                    cost_details=provider_holder.get("cost_details"),
                 )
 
     async def aclose(self) -> None:

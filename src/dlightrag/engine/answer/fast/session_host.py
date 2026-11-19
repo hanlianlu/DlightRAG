@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
 
+from dlightrag.engine.agent.session.effects import JsonValue
 from dlightrag.engine.agent.session.entries import (
     AssistantMessageEntry,
     CompactionEntry,
@@ -352,8 +353,12 @@ class FastSessionHost:
         lane_id: LaneId,
         reservation_id: str,
         projection: ContextProjection,
+        call: JsonValue | None = None,
     ) -> TransactionCommit:
-        """CAS one projection against the exact snapshot it was prepared from."""
+        """CAS one projection against the exact snapshot it was prepared from.
+
+        ``call`` is the summarizer call's record, committed with the entry (ADR 0041).
+        """
         if snapshot.session_id != session_id:
             raise ValueError("Fast compaction snapshot belongs to another Session")
         _reject_fault(snapshot)
@@ -403,6 +408,7 @@ class FastSessionHost:
             covered_through_entry_id=projection.covered_through_entry_id,
             first_retained_entry_id=projection.first_retained_entry_id,
             source_digest=projection.source_digest,
+            call=call,
         )
         projection_value = ContextProjectionRegister(lane_id, projection)
         return await self._transact(
@@ -433,7 +439,13 @@ class FastSessionHost:
         content: str,
         usage: Any | None = None,
         cost: Any | None = None,
+        call: JsonValue | None = None,
     ) -> TransactionCommit | None:
+        """Settle the reserved turn with its answer, and with the ``call`` that made it.
+
+        A turn settled again from its stored result, after the process that made the call is
+        gone, has no ``call`` to record.
+        """
         snapshot = await self.snapshot(session_id)
         _reject_fault(snapshot)
         reservation_record = _reservation(snapshot, lane_id)
@@ -497,6 +509,7 @@ class FastSessionHost:
             # the provider's payload used to fail the next Run while assembling turn 0.
             usage=usage_counters(usage),
             cost=cost,
+            call=call,
             acceptance_id=reservation_id,
         )
         return await self._transact(
