@@ -54,7 +54,7 @@ _SERVICE_URLS = [
             "access.web_identity.issuer",
             "access.web_identity.jwks_url",
             "interfaces.mcp.resource_server_url",
-            "observability.langfuse_host",
+            "observability.otlp_endpoint",
             "answer.agent.connections.oauth_callback_url",
             "answer.agent.browser.egress_proxy",
         )

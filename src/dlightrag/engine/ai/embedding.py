@@ -303,13 +303,15 @@ class MultimodalEmbedder:
                 "inline_image_bytes": sum(item.estimated_image_bytes for item in requests),
             },
             model=self.fingerprint.model,
+            provider=self.fingerprint.provider,
         ) as observation:
             try:
                 outcome = await self._run_requests(requests, expected_count=expected_count)
             except Exception as exc:
                 observation.update(
                     level="ERROR",
-                    status_message=telemetry_error_message(self._telemetry, exc),
+                    status_message=telemetry_error_message(exc),
+                    error_type=type(exc).__name__,
                 )
                 raise
             billed = outcome.usage.get("total_tokens")

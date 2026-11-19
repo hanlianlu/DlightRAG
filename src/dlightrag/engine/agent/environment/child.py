@@ -24,7 +24,6 @@ _BLOCK_PREFIXES = (
     "DLIGHTRAG_",
     "POSTGRES_",
     "LIGHTRAG_",
-    "LANGFUSE_",
     "OPENAI_",
     "ANTHROPIC_",
 )

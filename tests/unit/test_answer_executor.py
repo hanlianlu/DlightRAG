@@ -14,10 +14,9 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
+from opentelemetry.trace import StatusCode
 from PIL import Image
 
-from dlightrag.adapters.observability import LangfuseTelemetry
-from dlightrag.adapters.observability import langfuse as langfuse_state
 from dlightrag.application.config import (
     AgentBrowserConfig,
     AgentExecutionConfig,
@@ -103,7 +102,7 @@ from dlightrag.engine.runtime.records import (
 from tests.in_memory_session_repository import MemoryAgentSessionRepository
 from tests.support.agent_browser import FakeProvider, browser_settings, idle_accounts_binding
 from tests.support.dns import public_dns
-from tests.unit.conftest import RecordingLangfuse, answer_image_policy
+from tests.unit.conftest import OtlpExport, answer_image_policy
 
 
 @pytest.mark.asyncio
@@ -1425,13 +1424,12 @@ async def test_a_recovery_copy_the_volume_fails_defers_and_the_next_claim_copies
     assert store.workspace_epoch == 3
 
 
-@pytest.mark.usefixtures("reset_langfuse_client")
-async def test_the_run_trace_carries_question_attribution_and_hands_the_pipeline_its_root() -> None:
+async def test_the_run_trace_carries_question_attribution_and_hands_the_pipeline_its_root(
+    otlp_export: OtlpExport,
+) -> None:
     """The pipeline that knows the answer writes the root; the root carries the question."""
-    client = RecordingLangfuse()
-    langfuse_state.install_client(client, trace_sensitive=True)
     executor = _executor()
-    executor._telemetry = LangfuseTelemetry()
+    executor._telemetry = otlp_export.telemetry
     executor._execute = AsyncMock(return_value=Succeeded({"answer": "the answer"}))  # type: ignore[method-assign]
     session = MagicMock(
         owner_id="owner",
@@ -1445,29 +1443,30 @@ async def test_the_run_trace_carries_question_attribution_and_hands_the_pipeline
 
     await executor.execute(cast(RunSession, session))
 
-    root = client.observations[0]
-    assert root.kwargs["name"] == "run-answer"
-    assert root.kwargs["as_type"] == "agent"
-    assert root.kwargs["input"] == {"query": "why the sky is blue"}
-    assert root.kwargs["metadata"] == {
+    (span,) = otlp_export.spans()
+    assert span.name == "run-answer"
+    attributes = otlp_export.attributes(span)
+    assert attributes["dlightrag.observation.kind"] == "agent"
+    assert attributes["session.id"] == "sess-1"
+    assert attributes["user.id"] == "owner"
+    assert otlp_export.payload(span, "dlightrag.input") == {"query": "why the sky is blue"}
+    assert otlp_export.payload(span, "dlightrag.metadata") == {
         "run_id": "run-1",
         "parent_run_id": None,
-        "workspaces": ("default",),
+        "workspaces": ["default"],
     }
 
     calls = executor._execute.await_args_list if executor._execute.await_count else []
     handed = calls[0].args[1]
+    # The pipeline writes its answer through the handle the root handed it; the
+    # rendered update is asserted where a writer closes inside its own span.
     handed.update(output={"answer": "the answer"})
-    assert client.observations[0].updates == [{"output": {"answer": "the answer"}}]
 
 
-@pytest.mark.usefixtures("reset_langfuse_client")
-async def test_a_deferred_run_reports_why_it_has_no_answer() -> None:
+async def test_a_deferred_run_reports_why_it_has_no_answer(otlp_export: OtlpExport) -> None:
     """One writer per path: the deferral path says which dependency deferred the attempt."""
-    client = RecordingLangfuse()
-    langfuse_state.install_client(client, trace_sensitive=True)
     executor = _executor()
-    executor._telemetry = LangfuseTelemetry()
+    executor._telemetry = otlp_export.telemetry
     executor._now = lambda: datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
     executor._execute = AsyncMock(side_effect=ConnectionError("provider down"))  # type: ignore[method-assign]
     session = MagicMock(
@@ -1482,18 +1481,19 @@ async def test_a_deferred_run_reports_why_it_has_no_answer() -> None:
     outcome = await executor.execute(cast(RunSession, session))
 
     assert isinstance(outcome, Deferred)
-    assert client.observations[0].updates == [
-        {"output": {"outcome": "deferred", "component": "providers"}}
-    ]
+    (span,) = otlp_export.spans()
+    assert otlp_export.payload(span, "dlightrag.output") == {
+        "outcome": "deferred",
+        "component": "providers",
+    }
 
 
-@pytest.mark.usefixtures("reset_langfuse_client")
-async def test_a_cancelled_run_is_recorded_as_a_cancelled_outcome() -> None:
+async def test_a_cancelled_run_is_recorded_as_a_cancelled_outcome(
+    otlp_export: OtlpExport,
+) -> None:
     """A user-requested stop is terminal, not a failure; the trace must not say ERROR."""
-    client = RecordingLangfuse()
-    langfuse_state.install_client(client, trace_sensitive=True)
     executor = _executor()
-    executor._telemetry = LangfuseTelemetry()
+    executor._telemetry = otlp_export.telemetry
     executor._execute = AsyncMock(side_effect=RunCancellationObserved())  # type: ignore[method-assign]
     session = MagicMock(owner_id="owner", run_id="run-1", prepared_input={"query": "q"})
     session.cancel_requested = True
@@ -1501,10 +1501,9 @@ async def test_a_cancelled_run_is_recorded_as_a_cancelled_outcome() -> None:
     with pytest.raises(RunCancellationObserved):
         await executor.execute(cast(RunSession, session))
 
-    assert client.observations[0].updates[-1] == {
-        "level": "DEFAULT",
-        "output": {"outcome": "cancelled"},
-    }
+    (span,) = otlp_export.spans()
+    assert span.status.status_code is StatusCode.UNSET
+    assert otlp_export.payload(span, "dlightrag.output") == {"outcome": "cancelled"}
 
 
 async def test_unknown_errors_map_to_generic_public_message(

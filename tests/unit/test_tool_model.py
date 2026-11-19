@@ -86,7 +86,7 @@ async def test_tool_model_routes_streaming_turns_through_the_provider(monkeypatc
     provider.complete_tool_turn.assert_not_awaited()
 
 
-async def test_tool_model_error_uses_privacy_safe_status(monkeypatch) -> None:
+async def test_tool_model_error_states_what_failed(monkeypatch) -> None:
     class Observation:
         updates: list[dict[str, object]] = []
 
@@ -94,7 +94,6 @@ async def test_tool_model_error_uses_privacy_safe_status(monkeypatch) -> None:
             self.updates.append(kwargs)
 
     class Telemetry:
-        capture_sensitive_data = False
         observation = Observation()
         observations: list[tuple[str, dict[str, Any]]] = []
 
@@ -121,7 +120,13 @@ async def test_tool_model_error_uses_privacy_safe_status(monkeypatch) -> None:
     with pytest.raises(RuntimeError, match="secret tool transcript"):
         await model(messages=[{"role": "user", "content": "secret"}], tools=[])
 
-    assert Telemetry.observation.updates == [{"level": "ERROR", "status_message": "RuntimeError"}]
+    assert Telemetry.observation.updates == [
+        {
+            "level": "ERROR",
+            "status_message": "echoed secret tool transcript",
+            "error_type": "RuntimeError",
+        }
+    ]
     assert Telemetry.observations[0][0] == "generate-agent-turn"
     assert Telemetry.observations[0][1]["metadata"]["api_family"] == "chat_completion"
 

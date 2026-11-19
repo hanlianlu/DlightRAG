@@ -156,6 +156,17 @@ def test_embedding_wire_protocols_are_accepted(provider: str) -> None:
     assert EmbeddingSettings(provider=provider).provider == provider  # type: ignore[arg-type]
 
 
+def test_the_retired_privacy_switch_and_langfuse_keys_are_rejected() -> None:
+    """ADR 0039 deleted the switch and ADR 0040 the Langfuse client, so both fail as
+    unknown keys rather than being ignored."""
+    assert "langfuse_trace_sensitive_data" not in ObservabilitySettings.model_fields
+    assert not [name for name in ObservabilitySettings.model_fields if "langfuse" in name]
+    with pytest.raises(ValidationError, match="langfuse_trace_sensitive_data"):
+        ObservabilitySettings(langfuse_trace_sensitive_data=False)  # type: ignore[call-arg]
+    with pytest.raises(ValidationError, match="langfuse_host"):
+        ObservabilitySettings(langfuse_host="https://cloud.langfuse.com")  # type: ignore[call-arg]
+
+
 def test_retired_or_unknown_embedding_configuration_is_rejected() -> None:
     with pytest.raises(ValidationError, match="provider"):
         EmbeddingSettings(provider="ollama")  # type: ignore[arg-type]
@@ -550,7 +561,7 @@ def test_nested_secret_settings_never_render_in_repr() -> None:
             vector_storage="MilvusVectorDBStorage", milvus_uri=_SECRET, milvus_token=_SECRET
         ),
         AccessSectionSettings(api_token=_SECRET, jwt_verification_key=_SECRET),
-        ObservabilitySettings(langfuse_secret_key=_SECRET),
+        ObservabilitySettings(otlp_headers={"authorization": _SECRET}),
         WebSourceProviderConfig(api_key=_SECRET),
         WebSourcesConfig(exa=WebSourceProviderConfig(api_key=_SECRET)),
         AgentMailboxConfig(

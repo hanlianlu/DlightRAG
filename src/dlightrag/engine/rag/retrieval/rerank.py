@@ -321,11 +321,7 @@ class _RerankCallable:
     ) -> list[dict[str, Any]]:
         async with self._telemetry.observe(
             "rerank-passages",
-            input=(
-                {"query": bounded_telemetry_text(query, max_length=1000)}
-                if self._telemetry.capture_sensitive_data
-                else None
-            ),
+            input={"query": bounded_telemetry_text(query, max_length=1000)},
             metadata={"chunk_count": len(chunks), "top_k": top_k},
         ) as observation:
             result = await self._rerank(query, chunks, top_k)

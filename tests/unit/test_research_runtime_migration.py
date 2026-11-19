@@ -16,8 +16,6 @@ import httpx2
 import pytest
 from pydantic import BaseModel
 
-from dlightrag.adapters.observability import LangfuseTelemetry
-from dlightrag.adapters.observability import langfuse as langfuse_state
 from dlightrag.engine.agent.environment import SearchToolchain
 from dlightrag.engine.agent.environment.access import AccessScheduler
 from dlightrag.engine.agent.session.effects import EffectIntent
@@ -85,7 +83,7 @@ from dlightrag.engine.rag.retrieval import RetrievalResult
 from dlightrag.engine.runtime.coordinator import RunCancellationObserved
 from dlightrag.engine.runtime.settlements import EffectHostUpdate
 from tests.in_memory_session_repository import MemoryAgentSessionRepository
-from tests.unit.conftest import RecordingLangfuse, answer_model_profile
+from tests.unit.conftest import OtlpExport, answer_model_profile
 
 
 class _Session:
@@ -799,9 +797,10 @@ async def test_research_runtime_measures_one_tool_attempt_and_publishes_it_on_se
     assert settled.duration_ms >= 25
 
 
-@pytest.mark.usefixtures("reset_langfuse_client")
 @pytest.mark.asyncio
-async def test_a_tool_call_is_recorded_under_the_run_that_requested_it() -> None:
+async def test_a_tool_call_is_recorded_under_the_run_that_requested_it(
+    otlp_export: OtlpExport,
+) -> None:
     """A Tool call belongs to the agent observation that asked for it, not to the
     trace root, and its input is the arguments the model chose."""
 
@@ -819,7 +818,7 @@ async def test_a_tool_call_is_recorded_under_the_run_that_requested_it() -> None
         evidence=EvidenceLedger(),
     )
     effects = ResearchRuntimeEffects(
-        telemetry=LangfuseTelemetry(),
+        telemetry=otlp_export.telemetry,
         orchestrator=cast(Any, SimpleNamespace(bind_child_context=lambda *_args: None)),
         prepared=prepared,
         session=_Session(),  # type: ignore[arg-type]
@@ -839,9 +838,7 @@ async def test_a_tool_call_is_recorded_under_the_run_that_requested_it() -> None
         input_schema_digest=tool.input_schema_digest,
         effective_input_digest="0" * 64,
     )
-    client = RecordingLangfuse()
-    langfuse_state.install_client(client, trace_sensitive=True)
-    telemetry = LangfuseTelemetry()
+    telemetry = otlp_export.telemetry
     context = SimpleNamespace(
         session_id=SessionId.new(),
         lane_id=LaneId.main(),
@@ -859,16 +856,19 @@ async def test_a_tool_call_is_recorded_under_the_run_that_requested_it() -> None
                 already_in_source_order,
             )
 
-    assert [observation.kwargs["name"] for observation in client.observations] == [
-        "run-answer",
-        "execute-agent-tool",
-    ]
-    tool_span = client.observations[1]
-    assert tool_span.kwargs["as_type"] == "tool"
-    assert tool_span.parent is client.observations[0]
-    assert tool_span.kwargs["input"]["tool"] == "mcp_connection_hash"
-    assert "which filings mention risk" in tool_span.kwargs["input"]["arguments"]
-    assert tool_span.kwargs["metadata"]["call_id"] == "mcp-call"
+    spans = {span.name: span for span in otlp_export.spans()}
+    assert set(spans) == {"run-answer", "execute-agent-tool"}
+    root, tool_span = spans["run-answer"], spans["execute-agent-tool"]
+    tool_attributes = otlp_export.attributes(tool_span)
+    assert tool_attributes["dlightrag.observation.kind"] == "tool"
+    # The Required attribute of an execute_tool span, stated by the call site.
+    assert tool_attributes["gen_ai.tool.name"] == "mcp_connection_hash"
+    assert tool_span.parent is not None and root.context is not None
+    assert tool_span.parent.span_id == root.context.span_id
+    arguments = otlp_export.payload(tool_span, "dlightrag.input")
+    assert arguments["tool"] == "mcp_connection_hash"
+    assert "which filings mention risk" in arguments["arguments"]
+    assert otlp_export.payload(tool_span, "dlightrag.metadata")["call_id"] == "mcp-call"
 
 
 @pytest.mark.asyncio

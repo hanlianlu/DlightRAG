@@ -69,6 +69,7 @@ class RerankModel:
             "call-rerank-model",
             metadata={"document_count": len(documents), "top_n": top_n},
             model=self.model,
+            provider=self.settings.strategy,
         ) as observation:
             try:
                 response = await self._client.post(
@@ -81,7 +82,8 @@ class RerankModel:
             except Exception as exc:
                 observation.update(
                     level="ERROR",
-                    status_message=telemetry_error_message(self._telemetry, exc),
+                    status_message=telemetry_error_message(exc),
+                    error_type=type(exc).__name__,
                 )
                 raise
             observation.update(output={"score_count": len(scores)})

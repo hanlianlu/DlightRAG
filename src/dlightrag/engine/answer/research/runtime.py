@@ -827,6 +827,10 @@ class ResearchRuntimeEffects:
                 "arguments": bounded_telemetry_text(validated, max_length=2000),
             },
             metadata={"call_id": item.call_id, "intent_id": item.intent_id.value},
+            # Required on an execute_tool span, and what HyperDX's tool column
+            # reads. The name the model chose is what the transcript calls it, so
+            # the tool's own name is the right value rather than the call id.
+            tool=item.tool_name,
         ) as tool_trace:
             result = await tool.execute(validated, runtime)
             tool_trace.update(output={"is_error": result.is_error, "cached": result.cached})

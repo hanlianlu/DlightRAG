@@ -14,7 +14,6 @@ import httpx
 import pytest
 from lightrag.constants import PARSED_DIR_NAME
 
-from dlightrag.adapters.observability import LangfuseTelemetry
 from dlightrag.application.config import DlightragConfig
 from dlightrag.application.settings import rag_settings
 from dlightrag.engine.ai.scheduler import ModelScheduler
@@ -34,7 +33,7 @@ from dlightrag.engine.rag.workspace.pool import WorkspacePool, WorkspaceUnavaila
 from dlightrag.engine.rag.workspace.workspace_rag import RemoteIngestWindowProgress, WorkspaceRag
 from dlightrag.engine.rag.workspace.workspaces import normalize_workspace
 from tests.config_helpers import mutate_config
-from tests.unit.conftest import LangfuseExport
+from tests.unit.conftest import OtlpExport
 
 
 def _service(
@@ -848,7 +847,7 @@ class TestWorkspaceRagClose:
         service._lightrag.apipeline_process_enqueue_documents.assert_awaited_once_with()
 
     async def test_startup_pipeline_recovery_opens_no_trace_but_hides_no_model_work(
-        self, test_config: DlightragConfig, langfuse_export: LangfuseExport
+        self, test_config: DlightragConfig, otlp_export: OtlpExport
     ) -> None:
         """The sweep is a safety net, not a unit of work; the spend it starts stays visible."""
 
@@ -859,7 +858,7 @@ class TestWorkspaceRagClose:
 
         backend = _backend(normalize_workspace(test_config.deployment.workspace), read_only=False)
         backend.coordination = FakeCoordination()
-        service = _service(test_config, backend=backend, telemetry=LangfuseTelemetry())
+        service = _service(test_config, backend=backend, telemetry=otlp_export.telemetry)
 
         async def resume() -> None:
             async with service.telemetry.observe("generate-completion"):
@@ -870,7 +869,7 @@ class TestWorkspaceRagClose:
 
         await service._resume_lightrag_pipeline()
 
-        assert [(span.name, span.parent) for span in langfuse_export.spans()] == [
+        assert [(span.name, span.parent) for span in otlp_export.spans()] == [
             ("generate-completion", None)
         ]
 

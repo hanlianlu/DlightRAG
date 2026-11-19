@@ -110,16 +110,18 @@ def test_workspace_sources_and_lock_are_exact() -> None:
     }
 
 
-def test_langfuse_dependency_has_no_upper_bound() -> None:
-    """Langfuse should require the v4 SDK API without an upper cap."""
-    dependencies = _dependencies()
-    langfuse_deps = [dep for dep in dependencies if dep.startswith("langfuse")]
+def test_the_observability_package_owns_the_otlp_export() -> None:
+    """The exporter is the package's, so its transport is the package's dependency and
+    the product imports no OpenTelemetry SDK of its own."""
+    package = _dependencies(Path("packages/observability/pyproject.toml"))
+    assert any(dependency.startswith("opentelemetry-sdk") for dependency in package)
+    assert any(
+        dependency.startswith("opentelemetry-exporter-otlp-proto-http") for dependency in package
+    )
 
-    assert len(langfuse_deps) == 1
-    (langfuse_dep,) = langfuse_deps
-    # Pins the v4 SDK API as the floor without capping the major version, so
-    # routine patch bumps stay green while still guarding against v3/v5 drift.
-    assert re.fullmatch(r"langfuse>=4\.\d+(\.\d+)?", langfuse_dep)
+    root = _dependencies()
+    assert not [dependency for dependency in root if dependency.startswith("langfuse")]
+    assert not [dependency for dependency in root if dependency.startswith("opentelemetry")]
 
 
 def test_postgres_init_uses_required_pg18_extensions() -> None:

@@ -1,18 +1,7 @@
-LANGFUSE_LOCAL_DIR ?= $(abspath ../langfuse-local)
-LANGFUSE_PROJECT ?= langfuse
-# Host-facing URL: your browser and `make langfuse-health` reach the stack here.
-# Where the DlightRAG app SENDS traces is non-secret config (langfuse_host in
-# config.yaml: host.docker.internal:3300 for the Dockerized app, localhost:3300
-# for a native run), so bootstrap does not manage it — it only syncs the keys.
-LANGFUSE_HOST ?= http://localhost:3300
-PYTHON ?= python3
-LANGFUSE_COMPOSE = docker compose --env-file "$(LANGFUSE_LOCAL_DIR)/.env" -p $(LANGFUSE_PROJECT) -f "$(LANGFUSE_LOCAL_DIR)/docker-compose.yml"
-LANGFUSE_STACK = $(PYTHON) scripts/langfuse/stack.py --dir "$(LANGFUSE_LOCAL_DIR)"
-LANGFUSE_BOOTSTRAP = $(PYTHON) scripts/langfuse/headless.py --langfuse-env "$(LANGFUSE_LOCAL_DIR)/.env" --dlightrag-env ".env"
 PYTHON_LINT_PATHS = packages/ src/ tests/ scripts/ chart-render/ prerequisite_setup.py
 PYTHON_SECURITY_PATHS = packages/ src/ scripts/ chart-render/ prerequisite_setup.py
 
-.PHONY: mineru-install mineru-api mineru-gradio mineru-title-aided mineru-service-install mineru-service-start mineru-service-stop mineru-service-status mineru-service-logs mineru-service-uninstall langfuse-stack langfuse-bootstrap langfuse-up langfuse-down langfuse-reset langfuse-restart langfuse-status langfuse-logs langfuse-health hyperdx-bootstrap hyperdx-up hyperdx-down hyperdx-status hyperdx-logs hyperdx-reset hooks sync-dev lint lint-security format-check typecheck architecture-check shellcheck-all frontend-install frontend-typecheck frontend-lint frontend-test frontend-browser-install frontend-browser-test frontend-build frontend-audit frontend-ci chart-render-install chart-render-test release-check workspace-wheels test-unit runtime-faults runtime-pg18 load-runtime validate-runtime ci ci-full test-e2e ci-e2e dev-reset
+.PHONY: mineru-install mineru-api mineru-gradio mineru-title-aided mineru-service-install mineru-service-start mineru-service-stop mineru-service-status mineru-service-logs mineru-service-uninstall hyperdx-bootstrap hyperdx-up hyperdx-down hyperdx-status hyperdx-logs hyperdx-reset hooks sync-dev lint lint-security format-check typecheck architecture-check shellcheck-all frontend-install frontend-typecheck frontend-lint frontend-test frontend-browser-install frontend-browser-test frontend-build frontend-audit frontend-ci chart-render-install chart-render-test release-check workspace-wheels test-unit runtime-faults runtime-pg18 load-runtime validate-runtime ci ci-full test-e2e ci-e2e dev-reset
 
 mineru-install:
 	scripts/mineru/install.sh
@@ -47,44 +36,6 @@ mineru-service-logs:
 
 mineru-service-uninstall:
 	scripts/mineru/service.sh uninstall
-
-langfuse-stack:
-	$(LANGFUSE_STACK)
-
-langfuse-bootstrap: langfuse-stack
-	$(LANGFUSE_BOOTSTRAP)
-
-langfuse-up: langfuse-bootstrap
-	$(LANGFUSE_COMPOSE) up -d
-
-langfuse-down:
-	$(LANGFUSE_COMPOSE) down
-
-# Destructive: removes the local Langfuse data volumes (all traces). DlightRAG's
-# own data is a separate Compose project and is NOT touched. Guarded by CONFIRM=1.
-# Recover the login password first if possible (it is stored in
-# $(LANGFUSE_LOCAL_DIR)/.env as LANGFUSE_INIT_USER_PASSWORD). After a reset run
-# `make langfuse-up` to re-initialize from a fresh headless seed.
-langfuse-reset:
-	@if [ "$(CONFIRM)" != "1" ]; then \
-		echo "langfuse-reset DELETES all local Langfuse data (traces)."; \
-		echo "DlightRAG's own RAG data is a separate project and is NOT affected."; \
-		echo "Re-run to confirm:  make langfuse-reset CONFIRM=1"; \
-		exit 1; \
-	fi
-	$(LANGFUSE_COMPOSE) down -v
-
-langfuse-restart: langfuse-bootstrap
-	$(LANGFUSE_COMPOSE) up -d --force-recreate langfuse-web langfuse-worker
-
-langfuse-status:
-	$(LANGFUSE_COMPOSE) ps
-
-langfuse-logs:
-	$(LANGFUSE_COMPOSE) logs -f langfuse-web langfuse-worker
-
-langfuse-health:
-	curl -fsS $(LANGFUSE_HOST)/api/public/health && printf '\n'
 
 # ─────────────────────────────────────────────────────────────────
 # ClickStack / HyperDX observability stack (packages/observability)

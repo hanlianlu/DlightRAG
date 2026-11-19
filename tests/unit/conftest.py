@@ -1,21 +1,32 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Unit-test fixtures; the root conftest isolates every suite from operator inputs."""
 
-import functools
 import json
-import uuid
 from collections.abc import Callable, Generator
 from typing import Any
 
-import langfuse as langfuse_sdk
 import pytest
+from dlightrag_observability.otlp import (
+    DLIGHTRAG_TOTAL,
+    GEN_AI_USAGE_CACHE_READ,
+    GEN_AI_USAGE_INPUT,
+    GEN_AI_USAGE_OUTPUT,
+    OtlpTelemetry,
+    shutdown_log_export,
+    shutdown_telemetry,
+    start_log_export,
+    start_telemetry,
+)
+from opentelemetry.sdk._logs import ReadableLogRecord
+from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from dlightrag.application.config import ObservabilitySettings
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.media import MODEL_IMAGE_MAX_PIXELS
+from dlightrag.engine.ai.providers.base import provider_usage_buckets
 from dlightrag.engine.ai.structured_transport import JSON_SCHEMA_TRANSPORT_CACHE
+from dlightrag.engine.ai.telemetry import SPAN_TYPES
 from dlightrag.engine.answer.capabilities import AnswerCapabilities
 from dlightrag.engine.answer.image_capability import AnswerImageCapability
 from dlightrag.engine.answer.images import AnswerImagePolicy
@@ -60,131 +71,143 @@ def _fresh_json_schema_transport_cache():
     JSON_SCHEMA_TRANSPORT_CACHE.clear()
 
 
-class RecordingObservation:
-    """One recorded Langfuse observation, including its ambient parent."""
+class OtlpExport:
+    """What the process's OTLP exporter, started by ``start_telemetry``, has exported.
 
-    def __init__(self, client: RecordingLangfuse, kwargs: dict[str, Any]) -> None:
-        self.client = client
-        self.kwargs = kwargs
-        self.parent = client.active[-1] if client.active else None
-        self.updates: list[dict[str, Any]] = []
-
-    def __enter__(self) -> RecordingObservation:
-        self.client.active.append(self)
-        return self
-
-    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
-        popped = self.client.active.pop()
-        assert popped is self
-
-    def update(self, **kwargs: Any) -> None:
-        self.updates.append(kwargs)
-
-
-class RecordingLangfuse:
-    """A Langfuse client double that records observations and their nesting."""
-
-    def __init__(self) -> None:
-        self.observations: list[RecordingObservation] = []
-        self.active: list[RecordingObservation] = []
-        self.flushed = False
-        self.shutdown_called = False
-
-    def start_as_current_observation(self, **kwargs: Any) -> RecordingObservation:
-        obs = RecordingObservation(self, kwargs)
-        self.observations.append(obs)
-        return obs
-
-    def flush(self) -> None:
-        self.flushed = True
-
-    def shutdown(self) -> None:
-        self.shutdown_called = True
-
-
-@pytest.fixture
-def reset_langfuse_client(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
-    """Isolate process tracing state, restoring it afterwards.
-
-    The real ``langfuse.propagate_attributes`` reaches for a real client when a
-    double is installed, so tests drive the same call shape through a neutral
-    context manager unless they monkeypatch it themselves.
+    Only the span exporter belongs to the test: the tracer provider, its
+    sampling, the span rendering, and the masking in front of it are the
+    product's, so an assertion here is an assertion about the wire.
     """
-    from contextlib import contextmanager
 
-    from dlightrag.adapters.observability import langfuse as langfuse_state
-
-    @contextmanager
-    def _neutral_propagation(**_kwargs: Any) -> Generator[None]:
-        yield
-
-    monkeypatch.setattr("langfuse.propagate_attributes", _neutral_propagation)
-    previous = langfuse_state.current_client()
-    previous_sensitive = langfuse_state.trace_sensitive_enabled()
-    langfuse_state.install_client(None, trace_sensitive=True)
-    yield
-    langfuse_state.install_client(previous, trace_sensitive=previous_sensitive)
-
-
-class LangfuseExport:
-    """What a real Langfuse client, started by ``init_tracing``, has exported."""
-
-    def __init__(self, exporter: InMemorySpanExporter) -> None:
+    def __init__(self, exporter: InMemorySpanExporter, telemetry: OtlpTelemetry) -> None:
         self._exporter = exporter
+        # Built before the exporter starts, like the composition root builds its
+        # handles: a handle resolves the installed export when a span opens.
+        self.telemetry = telemetry
 
     def spans(self) -> tuple[ReadableSpan, ...]:
-        from dlightrag.adapters.observability import langfuse as langfuse_state
-
-        client = langfuse_state.current_client()
-        assert client is not None, "tracing is not started"
-        client.flush()
         return self._exporter.get_finished_spans()
 
     @staticmethod
+    def attributes(span: ReadableSpan) -> dict[str, Any]:
+        return dict(span.attributes or {})
+
+    @staticmethod
+    def payload(span: ReadableSpan, attribute: str) -> Any:
+        """One JSON payload attribute, decoded as a reviewer's UI would decode it."""
+        return json.loads(str((span.attributes or {})[attribute]))
+
+    @staticmethod
     def usage(span: ReadableSpan) -> dict[str, int]:
-        """The usage keys the span carries, none when it carries none."""
-        value = (span.attributes or {}).get(
-            langfuse_sdk.LangfuseOtelSpanAttributes.OBSERVATION_USAGE_DETAILS
-        )
-        return {} if value is None else json.loads(str(value))
+        """The usage counters the span carries, none when it carries none.
+
+        ``input`` is the inclusive prompt and ``cache_read_input_tokens`` its
+        cached subset, which is the registry's nesting rather than a partition;
+        ``total`` is read off the provider's own counters, never re-derived here.
+        """
+        attributes = span.attributes or {}
+        carried: dict[str, int] = {}
+        for bucket, attribute in (
+            ("input", GEN_AI_USAGE_INPUT),
+            ("cache_read_input_tokens", GEN_AI_USAGE_CACHE_READ),
+            ("output", GEN_AI_USAGE_OUTPUT),
+        ):
+            value = attributes.get(attribute)
+            if isinstance(value, int) and not isinstance(value, bool):
+                carried[bucket] = value
+        return carried
+
+    @staticmethod
+    def total(span: ReadableSpan) -> int | None:
+        """The provider's own total counter, which is not the sum of the buckets.
+
+        ``input`` already contains ``cache_read_input_tokens``, so a total is
+        ``input + output`` when the provider states none, never all three.
+        """
+        value = (span.attributes or {}).get(DLIGHTRAG_TOTAL)
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 @pytest.fixture
-def start_langfuse_export(
-    monkeypatch: pytest.MonkeyPatch,
-) -> Generator[Callable[..., LangfuseExport]]:
-    """Start a real Langfuse client through ``init_tracing``, exporting into memory.
+def start_otlp_export() -> Generator[Callable[..., OtlpExport]]:
+    """Start the real exporter through ``start_telemetry``, exporting into memory.
 
-    Only the span exporter is the test's: the tracer provider, sampling, masking and
-    attribute mapping are the product's. Langfuse keeps one resource manager per public
-    key for the life of the process, so every client gets a key of its own.
+    The exporter replaces only the network leg; everything in front of it — the
+    provider, the sampler, the attribute rendering, and the masker — is the
+    product's, which is what makes these spans evidence about the wire.
     """
-    from dlightrag.adapters.observability import langfuse as langfuse_state
 
-    real_client = langfuse_sdk.Langfuse
-
-    def start(**settings: Any) -> LangfuseExport:
+    def start(**settings: Any) -> OtlpExport:
         exporter = InMemorySpanExporter()
-        monkeypatch.setattr(
-            "langfuse.Langfuse", functools.partial(real_client, span_exporter=exporter)
+        telemetry = OtlpTelemetry(span_types=SPAN_TYPES, usage_buckets=provider_usage_buckets)
+        start_telemetry(
+            span_types=SPAN_TYPES,
+            usage_buckets=provider_usage_buckets,
+            endpoint="http://127.0.0.1:4318",
+            service_name="dlightrag-api",
+            environment="test",
+            release="9.9.9",
+            span_exporter=exporter,
+            **settings,
         )
-        langfuse_state.init_tracing(
-            ObservabilitySettings(
-                langfuse_public_key=f"pk-lf-{uuid.uuid4().hex}",
-                langfuse_secret_key="sk-lf-test",
-                langfuse_host="http://127.0.0.1:9",
-                langfuse_environment="test",
-                langfuse_release="9.9.9",
-                **settings,
-            )
-        )
-        return LangfuseExport(exporter)
+        return OtlpExport(exporter, telemetry)
 
     yield start
-    langfuse_state.shutdown_tracing()
-    langfuse_state.install_client(None, trace_sensitive=True)
+    shutdown_telemetry()
 
 
 @pytest.fixture
-def langfuse_export(start_langfuse_export: Callable[..., LangfuseExport]) -> LangfuseExport:
-    return start_langfuse_export()
+def otlp_export(start_otlp_export: Callable[..., OtlpExport]) -> OtlpExport:
+    return start_otlp_export()
+
+
+class OtlpLogs:
+    """What the process's OTLP log export, started by ``start_log_export``, has exported.
+
+    As with ``OtlpExport``, only the exporter belongs to the test: the handler,
+    the masking, and the trace context a record carries are the product's.
+    """
+
+    def __init__(self, exporter: InMemoryLogRecordExporter) -> None:
+        self._exporter = exporter
+
+    def records(self) -> tuple[ReadableLogRecord, ...]:
+        return self._exporter.get_finished_logs()
+
+    @staticmethod
+    def body(record: ReadableLogRecord) -> str:
+        return str(record.log_record.body)
+
+    @staticmethod
+    def attributes(record: ReadableLogRecord) -> dict[str, Any]:
+        return dict(record.log_record.attributes or {})
+
+    @staticmethod
+    def trace_id(record: ReadableLogRecord) -> str:
+        """The trace a record belongs to, as the wire spells it: 32 hex zeros when none."""
+        return format(record.log_record.trace_id or 0, "032x")
+
+    @staticmethod
+    def span_id(record: ReadableLogRecord) -> str:
+        return format(record.log_record.span_id or 0, "016x")
+
+
+@pytest.fixture
+def start_otlp_logs() -> Generator[Callable[..., OtlpLogs]]:
+    """Attach the real log export, writing into memory instead of to the network."""
+
+    def start(**settings: Any) -> OtlpLogs:
+        exporter = InMemoryLogRecordExporter()
+        start_log_export(
+            log_exporter=exporter,
+            service_name="dlightrag-api",
+            environment="test",
+            release="9.9.9",
+            **settings,
+        )
+        # The line the export logs about itself is not the record under test.
+        exporter.clear()
+        return OtlpLogs(exporter)
+
+    yield start
+    shutdown_log_export()

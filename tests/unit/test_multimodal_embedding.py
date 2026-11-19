@@ -15,7 +15,6 @@ import pytest
 from lightrag.utils import TiktokenTokenizer
 from PIL import Image
 
-from dlightrag.adapters.observability import LangfuseTelemetry
 from dlightrag.engine.ai import embedding
 from dlightrag.engine.ai.contracts import InputModality, ResolvedInputModality
 from dlightrag.engine.ai.embedding import MultimodalEmbedder as _MultimodalEmbedder
@@ -36,7 +35,7 @@ from dlightrag.engine.ai.providers.embed_providers import (
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from tests.support.loopback import bypass_proxies, loopback_server, reset_on_accept
-from tests.unit.conftest import LangfuseExport
+from tests.unit.conftest import OtlpExport
 
 
 @pytest.fixture(autouse=True)
@@ -122,8 +121,6 @@ def _untrusted_certificate() -> httpx.ConnectError:
 
 
 class RecordingTelemetry:
-    capture_sensitive_data = False
-
     def __init__(self) -> None:
         self.updates: list[dict[str, Any]] = []
 
@@ -577,7 +574,7 @@ async def test_image_payload_preparation_runs_off_event_loop(monkeypatch) -> Non
 
 
 async def test_the_startup_probe_sends_both_image_requests_and_opens_no_trace(
-    langfuse_export: LangfuseExport,
+    otlp_export: OtlpExport,
 ) -> None:
     """A capability check is not a unit of work; the embedding it guards still is."""
     embedder = MultimodalEmbedder(
@@ -586,7 +583,7 @@ async def test_the_startup_probe_sends_both_image_requests_and_opens_no_trace(
         api_key="key",
         dim=3,
         provider=VoyageEmbedProvider(),
-        telemetry=LangfuseTelemetry(),
+        telemetry=otlp_export.telemetry,
     )
     embedder._client.post = AsyncMock(  # pyright: ignore[reportPrivateUsage]
         return_value=_response(
@@ -595,7 +592,7 @@ async def test_the_startup_probe_sends_both_image_requests_and_opens_no_trace(
     )
     try:
         await embedder.probe_image_embedding()
-        traced_by_the_probe = langfuse_export.spans()
+        traced_by_the_probe = otlp_export.spans()
         await embedder.embed_texts(["hello"])
     finally:
         await embedder.aclose()
@@ -618,9 +615,12 @@ async def test_the_startup_probe_sends_both_image_requests_and_opens_no_trace(
     assert fused["input_type"] == "document"
 
     assert traced_by_the_probe == ()
-    (span,) = langfuse_export.spans()
+    (span,) = otlp_export.spans()
     assert span.name == "embed-text"
-    assert langfuse_export.usage(span) == {"input": 7, "total": 7}
+    assert otlp_export.usage(span) == {"input": 7}
+    assert otlp_export.total(span) == 7
+    # The Required attribute of an embeddings span, stated by the call site.
+    assert otlp_export.attributes(span)["gen_ai.provider.name"] == embedder.fingerprint.provider
 
 
 async def test_the_startup_probe_sends_both_requests_at_once_and_a_rejection_ends_both() -> None:
@@ -881,7 +881,7 @@ async def test_usage_and_retry_counts_are_added_to_telemetry() -> None:
     }
 
 
-async def test_embedding_error_text_is_redacted_when_sensitive_capture_is_disabled() -> None:
+async def test_embedding_error_states_what_failed() -> None:
     telemetry = RecordingTelemetry()
     embedder = MultimodalEmbedder(
         model="voyage-multimodal-3.5",
@@ -900,7 +900,13 @@ async def test_embedding_error_text_is_redacted_when_sensitive_capture_is_disabl
     finally:
         await embedder.aclose()
 
-    assert telemetry.updates == [{"level": "ERROR", "status_message": "RuntimeError"}]
+    assert telemetry.updates == [
+        {
+            "level": "ERROR",
+            "status_message": "upstream echoed secret embedding input",
+            "error_type": "RuntimeError",
+        }
+    ]
 
 
 async def test_native_text_port_methods() -> None:
