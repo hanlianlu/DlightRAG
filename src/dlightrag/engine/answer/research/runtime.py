@@ -774,8 +774,14 @@ class ResearchRuntimeEffects:
             raise RuntimeError(f"Tool contract unavailable: {item.tool_name}")
         await self._bind_subagent_intent(item, arguments)
         validated = tool.input_model.model_validate(arguments)
+        # The first subject the Tool itself reports for this call; the trace row names what the call
+        # acted on without reading its arguments, and the value stays the Tool's own bounded line.
+        subject: str | None = None
 
         async def update(result: ToolResult) -> None:
+            nonlocal subject
+            if subject is None and result.subject:
+                subject = result.subject
             await emit_ephemeral(
                 AgentSessionEvent(
                     kind="tool_update",
@@ -889,6 +895,9 @@ class ResearchRuntimeEffects:
                 "is_error": fitted.is_error,
                 "content_chars": len(fitted.text_content),
                 "capacity_tokens": observation_capacity,
+                # The Tool's own one-line subject (search query, URL read, command, action), bounded
+                # where ToolResult is constructed; absent when the Tool reports none.
+                **({"subject": subject} if subject else {}),
             }
         )
         intent = EffectIntent(

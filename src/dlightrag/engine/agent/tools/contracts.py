@@ -123,7 +123,7 @@ _SUBJECT_DROPPED_CHARS = {code: None for code in (*range(0x20), 0x7F, *range(0x8
 
 
 def _bounded_tool_subject(value: str) -> str:
-    """Normalize one reported subject into the single bounded line the trace shows.
+    """Normalize one reported subject into the single bounded line the UI update and trace row show.
 
     Control characters are dropped rather than escaped: they are invisible in a one-line
     row, and U+0000 is not representable in the durable JSON payload at all.
@@ -143,9 +143,10 @@ class ToolResult:
     subject: str | None = None
     """One bounded line naming what this call acts on, when the tool reports one.
 
-    It reaches a viewer only through an update, never through a settled result: it exists
-    for the live activity row. Because it is the one producer-reported fact that crosses to
-    the browser, the bound belongs to the field rather than to each producer's discipline.
+    It has two consumers: the live activity row (the update's own label) and the settled
+    ``trace.tool_observations.subject`` row. It is transport-private metadata, never model-visible
+    result content. Because it is the one producer-reported fact that crosses to the browser, the
+    bound belongs to the field rather than to each producer's discipline.
     """
     cached: bool = False
     protected_text: str = ""

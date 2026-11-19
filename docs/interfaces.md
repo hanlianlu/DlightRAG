@@ -493,6 +493,15 @@ fails and the other succeeds, the result continues with `bm25_error_type` or
 `lightrag_error_type`; `lightrag_mix_chunk_count` records the pre-fusion
 LightRAG count.
 
+A Research Run's `trace.tool_observations` is one row per root-agent tool call: `tool`, `call_id`,
+`outcome`, `cached`, `is_error`, `content_chars`, `capacity_tokens`, and `subject` — the first
+subject the Tool reports in a progress update (later updates, and a subject present only on the
+settled result, are ignored): a bounded, tool-reported line naming what the call acted on (a search
+query, a read URL or path, a shell command, a browser action; at most 64 characters, absent when the
+tool reports none, and never inferred from its arguments). The trace is a bounded summary of what the
+Run did, not its durable call log: the event log carries call metadata and the subject only, while
+full tool arguments and model-visible (fitted) tool results live in the Session transcript.
+
 ### In-process Application
 
 ```python
