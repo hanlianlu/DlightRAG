@@ -75,6 +75,8 @@ services:
       default:
     environment:
       <<: *agent-browser-bindings
+      # service.name on this process's spans and logs, so ClickStack separates the three.
+      DLIGHTRAG_OBSERVABILITY__SERVICE_NAME: dlightrag-api
       # Compose Service DNS; the native application default remains localhost.
       DLIGHTRAG_STORAGE__POSTGRES__HOST: postgres
       # The container binds 0.0.0.0, but the port above is published to
@@ -135,6 +137,8 @@ services:
       default:
     environment:
       <<: *agent-browser-bindings
+      # service.name on this process's spans and logs, so ClickStack separates the three.
+      DLIGHTRAG_OBSERVABILITY__SERVICE_NAME: dlightrag-mcp
       # Compose Service DNS; the native application default remains localhost.
       DLIGHTRAG_STORAGE__POSTGRES__HOST: postgres
       DLIGHTRAG_INTERFACES__MCP__TRANSPORT: streamable-http
@@ -184,6 +188,8 @@ services:
       default:
     environment:
       <<: *agent-browser-bindings
+      # service.name on this process's spans and logs, so ClickStack separates the three.
+      DLIGHTRAG_OBSERVABILITY__SERVICE_NAME: dlightrag-reader
       DLIGHTRAG_DEPLOYMENT__SERVICE_ROLE: reader
       # Compose Service DNS; the native application default remains localhost.
       DLIGHTRAG_STORAGE__POSTGRES__HOST: postgres

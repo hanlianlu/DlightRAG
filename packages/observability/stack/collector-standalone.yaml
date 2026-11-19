@@ -40,7 +40,7 @@ exporters:
     endpoint: ${env:CLICKHOUSE_ENDPOINT}
     database: default
     create_schema: true
-    ttl: ${env:HYPERDX_OTEL_EXPORTER_TABLES_TTL:-720h}
+    ttl: ${env:HYPERDX_OTEL_EXPORTER_TABLES_TTL:-168h}
 service:
   extensions: [health_check]
   pipelines:

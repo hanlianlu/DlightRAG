@@ -58,7 +58,7 @@ services:
       # One TTL for every otel_* table; there is no per-signal variable. A table a signal creates
       # with its first write gets the same TTL from `dlightrag-observability bootstrap` (an
       # idempotent ALTER).
-      HYPERDX_OTEL_EXPORTER_TABLES_TTL: ${HYPERDX_OTEL_EXPORTER_TABLES_TTL:-720h}
+      HYPERDX_OTEL_EXPORTER_TABLES_TTL: ${HYPERDX_OTEL_EXPORTER_TABLES_TTL:-168h}
       HYPERDX_OTEL_EXPORTER_RECONCILE_TABLE_TTL: 'true'
       # The shipped batch has no upper bound; a bounded one keeps a burst out of one giant insert.
       HYPERDX_OTEL_BATCH_SEND_BATCH_MAX_SIZE: ${HYPERDX_OTEL_BATCH_SEND_BATCH_MAX_SIZE:-10000}
@@ -133,7 +133,7 @@ services:
       - --config=/etc/otelcol-contrib/custom.config.yaml
     environment:
       CLICKHOUSE_ENDPOINT: 'tcp://ch-server:9000?dial_timeout=10s'
-      HYPERDX_OTEL_EXPORTER_TABLES_TTL: ${HYPERDX_OTEL_EXPORTER_TABLES_TTL:-720h}
+      HYPERDX_OTEL_EXPORTER_TABLES_TTL: ${HYPERDX_OTEL_EXPORTER_TABLES_TTL:-168h}
     volumes:
       - ./stack/collector-standalone.yaml:/etc/otelcol-contrib/standalone-agent.yaml:ro
       - ./stack/collector.yaml:/etc/otelcol-contrib/custom.config.yaml:ro

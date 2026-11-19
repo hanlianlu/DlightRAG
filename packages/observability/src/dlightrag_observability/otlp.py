@@ -308,7 +308,7 @@ def _json_attribute(value: Any) -> str:
     product, and must not carry the original either.
     """
     try:
-        text = json.dumps(mask_payload(value), default=str, ensure_ascii=False)
+        text = json.dumps(mask_payload(value), ensure_ascii=False)
     except Exception:
         logger.debug("Unserializable observation payload (non-fatal)", exc_info=True)
         return f"[unserializable payload of type {type(value).__name__}]"
@@ -906,6 +906,15 @@ def start_telemetry(
     ``span_exporter`` replaces the network exporter and switches to a simple
     processor: it is the seam a test reads spans through, not a deployment knob.
     """
+    installed = _installed
+    if installed is not None:
+        # One provider per process. A second would replace the first without stopping it,
+        # and the first one's batch thread would keep running with nothing to flush it.
+        return OtlpTelemetry(
+            span_types=span_types,
+            usage_buckets=usage_buckets or installed.usage_buckets,
+            tracer=installed.tracer,
+        )
     if endpoint is None and span_exporter is None:
         logger.info("OTLP tracing off (no endpoint configured)")
         _install(None)

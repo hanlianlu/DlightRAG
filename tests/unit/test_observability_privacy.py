@@ -8,10 +8,15 @@ to turn monitoring off, so nothing here may depend on one.
 
 from __future__ import annotations
 
-from pathlib import Path
+import json
+from datetime import UTC, date, datetime
+from enum import Enum
+from pathlib import Path, PurePosixPath
+from uuid import UUID, uuid4
 
 import dlightrag_observability
 import pytest
+from dlightrag_observability import otlp as otlp_module
 from dlightrag_observability.privacy import (
     REDACTED,
     SECRET_KEY_PATTERNS,
@@ -231,3 +236,73 @@ def test_the_classifier_is_the_decision_the_masker_takes() -> None:
     for key, value in payload.items():
         expected = "private" if masked[key] != value else "exportable"
         assert classify(key, value) == expected
+
+
+class _Stage(Enum):
+    DRAFT = "draft"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        UUID("12345678-1234-5678-1234-567812345678"),
+        datetime(2026, 11, 19, 8, 30, tzinfo=UTC),
+        date(2026, 11, 19),
+        _Stage.DRAFT,
+        PurePosixPath("/app/answer.py"),
+    ],
+    ids=["uuid", "datetime", "date", "enum", "path"],
+)
+def test_an_identifier_or_a_structural_value_is_exported_as_the_text_it_reads_as(
+    value: object,
+) -> None:
+    """ADR 0039 exports identifiers and structural metadata; none of them is a value to hide.
+
+    These types used to fall to the tail of the walk and leave as ``[private: ...]``, so a
+    run's id and a record's timestamp were unreadable in the store they were exported to.
+    """
+    assert mask_payload({"run_id": value}) == {"run_id": str(value)}
+    assert mask_payload([value]) == [str(value)]
+
+
+def test_a_secret_name_still_hides_an_identifier() -> None:
+    """The key is read beside the converted value, so a token that is a UUID is a token."""
+    assert mask_payload({"api_key": uuid4(), "token": _Stage.DRAFT}) == {
+        "api_key": REDACTED,
+        "token": REDACTED,
+    }
+
+
+def test_a_path_object_follows_the_path_rule() -> None:
+    """A `Path` is text to the classifier: a home directory is private, a container path is not."""
+    home = Path("/Users/operator/app/toolchain.py")
+    masked = mask_payload(
+        {"search_toolchain.fd.path": home, "code.file.path": PurePosixPath("/app/x.py")}
+    )
+    assert masked["search_toolchain.fd.path"] == private_path_placeholder(str(home))
+    assert masked["code.file.path"] == "/app/x.py"
+
+
+def test_a_set_a_frozenset_and_a_tuple_are_exported_as_lists() -> None:
+    masked = mask_payload(
+        {"tags": {"alpha"}, "ids": frozenset({"beta"}), "pair": ("gamma", "delta")}
+    )
+    assert masked == {"tags": ["alpha"], "ids": ["beta"], "pair": ["gamma", "delta"]}
+    # What is inside is still classified: a set of secrets under a secret name is hidden whole.
+    assert mask_payload({"api_key": {"sk-1"}}) == {"api_key": REDACTED}
+
+
+def test_the_exporter_serializes_these_types_without_a_fallback_encoder() -> None:
+    """`json.dumps` needs no ``default=str`` once the masker has returned only JSON types."""
+    attribute = otlp_module._json_attribute(  # noqa: SLF001 - the shaping step under test
+        {
+            "run_id": uuid4(),
+            "at": datetime(2026, 11, 19, tzinfo=UTC),
+            "stage": _Stage.DRAFT,
+            "tags": {"x"},
+        }
+    )
+    decoded = json.loads(attribute)
+    assert decoded["stage"] == "_Stage.DRAFT"
+    assert decoded["tags"] == ["x"]
+    assert decoded["at"] == "2026-11-19 00:00:00+00:00"

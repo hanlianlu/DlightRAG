@@ -1,14 +1,13 @@
 {
-  "id": "6ac96071dc4345726668563c",
-  "name": "the collector refused telemetry",
-  "displayName": "collector ingestion trouble",
+  "name": "DlightRAG · the collector refused telemetry",
+  "displayName": "DlightRAG · collector ingestion trouble",
   "source": "inline",
   "interval": "5m",
   "threshold": 1,
   "thresholdType": "above",
   "channel": {
     "type": "webhook",
-    "webhookId": "${DLIGHTRAG_TELEGRAM_WEBHOOK_ID}"
+    "webhookId": "${HYPERDX_WEBHOOK_ID}"
   },
   "message": "the collector refused or failed to take in telemetry; this window saw {{value}} records. a refusal is back-pressure or a batch it could not read, so check the collector's own metrics before the pipeline goes quiet.",
   "tags": [
@@ -18,8 +17,8 @@
   "chartConfig": {
     "configType": "sql",
     "displayType": "number",
-    "connectionId": "6ac9470bc0696e82a108098f",
-    "sourceId": "6ac9470bc0696e82a1080997",
+    "connectionId": "${HYPERDX_CONNECTION_ID}",
+    "sourceId": "${HYPERDX_SOURCE_METRICS}",
     "name": "collector refused or failed records",
     "sqlTemplate": "SELECT sum(greatest(delta, 0)) AS refused_or_failed_records\nFROM (\n  SELECT MetricName,\n         Attributes['receiver'] AS receiver,\n         max(Value) - min(Value) AS delta\n  FROM otel_metrics_sum\n  WHERE MetricName IN ('otelcol_receiver_refused_spans', 'otelcol_receiver_refused_log_records', 'otelcol_receiver_refused_metric_points',\n                       'otelcol_receiver_failed_spans', 'otelcol_receiver_failed_log_records', 'otelcol_receiver_failed_metric_points')\n    AND $__timeFilter_ms(TimeUnix)\n  GROUP BY MetricName, receiver\n)"
   }

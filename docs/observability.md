@@ -324,6 +324,16 @@ not the deployment's money account. A charge a provider reports itself
 (OpenRouter's `usage.include`, in [Operations](operations.md#cost-and-recovery)) is
 passed through as `gen_ai.usage.cost` and outranks any derived price.
 
+## One ClickStack, Several Products
+
+DlightRAG and DlightAgent export into the same kind of ClickStack, and one instance can
+serve both. Nothing is shared by accident: each process states its own `service.name`
+(`dlightrag-api`, `dlightrag-mcp`, `dlightrag-reader`), the shipped alerts, channel and
+dashboard carry the product's name, and every query over product signals filters on
+`startsWith(ServiceName, 'dlightrag')`. Two products therefore never overwrite each
+other's alerts and never count each other's spans
+([Operations](operations.md#alerts-and-the-dashboard)).
+
 ## Deployment
 
 The `observability` fields are in
