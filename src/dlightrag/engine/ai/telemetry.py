@@ -168,9 +168,9 @@ def telemetry_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return summarized
 
 
-def telemetry_error_message(telemetry: Telemetry, exc: BaseException) -> str:
-    """Return raw error text only when the injected privacy policy permits it."""
-    return str(exc) if telemetry.capture_sensitive_data else type(exc).__name__
+def telemetry_error_message(exc: BaseException) -> str:
+    """Return the message an observation reports for a failed operation."""
+    return str(exc)
 
 
 class Observation(Protocol):
@@ -181,9 +181,6 @@ class Observation(Protocol):
 
 class Telemetry(Protocol):
     """Create observations without coupling a core package to a telemetry SDK."""
-
-    @property
-    def capture_sensitive_data(self) -> bool: ...
 
     def trace(
         self,
@@ -199,6 +196,8 @@ class Telemetry(Protocol):
         input: Any | None = None,
         metadata: Any | None = None,
         model: str | None = None,
+        provider: str | None = None,
+        tool: str | None = None,
         model_parameters: dict[str, Any] | None = None,
     ) -> AbstractAsyncContextManager[Observation]: ...
 
@@ -210,8 +209,6 @@ class _NoopObservation:
 
 class NoopTelemetry:
     """Standalone telemetry adapter that records nothing."""
-
-    capture_sensitive_data = False
 
     def trace(
         self,
@@ -230,9 +227,11 @@ class NoopTelemetry:
         input: Any | None = None,
         metadata: Any | None = None,
         model: str | None = None,
+        provider: str | None = None,
+        tool: str | None = None,
         model_parameters: dict[str, Any] | None = None,
     ) -> AsyncIterator[Observation]:
-        del name, input, metadata, model, model_parameters
+        del name, input, metadata, model, provider, tool, model_parameters
         yield _NoopObservation()
 
 

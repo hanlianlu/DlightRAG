@@ -1120,28 +1120,27 @@ class InterfacesSettings(FrozenSettings):
 
 
 class ObservabilitySettings(FrozenSettings):
-    log_level: str = "info"
-    langfuse_public_key: str | None = None
-    langfuse_secret_key: str | None = Field(default=None, repr=False)
-    langfuse_host: ServiceUrl = "https://cloud.langfuse.com"
-    langfuse_trace_sensitive_data: bool = True
-    langfuse_environment: str | None = Field(
-        default=None,
-        pattern=r"^[a-z0-9][a-z0-9_-]{0,39}$",
-        description="Deployment label; Langfuse drops any other alphabet or length.",
-    )
-    langfuse_release: str | None = None
-    langfuse_sample_rate: float = Field(default=1.0, ge=0, le=1)
-    langfuse_timeout: int | None = Field(default=None, ge=1, le=300)
-    langfuse_flush_at: int | None = Field(default=None, ge=1)
-    langfuse_flush_interval: float | None = Field(default=None, ge=0.1, le=300)
+    """Where telemetry goes, and what identifies the process that sends it.
 
-    @field_validator("langfuse_environment")
-    @classmethod
-    def _reject_reserved_environment_prefix(cls, value: str | None) -> str | None:
-        if value is not None and value.lower().startswith("langfuse"):
-            raise ValueError("langfuse_environment must not start with 'langfuse'")
-        return value
+    There is no switch here: monitoring is always on, and the only keys are
+    operational (ADR 0039). A process that names no endpoint starts with no-op
+    telemetry and one info line, rather than failing to boot.
+    """
+
+    log_level: str = "info"
+    # The OTLP/HTTP destination, such as http://otel-collector:4318. The signal
+    # path (/v1/traces) is the exporter's to append.
+    otlp_endpoint: ServiceUrl | None = None
+    # The ingestion credential rides here, never in the URL: DlightRAG sends
+    # `authorization`, and ClickStack's ingestion key is the value.
+    otlp_headers: dict[str, str] = Field(default_factory=dict, repr=False)
+    # The service.name every span carries; a deployment sets one per process so
+    # the service map separates the API from the MCP server and the reader.
+    service_name: str = "dlightrag"
+    environment: str | None = None
+    release: str | None = None
+    sample_rate: float = Field(default=1.0, ge=0, le=1)
+    timeout: int | None = Field(default=None, ge=1, le=300)
 
 
 class DlightragConfig(BaseSettings):

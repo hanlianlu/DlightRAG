@@ -116,6 +116,7 @@ class ToolModel:
                 **self._reasoning_metadata(resolved),
             },
             model=self.settings.model,
+            provider=self.fingerprint.provider,
         ) as observation:
             try:
                 provider_method = (
@@ -143,7 +144,8 @@ class ToolModel:
             except Exception as exc:
                 observation.update(
                     level="ERROR",
-                    status_message=telemetry_error_message(self._telemetry, exc),
+                    status_message=telemetry_error_message(exc),
+                    error_type=type(exc).__name__,
                 )
                 raise
             observation.update(
@@ -187,7 +189,6 @@ class ToolModel:
         reasoning: ReasoningLevel | None = None,
         model_profile: ModelProfile | None = None,
     ) -> AsyncGenerator[str]:
-        record_text = self._telemetry.capture_sensitive_data
         streamed: list[str] = []
         usage_details: dict[str, int | float] = {}
         cost_details: dict[str, int | float] = {}
@@ -215,6 +216,7 @@ class ToolModel:
                 "api_family": self.fingerprint.api_family,
             },
             model=self.settings.model,
+            provider=self.fingerprint.provider,
         ) as observation:
             try:
                 for attempt_kwargs, resolved in attempt_options:
@@ -235,8 +237,7 @@ class ToolModel:
                         async for token in stream:
                             text_length += len(token)
                             substantive_text = substantive_text or bool(token.strip())
-                            if record_text:
-                                streamed.append(token)
+                            streamed.append(token)
                             yield token
                     _accumulate_metrics(usage_details, attempt_usage.get("usage_details"))
                     _accumulate_metrics(cost_details, attempt_usage.get("cost_details"))
@@ -252,15 +253,15 @@ class ToolModel:
             except BaseException as exc:
                 observation.update(
                     level="ERROR",
-                    status_message=telemetry_error_message(self._telemetry, exc),
+                    status_message=telemetry_error_message(exc),
+                    error_type=type(exc).__name__,
                 )
                 raise
             finally:
                 output: dict[str, Any] = {"text_length": text_length, "attempts": attempts}
                 if reasoning_attempts:
                     output["reasoning"] = reasoning_attempts
-                if record_text:
-                    output["text"] = "".join(streamed)
+                output["text"] = "".join(streamed)
                 observation.update(
                     output=output,
                     usage_details=usage_details or None,

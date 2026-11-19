@@ -24,7 +24,6 @@ import pytest
 from google.genai._gaos.utils import retries
 from pydantic import BaseModel, ValidationError
 
-from dlightrag.adapters.observability.tracing import _langfuse_usage_details
 from dlightrag.engine.agent.session.effects import canonical_json
 from dlightrag.engine.agent.session.entries import AssistantMessageEntry, decode_entry_payload
 from dlightrag.engine.agent.session.fold import fold_assistant_message
@@ -42,6 +41,7 @@ from dlightrag.engine.ai.providers.base import (
     is_provider_reasoning_rejection,
     provider_cache_hit_tokens,
     provider_input_tokens,
+    provider_usage_buckets,
 )
 from dlightrag.engine.ai.providers.gemini_native import (
     InteractionRequestError,
@@ -738,11 +738,12 @@ async def test_usage_counts_thinking_as_output_and_keeps_cache_hits() -> None:
     assert turn.usage_details == _COUNTERS
     assert provider_input_tokens(turn.usage_details) == 62
     assert provider_cache_hit_tokens(turn.usage_details) == 40
-    # Gemini counts its 40 cached tokens inside the 62 of the prompt, so Langfuse's input
-    # is the other 22 and the three buckets still sum to the stated total.
-    assert _langfuse_usage_details(_COUNTERS) == {
-        "input": 22,
-        "input_cached_tokens": 40,
+    # Gemini counts its 40 cached tokens inside the 62 of the prompt, so `input` is
+    # the whole 62 — the registry says the cached tokens are included in it — and
+    # `cache_read_input_tokens` names the 40 of them the cache served.
+    assert provider_usage_buckets(_COUNTERS) == {
+        "input": 62,
+        "cache_read_input_tokens": 40,
         "output": 468,
         "total": 530,
     }

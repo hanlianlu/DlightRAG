@@ -1,0 +1,8 @@
+{
+  "id": "${DLIGHTRAG_TELEGRAM_WEBHOOK_ID}",
+  "name": "Telegram",
+  "service": "generic",
+  "url": "${DLIGHTRAG_TELEGRAM_WEBHOOK_URL}",
+  "description": "DlightRAG alerts to a Telegram bot.",
+  "body": "{\"chat_id\": \"${DLIGHTRAG_TELEGRAM_CHAT_ID}\", \"text\": \"{{title}}\\n{{body}}\\n{{link}}\"}"
+}

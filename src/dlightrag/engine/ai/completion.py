@@ -149,11 +149,10 @@ class CompletionModel:
             },
         }
         return {
-            "input": (
-                telemetry_messages(messages) if self._telemetry.capture_sensitive_data else None
-            ),
+            "input": telemetry_messages(messages),
             "metadata": metadata or None,
             "model": self.fingerprint.model,
+            "provider": self.fingerprint.provider,
             "model_parameters": model_parameters or None,
         }
 
@@ -315,21 +314,18 @@ class CompletionModel:
                     except Exception as fallback_exc:
                         observation.update(
                             level="ERROR",
-                            status_message=telemetry_error_message(
-                                self._telemetry,
-                                fallback_exc,
-                            ),
+                            status_message=telemetry_error_message(fallback_exc),
+                            error_type=type(fallback_exc).__name__,
                         )
                         raise
                 else:
                     observation.update(
                         level="ERROR",
-                        status_message=telemetry_error_message(self._telemetry, exc),
+                        status_message=telemetry_error_message(exc),
+                        error_type=type(exc).__name__,
                     )
                     raise
-            output: dict[str, Any] = {"text_length": len(result)}
-            if self._telemetry.capture_sensitive_data:
-                output["text"] = str(result)
+            output: dict[str, Any] = {"text_length": len(result), "text": str(result)}
             observation.update(
                 output=output,
                 usage_details=getattr(result, "usage_details", None),
@@ -367,8 +363,7 @@ class CompletionModel:
                     observation.update(completion_start_time=datetime.now(UTC))
                     first_chunk = False
                 text_length += len(chunk)
-                if self._telemetry.capture_sensitive_data:
-                    chunks.append(chunk)
+                chunks.append(chunk)
 
             try:
                 stream = self._provider_stream(
@@ -393,7 +388,8 @@ class CompletionModel:
                 ):
                     observation.update(
                         level="ERROR",
-                        status_message=telemetry_error_message(self._telemetry, exc),
+                        status_message=telemetry_error_message(exc),
+                        error_type=type(exc).__name__,
                     )
                     raise
                 try:
@@ -414,16 +410,12 @@ class CompletionModel:
                 except BaseException as fallback_exc:
                     observation.update(
                         level="ERROR",
-                        status_message=telemetry_error_message(
-                            self._telemetry,
-                            fallback_exc,
-                        ),
+                        status_message=telemetry_error_message(fallback_exc),
+                        error_type=type(fallback_exc).__name__,
                     )
                     raise
             finally:
-                output: dict[str, Any] = {"text_length": text_length}
-                if self._telemetry.capture_sensitive_data:
-                    output["text"] = "".join(chunks)
+                output: dict[str, Any] = {"text_length": text_length, "text": "".join(chunks)}
                 observation.update(
                     output=output,
                     usage_details=active_usage_holder.get("usage_details"),

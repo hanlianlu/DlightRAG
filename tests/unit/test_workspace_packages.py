@@ -27,11 +27,30 @@ _BATTERIES = (
     "lingua-language-detector>=2.2.0",
     "openai>=2.54.0",
 )
-_ROOT_REQUIRES = (f"dlightrag-memory=={_VERSION}", *_BATTERIES)
+_ROOT_REQUIRES = (
+    f"dlightrag-memory=={_VERSION}",
+    f"dlightrag-observability=={_VERSION}",
+    *_BATTERIES,
+)
 _REPORT_EXAMPLES = "engine/agent/builtin_skills/interactive-html/references"
+#: What the observability source distribution has to carry for its own commands to run:
+#: the Compose file, the collector configurations, the credentials template, and the
+#: alert and dashboard JSON the CLI reads. The wheel cannot carry them — uv's build
+#: backend includes only the module root — so `source-include` is their only route into
+#: an artifact, and this is what says the route still works.
+_OBSERVABILITY_SDIST_STACK = {
+    "compose.yaml": "services: {}\n",
+    "stack/.env.example": "HYPERDX_API_KEY=\nEXPRESS_SESSION_SECRET=\n",
+    "stack/collector.yaml": "receivers: {}\n",
+    "stack/collector-standalone.yaml": "receivers: {}\n",
+    "stack/alerts/channel.json": '{"name": "webhook"}',
+    "stack/dashboards/dlightrag.json": '{"name": "DlightRAG"}',
+}
 
 
-@pytest.mark.parametrize("package_name", ["dlightrag", "dlightrag_memory"])
+@pytest.mark.parametrize(
+    "package_name", ["dlightrag", "dlightrag_memory", "dlightrag_observability"]
+)
 def test_workspace_package_root_imports(package_name: str) -> None:
     importlib.import_module(package_name)
 
@@ -50,6 +69,7 @@ def _write_wheel(
     additional_sources: dict[str, str] | None = None,
     sdist_source: str | None = None,
     sdist_without: tuple[str, ...] = (),
+    sdist_stack: dict[str, str] | None = None,
 ) -> None:
     wheel_name = distribution.replace("-", "_")
     dist_info = f"{wheel_name}-{version}.dist-info"
@@ -119,6 +139,11 @@ def _write_wheel(
                 f"{sdist_root}/src/{package}/adapters/http/browser/static/app/assets/theme-init-test.js": "",
             }
         )
+    # The stack files only the source distribution carries: uv's build backend has no
+    # wheel includes, so they reach an artifact through `source-include` or not at all.
+    members.update(
+        {f"{sdist_root}/{member}": content for member, content in (sdist_stack or {}).items()}
+    )
     with tarfile.open(dist_dir / f"{wheel_name}-{version}.tar.gz", "w:gz") as sdist:
         for name, content in members.items():
             payload = content.encode("utf-8")
@@ -147,6 +172,7 @@ def _write_workspace_artifacts(
     memory_source: str = "",
     memory_sdist_source: str | None = None,
     memory_version: str = _VERSION,
+    observability_sdist_stack: dict[str, str] | None = _OBSERVABILITY_SDIST_STACK,
 ) -> None:
     root_sources = dict(root_additional_sources or {})
     if root_include_model_catalog:
@@ -187,6 +213,14 @@ def _write_workspace_artifacts(
         sdist_source=memory_sdist_source,
         version=memory_version,
     )
+    _write_wheel(
+        tmp_path,
+        distribution="dlightrag-observability",
+        package="dlightrag_observability",
+        requires=(),
+        version=memory_version,
+        sdist_stack=observability_sdist_stack,
+    )
 
 
 def _verify_wheels(
@@ -211,12 +245,30 @@ def _verify_wheels(
     )
 
 
-def test_workspace_wheel_verifier_accepts_root_and_memory(tmp_path: Path) -> None:
+def test_workspace_wheel_verifier_accepts_the_workspace_packages(tmp_path: Path) -> None:
     _write_workspace_artifacts(tmp_path)
 
     completed = _verify_wheels(tmp_path)
 
     assert completed.returncode == 0, completed.stderr
+
+
+def test_workspace_wheel_verifier_requires_the_stack_in_the_observability_sdist(
+    tmp_path: Path,
+) -> None:
+    """The stack reaches a distributable only through the source distribution.
+
+    A command that cannot find `compose.yaml` fails rather than degrading, so an sdist
+    that lost the stack is a deployment that cannot start it.
+    """
+    stack = dict(_OBSERVABILITY_SDIST_STACK)
+    del stack["stack/collector.yaml"]
+    _write_workspace_artifacts(tmp_path, observability_sdist_stack=stack)
+
+    completed = _verify_wheels(tmp_path)
+
+    assert completed.returncode == 1
+    assert "sdist must contain the stack its commands read" in completed.stderr
 
 
 @pytest.mark.parametrize(
@@ -370,7 +422,11 @@ def test_workspace_wheel_verifier_requires_memory_dependency(tmp_path: Path) -> 
 def test_workspace_wheel_verifier_requires_lockstep_memory_pin(tmp_path: Path) -> None:
     _write_workspace_artifacts(
         tmp_path,
-        root_requires=("dlightrag-memory>=2.0.0", *_BATTERIES),
+        root_requires=(
+            "dlightrag-memory>=2.0.0",
+            f"dlightrag-observability=={_VERSION}",
+            *_BATTERIES,
+        ),
     )
 
     completed = _verify_wheels(tmp_path)

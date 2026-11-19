@@ -57,15 +57,20 @@ def _verify_playwright_pins(root: Path, dependencies: list[str]) -> None:
 
 
 def verify_repository(root: Path = ROOT) -> None:
-    manifests = (root / "pyproject.toml", root / "packages/memory/pyproject.toml")
+    manifests = (
+        root / "pyproject.toml",
+        root / "packages/memory/pyproject.toml",
+        root / "packages/observability/pyproject.toml",
+    )
     projects = [_project(path) for path in manifests]
     versions = {str(project["version"]) for project in projects}
     if len(versions) != 1:
         raise ValueError(f"workspace versions are not lockstep: {sorted(versions)}")
     (version,) = versions
-    dependency = f"dlightrag-memory=={version}"
-    if dependency not in projects[0].get("dependencies", []):
-        raise ValueError(f"root distribution must depend on {dependency}")
+    for name in ("dlightrag-memory", "dlightrag-observability"):
+        dependency = f"{name}=={version}"
+        if dependency not in projects[0].get("dependencies", []):
+            raise ValueError(f"root distribution must depend on {dependency}")
 
     _verify_playwright_pins(root, projects[0].get("dependencies", []))
 

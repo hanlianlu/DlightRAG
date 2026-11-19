@@ -17,7 +17,7 @@ from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
 from dlightrag.engine.agent.environment.toolchain import SearchToolchain
 from dlightrag.engine.ai.embedding import MultimodalEmbedder
 from dlightrag.engine.ai.scheduler import ModelScheduler
-from dlightrag.engine.ai.telemetry import Telemetry
+from dlightrag.engine.ai.telemetry import SPAN_TYPES, Telemetry
 from dlightrag.engine.runtime.workspace import SessionNotesLimits
 
 if TYPE_CHECKING:
@@ -52,24 +52,68 @@ def _actionable_error(exc: Exception) -> str:
     return f"Dependency initialization failed ({type(exc).__name__})."
 
 
-def _initialize_process(config: DlightragConfig) -> None:
-    """Initialize tracing and bind the process-wide operational pool."""
-    from dlightrag.adapters.observability import init_tracing
-    from dlightrag.adapters.postgres.core._pool import pg_pool
+def _package_release() -> str:
+    """Default the release to the running DlightRAG version.
 
-    init_tracing(config.observability)
+    Read from installed metadata rather than the package root: importing
+    ``dlightrag`` pulls the composition root and every transport with it.
+    """
+    try:
+        from importlib.metadata import version
+
+        return version("dlightrag")
+    except Exception:
+        return "unknown"
+
+
+def _initialize_process(config: DlightragConfig) -> None:
+    """Initialize tracing and logging, and bind the process-wide operational pool."""
+    from dlightrag_observability.otlp import start_log_export, start_telemetry
+
+    from dlightrag.adapters.postgres.core._pool import pg_pool
+    from dlightrag.engine.ai.providers.base import provider_usage_buckets
+
+    observability = config.observability
+    release = observability.release or _package_release()
+    # The application owns the vocabulary and the provider dialects; the package
+    # owns how an observation is rendered and sent. A destination that is absent
+    # or broken costs telemetry, never a boot.
+    start_telemetry(
+        span_types=SPAN_TYPES,
+        usage_buckets=provider_usage_buckets,
+        endpoint=observability.otlp_endpoint,
+        headers=observability.otlp_headers,
+        service_name=observability.service_name,
+        environment=observability.environment,
+        release=release,
+        sample_rate=observability.sample_rate,
+        timeout=observability.timeout,
+    )
+    # The same seam carries the process's own log records, so a trace and the
+    # lines it logged meet in ClickHouse. stdout is untouched: the export is one
+    # more handler, and no endpoint leaves it off with nothing else to configure.
+    start_log_export(
+        endpoint=observability.otlp_endpoint,
+        headers=observability.otlp_headers,
+        service_name=observability.service_name,
+        environment=observability.environment,
+        release=release,
+        timeout=observability.timeout,
+    )
     pg_pool.bind(config)
 
 
 async def _close_process() -> None:
-    """Close process-wide resources while always flushing tracing."""
-    from dlightrag.adapters.observability import shutdown_tracing
+    """Close process-wide resources while always flushing both telemetry channels."""
+    from dlightrag_observability.otlp import shutdown_log_export, shutdown_telemetry
+
     from dlightrag.adapters.postgres.core._pool import pg_pool
 
     try:
         await pg_pool.close()
     finally:
-        shutdown_tracing()
+        shutdown_log_export()
+        shutdown_telemetry()
 
 
 def agent_confinement_policy(config: DlightragConfig) -> ConfinementPolicy:
@@ -111,11 +155,11 @@ def _agent_mailbox(config: DlightragConfig) -> AgentMailbox | None:
 def _compose(config: DlightragConfig) -> _ApplicationComponents:
     """Construct this process's collaborators from one resolved configuration."""
     from dlightrag_memory.postgres import PostgresMemoryStore
+    from dlightrag_observability.otlp import OtlpTelemetry
     from PIL import Image
 
     from dlightrag.adapters.mcp.oauth import PersonalOAuthClient
     from dlightrag.adapters.mcp.personal_http import PersonalMcpClient
-    from dlightrag.adapters.observability import LangfuseTelemetry
     from dlightrag.adapters.postgres.answer.agent_accounts import (
         PGAgentAccountSettingsStore,
         PGAgentAccountStore,
@@ -178,6 +222,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         model_invocation_fingerprint,
     )
     from dlightrag.engine.ai.media import MAX_DECODE_IMAGE_PIXELS
+    from dlightrag.engine.ai.providers.base import provider_usage_buckets
     from dlightrag.engine.ai.scheduler import ModelScheduler
     from dlightrag.engine.ai.settings import (
         CHAT_MODEL_SELECTORS,
@@ -227,7 +272,9 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     health = ApplicationHealth(readiness_probe=PGReadinessProbe())
     health.set_agent_shell_confinement(confinement_state(config.answer.agent.execution_environment))
     scheduler = ModelScheduler(max_concurrency=config.models.max_concurrency)
-    telemetry = LangfuseTelemetry()
+    # One process-wide handle: startup installs the provider it resolves, so the
+    # components built here and the exporter that starts later are the same seam.
+    telemetry = OtlpTelemetry(span_types=SPAN_TYPES, usage_buckets=provider_usage_buckets)
     # Every workspace and the federation pass rerank through one configured endpoint, so
     # they share one breaker: a down reranker is noticed once, not once per workspace.
     rerank_breaker = RerankBreaker()
@@ -258,7 +305,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
                 settings=settings,
                 backend=backend,
                 scheduler=scheduler,
-                telemetry=LangfuseTelemetry(),
+                telemetry=telemetry,
                 rerank_supports_vision=capabilities.rerank_supports_vision,
                 rerank_breaker=rerank_breaker,
             )

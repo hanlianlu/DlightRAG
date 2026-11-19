@@ -10,7 +10,11 @@ from typing import Any
 import pytest
 import yaml
 
-_MANIFESTS = (Path("pyproject.toml"), Path("packages/memory/pyproject.toml"))
+_MANIFESTS = (
+    Path("pyproject.toml"),
+    Path("packages/memory/pyproject.toml"),
+    Path("packages/observability/pyproject.toml"),
+)
 
 
 def _project(path: Path = Path("pyproject.toml")) -> dict[str, object]:
@@ -62,7 +66,8 @@ def test_root_is_batteries_included_and_depends_only_on_standalone_memory() -> N
         )
     )
     assert [dependency for dependency in dependencies if dependency.startswith("dlightrag-")] == [
-        f"dlightrag-memory=={version}"
+        f"dlightrag-memory=={version}",
+        f"dlightrag-observability=={version}",
     ]
 
 
@@ -83,9 +88,13 @@ def test_root_has_no_server_template_runtime_dependency() -> None:
 
 def test_workspace_sources_and_lock_are_exact() -> None:
     root = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-    assert root["tool"]["uv"]["workspace"]["members"] == ["packages/memory"]
+    assert root["tool"]["uv"]["workspace"]["members"] == [
+        "packages/memory",
+        "packages/observability",
+    ]
     assert root["tool"]["uv"]["sources"] == {
         "dlightrag-memory": {"workspace": True},
+        "dlightrag-observability": {"workspace": True},
     }
 
     lock = tomllib.loads(Path("uv.lock").read_text(encoding="utf-8"))
@@ -97,19 +106,22 @@ def test_workspace_sources_and_lock_are_exact() -> None:
     assert workspace_sources == {
         "dlightrag": {"editable": "."},
         "dlightrag-memory": {"editable": "packages/memory"},
+        "dlightrag-observability": {"editable": "packages/observability"},
     }
 
 
-def test_langfuse_dependency_has_no_upper_bound() -> None:
-    """Langfuse should require the v4 SDK API without an upper cap."""
-    dependencies = _dependencies()
-    langfuse_deps = [dep for dep in dependencies if dep.startswith("langfuse")]
+def test_the_observability_package_owns_the_otlp_export() -> None:
+    """The exporter is the package's, so its transport is the package's dependency and
+    the product imports no OpenTelemetry SDK of its own."""
+    package = _dependencies(Path("packages/observability/pyproject.toml"))
+    assert any(dependency.startswith("opentelemetry-sdk") for dependency in package)
+    assert any(
+        dependency.startswith("opentelemetry-exporter-otlp-proto-http") for dependency in package
+    )
 
-    assert len(langfuse_deps) == 1
-    (langfuse_dep,) = langfuse_deps
-    # Pins the v4 SDK API as the floor without capping the major version, so
-    # routine patch bumps stay green while still guarding against v3/v5 drift.
-    assert re.fullmatch(r"langfuse>=4\.\d+(\.\d+)?", langfuse_dep)
+    root = _dependencies()
+    assert not [dependency for dependency in root if dependency.startswith("langfuse")]
+    assert not [dependency for dependency in root if dependency.startswith("opentelemetry")]
 
 
 def test_postgres_init_uses_required_pg18_extensions() -> None:

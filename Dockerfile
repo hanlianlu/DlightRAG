@@ -37,6 +37,7 @@ COPY --from=uv-bin /usr/local/bin/uv /bin/
 
 COPY pyproject.toml uv.lock ./
 COPY packages/memory/pyproject.toml packages/memory/pyproject.toml
+COPY packages/observability/pyproject.toml packages/observability/pyproject.toml
 # Deps only — binary-only (UV_NO_BUILD): never compile an sdist; the slim base has
 # no toolchain, so a missing wheel fails fast. Keep it off the project build below.
 RUN --mount=type=cache,target=/root/.cache/uv \

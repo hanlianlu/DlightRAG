@@ -289,6 +289,57 @@ def provider_cache_hit_tokens(usage: Mapping[str, int] | None) -> int | None:
     )
 
 
+def provider_usage_buckets(usage: Mapping[str, Any]) -> dict[str, int]:
+    """Map one provider's counters onto the usage buckets an observation exports.
+
+    The GenAI registry states that ``gen_ai.usage.input_tokens`` *"SHOULD include
+    all types of input tokens, including cached tokens"*, and that
+    ``gen_ai.usage.cache_read.input_tokens`` *"SHOULD be included in
+    ``gen_ai.usage.input_tokens``"*. The buckets therefore **nest** rather than
+    partition:
+
+    - ``input`` — the whole prompt, the cache hit inside it.
+    - ``cache_read_input_tokens`` — the subset of that prompt a provider-managed
+      cache served (omitted when the provider reports no caching at all, which is
+      a different fact from a reported zero).
+    - ``output`` — the completion with its reasoning.
+    - ``total`` — the total the provider states or, when it states none, the sum
+      of the *top-level* buckets: ``input + output``. A subset must not be added
+      to the whole it is inside, or a cache hit would be counted twice.
+
+    A consumer that wants the *fresh* prompt tokens — what a price table prices at
+    the uncached rate — derives ``input - cache_read_input_tokens``. Nothing here
+    redefines the registry's key to mean the exclusive count, because a consumer
+    that sums ``input`` across spans must get the prompt total.
+
+    Which counter holds what, in each dialect, is this module's knowledge alone:
+    :func:`provider_input_tokens` already adds Anthropic's cache reads and writes
+    back in, since that wire states them *beside* ``input_tokens``, while OpenAI,
+    DeepSeek, Gemini and the Responses wire count a cache hit inside the prompt.
+    """
+    prompt = provider_input_tokens(usage)
+    cached = provider_cache_hit_tokens(usage) or 0
+    output = provider_output_tokens(usage)
+
+    buckets: dict[str, int] = {}
+    if prompt is not None:
+        buckets["input"] = prompt
+    if cached:
+        buckets["cache_read_input_tokens"] = cached
+    if output is not None:
+        buckets["output"] = output
+    total = provider_total_tokens(usage)
+    if not buckets and total is None:
+        # An unknown provider dialect contributes no bucket: a price table keys on
+        # the buckets it knows, and arbitrary keys would silently price nothing.
+        logger.debug("No recognized usage keys in provider usage payload")
+        return buckets
+    # The cache read is a subset of `input`, so only the top-level buckets sum.
+    top_level = sum(value for bucket, value in buckets.items() if bucket in {"input", "output"})
+    buckets["total"] = top_level if total is None else total
+    return buckets
+
+
 def usage_to_dict(usage: Any) -> dict[str, int] | None:
     """Extract integer token counters from a provider usage payload.
 
@@ -542,6 +593,7 @@ __all__ = [
     "provider_output_tokens",
     "provider_status_code",
     "provider_total_tokens",
+    "provider_usage_buckets",
     "usage_mapping",
     "usage_to_dict",
 ]

@@ -78,10 +78,10 @@ async def test_initialized_default_runtime_does_not_capture_tenant_workspace(
     monkeypatch: pytest.MonkeyPatch,
     pg_conn,
 ) -> None:
-    from dlightrag.adapters.observability import LangfuseTelemetry
     from dlightrag.adapters.postgres.core._pool import pg_pool
     from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
     from dlightrag.application.settings import rag_settings
+    from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
     from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
 
     conn_kwargs = pg_conn_kwargs_from_env()
@@ -103,7 +103,7 @@ async def test_initialized_default_runtime_does_not_capture_tenant_workspace(
         settings=rag_settings(deployment_cfg),
         backend=build_pg_corpus_backend(deployment_cfg),
         scheduler=scheduler,
-        telemetry=LangfuseTelemetry(),
+        telemetry=NOOP_TELEMETRY,
         rerank_breaker=RerankBreaker(),
     )
     tenant = None
@@ -113,7 +113,7 @@ async def test_initialized_default_runtime_does_not_capture_tenant_workspace(
             settings=rag_settings(tenant_cfg),
             backend=build_pg_corpus_backend(tenant_cfg),
             scheduler=scheduler,
-            telemetry=LangfuseTelemetry(),
+            telemetry=NOOP_TELEMETRY,
             rerank_breaker=RerankBreaker(),
         )
         doc_path = tmp_path / "workspace-isolation.md"
@@ -158,13 +158,13 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.adapters.observability import LangfuseTelemetry
     from dlightrag.adapters.postgres.core._pool import pg_pool
     from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
     from dlightrag.adapters.postgres.corpus.file_panel import PGFilePanelStore
     from dlightrag.adapters.postgres.corpus.pg_metadata_index import PGMetadataIndex
     from dlightrag.application.corpus_admin import FilePanelPageRequest
     from dlightrag.application.settings import rag_settings
+    from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
     from dlightrag.engine.rag.corpus.downloads import (
         LocalDownloadTarget,
         SourceDownloadNotFoundError,
@@ -187,7 +187,7 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
         settings=rag_settings(cfg),
         backend=build_pg_corpus_backend(cfg),
         scheduler=ModelScheduler(max_concurrency=cfg.models.max_concurrency),
-        telemetry=LangfuseTelemetry(),
+        telemetry=NOOP_TELEMETRY,
         rerank_breaker=RerankBreaker(),
     )
     doc_path = tmp_path / "pg18-native-smoke.md"
@@ -540,12 +540,12 @@ async def test_nested_local_sources_are_parsed_from_their_flat_inputs_never_a_de
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
-    from dlightrag.adapters.observability import LangfuseTelemetry
     from dlightrag.adapters.postgres.core._pool import pg_pool
     from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
     from dlightrag.application.corpus_admin import IngestSpec
     from dlightrag.application.corpus_admin.mutations import CorpusMutationService, UploadLimits
     from dlightrag.application.settings import rag_settings
+    from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
     from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
 
     conn_kwargs = pg_conn_kwargs_from_env()
@@ -589,7 +589,7 @@ async def test_nested_local_sources_are_parsed_from_their_flat_inputs_never_a_de
         settings=rag_settings(cfg),
         backend=build_pg_corpus_backend(cfg),
         scheduler=ModelScheduler(max_concurrency=cfg.models.max_concurrency),
-        telemetry=LangfuseTelemetry(),
+        telemetry=NOOP_TELEMETRY,
         rerank_breaker=RerankBreaker(),
     )
     try:
@@ -642,12 +642,12 @@ async def test_a_document_is_listed_while_the_rest_of_its_batch_is_still_parsing
     """
     import lightrag.pipeline as lightrag_pipeline
 
-    from dlightrag.adapters.observability import LangfuseTelemetry
     from dlightrag.adapters.postgres.core._pool import pg_pool
     from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
     from dlightrag.adapters.postgres.corpus.file_panel import PGFilePanelStore
     from dlightrag.application.corpus_admin import FilePanelPageRequest
     from dlightrag.application.settings import rag_settings
+    from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
     from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
 
     conn_kwargs = pg_conn_kwargs_from_env()
@@ -702,7 +702,7 @@ async def test_a_document_is_listed_while_the_rest_of_its_batch_is_still_parsing
         settings=rag_settings(cfg),
         backend=build_pg_corpus_backend(cfg),
         scheduler=ModelScheduler(max_concurrency=cfg.models.max_concurrency),
-        telemetry=LangfuseTelemetry(),
+        telemetry=NOOP_TELEMETRY,
         rerank_breaker=RerankBreaker(),
     )
     try:
@@ -744,11 +744,11 @@ async def test_a_parser_outage_defers_a_corpus_run_that_resumes_what_it_did_not_
 
     import lightrag.pipeline as lightrag_pipeline
 
-    from dlightrag.adapters.observability import LangfuseTelemetry
     from dlightrag.adapters.postgres.core._pool import pg_pool
     from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
     from dlightrag.application.corpus_admin.mutations import CorpusMutationExecutor
     from dlightrag.application.settings import rag_settings
+    from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
     from dlightrag.engine.dependencies import ParserUnavailableError
     from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
     from dlightrag.engine.runtime.records import Deferred, Succeeded
@@ -851,7 +851,7 @@ async def test_a_parser_outage_defers_a_corpus_run_that_resumes_what_it_did_not_
         settings=rag_settings(cfg),
         backend=build_pg_corpus_backend(cfg),
         scheduler=ModelScheduler(max_concurrency=cfg.models.max_concurrency),
-        telemetry=LangfuseTelemetry(),
+        telemetry=NOOP_TELEMETRY,
         rerank_breaker=RerankBreaker(),
     )
     degraded: list[str] = []
@@ -904,12 +904,12 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
     """
     import uuid
 
-    from dlightrag.adapters.observability import LangfuseTelemetry
     from dlightrag.adapters.postgres.core._pool import pg_pool
     from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
     from dlightrag.adapters.postgres.runtime.run_store import PGRunStore
     from dlightrag.application.config import set_config
     from dlightrag.application.settings import rag_settings
+    from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
     from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
     from dlightrag.engine.runtime.records import (
         PreparedRunEnvelope,
@@ -934,7 +934,7 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
         settings=rag_settings(writer_cfg),
         backend=build_pg_corpus_backend(writer_cfg),
         scheduler=model_scheduler,
-        telemetry=LangfuseTelemetry(),
+        telemetry=NOOP_TELEMETRY,
         rerank_breaker=RerankBreaker(),
     )
     try:
@@ -970,7 +970,7 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
         settings=rag_settings(reader_cfg),
         backend=build_pg_corpus_backend(reader_cfg),
         scheduler=model_scheduler,
-        telemetry=LangfuseTelemetry(),
+        telemetry=NOOP_TELEMETRY,
         rerank_breaker=RerankBreaker(),
     )
     store = PGRunStore()
@@ -1042,7 +1042,7 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
         settings=rag_settings(writer_cfg),
         backend=build_pg_corpus_backend(writer_cfg),
         scheduler=model_scheduler,
-        telemetry=LangfuseTelemetry(),
+        telemetry=NOOP_TELEMETRY,
         rerank_breaker=RerankBreaker(),
     )
     try:

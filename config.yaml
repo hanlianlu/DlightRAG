@@ -133,4 +133,8 @@ access:
   auth_mode: none
 
 observability:
-  langfuse_host: http://host.docker.internal:3300
+  # The bundled ClickStack collector, reached from inside the app container. The
+  # ingestion key is the secret and lives in .env
+  # (DLIGHTRAG_OBSERVABILITY__OTLP_HEADERS); service_name and environment are
+  # per-process and a deployment sets them in its own environment.
+  otlp_endpoint: http://host.docker.internal:4318

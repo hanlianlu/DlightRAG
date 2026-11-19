@@ -89,8 +89,8 @@ repository and runs Compose or a native process, or adds the clone as an
 editable path dependency. No workflow publishes DlightRAG to a package index,
 and `v*` tags only mark releases on GitHub. `make release-check`, which
 `make ci` runs, enforces lockstep versions across `pyproject.toml`,
-`packages/memory/pyproject.toml`, `frontend/package.json`, and the Memory
-runtime. `make workspace-wheels` is a local packaging check that installs the
+`packages/memory/pyproject.toml`, `packages/observability/pyproject.toml`,
+`frontend/package.json`, and the Memory runtime. `make workspace-wheels` is a local packaging check that installs the
 built wheels in isolation; it distributes nothing.
 
 ## Agent Chart Rendering
@@ -605,81 +605,300 @@ product code, and another one could use SES receipt rules that write to S3.
   runs the account store, its re-sealing, and a later Run's login against PostgreSQL. Both
   need the browser installed as for the [pool's tests](#agent-browser-pool).
 
-## Local Langfuse Observability
+## Local ClickStack Observability
 
-The repository can run an isolated local Langfuse Compose project in
-`../langfuse-local` (override with `LANGFUSE_LOCAL_DIR`).
+The repository runs a self-hosted ClickStack — ClickHouse, the HyperDX UI/API, the
+ClickStack OpenTelemetry collector, and MongoDB — from
+`packages/observability/compose.yaml`. It is the destination the product's traces
+are exported to, and the same ClickHouse holds the infrastructure metrics the
+stack's own collector scrapes.
 
 ```bash
-make langfuse-up
+make hyperdx-up
 ```
 
-Open <http://localhost:3300> with user `admin@localhost.local`; read the generated
-password from `../langfuse-local/.env`. Traces appear after a model call.
+Open <http://127.0.0.1:8300> and create the first administrator. ClickStack
+provisions the collector's pipelines over OpAMP once the application has a team
+and a data source, which happens on that first UI run; before it, the stack is up
+but its collector does not accept OTLP yet.
 
 | Target | Behavior |
 |---|---|
-| `make langfuse-stack` | Download/patch the official Compose file, refreshing an older server major |
-| `make langfuse-bootstrap` | Sync project credentials to both env files |
-| `make langfuse-up` | Bootstrap and start |
-| `make langfuse-down` | Stop |
-| `make langfuse-restart` | Re-sync and recreate Web/worker |
-| `make langfuse-status` | Show containers |
-| `make langfuse-logs` | Follow Web/worker logs |
-| `make langfuse-health` | Check host endpoint |
-| `make langfuse-reset CONFIRM=1` | Delete all local Langfuse data: traces, users, project keys, and model prices |
+| `make hyperdx-bootstrap` | Write `stack/.env` once (generated secrets), send a probe span, apply retention to every telemetry table, and report whether the probe landed |
+| `make hyperdx-up` | Start the four containers, then bootstrap |
+| `make hyperdx-down` | Stop |
+| `make hyperdx-status` | Show containers |
+| `make hyperdx-logs` | Follow the stack's logs |
+| `make hyperdx-reset` | Stop and delete the stack's volumes: all telemetry. DlightRAG's own data is a separate Compose project and is not touched |
 
-### Version
+The CLI behind them is `dlightrag-observability` (`up`, `down`, `status`,
+`logs`, `reset`, `bootstrap`, `alerts push`). It reads the stack from `stack_root()`:
+`packages/observability` in a checkout, or whatever
+`DLIGHTRAG_OBSERVABILITY_STACK_DIR` names. **The source distribution carries those
+files and the wheel does not** — uv's build backend includes only the module root, so
+`source-include` is the only route `compose.yaml` and `stack/**` have into an artifact.
+A wheel-only install has the exporter and the classifier and nothing else: every command
+that needs the stack exits 1 at `stack_root()`, with
 
-The stack tracks the Langfuse server major DlightRAG targets, not a patch version:
-`scripts/langfuse/stack.py` pins `LANGFUSE_IMAGE_MAJOR` and prepares the official
-Compose file, which means `langfuse/langfuse:4` and ClickHouse `25.12`. The Python
-SDK dependency stays on the same major, because the v4 data model is what the SDK's
-real-time ingestion and the v2 read APIs require.
+> compose.yaml not found; set DLIGHTRAG_OBSERVABILITY_STACK_DIR to the directory holding the stack (packages/observability in a checkout)
 
-The Compose file is written once and only patched afterwards, so an existing stack
-is refreshed when it pins another major, and the target fails rather than starting
-a mismatched stack when upstream moves beyond `LANGFUSE_IMAGE_MAJOR` — upgrade the
-SDK dependency and the constant together. Delete
-`../langfuse-local/docker-compose.yml` to force a full re-download on a smaller
-upstream change; keep `.env` next to it so the generated keys survive.
+so a wheel can export telemetry but cannot start, inspect, or configure the stack. Pointing
+the variable at an unpacked sdist is what makes those commands work, and the directory has
+to be writable, because `bootstrap` renders `stack/.env` into it. Nothing publishes either
+artifact ([Release Distribution](#release-distribution)), so the checkout — where the files
+sit beside the package — is what a deployment uses, and neither the variable nor the
+unpacking is needed there.
 
-### Connection And Keys
+### Pointing DlightRAG At It
 
-`scripts/langfuse/headless.py` writes one key pair to the Langfuse
-`LANGFUSE_INIT_PROJECT_*` variables and DlightRAG's
-`DLIGHTRAG_OBSERVABILITY__LANGFUSE_{PUBLIC,SECRET}_KEY`. Both are required;
-without either, tracing is disabled. Initialization variables are read only when
-Langfuse first creates its database; rotate established credentials in the UI or
-reset the local stack.
+The endpoint is not a secret and belongs in `config.yaml`:
 
-Set `observability.langfuse_host` according to where DlightRAG runs:
-
-| DlightRAG | Trace host |
+| DlightRAG | `observability.otlp_endpoint` |
 |---|---|
-| Docker Compose | `http://host.docker.internal:3300` |
-| Native | `http://localhost:3300` |
+| Docker Compose | `http://host.docker.internal:4318` |
+| Native | `http://127.0.0.1:4318` |
 
-Browsers and `make langfuse-health` always use `http://localhost:3300`.
-`config.yaml` owns the nonsecret host; bootstrap writes only secrets.
-
-Compose reads `.env` only when creating a container. After keys/host change:
+The ingestion key is a secret. ClickStack's OTLP receiver authenticates it as the
+`authorization` header, and the key that works is the **team's** ingestion key:
+copy it from the UI's Team Settings. The value `bootstrap` generated into
+`stack/.env` is a seed for the stack's first run and can differ from the one the
+application registers, so a 401 from the collector usually means the wrong one of
+the two. Put it in `.env`:
 
 ```bash
-docker compose up -d --force-recreate dlightrag-api dlightrag-mcp
-docker compose logs dlightrag-api | grep -i 'langfuse tracing'
+DLIGHTRAG_OBSERVABILITY__OTLP_HEADERS={"authorization":"<team ingestion key>"}
 ```
 
-A log target of `https://cloud.langfuse.com` means the local host setting was
-not loaded.
+Compose reads `.env` only when it creates a container:
+
+```bash
+docker compose up -d --force-recreate dlightrag-api dlightrag-mcp dlightrag-reader
+docker compose logs dlightrag-api | grep -i 'OTLP tracing'
+```
+
+`OTLP tracing enabled → http://host.docker.internal:4318/v1/traces` is the line
+that says where spans go; `OTLP tracing off (no endpoint configured)` means the
+setting did not load. The same endpoint starts the log channel one line later
+(`OTLP log export enabled → http://host.docker.internal:4318/v1/logs`), so a
+process that exports traces exports its own records too — there is no second
+switch. Startup performs no authentication or reachability check, so a wrong key
+or a stopped stack shows up as missing traces, not as a failed boot. A process
+that names no endpoint exports nothing and retries nothing.
+
+Set `DLIGHTRAG_OBSERVABILITY__SERVICE_NAME` per process
+(`dlightrag-api`, `dlightrag-mcp`, `dlightrag-reader`) so the service map
+separates them; `environment` and `release` separate deployments and versions
+([field table](configuration.md#observability)).
+
+### Where The Traces Are
+
+Spans land in `default.otel_traces` in the stack's ClickHouse, over its HTTP
+interface on loopback:
+
+```bash
+curl -sS 'http://127.0.0.1:8123/?default_format=TabSeparated' --data-binary \
+  "SELECT ServiceName, SpanName, count() AS spans FROM default.otel_traces \
+   WHERE Timestamp > now() - INTERVAL 1 HOUR GROUP BY 1, 2 ORDER BY spans DESC"
+```
+
+The product's vocabulary rides on the spans, not in the table's shape:
+`SpanName` is the registry's name (such as `run-answer`),
+`dlightrag.observation.kind` is its kind, `session.id` and `user.id` carry the
+conversation and the owner, and the usage buckets are `gen_ai.usage.*` with
+`dlightrag.usage.total` ([rendering](observability.md#rendering-on-the-wire)).
+A failed Run also carries `dlightrag.error.kind`, the kind its executor
+classified — `dependency_unavailable`, `workspace_integrity_error`, and the rest
+of the coordinator's vocabulary. An alert prefers that attribute and falls back to
+the status description, which is what a span recorded before the attribute existed
+carries, and what a loss the durable store settled without a surviving worker has
+instead.
+`bootstrap` runs the same check as its probe, so a stack that just started either
+reports one landed span or says explicitly that ingestion is not provisioned yet.
+
+### Where The Logs Are
+
+The process's own records land in `default.otel_logs`, one row per record, in the
+same ClickHouse:
+
+```bash
+curl -sS 'http://127.0.0.1:8123/?default_format=TabSeparated' --data-binary \
+  "SELECT Timestamp, ServiceName, SeverityText, Body, TraceId, SpanId \
+   FROM default.otel_logs WHERE Timestamp > now() - INTERVAL 1 HOUR \
+   ORDER BY Timestamp DESC LIMIT 20"
+```
+
+The shape to read: `Body` is the masked message, `SeverityText` is the
+OpenTelemetry severity (`WARN`, `FATAL`), `LogAttributes` holds what the caller
+attached with `extra` plus the code location the record came from, and
+`TraceId`/`SpanId` are the observation that logged it — empty outside a Run. That
+pair is the join: search a trace in the UI and its lines are the rows whose
+`TraceId` matches, which is why a log line can be read next to the span that
+produced it. A record whose field name carries a secret (`api_key`,
+`authorization`, …) arrives as `[redacted]`; a message is bounded, and the
+exporter's own records stay on stdout rather than being exported.
+
+stdout is unchanged, and it is still the first place to look: the export is one
+extra handler, it never blocks a logging call, and when the collector is down the
+records are dropped from a bounded queue while the process keeps printing.
+
+### Alerts And The Dashboard
+
+The notification channel, the alerts, and the dashboard tiles are files, not
+clicks: they ship under `packages/observability/stack/alerts/` (one JSON document
+per alert, `channel.json` for the webhook) and `.../stack/dashboards/`, and one
+command writes them through ClickStack's REST API. An artifact that names an `id`
+is updated and one that does not is created, the channel goes first because every
+alert names it, and a file that changes is the change:
+
+```bash
+export DLIGHTRAG_OBSERVABILITY_API_KEY=<the access key the UI mints under Team Settings>
+uv run dlightrag-observability alerts push
+```
+
+The artifacts carry the `id`, `connectionId`, and `sourceId` values of the ClickStack
+they were written against. ClickStack mints those per stack, so on a stack of your
+own the connection and source ids must be set to that stack's before the first push:
+an alert that names a source the stack does not have evaluates nothing.
+
+`alerts push --dry-run` prints the same requests without sending them;
+`DLIGHTRAG_OBSERVABILITY_API_URL` points the command at another stack
+(`http://127.0.0.1:8000` by default). The webhook's URL carries a bot token and is
+therefore a credential: `channel.json` names `${DLIGHTRAG_TELEGRAM_WEBHOOK_URL}`
+and the push resolves it, so nothing secret lives in the repository. Three
+variables supply it, and the command reads `stack/.env` when the process
+environment does not (`packages/observability/stack/.env.example` declares them):
+`DLIGHTRAG_TELEGRAM_WEBHOOK_ID` (the channel the alerts name),
+`DLIGHTRAG_TELEGRAM_CHAT_ID` (the conversation the bot posts to), and
+`DLIGHTRAG_TELEGRAM_WEBHOOK_URL` (which carries the token). The artifacts are
+checked with:
+
+```bash
+uv run pytest tests/unit/test_observability_stack.py -q
+```
+
+What the stack watches, and what it cannot: p95 answer duration, failing runs by
+kind, runs lost to an outage or an abandoned lease, Postgres availability and
+connection headroom, host disk pressure, and collector refusals.
+
+**There is no product-api 5xx alert.** The product api emits feature-level spans
+(`run-answer`, `execute-agent-tool`, …) and no request-level observation, so no
+honest share of api requests is computable from what it exports; an alert that
+cannot fire is worse than a missing one, because its silent `OK` reads as a healthy
+api. A deployment that adds request instrumentation can add one.
+
+The Postgres alert reads the metrics `postgres-exporter` publishes, and nothing
+else in the deployment reports that database: start the `metrics` profile (below)
+or the alert stays quiet, because a window with no `pg_` metric is a deployment
+that is not watching Postgres rather than one whose Postgres is down. It fires on
+`pg_up` going to zero, or on the busiest single scrape in its window passing 80% of
+the `pg_settings_max_connections` that scrape reported. That 80% is a ceiling, not
+a level ordinary operation reaches: with a fifth of the server's connections still
+free, the next burst of concurrent Runs is what spends the last of the headroom,
+which is why the alert is a warning ahead of `FATAL: sorry, too many clients
+already` rather than a report of one. The word *scrape* is load-bearing:
+`pg_stat_activity_count` carries one row per `(datname, state)` label pair and one
+per scrape, so a plain `sum` over a five-minute bucket measures label combinations
+times scrapes — backs × states × scrapes — and not backends. The shipped query
+deduplicates each scrape first (`SELECT DISTINCT TimeUnix AS scrape, MetricName,
+Value, Attributes`), sums only that scrape's own series, and takes the busiest one
+as the value; `max_connections` is server-global, so its aggregate is `max`, never
+a `sum`.
+
+ClickStack's alert task gives an interval to a time-series display (`line`,
+`stacked_bar`) and to nothing else, so a `number` alert's query uses no
+`$__timeInterval`: the macro would fail every evaluation while the alert's state
+stayed `OK`. `tests/unit/test_observability_stack.py` holds that for every shipped
+query.
+
+### Where The Metrics Are
+
+The `metrics` profile adds a second collector process and the exporters it scrapes,
+none of which the four required containers include:
+
+```bash
+docker compose --project-name dlightrag-observability \
+  --env-file packages/observability/stack/.env \
+  -f packages/observability/compose.yaml --profile metrics up -d
+```
+
+| Source | Metrics | Read by |
+|---|---|---|
+| `hostmetrics` | `system.cpu.*`, `system.memory.*`, `system.disk.*`, `system.filesystem.usage` | the host-disk alert |
+| `docker_stats` | `container.cpu.utilization`, `container.memory.usage.total`, the network counters | an operator asking which container is eating memory |
+| `prometheus` → `postgres-exporter` | `pg_up`, `pg_stat_activity_count`, `pg_settings_max_connections`, `pg_stat_database_numbackends`, `pg_database_size_bytes`, `pg_locks_count`, `pg_replication_lag_seconds`, `pg_stat_user_tables_*` | the postgres alert, and an operator |
+
+They land in `otel_metrics_gauge` (gauges) and `otel_metrics_sum` (counters) with
+`MetricName`, `TimeUnix`, `Value`, `Attributes` (the Prometheus labels), and
+`ResourceAttributes`:
+
+```bash
+curl -sS 'http://127.0.0.1:8123/?default_format=TabSeparated' --data-binary \
+  "SELECT MetricName, Attributes, max(Value) AS value FROM default.otel_metrics_gauge \
+   WHERE startsWith(MetricName, 'pg_') AND TimeUnix > now() - INTERVAL 5 MINUTE \
+   GROUP BY MetricName, Attributes ORDER BY MetricName LIMIT 20"
+```
+
+`postgres-exporter` reaches the application's database through the host gateway on
+`127.0.0.1:5432`, with the application's own local defaults
+(`dlightrag`/`dlightrag`/`dlightrag`). A deployment that changed them sets
+`DLIGHTRAG_POSTGRES_USER`, `__PASSWORD`, `__HOST`, `__PORT`, and `__DATABASE` in
+`stack/.env` — the observability stack is a different Compose project and cannot
+read the application's `.env`. The exporter publishes its own exposition on
+`127.0.0.1:9187`, which is how to check it without the collector in the path.
+
+### Retention
+
+`HYPERDX_OTEL_EXPORTER_TABLES_TTL` in `stack/.env` is the deployment's **one**
+statement of retention: a TTL for every `otel_*` table the collector creates.
+`dlightrag-observability bootstrap` reads the same variable and applies that
+retention to every telemetry table it finds in `system.tables` — including the
+ones the collector's variable cannot reach, a table a signal creates with its
+first write:
+
+```bash
+uv run dlightrag-observability bootstrap
+# retention: 168 hour(s) on otel_logs.Timestamp, …
+```
+
+The variable is the duration ClickHouse states (`168h`, `30d`, `2w`; a bare number
+is seconds) and it defaults to seven days when neither the environment nor
+`stack/.env` states one. `bootstrap` applies it **as stated**: a `36h` deployment
+gets `toIntervalHour(36)`, not the two days a day count would have rounded it to,
+because a restated duration is a second retention and this one decides when
+telemetry is deleted. That is why `bootstrap` and the collector cannot come to
+different answers, and why `.env.example` cannot promise a retention the CLI would
+not apply. `--days N` overrides it for one run with a whole-day count — the
+operator's own number rather than a reading of the variable. The pass is idempotent
+(`MODIFY TTL` states the retention a table should have), it names the column it
+keyed each table on, and it reports a table it will not guess at rather than
+altering it. A deployment that has exported nothing yet says so, which is not a failure. Change retention in `stack/.env` and recreate the collector,
+or bootstrap again with another `--days`.
+
+### Health And Outage Behavior
+
+The collector answers on <http://127.0.0.1:13133> and its own metrics are on
+8888; the UI answers on 8300. When the stack stops answering, nothing in the
+product does: spans are dropped from a bounded in-process queue, a request, a Tool
+call, and a log line never wait on the export, and shutdown flushes under a
+timeout. An outage is reported once — one `WARNING` when the export starts
+failing, one `INFO` line when it recovers — and the failures in between are
+counted rather than logged, so turning the observing stack off gives a quiet
+product instead of a log flood
+([ADR 0039](adr/0039-observability-is-always-on-and-the-seam-masks-private-data.md)).
 
 ### Cost And Recovery
 
-DlightRAG always reports tokens. Configure matching model prices in Langfuse to
-compute cost: a Model definition whose match pattern fits the model alias (such as
-`deepseek-flash`), with prices for `input`, `output`, and `input_cached_tokens`
-([Observability](observability.md#cost)). OpenRouter can instead return charged
-cost when enabled only on its model block:
+DlightRAG always reports tokens and never computes cost. The counters a price
+table needs are on every span (`gen_ai.usage.input_tokens`, `output_tokens`,
+`gen_ai.usage.cache_read.input_tokens`, and `dlightrag.usage.total`), keyed by
+the model alias in `gen_ai.request.model`, so the operator builds that table
+beside the traces it prices ([Observability](observability.md#cost)). The cache
+read is a *subset* of `input_tokens`, not a sibling of it, so a table that prices
+the uncached rate prices `input_tokens - cache_read.input_tokens` and one that
+prices the cached rate prices the read on its own; adding the two would count the
+hit twice. ClickStack's own LLM cost panel
+reads a built-in catalogue and is not the deployment's money account. OpenRouter
+can instead return the charge it applied, when enabled only on its model block:
 
 ```yaml
 models:
@@ -692,20 +911,18 @@ models:
           include: true
 ```
 
-Do not send that vendor-specific option to providers that reject it.
+Do not send that vendor-specific option to providers that reject it. A reported
+charge becomes `gen_ai.usage.cost` and outranks any derived price.
 
-To disable tracing, clear both Langfuse keys and recreate app containers. If the
-UI password is lost, read `LANGFUSE_INIT_USER_PASSWORD` from the local env. If
-the env file was deleted, `make langfuse-bootstrap` recovers the API key pair
-from DlightRAG's `.env`, but cannot change the established UI password.
-
-Last-resort reset, which deletes all local Langfuse data but none of
-DlightRAG's; `make langfuse-up` seeds the user and project keys again from the
-env files:
+Recovery is a restart, not a data migration. If the stack's volumes are gone,
+`make hyperdx-up` starts it again, the UI asks for a first administrator, and
+`make hyperdx-bootstrap` re-applies retention and proves ingestion with a
+probe. The generated secrets stay in `stack/.env`; delete that file to have
+bootstrap write a new pair, then restart the containers with the new
+`HYPERDX_API_KEY` and update DlightRAG's `otlp_headers` to match. Last resort,
+which deletes all telemetry and none of DlightRAG's data:
 
 ```bash
-make langfuse-bootstrap
-make langfuse-reset CONFIRM=1
-make langfuse-up
-grep LANGFUSE_INIT_USER_PASSWORD ../langfuse-local/.env
+make hyperdx-reset
+make hyperdx-up
 ```

@@ -9,6 +9,7 @@ import sys
 from types import SimpleNamespace
 from typing import Any, Literal
 
+from dlightrag_observability.otlp import OtlpTelemetry
 from lightrag.base import DocStatus
 from lightrag.constants import DEFAULT_COSINE_THRESHOLD
 from lightrag.kg import STORAGE_ENV_REQUIREMENTS
@@ -16,7 +17,6 @@ from lightrag.namespace import NameSpace
 from lightrag.tools.rebuild_vdb import DEFAULT_BATCH_SIZE, RebuildTool
 from lightrag.utils import get_env_value
 
-from dlightrag.adapters.observability import LangfuseTelemetry
 from dlightrag.adapters.postgres.corpus.corpus import (
     chunk_vector_store,
     verify_lightrag_storage_configuration,
@@ -26,8 +26,9 @@ from dlightrag.adapters.postgres.rebuild_bm25 import canonical_workspace_config,
 from dlightrag.application.config import DlightragConfig, get_config, load_config, set_config
 from dlightrag.application.settings import rag_settings
 from dlightrag.engine.ai.embedding import create_embedding_model
+from dlightrag.engine.ai.providers.base import provider_usage_buckets
 from dlightrag.engine.ai.scheduler import ModelScheduler
-from dlightrag.engine.ai.telemetry import Telemetry
+from dlightrag.engine.ai.telemetry import SPAN_TYPES, Telemetry
 from dlightrag.engine.dependencies import classify_transient_dependency
 from dlightrag.engine.rag.corpus.ingestion.document_embedding import (
     build_document_embedder,
@@ -322,7 +323,7 @@ async def run_rebuild(
     multimodal_embedder = create_embedding_model(
         resolved_embedding,
         scheduler=model_scheduler,
-        telemetry=LangfuseTelemetry(),
+        telemetry=OtlpTelemetry(span_types=SPAN_TYPES, usage_buckets=provider_usage_buckets),
     )
     embedding_func = build_lightrag_embedding(resolved_embedding, multimodal_embedder)
 
@@ -405,7 +406,9 @@ async def run_rebuild(
                         chunk_vectors=chunk_vectors,
                     ),
                     multimodal_embedder=multimodal_embedder,
-                    telemetry=LangfuseTelemetry(),
+                    telemetry=OtlpTelemetry(
+                        span_types=SPAN_TYPES, usage_buckets=provider_usage_buckets
+                    ),
                 )
                 print(
                     "Sidecar fused visual-vector alignment: "

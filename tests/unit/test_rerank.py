@@ -132,7 +132,7 @@ async def test_rerank_requests_share_scheduler_limit() -> None:
     assert calls == 2
 
 
-async def test_rerank_error_text_is_redacted_when_sensitive_capture_is_disabled() -> None:
+async def test_rerank_error_states_what_failed() -> None:
     class Observation:
         updates: list[dict[str, Any]] = []
 
@@ -140,7 +140,6 @@ async def test_rerank_error_text_is_redacted_when_sensitive_capture_is_disabled(
             self.updates.append(kwargs)
 
     class Telemetry:
-        capture_sensitive_data = False
         observation = Observation()
 
         def trace(self, **_kwargs: Any):
@@ -171,7 +170,13 @@ async def test_rerank_error_text_is_redacted_when_sensitive_capture_is_disabled(
     finally:
         await model.aclose()
 
-    assert Telemetry.observation.updates == [{"level": "ERROR", "status_message": "RuntimeError"}]
+    assert Telemetry.observation.updates == [
+        {
+            "level": "ERROR",
+            "status_message": "upstream echoed secret rerank query",
+            "error_type": "RuntimeError",
+        }
+    ]
 
 
 async def test_rerank_with_fallback_caps_successful_provider_result() -> None:
@@ -501,8 +506,6 @@ class TestBuildRerankFunc:
         calls: list[dict[str, Any]] = []
 
         class Telemetry:
-            capture_sensitive_data = True
-
             def trace(self, **_kwargs: Any):
                 return nullcontext()
 

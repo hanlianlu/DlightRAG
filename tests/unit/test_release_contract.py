@@ -16,6 +16,7 @@ _FILES = (
     "docker-compose.yml",
     "packages/memory/pyproject.toml",
     "packages/memory/src/dlightrag_memory/__init__.py",
+    "packages/observability/pyproject.toml",
     "frontend/package.json",
     "frontend/package-lock.json",
     "agent-browser/browser/Dockerfile",

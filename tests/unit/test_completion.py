@@ -29,8 +29,6 @@ class RecordingObservation:
 
 
 class RecordingTelemetry:
-    capture_sensitive_data = True
-
     def __init__(self) -> None:
         self.observation = RecordingObservation()
         self.calls: list[dict[str, Any]] = []
@@ -157,7 +155,7 @@ async def test_response_family_rejects_product_owned_raw_model_kwargs(
     provider.complete.assert_not_awaited()
 
 
-async def test_provider_error_text_is_redacted_when_sensitive_capture_is_disabled(
+async def test_provider_error_states_what_failed(
     monkeypatch,
 ) -> None:
     class Provider:
@@ -168,7 +166,6 @@ async def test_provider_error_text_is_redacted_when_sensitive_capture_is_disable
             return None
 
     telemetry = RecordingTelemetry()
-    telemetry.capture_sensitive_data = False
     monkeypatch.setattr(
         "dlightrag.engine.ai.providers.get_provider",
         lambda *_args, **_kwargs: Provider(),
@@ -182,7 +179,13 @@ async def test_provider_error_text_is_redacted_when_sensitive_capture_is_disable
     with pytest.raises(RuntimeError, match="secret prompt fragment"):
         await model(messages=[{"role": "user", "content": "secret"}])
 
-    assert telemetry.observation.updates == [{"level": "ERROR", "status_message": "RuntimeError"}]
+    assert telemetry.observation.updates == [
+        {
+            "level": "ERROR",
+            "status_message": "upstream echoed secret prompt fragment",
+            "error_type": "RuntimeError",
+        }
+    ]
 
 
 async def test_stream_records_ttft_usage_cost_and_sensitive_text(monkeypatch) -> None:

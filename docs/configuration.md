@@ -89,7 +89,7 @@ setting, with an error that names the field and never repeats the value:
 - `storage.lightrag.milvus_uri`
 - `access.jwt_issuer`, `access.jwt_jwks_url`, `access.web_identity.issuer`, and
   `access.web_identity.jwks_url`
-- `interfaces.mcp.resource_server_url` and `observability.langfuse_host`
+- `interfaces.mcp.resource_server_url` and `observability.otlp_endpoint`
 - `answer.agent.connections.oauth_callback_url`
 - `answer.agent.browser.endpoints[]` and `answer.agent.browser.egress_proxy`
 
@@ -1120,25 +1120,35 @@ The CLI reads `DLIGHTRAG_API_URL` (default `http://localhost:8100`), optional
 
 ## Observability
 
-Tracing activates only when both Langfuse keys are set; keep them in `.env`.
+Monitoring has no off state: there is no key that decides whether content exists
+([ADR 0039](adr/0039-observability-is-always-on-and-the-seam-masks-private-data.md)),
+and the keys below are operational. The non-secret ones belong in `config.yaml`;
+the ingestion key belongs in `.env`.
 
 | Field | Default | Meaning |
 |---|---|---|
 | `log_level` | `info` | Application logging level |
-| `langfuse_public_key`, `langfuse_secret_key` | unset | Both required |
-| `langfuse_host` | `https://cloud.langfuse.com` | Trace destination |
-| `langfuse_trace_sensitive_data` | `true` | Suppress raw content — observation inputs, outputs, and error text — when false |
-| `langfuse_environment` | unset | Deployment label such as `local`, `staging`, or `production`, so deployments' traces stay apart: lowercase letters, digits, `_`, and `-`, at most 40 characters, starting with a letter or digit but not with `langfuse` |
-| `langfuse_release` | running package version | Release label |
-| `langfuse_sample_rate` | `1.0` | Export fraction |
-| `langfuse_timeout` | SDK default | Export timeout |
-| `langfuse_flush_at` | SDK default | Buffered event count |
-| `langfuse_flush_interval` | SDK default | Flush cadence |
+| `otlp_endpoint` | unset | The OTLP/HTTP destination the process's telemetry is exported to, such as `http://host.docker.internal:4318` for the Dockerized app or `http://127.0.0.1:4318` for a native run. The exporter appends each signal's path (`/v1/traces`, `/v1/logs`) |
+| `otlp_headers` | `{}` | Request headers for the export; the ClickStack team's ingestion key rides here as `authorization`. Hidden from a settings dump |
+| `service_name` | `dlightrag` | `service.name` on every span, so a service map separates the processes; set `dlightrag-api`, `dlightrag-mcp`, or `dlightrag-reader` per process |
+| `environment` | unset | `deployment.environment.name`, a label such as `local`, `staging`, or `production`, so deployments' traces stay apart |
+| `release` | running package version | `service.version`, so two releases never share a bucket |
+| `sample_rate` | `1.0` | Trace-id ratio exported; `0` exports none |
+| `timeout` | exporter default | OTLP/HTTP request timeout in seconds (1–300) |
+
+Without `otlp_endpoint` the process exports nothing, logs one info line, and
+never retries or fails: a destination that is absent or unreachable costs
+telemetry, never a boot or a request. An outage is reported once — one warning
+when the export starts failing, one line when it recovers — and the failures in
+between are counted rather than logged. Shutdown flushes under a timeout. The
+same endpoint carries the process's own log records: stdout does not change, the
+export is one additional handler over a bounded queue, and a record carries the
+trace and span id of the observation that logged it.
 
 Memory traces include counts and character totals, never record bodies. Span
-names, observation types, attribution, and redaction follow the
+names, observation kinds, attribution, and redaction follow the
 [observability contract](observability.md). Run the bundled stack with the
-[Langfuse runbook](operations.md#local-langfuse-observability).
+[ClickStack runbook](operations.md#local-clickstack-observability).
 
 ## Vector Index Fields
 

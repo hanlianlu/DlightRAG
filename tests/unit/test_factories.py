@@ -207,7 +207,6 @@ async def test_ai_completion_model_owns_provider_telemetry_and_lifecycle(monkeyp
     class Telemetry:
         observation = Observation()
         observations: list[dict[str, Any]] = []
-        capture_sensitive_data = False
 
         def trace(self, **_kwargs: Any):
             return nullcontext()
@@ -242,7 +241,7 @@ async def test_ai_completion_model_owns_provider_telemetry_and_lifecycle(monkeyp
     assert Telemetry.observations[0]["metadata"]["api_family"] == "response"
     assert Telemetry.observation.updates == [
         {
-            "output": {"text_length": 6},
+            "output": {"text_length": 6, "text": "answer"},
             "usage_details": {"input_tokens": 3},
             "cost_details": None,
         }

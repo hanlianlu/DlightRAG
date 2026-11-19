@@ -225,6 +225,7 @@ from dlightrag.engine.answer.workspace import (
 )
 from dlightrag.engine.dependencies import (
     DependencyComponent,
+    DependencyRetriesExhausted,
     classify_transient_dependency,
     dependency_component_from_checkpoint,
     next_dependency_retry,
@@ -577,6 +578,17 @@ class AnswerExecutor:
                         # is not a settlement: a point recorded here would outlive the
                         # attempt that never ended, and the requeue clears it anyway.
                         self._settled_views.pop(session.run_id, None)
+                        raise
+                    except (RunExecutionError, DependencyRetriesExhausted) as exc:
+                        # The coordinator terminalizes this Run with the same kind, and
+                        # the kind is already classified here; naming it on the root
+                        # saves an alert from reading it back out of the message.
+                        run_trace.update(error_kind=exc.kind)
+                        await self._record_fork_point(
+                            session,
+                            run_trace,
+                            snapshot=self._settled_views.pop(session.run_id, None),
+                        )
                         raise
                     except BaseException:
                         # A failure the coordinator will terminalize is still a state
@@ -2027,7 +2039,6 @@ class AnswerExecutor:
                     finalized.answer,
                     finalized.sources,
                     contexts,
-                    capture_sensitive_data=self._telemetry.capture_sensitive_data,
                 )
                 generation_trace.update(output=answer_output)
                 # The root drives the trace table, so the answer a reviewer sees
@@ -3040,18 +3051,14 @@ def answer_trace_output(
     answer: str | None,
     sources: Sequence[Any] | None,
     contexts: RetrievalContexts,
-    *,
-    capture_sensitive_data: bool = False,
 ) -> dict[str, Any]:
     """Shape what a pipeline observation reports for one Answer result."""
-    output: dict[str, Any] = {
+    return {
         "answer_len": len(answer or ""),
+        "answer": answer or "",
         "source_count": len(sources or []),
         "context_chunk_count": _context_count(contexts, "chunks"),
     }
-    if capture_sensitive_data:
-        output["answer"] = answer or ""
-    return output
 
 
 def _worst_case_recall_block(prepared_input: Mapping[str, Any] | None) -> str:

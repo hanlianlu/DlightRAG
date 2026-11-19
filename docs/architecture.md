@@ -342,7 +342,7 @@ metadata source, and readers use the PostgreSQL vector leg. See
 ## Code Layering
 
 The UV workspace contains the root DlightRAG wheel and the independently
-installable `dlightrag-memory` distribution. Application imports no adapter and
+installable `dlightrag-memory` and `dlightrag-observability` distributions. Application imports no adapter and
 never composes; no Engine module imports Application or a transport; RAG owns
 the LightRAG dependency and never imports PostgreSQL code; Runtime imports
 neither Answer, RAG, nor storage. Import contracts in `pyproject.toml` enforce
@@ -361,6 +361,10 @@ must agree on the protocol.
 journal, and stdio MCP server, and imports no DlightRAG, AI, Agent, or RAG
 module. DlightRAG supplies owner identity, eligibility, rendering, and the
 capability gate; Memory records are low-authority, non-citable context.
+`dlightrag-observability` owns the privacy classifier, the OTLP export, and the
+ClickStack stack, and imports no DlightRAG module: the composition root hands it
+the span registry and the provider usage mapper as data
+([Observability](observability.md), [ADR 0040](adr/0040-observability-lands-in-clickstack.md)).
 `DlightragConfig` mirrors ownership through frozen sections: AI owns model
 settings, RAG owns corpus settings, and root modules own product settings
 ([ADR 0006](adr/0006-configuration-ownership-and-deployment-bindings.md)).

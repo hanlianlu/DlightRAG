@@ -280,12 +280,28 @@ def test_load_config_redacts_invalid_secret_input() -> None:
     assert "do-not-echo" not in str(caught.value)
 
 
-def test_langfuse_environment_rejects_values_langfuse_would_drop() -> None:
-    """An environment label Langfuse cannot store would silently lose its bucket."""
+def test_observability_settings_carry_the_otlp_destination_and_its_headers() -> None:
+    """The endpoint is non-secret; the ingestion key rides in a header, never in the URL."""
     from dlightrag.application.config.sections import ObservabilitySettings
 
-    assert ObservabilitySettings(langfuse_environment="local").langfuse_environment == "local"
-    assert ObservabilitySettings().langfuse_environment is None
-    for rejected in ("Production", "prod/eu", "langfuse-local", "x" * 41):
-        with pytest.raises(ValidationError):
-            ObservabilitySettings(langfuse_environment=rejected)
+    settings = ObservabilitySettings(
+        otlp_endpoint="http://127.0.0.1:4318",
+        otlp_headers={"authorization": "key-1"},
+        service_name="dlightrag-api",
+        environment="local",
+        release="9.9.9",
+        sample_rate=0.25,
+        timeout=10,
+    )
+    assert settings.otlp_endpoint == "http://127.0.0.1:4318"
+    assert settings.otlp_headers == {"authorization": "key-1"}
+    assert settings.service_name == "dlightrag-api"
+    assert settings.sample_rate == 0.25
+    assert settings.timeout == 10
+    assert ObservabilitySettings().otlp_endpoint is None
+    assert ObservabilitySettings().otlp_headers == {}
+    assert ObservabilitySettings().service_name == "dlightrag"
+    with pytest.raises(ValidationError):
+        ObservabilitySettings(sample_rate=1.5)
+    with pytest.raises(ValidationError):
+        ObservabilitySettings(otlp_endpoint="http://user:secret@127.0.0.1:4318")

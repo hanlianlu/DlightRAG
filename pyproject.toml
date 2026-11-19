@@ -10,8 +10,9 @@ license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 maintainers = [{ name = "HanlianLyu" }, { name = "hllyu" }]
 dependencies = [
-    # Standalone workspace package
+    # Standalone workspace packages
     "dlightrag-memory==2.1.0",
+    "dlightrag-observability==2.1.0",
     # Built-in model providers (batteries included)
     "openai>=3.3.0",
     "anthropic>=1.9.0",
@@ -55,10 +56,8 @@ dependencies = [
     "nh3>=0.3.7",
     "pygments>=2.17",
     # Observability
-    "langfuse>=4.17.0",
-    # The tracer provider Langfuse exports through; already present as its dependency,
-    # declared here because the observability adapter imports it.
-    "opentelemetry-sdk>=1.45.0",
+    # The export belongs to dlightrag-observability, which owns its OpenTelemetry
+    # dependencies; no module here imports an SDK directly.
     # Native docx parsing: lightrag's docx parser imports python-docx + defusedxml.
     "python-docx>=1.2.0",
     "defusedxml>=0.7.1",
@@ -125,10 +124,11 @@ requires = ["uv_build>=0.11.21"]
 build-backend = "uv_build"
 
 [tool.uv.workspace]
-members = ["packages/memory"]
+members = ["packages/memory", "packages/observability"]
 
 [tool.uv.sources]
 dlightrag-memory = { workspace = true }
+dlightrag-observability = { workspace = true }
 
 [tool.uv.build-backend]
 # uv_build includes generated module data even when gitignored; reject local OS metadata.
@@ -155,7 +155,7 @@ markers = [
 ]
 
 [tool.importlinter]
-root_packages = ["dlightrag", "dlightrag_memory"]
+root_packages = ["dlightrag", "dlightrag_memory", "dlightrag_observability"]
 include_external_packages = true
 
 [[tool.importlinter.contracts]]
@@ -163,7 +163,14 @@ id = "memory-package-independence"
 name = "Memory package stays host-neutral"
 type = "forbidden"
 source_modules = ["dlightrag_memory"]
-forbidden_modules = ["dlightrag", "lightrag", "fastapi"]
+forbidden_modules = ["dlightrag", "dlightrag_observability", "lightrag", "fastapi"]
+
+[[tool.importlinter.contracts]]
+id = "observability-package-independence"
+name = "Observability package stays host-neutral and states no product vocabulary"
+type = "forbidden"
+source_modules = ["dlightrag_observability"]
+forbidden_modules = ["dlightrag", "dlightrag_memory", "lightrag", "fastapi", "asyncpg", "mcp"]
 
 [[tool.importlinter.contracts]]
 id = "bm25-lightrag-independence"
@@ -182,21 +189,21 @@ id = "ai-module-independence"
 name = "AI remains provider-neutral and independent of product modules"
 type = "forbidden"
 source_modules = ["dlightrag.engine.ai"]
-forbidden_modules = ["dlightrag.application", "dlightrag.adapters", "dlightrag.engine.agent", "dlightrag.engine.answer", "dlightrag.adapters.observability", "dlightrag.engine.rag", "dlightrag.engine.runtime", "dlightrag_memory", "lightrag", "asyncpg", "fastapi", "mcp"]
+forbidden_modules = ["dlightrag.application", "dlightrag.adapters", "dlightrag.engine.agent", "dlightrag.engine.answer", "dlightrag.engine.rag", "dlightrag.engine.runtime", "dlightrag_memory", "lightrag", "asyncpg", "fastapi", "mcp"]
 
 [[tool.importlinter.contracts]]
 id = "agent-module-independence"
 name = "Agent may depend on AI but not product or RAG modules"
 type = "forbidden"
 source_modules = ["dlightrag.engine.agent"]
-forbidden_modules = ["dlightrag.application", "dlightrag.adapters", "dlightrag.engine.answer", "dlightrag.adapters.observability", "dlightrag.engine.rag", "dlightrag.engine.runtime", "dlightrag_memory", "lightrag", "asyncpg", "fastapi", "mcp"]
+forbidden_modules = ["dlightrag.application", "dlightrag.adapters", "dlightrag.engine.answer", "dlightrag.engine.rag", "dlightrag.engine.runtime", "dlightrag_memory", "lightrag", "asyncpg", "fastapi", "mcp"]
 
 [[tool.importlinter.contracts]]
 id = "rag-module-independence"
 name = "RAG runtime remains storage-neutral and independent of product modules"
 type = "forbidden"
 source_modules = ["dlightrag.engine.rag"]
-forbidden_modules = ["dlightrag.application", "dlightrag.adapters", "dlightrag.engine.agent", "dlightrag.engine.answer", "dlightrag.adapters.observability", "dlightrag.engine.runtime", "dlightrag_memory", "asyncpg", "fastapi", "mcp"]
+forbidden_modules = ["dlightrag.application", "dlightrag.adapters", "dlightrag.engine.agent", "dlightrag.engine.answer", "dlightrag.engine.runtime", "dlightrag_memory", "asyncpg", "fastapi", "mcp"]
 
 [[tool.importlinter.contracts]]
 id = "engine-application-direction"
@@ -210,7 +217,7 @@ forbidden_modules = ["dlightrag.application"]
 id = "no-transport-internals"
 name = "Internal packages must not import transport layers"
 type = "forbidden"
-source_modules = ["dlightrag.engine.answer", "dlightrag.application", "dlightrag.adapters.observability"]
+source_modules = ["dlightrag.engine.answer", "dlightrag.application"]
 forbidden_modules = ["dlightrag.adapters.http", "dlightrag.adapters.mcp"]
 
 [[tool.importlinter.contracts]]
@@ -322,7 +329,7 @@ id = "no-circular-foundation"
 name = "Configuration does not import projections, Answer, PostgreSQL, or Observability"
 type = "forbidden"
 source_modules = ["dlightrag.application.config"]
-forbidden_modules = ["dlightrag.application.settings", "dlightrag.application.answer_runs", "dlightrag.adapters.postgres", "dlightrag.adapters.observability", "dlightrag.engine.answer"]
+forbidden_modules = ["dlightrag.application.settings", "dlightrag.application.answer_runs", "dlightrag.adapters.postgres", "dlightrag_observability", "dlightrag.engine.answer"]
 
 [[tool.importlinter.contracts]]
 id = "transport-postgres-adapter-direction"
@@ -336,7 +343,7 @@ allow_indirect_imports = true
 id = "foundation-layers"
 name = "Application settings project Application configuration"
 type = "layers"
-layers = ["dlightrag.application.settings", "dlightrag.application.config", "dlightrag.adapters.observability"]
+layers = ["dlightrag.application.settings", "dlightrag.application.config", "dlightrag_observability"]
 
 [[tool.importlinter.contracts]]
 id = "resources-below-tools"
