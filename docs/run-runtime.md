@@ -86,9 +86,10 @@ generation before a final result is staged.
 ### Events
 
 Each Run's events carry a gap-free, increasing sequence. An append locks the
-Run row, takes its next sequence, and succeeds only for the live lease owner and
-epoch; a database trigger also refuses a nonterminal event without a live lease
-and a terminal event that does not match the stored status and result.
+Run row, takes its next sequence, and succeeds only for the lease owner at its
+epoch; a database trigger also refuses a nonterminal event for a Run that is not
+running with a lease owner, and a terminal event that does not match the stored
+status and result.
 Retrieval and Corpus Mutation emit `progress` and one terminal event. Answer
 also emits tokens, `reset`, Tool, and memory events, and commits token text in
 batches once they reach 512 characters or 250 ms after their first token.
@@ -460,13 +461,14 @@ Tool effect.
 
 ### Leases And Fencing
 
-A claim sets a 60-second lease and increments the Run's fencing epoch. The
-worker renews the lease every 20 seconds, and each fenced write extends it.
+A claim sets a 300-second lease and increments the Run's fencing epoch. The
+worker renews the lease every 30 seconds, and each fenced write extends it.
 Every write a worker makes (event, checkpoint, settlement, terminal transition)
-requires its own lease owner and epoch on an unexpired lease. The first such
-write that matches no row means the lease is lost: the worker stops, writes
-nothing more, and frees its slot. A heartbeat the store fails to answer is
-retried, not taken as lease loss.
+requires its own lease owner and epoch on a running Run, whether or not the lease
+window has lapsed: only a reclaim, which bumps the epoch, takes a Run from its
+owner. The first such write that matches no row means the lease is lost: the
+worker stops, writes nothing more, and frees its slot. A heartbeat the store
+fails to answer is retried, not taken as lease loss.
 
 A free worker reclaims a `running` Run whose lease expired.
 `durable_progress_version` advances with each fenced settlement: a model turn,

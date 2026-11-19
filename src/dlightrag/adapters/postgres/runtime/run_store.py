@@ -360,6 +360,9 @@ CREATE TABLE IF NOT EXISTS dlightrag_run_events (
 )
 """
 
+# The trigger guards integrity: a nonterminal event needs a running, leased parent. Who owns the
+# Run is the writing statement's predicate (owner and epoch), never the clock, so a lapsed window
+# does not refuse the event.
 _ENFORCE_RUN_EVENT_CONSTRAINTS = """
 CREATE OR REPLACE FUNCTION public.dlightrag_enforce_run_event_constraints()
 RETURNS TRIGGER
@@ -434,9 +437,8 @@ BEGIN
         END IF;
     ELSIF parent_status IS DISTINCT FROM 'running'
           OR parent_lease_owner IS NULL
-          OR parent_lease_expires_at IS NULL
-          OR parent_lease_expires_at < NOW() THEN
-        RAISE EXCEPTION 'nonterminal event requires a live leased parent'
+          OR parent_lease_expires_at IS NULL THEN
+        RAISE EXCEPTION 'nonterminal event requires a leased parent'
             USING ERRCODE = '23514';
     END IF;
 
@@ -2719,6 +2721,11 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
                 tables=RUN_SCHEMA_TABLES,
                 schema_error=RunSchemaError,
             )
+            # Stored code is code, not data: PostgreSQL never rewrites a function body when a
+            # table or column it names is renamed, and a recorded migration never re-runs - so a
+            # rename leaves this body naming what is no longer there, and every run event write
+            # fails at runtime. Each writer reconciles the body with this revision instead.
+            await conn.execute(_ENFORCE_RUN_EVENT_CONSTRAINTS)
 
         await self._run(_operation)
         self._initialized = True

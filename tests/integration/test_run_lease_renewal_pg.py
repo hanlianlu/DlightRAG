@@ -14,12 +14,17 @@ it is written.
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any
 
 import pytest
 
+from dlightrag.adapters.postgres.answer.session_repository import _INSERT_MEMORY_OPERATION_EVENT
+from dlightrag.adapters.postgres.connections import PGConnectionsStore
+from dlightrag.adapters.postgres.runtime._child import _parent_origin_holds_run
 from tests.integration.run_runtime_pg_harness import isolated_run_runtime, run_envelope
+from tests.integration.test_connection_dispatch_pg import dispatch_fixture
 from tests.support.pg import skip_without_postgres
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
@@ -192,3 +197,85 @@ async def test_the_fencing_epoch_alone_refuses_a_renewal() -> None:
         )
 
         assert renewal.renewed is False
+
+
+_LAPSE = "UPDATE dlightrag_runs SET lease_expires_at = NOW() - INTERVAL '1 second'"
+_RECLAIM = "UPDATE dlightrag_runs SET fencing_epoch = fencing_epoch + 1"
+
+
+async def test_a_nonterminal_event_needs_an_owner_not_an_unexpired_lease() -> None:
+    """The events trigger guards integrity; who owns the Run is the writing statement's predicate.
+
+    The memory operation event is a write that does not extend the lease, so after a lapse it is
+    the case that reaches the trigger with a stale clock. A live owner's event is accepted and the
+    lease stays lapsed; once a reclaim moved the epoch the same statement writes nothing.
+    """
+    async with isolated_run_runtime("lease_event") as (store, pool):
+        claimed = await _claimed_run(store, key="event-after-lapse")
+        execution = claimed.execution
+        run_id = uuid.UUID(execution.run_id)
+        await pool.execute(_LAPSE)
+
+        async def settle(epoch: int) -> str:
+            return await pool.execute(
+                _INSERT_MEMORY_OPERATION_EVENT,
+                execution.owner_id,
+                run_id,
+                execution.worker_id,
+                epoch,
+                json.dumps({"operation": "remember"}),
+            )
+
+        assert await settle(execution.fencing_epoch) == "INSERT 0 1"
+        assert (
+            await pool.fetchval(
+                "SELECT lease_expires_at < NOW() FROM dlightrag_runs WHERE run_id = $1", run_id
+            )
+            is True
+        )
+
+        await pool.execute(_RECLAIM)
+
+        assert await settle(execution.fencing_epoch) == "INSERT 0 0"
+
+
+async def test_a_parent_origin_holds_the_run_by_ownership_not_by_the_clock() -> None:
+    """A parent's control of its Child is honoured while the same owner and epoch hold the Run."""
+    async with isolated_run_runtime("lease_origin") as (store, pool):
+        claimed = await _claimed_run(store, key="origin-after-lapse")
+        execution = claimed.execution
+        run_id = uuid.UUID(execution.run_id)
+
+        async def holds() -> bool:
+            row = await pool.fetchrow(
+                "SELECT status, lease_owner, lease_expires_at, fencing_epoch"
+                " FROM dlightrag_runs WHERE run_id = $1",
+                run_id,
+            )
+            return _parent_origin_holds_run(
+                row, worker_id=execution.worker_id, fencing_epoch=execution.fencing_epoch
+            )
+
+        await pool.execute(_LAPSE)
+        assert await holds() is True
+
+        await pool.execute(_RECLAIM)
+        assert await holds() is False
+
+
+async def test_a_connection_effect_keeps_its_execution_by_ownership_not_by_the_clock() -> None:
+    """Whether an external effect may run again is the pending effect's business, not the clock's."""
+    async with isolated_run_runtime("lease_connection") as (runs, pool):
+        *_, claim, _tool, runtime = await dispatch_fixture(runs, pool)
+
+        async def live() -> bool:
+            async with pool.acquire() as conn:
+                return await PGConnectionsStore._live_execution(
+                    conn, claim=claim, runtime=runtime, lock=False
+                )
+
+        await pool.execute(_LAPSE)
+        assert await live() is True
+
+        await pool.execute(_RECLAIM)
+        assert await live() is False

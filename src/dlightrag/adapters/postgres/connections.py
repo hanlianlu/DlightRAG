@@ -625,7 +625,7 @@ class PGConnectionsStore(PostgresOperationRunner):
                 ):
                     raise ConnectionsError("Connection pending effect mismatch")
                 if not await self._live_execution(conn, claim=claim, runtime=runtime, lock=False):
-                    raise ConnectionsError("Connection execution lease expired")
+                    raise ConnectionsError("Connection execution is no longer held by this worker")
                 return DispatchCredentials(
                     b.connection_id,
                     b.generation,
@@ -644,10 +644,14 @@ class PGConnectionsStore(PostgresOperationRunner):
     async def _live_execution(
         conn: Any, *, claim: ResearchToolClaim, runtime: ToolRuntime, lock: bool
     ) -> bool:
+        # Ownership, not the clock: the same worker at the same epoch on a running, uncancelled Run
+        # (or Child) still holds the execution after its lease window lapsed, because only a reclaim
+        # moves the epoch. An effect never runs twice for want of a clock: the pending effect record
+        # and its replay policy fence that.
         run = await conn.fetchrow(
             """SELECT prepared_input_json FROM dlightrag_runs
             WHERE owner_id=$1 AND run_id=$2 AND lease_owner=$3 AND fencing_epoch=$4
-            AND status='running' AND lease_expires_at>clock_timestamp() AND cancel_requested_at IS NULL"""  # noqa: S608 - only a constant lock clause is appended
+            AND status='running' AND cancel_requested_at IS NULL"""  # noqa: S608 - only a constant lock clause is appended
             + (" FOR UPDATE" if lock else ""),
             claim.owner_id,
             uuid.UUID(claim.run_id),
@@ -664,8 +668,7 @@ class PGConnectionsStore(PostgresOperationRunner):
             child = await conn.fetchval(
                 """SELECT 1 FROM dlightrag_answer_child_sessions
                 WHERE owner_id=$1 AND run_id=$2 AND child_session_id=$3 AND lease_owner=$4
-                AND fencing_epoch=$5 AND status='running' AND lease_expires_at>clock_timestamp()
-                AND cancel_requested_at IS NULL"""  # noqa: S608 - only a constant lock clause is appended
+                AND fencing_epoch=$5 AND status='running' AND cancel_requested_at IS NULL"""  # noqa: S608 - only a constant lock clause is appended
                 + (" FOR UPDATE" if lock else ""),
                 claim.owner_id,
                 uuid.UUID(claim.run_id),

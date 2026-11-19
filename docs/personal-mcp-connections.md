@@ -293,10 +293,11 @@ A call proceeds in this order:
      the pinned activation epoch, with the pinned catalogue digest;
    - any Grant is active, `bearer` or `oauth`, holds an envelope, and was issued
      for the generation's endpoint, whose stored URL matches its digest;
-   - the parent Run is `running` and uncancelled under this worker's live lease
-     at the claim's fencing epoch, which a parent call carries; a Child Session
-     call needs its own live, uncancelled child lease at its `ToolRuntime`
-     fencing epoch; and the Agent Session lease matches;
+   - the parent Run is `running` and uncancelled, held by this worker at the
+     claim's fencing epoch, which a parent call carries; a Child Session call
+     needs its own running, uncancelled child held by this worker at its
+     `ToolRuntime` fencing epoch; and the Agent Session lease matches. A lapsed
+     lease window alone does not end that hold; only a reclaim does;
    - exactly one committed `ToolEffectPending` exists for
      `(execution_scope, intent_id)`, matching the call's tool name, call id,
      `never` replay policy, sequential contract, contract version, schema

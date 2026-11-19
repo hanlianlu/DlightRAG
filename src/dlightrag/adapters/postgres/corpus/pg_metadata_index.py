@@ -930,6 +930,10 @@ class PGMetadataIndex(PostgresOperationRunner):
                 schema_error=CorpusSchemaError,
                 require_applied_prefix=False,
             )
+            # Stored code is code, not data: a rename never rewrites a function body, and a
+            # recorded migration never re-runs, so the body is reconciled with this revision on
+            # every writer start rather than migrated once.
+            await conn.execute(_CREATE_FIELD_STATS_TRIGGER_FN)
 
         await self._run(_operation)
 
