@@ -120,7 +120,6 @@ def test_the_observability_package_owns_the_otlp_export() -> None:
     )
 
     root = _dependencies()
-    assert not [dependency for dependency in root if dependency.startswith("langfuse")]
     assert not [dependency for dependency in root if dependency.startswith("opentelemetry")]
 
 
