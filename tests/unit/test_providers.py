@@ -158,9 +158,78 @@ class TestAnthropicProvider:
                 "claude-sonnet-4-20250514",
             )
             call_kwargs = MockSDK.return_value.messages.create.call_args[1]
-            assert call_kwargs["system"] == "You are helpful."
-            assert call_kwargs["messages"] == [{"role": "user", "content": "hi"}]
+            assert call_kwargs["system"] == [
+                {"type": "text", "text": "You are helpful.", "cache_control": {"type": "ephemeral"}}
+            ]
+            assert call_kwargs["messages"] == [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}
+                    ],
+                }
+            ]
         assert result == "reply"
+
+    @pytest.mark.asyncio
+    async def test_every_request_marks_the_prefix_anthropic_may_cache(self):
+        """Anthropic caches nothing it is not told to, so the Tool set, the system block and the last
+        block of the growing transcript each carry a breakpoint — and nothing else does."""
+        p = get_provider("anthropic", api_key="test-key")
+        tool = ToolDefinition(
+            name="search_web",
+            description="Search the open web.",
+            parameters={"type": "object", "properties": {}, "additionalProperties": False},
+        )
+        response = SimpleNamespace(
+            content=[],
+            stop_reason="end_turn",
+            usage=SimpleNamespace(input_tokens=8, output_tokens=3),
+        )
+        with patch("dlightrag.engine.ai.providers.anthropic_native.AsyncAnthropic") as MockSDK:
+            MockSDK.return_value.messages.create = AsyncMock(return_value=response)
+            cast(Any, p)._client = None
+            await p.complete_tool_turn(
+                [
+                    {"role": "system", "content": "You are helpful."},
+                    {"role": "user", "content": "one"},
+                    {"role": "assistant", "content": "looking"},
+                    {"role": "user", "content": "two"},
+                ],
+                "claude-sonnet-4-20250514",
+                tools=[tool],
+            )
+
+        request = MockSDK.return_value.messages.create.call_args[1]
+        marker = {"type": "ephemeral"}
+        # The system breakpoint covers the Tools as well, so it outlives the transcript beneath it.
+        assert request["system"] == [
+            {"type": "text", "text": "You are helpful.", "cache_control": marker}
+        ]
+        assert request["tools"][-1]["cache_control"] == marker
+        assert request["messages"][-1] == {
+            "role": "user",
+            "content": [{"type": "text", "text": "two", "cache_control": marker}],
+        }
+        assert "cache_control" not in request["messages"][-2]["content"][0]
+
+    @pytest.mark.asyncio
+    async def test_a_request_without_tools_or_a_system_message_marks_only_its_transcript(self):
+        p = get_provider("anthropic", api_key="test-key")
+        response = SimpleNamespace(
+            content=[SimpleNamespace(type="text", text="reply")],
+            stop_reason="end_turn",
+            usage=None,
+        )
+        with patch("dlightrag.engine.ai.providers.anthropic_native.AsyncAnthropic") as MockSDK:
+            MockSDK.return_value.messages.create = AsyncMock(return_value=response)
+            cast(Any, p)._client = None
+            await p.complete([{"role": "user", "content": "hi"}], "claude-sonnet-4-20250514")
+
+        request = MockSDK.return_value.messages.create.call_args[1]
+        assert "system" not in request
+        assert "tools" not in request
+        assert request["messages"][-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
 
     @pytest.mark.asyncio
     async def test_complete_preserves_token_limit_stop_reason(self):
@@ -309,6 +378,7 @@ class TestAnthropicProvider:
                 "name": "search_web",
                 "description": "Search the open web.",
                 "input_schema": tool.parameters,
+                "cache_control": {"type": "ephemeral"},
             }
         ]
         assert request["tool_choice"] == {"type": "any"}
@@ -337,6 +407,7 @@ class TestAnthropicProvider:
                         "tool_use_id": "call-1",
                         "content": "price evidence",
                         "is_error": False,
+                        "cache_control": {"type": "ephemeral"},
                     }
                 ],
             },
@@ -435,6 +506,9 @@ class TestAnthropicProvider:
             "thinking_blocks": [{"type": "thinking", "thinking": "Think.", "signature": "signed"}]
         }
         assert turn.usage_details == {"input_tokens": 5, "output_tokens": 7}
+        # A streaming turn marks its prefix like any other.
+        streamed = sdk.return_value.messages.create.call_args[1]
+        assert streamed["messages"][-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
 
     @pytest.mark.asyncio
     async def test_complete_routes_thinking_to_top_level(self):

@@ -46,6 +46,54 @@ def _extract_system(messages: list[dict[str, Any]]) -> tuple[str | None, list[di
     return ("\n\n".join(system_parts) if system_parts else None), filtered
 
 
+def _cache_marker() -> dict[str, str]:
+    """One Anthropic cache breakpoint. ``ephemeral`` is the only type the API takes, and its
+    five-minute life is refreshed by every hit."""
+    return {"type": "ephemeral"}
+
+
+def _with_prompt_cache(call_kwargs: dict[str, Any]) -> None:
+    """Mark where Anthropic may cache this request's prefix, in place.
+
+    Anthropic caches nothing by itself: an unmarked request is billed in full, every turn, however
+    stable its prefix is. (DeepSeek's cache is automatic instead, which is why ADR 0015 is about
+    composing a prefix worth storing rather than about asking for one.) Anthropic's prefix order is
+    the Tools, then the system message, then the messages, and one breakpoint caches everything
+    before it, so three of the four a request may carry cover the shapes this adapter sends:
+
+    - the last Tool definition, which caches the whole Tool set;
+    - the system block, which covers the Tools too and outlives the transcript beneath it — a
+      compaction, a fork, or a Run that never saw the earlier messages still reads it;
+    - the last content block of the last message, which is the growing transcript: the Run's next
+      turn extends exactly that.
+
+    A prefix shorter than the model's own minimum (512 to 4,096 tokens, model by model) is served
+    uncached, with no error and nothing charged for the marker, so a short call loses nothing. The
+    marker is a block-level one rather than the request-level automatic breakpoint, which the legacy
+    Bedrock integration answers with a 400.
+    """
+    system = call_kwargs.get("system")
+    if isinstance(system, str) and system.strip():
+        call_kwargs["system"] = [{"type": "text", "text": system, "cache_control": _cache_marker()}]
+    tools = call_kwargs.get("tools")
+    if isinstance(tools, list) and tools and isinstance(tools[-1], dict):
+        call_kwargs["tools"] = [*tools[:-1], {**tools[-1], "cache_control": _cache_marker()}]
+    messages = call_kwargs.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return
+    last = messages[-1]
+    if not isinstance(last, dict):
+        return
+    content = last.get("content")
+    marked: list[Any] | None = None
+    if isinstance(content, str) and content:
+        marked = [{"type": "text", "text": content, "cache_control": _cache_marker()}]
+    elif isinstance(content, list) and content and isinstance(content[-1], dict):
+        marked = [*content[:-1], {**content[-1], "cache_control": _cache_marker()}]
+    if marked is not None:
+        call_kwargs["messages"] = [*messages[:-1], {**last, "content": marked}]
+
+
 def _convert_content(content: str | list[Any]) -> str | list[dict[str, Any]]:
     """Convert OpenAI content blocks to Anthropic format."""
     if isinstance(content, str):
@@ -259,6 +307,7 @@ class AnthropicProvider(CompletionProvider):
         _apply_response_format(call_kwargs, response_format)
 
         _apply_model_kwargs(call_kwargs, model_kwargs)
+        _with_prompt_cache(call_kwargs)
 
         response = await self._get_client().messages.create(**call_kwargs)
         content = response.content
@@ -311,6 +360,7 @@ class AnthropicProvider(CompletionProvider):
         if temperature is not None:
             call_kwargs["temperature"] = temperature
         _apply_model_kwargs(call_kwargs, model_kwargs)
+        _with_prompt_cache(call_kwargs)
 
         response = await self._get_client().messages.create(**call_kwargs)
         content = response.content
@@ -401,6 +451,7 @@ class AnthropicProvider(CompletionProvider):
         if temperature is not None:
             call_kwargs["temperature"] = temperature
         _apply_model_kwargs(call_kwargs, model_kwargs)
+        _with_prompt_cache(call_kwargs)
 
         response = await self._get_client().messages.create(**call_kwargs)
         text_parts: list[str] = []
@@ -573,6 +624,7 @@ class AnthropicProvider(CompletionProvider):
         _apply_response_format(call_kwargs, response_format)
 
         _apply_model_kwargs(call_kwargs, model_kwargs)
+        _with_prompt_cache(call_kwargs)
 
         response = await self._get_client().messages.create(**call_kwargs)
         reasoning_parts: list[str] = []

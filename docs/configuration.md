@@ -321,6 +321,17 @@ rejected. Model IDs are endpoint-specific: DeepSeek's flash model is
 `deepseek-flash` on `api.deepseek.com` and `deepseek/deepseek-v4.1-flash` on
 OpenRouter.
 
+**Prompt caching.** A prefix cache belongs to the provider, and what a request must say to reach it
+differs by provider. DeepSeek caches every request automatically and reports what it reused as
+`prompt_cache_hit_tokens`; nothing is sent to ask for it, and what a deployment controls is the
+stability of the prefix ([ADR 0015](adr/0015-prompt-prefix-stability-and-cache-anchored-accounting.md)).
+Anthropic caches only what a request marks, so every request the native adapter sends carries three
+of the four breakpoints the API allows — the last Tool definition, the system block, and the last
+content block of the last message — which cover the same prefix that ADR composes. A prompt shorter
+than the model's own minimum (512 to 4,096 tokens, model by model) is served uncached: no error, and
+nothing charged for the marker. Either way the hit is billed back into the Run's trace, so a
+deployment can read its own hit ratio ([Observability](observability.md)).
+
 ### Role Configuration
 
 ```yaml
