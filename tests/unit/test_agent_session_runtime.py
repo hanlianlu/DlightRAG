@@ -2457,3 +2457,88 @@ async def test_a_stale_group_worker_reports_its_lost_lease_and_writes_nothing() 
         (1, "outcome_unknown"),
     ]
     assert not any(record.ref.kind == "session_fault" for record in after.registers)
+
+
+# ---- the repeated-call guard: refuse the duplicate, then stop the Run that keeps repeating ----
+
+
+def _bash_tool() -> AgentTool:
+    return AgentTool(
+        name="bash",
+        description="bash",
+        input_model=_Args,
+        execute=_tool,
+    )
+
+
+async def _drive_bash_turns(
+    turns: list[AssistantTurn],
+) -> tuple[Any, _Effects, list[Any]]:
+    tool = _bash_tool()
+    effects = _Effects(turns)
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
+    runtime = _runtime(store, effects, tool)
+    session_id = SessionId.new()
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="repeated-call",
+        content="question",
+        plan=_plan(tool),
+    )
+    final = await runtime.drive(session_id=session_id, operation_id=accepted.operation_id)
+    entries = list((await store.load(session_id)).entries)
+    return final, effects, entries
+
+
+@pytest.mark.asyncio
+async def test_an_identical_bash_call_after_one_that_returned_is_refused_not_executed() -> None:
+    call = ToolCall("first", "bash", {"value": "git status"})
+    second = ToolCall("second", "bash", {"value": "git status"})
+    final, effects, entries = await _drive_bash_turns(
+        [_assistant(call), _assistant(second), _assistant(text="done")]
+    )
+    assert isinstance(final.state, OperationCompleted)
+    assert len(effects.tool_attempts) == 1
+    results = [e for e in entries if isinstance(e, ToolResultMessageEntry)]
+    assert results[0].result.outcome == "succeeded"
+    assert results[1].result.outcome == "repeated_call"
+    assert "identical call" in tool_content_text(results[1].result.parts)
+
+
+@pytest.mark.asyncio
+async def test_a_command_changed_after_the_refusal_still_executes() -> None:
+    first = ToolCall("first", "bash", {"value": "git status"})
+    duplicate = ToolCall("second", "bash", {"value": "git status"})
+    changed = ToolCall("third", "bash", {"value": "git log --oneline -3"})
+    final, effects, entries = await _drive_bash_turns(
+        [_assistant(first), _assistant(duplicate), _assistant(changed), _assistant(text="done")]
+    )
+    assert isinstance(final.state, OperationCompleted)
+    assert len(effects.tool_attempts) == 2
+    results = [e for e in entries if isinstance(e, ToolResultMessageEntry)]
+    assert [result.result.outcome for result in results] == [
+        "succeeded",
+        "repeated_call",
+        "succeeded",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_identical_refusals_past_the_limit_stop_the_run_instead_of_flooding_it() -> None:
+    """The guard must not become the loop it exists to break: one more refusal each turn for ever."""
+    calls = [ToolCall(f"call-{index}", "bash", {"value": "same command"}) for index in range(6)]
+    final, effects, entries = await _drive_bash_turns(
+        [_assistant(call) for call in calls] + [_assistant(text="done")]
+    )
+    assert isinstance(final.state, OperationFailed)
+    assert final.state.kind == "repeated_call_loop"
+    assert '"bash"' in final.state.detail
+    assert "refused" in final.state.detail
+    # One execution, then the refusals; the Run never reaches the repeated call's fifth refusal.
+    assert len(effects.tool_attempts) == 1
+    outcomes = [
+        entry.result.outcome for entry in entries if isinstance(entry, ToolResultMessageEntry)
+    ]
+    assert outcomes[0] == "succeeded"
+    assert outcomes.count("repeated_call") == 3

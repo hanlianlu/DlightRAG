@@ -21,6 +21,7 @@ ToolCallDisposition = Literal[
     "plan_denied",
     "truncated_call",
     "contract_changed",
+    "repeated_call",
 ]
 TerminalFailureKind = Literal[
     "provider_unavailable",
@@ -30,6 +31,7 @@ TerminalFailureKind = Literal[
     "compaction_failed",
     "runtime_fault",
     "payload_unrepresentable",
+    "repeated_call_loop",
 ]
 
 
