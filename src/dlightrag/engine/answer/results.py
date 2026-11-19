@@ -186,8 +186,13 @@ def project_answer_result(
     image_url_prefix: str = IMAGE_URL_PREFIX,
     run_id: str | None = None,
     artifact_url_prefix: str | None = None,
+    include_contexts: bool = True,
 ) -> dict[str, Any]:
     """Project a stored result for one authenticated reader.
+
+    ``include_contexts=False`` is for a reader projection that never renders the retrieval
+    contexts (the conversation-history page draws only the answer, its parts and its sources),
+    so a page that cannot show them does not pay to project them.
 
     ``artifact_url_prefix=None`` deliberately omits browser-cookie URLs for MCP.
     REST/Web callers pass their owner-scoped route prefix and the owning run id.
@@ -228,10 +233,14 @@ def project_answer_result(
             evidence_images=images,
             artifact_bindings=artifact_bindings,
         ),
-        "contexts": project_contexts_for_client(
-            dict(stored.get("contexts") or {}),
-            image_url_prefix=image_url_prefix,
-            visual_workspaces=visual_workspaces,
+        "contexts": (
+            project_contexts_for_client(
+                dict(stored.get("contexts") or {}),
+                image_url_prefix=image_url_prefix,
+                visual_workspaces=visual_workspaces,
+            )
+            if include_contexts
+            else {}
         ),
         "references": [
             {"id": source.id, "title": source.title or "Source"} for source in source_payloads

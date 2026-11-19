@@ -13,6 +13,7 @@ from dlightrag.engine.agent.skills import (
     PublishSkillInput,
     SetSkillEnabledInput,
     SkillCatalog,
+    SkillsBundle,
     SkillsBundleFactory,
     builtin_skills_root,
     delete_owner_skill,
@@ -70,10 +71,12 @@ def _states(owner_root: Path) -> list[tuple[str, bool]]:
     return [(skill.name, skill.enabled) for skill in list_owner_skills(owner_root)]
 
 
-def test_discovery_projects_metadata_only_and_owner_takes_precedence(tmp_path: Path) -> None:
+def test_discovery_projects_metadata_only_and_the_stronger_tier_keeps_the_name(
+    tmp_path: Path,
+) -> None:
     global_root = tmp_path / "global"
     owner_root = tmp_path / "owner"
-    _skill(global_root, "review", name="review", description="global", body="GLOBAL SECRET")
+    _skill(global_root, "review", name="review", description="global", body="GLOBAL BODY")
     _skill(owner_root, "review", name="review", description="owner", body="OWNER BODY")
 
     catalog = SkillCatalog.discover(global_root=global_root, owner_root=owner_root)
@@ -81,9 +84,10 @@ def test_discovery_projects_metadata_only_and_owner_takes_precedence(tmp_path: P
 
     assert contribution is not None
     rendered = str(contribution.messages[0]["content"])
-    assert "review: owner (owner)" in rendered
-    assert "OWNER BODY" not in rendered
-    assert catalog.read("review").endswith("OWNER BODY")
+    # One name, one Skill: the operator's, and the owner's colliding one is not served.
+    assert "review: global (global)" in rendered
+    assert "GLOBAL BODY" not in rendered
+    assert catalog.read("review").endswith("GLOBAL BODY")
 
 
 def test_discovery_merges_distinct_names_across_tiers(tmp_path: Path) -> None:
@@ -100,9 +104,10 @@ def test_discovery_merges_distinct_names_across_tiers(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_three_tier_precedence_and_owner_delete_reveals_lower_tiers(
+async def test_the_stronger_tier_keeps_the_name_whatever_the_others_hold(
     tmp_path: Path,
 ) -> None:
+    """A collision is not an override, so nothing another tier does moves a built-in's name."""
     builtin_root = tmp_path / "builtin"
     global_root = tmp_path / "global"
     owner_root = tmp_path / "owner"
@@ -116,39 +121,23 @@ async def test_three_tier_precedence_and_owner_delete_reveals_lower_tiers(
         tool_runtime(),
     )
 
-    catalog = SkillCatalog.discover(
-        builtin_root=builtin_root,
-        global_root=global_root,
-        owner_root=owner_root,
-    )
+    def discover() -> SkillCatalog:
+        return SkillCatalog.discover(
+            builtin_root=builtin_root, global_root=global_root, owner_root=owner_root
+        )
 
-    assert [(skill.name, skill.source) for skill in catalog.metadata] == [("review", "owner")]
-    assert catalog.read("review").endswith("OWNER")
+    assert [(skill.name, skill.source) for skill in discover().metadata] == [("review", "builtin")]
+    assert discover().read("review").endswith("BUILTIN")
 
-    removed = await delete_skill_tool(owner_root).execute(
-        DeleteSkillInput(name="review"), tool_runtime()
-    )
-    catalog = SkillCatalog.discover(
-        builtin_root=builtin_root,
-        global_root=global_root,
-        owner_root=owner_root,
-    )
-
-    assert not removed.is_error
-    assert catalog.metadata[0].source == "global"
-    assert catalog.read("review").endswith("GLOBAL")
-    assert (global_root / "review" / "SKILL.md").read_text(encoding="utf-8").endswith("GLOBAL")
-    assert (builtin_root / "review" / "SKILL.md").read_text(encoding="utf-8").endswith("BUILTIN")
+    assert not (
+        await delete_skill_tool(owner_root).execute(DeleteSkillInput(name="review"), tool_runtime())
+    ).is_error
+    assert discover().metadata[0].source == "builtin"
 
     (global_root / "review" / "SKILL.md").unlink()
     (global_root / "review").rmdir()
-    catalog = SkillCatalog.discover(
-        builtin_root=builtin_root,
-        global_root=global_root,
-        owner_root=owner_root,
-    )
-    assert catalog.metadata[0].source == "builtin"
-    assert catalog.read("review").endswith("BUILTIN")
+    assert discover().metadata[0].source == "builtin"
+    assert discover().read("review").endswith("BUILTIN")
 
 
 @pytest.mark.asyncio
@@ -384,17 +373,25 @@ async def test_a_published_or_deleted_skill_is_loadable_or_gone_inside_the_same_
         assert not result.is_error
 
     await publish("weekly-report", "WEEKLY")
-    await publish("review", "OWNER")
+    # The global tier serves `review`, so the owner may not take that name.
+    collided = await tools["publish_skill"].execute(
+        PublishSkillInput(
+            name="review", files=_skill_files(name="review", description="owner", body="OWNER")
+        ),
+        tool_runtime(tool_name="publish_skill"),
+    )
 
+    assert collided.is_error and "already served by a built-in or operator Skill" in (
+        collided.text_content
+    )
     assert (await load("weekly-report")).text_content.endswith("WEEKLY")
-    assert (await load("review")).text_content.endswith("OWNER")
+    assert (await load("review")).text_content.endswith("GLOBAL")
     # The catalog message is the Run's stable prompt prefix; only the next Run lists the new Skill.
     assert "weekly-report" not in catalog_at_start
     next_run = factory("alice").context_contributions(child=False)[0].messages[0]["content"]
     assert "weekly-report: owner (owner)" in str(next_run)
 
     await delete("weekly-report")
-    await delete("review")
 
     gone = await load("weekly-report")
     assert gone.is_error and "no Agent Skill is named 'weekly-report'" in gone.text_content
@@ -432,7 +429,7 @@ async def test_skill_tools_report_their_subject_live(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_disabled_owner_skill_is_not_served_and_the_tier_below_shows_through(
+async def test_a_disabled_owner_skill_is_not_served_and_its_own_name_is_kept_as_disabled(
     tmp_path: Path,
 ) -> None:
     builtin_root = tmp_path / "builtin"
@@ -451,18 +448,19 @@ async def test_a_disabled_owner_skill_is_not_served_and_the_tier_below_shows_thr
     def sources(catalog: SkillCatalog) -> list[tuple[str, str]]:
         return [(skill.name, skill.source) for skill in catalog.metadata]
 
-    owner_serves = [("review", "owner"), ("triage", "owner"), ("weekly-report", "owner")]
+    # A colliding name is the other tier's, so only the owner's own name is theirs to serve.
+    owner_serves = [("review", "builtin"), ("triage", "global"), ("weekly-report", "owner")]
     assert sources(discover()) == owner_serves
 
     for name in ("review", "triage", "weekly-report"):
         await _turn(owner_root, name, enabled=False)
     catalog = discover()
 
-    # An override that is off gives its name back to the tier below it.
+    # Turning the owner's own Skill off keeps its name as disabled; the two colliding ones were
+    # never served, so nothing about them changes.
     assert sources(catalog) == [("review", "builtin"), ("triage", "global")]
     assert catalog.read("review").endswith("BUILTIN")
     assert catalog.read("triage").endswith("GLOBAL")
-    # Only a name that nothing else serves is kept as disabled.
     assert catalog.disabled == ("weekly-report",)
 
     for name in ("review", "triage", "weekly-report"):
@@ -875,3 +873,36 @@ async def test_a_failed_skill_load_is_an_error_result_that_says_what_is_missing(
     assert missing.is_error
     assert "'references/gone.md' is not a file in Agent Skill 'review'" in missing.text_content
     assert escaping.is_error
+
+
+def test_a_hidden_builtin_frees_its_name(tmp_path: Path) -> None:
+    """Hiding the product's version is the operator saying they do not want it."""
+    owner_root = tmp_path / "owner"
+    _skill(owner_root, "charts", name="charts", description="mine", body="OWNER")
+    catalog = SkillCatalog.discover(
+        builtin_root=builtin_skills_root(),
+        owner_root=owner_root,
+        disabled_builtin_skills=frozenset({"charts"}),
+    )
+
+    assert {skill.name: skill.source for skill in catalog.metadata}["charts"] == "owner"
+
+
+@pytest.mark.asyncio
+async def test_publication_refuses_a_name_another_tier_serves(tmp_path: Path) -> None:
+    """The user learns the rule while naming the Skill, not when it never loads."""
+    owner_root = tmp_path / "owner"
+    bundle = SkillsBundle(builtin_root=builtin_skills_root(), owner_root=owner_root)
+    publish = next(tool for tool in bundle.tools(child=False) if tool.name == "publish_skill")
+
+    result = await publish.execute(
+        PublishSkillInput(
+            name="charts",
+            files=_skill_files(name="charts", description="mine", body="body"),
+        ),
+        tool_runtime(tool_name="publish_skill"),
+    )
+
+    assert result.is_error is True
+    assert "already served by a built-in or operator Skill" in result.text_content
+    assert not (owner_root / "charts").exists()

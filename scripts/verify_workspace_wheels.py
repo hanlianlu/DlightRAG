@@ -1405,9 +1405,10 @@ def main() -> int:
         return 1
     print("workspace wheel verification passed")
     if args.installed:
-        # This is a disposable isolated smoke process. Some optional native
-        # dependencies race during interpreter teardown on macOS and can turn
-        # an already-passed verification into a spurious libc++ abort.
+        # This is a disposable isolated smoke process. Its children now load no ONNX runtime:
+        # the conversion stack is imported where a conversion happens and that stack disables the
+        # runtime's telemetry, whose uploader used to race its own teardown and abort the child
+        # after a passed verification. This process still skips teardown for the same reason.
         sys.stdout.flush()
         sys.stderr.flush()
         os._exit(0)

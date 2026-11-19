@@ -1051,7 +1051,7 @@ error, as naming a provider without its key is.
 
 How Research uses the chains is in [Web Search](retrieval-answer.md#web-search):
 `search_web` takes result count, domains, date range, and
-`fast`/`balanced`/`deep` effort, and `read` uses the Extract chain only when a
+`fast`/`balanced` effort, and `read` uses the Extract chain only when a
 direct anonymous fetch fails or yields no usable text; a browser step renders the
 page ([Rendered reads](resource-reading.md#rendered-reads)).
 

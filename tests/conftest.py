@@ -2,6 +2,11 @@
 """Shared test fixtures for dlightrag tests."""
 
 import os
+
+# The conversion stack's ONNX runtime carries Microsoft's 1DS telemetry, which is on by default
+# and is only suppressed by a variable read while the runtime initialises. Any selection of these
+# tests can import it, so the switch is on for the process before any test module loads.
+os.environ["ORT_DISABLE_TELEMETRY"] = "1"
 import shutil
 import sys
 import tempfile

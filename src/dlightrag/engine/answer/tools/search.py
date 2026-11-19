@@ -67,12 +67,9 @@ class WebSearchInput(SearchInput):
         default=None,
         description="Limits results to pages published on or before this date (YYYY-MM-DD).",
     )
-    effort: Literal["fast", "balanced", "deep"] = Field(
+    effort: Literal["fast", "balanced"] = Field(
         default="balanced",
-        description=(
-            "Search depth: fast is quickest, deep is most thorough at more latency and "
-            "cost, and balanced sits between."
-        ),
+        description="Search depth: fast is quickest; balanced trades some latency for relevance.",
     )
 
     @field_validator("include_domains", "exclude_domains")

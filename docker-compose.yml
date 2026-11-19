@@ -84,6 +84,9 @@ services:
       DLIGHTRAG_INTERFACES__API__HOST: "0.0.0.0"
       DLIGHTRAG_ACCESS__ALLOW_INSECURE_NO_AUTH: "true"
       FORWARDED_ALLOW_IPS: *local-proxies
+      # The document-conversion stack loads an ONNX runtime whose 1DS telemetry is on by
+      # default and reports model metadata and this machine's identifiers to Microsoft.
+      ORT_DISABLE_TELEMETRY: "1"
     env_file: .env
     configs:
       - source: dlightrag_config
@@ -138,6 +141,8 @@ services:
       DLIGHTRAG_INTERFACES__MCP__HOST: "0.0.0.0"
       DLIGHTRAG_INTERFACES__MCP__PORT: "8101"
       DLIGHTRAG_ACCESS__ALLOW_INSECURE_NO_AUTH: "true"
+      # This service can convert a document too: see the API service above.
+      ORT_DISABLE_TELEMETRY: "1"
     env_file: .env
     configs:
       - source: dlightrag_config
@@ -185,6 +190,8 @@ services:
       DLIGHTRAG_INTERFACES__API__HOST: "0.0.0.0"
       DLIGHTRAG_ACCESS__ALLOW_INSECURE_NO_AUTH: "true"
       FORWARDED_ALLOW_IPS: *local-proxies
+      # This service reads published documents and can convert them: see the API service.
+      ORT_DISABLE_TELEMETRY: "1"
     env_file: .env
     configs:
       - source: dlightrag_config

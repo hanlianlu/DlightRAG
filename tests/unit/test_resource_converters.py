@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import os
 import socket
 import tomllib
 import zipfile
@@ -363,3 +364,23 @@ async def test_a_charset_no_codec_knows_is_no_charset_at_all(declared: str) -> N
     converted = await convert_resource(page, filename="page.html", declared_mime=declared)
 
     assert "plain ascii" in converted.text
+
+
+def test_the_conversion_path_disables_model_telemetry_once(monkeypatch) -> None:
+    """The ONNX runtime's telemetry worker must never start: it races its own teardown."""
+    import onnxruntime
+
+    from dlightrag.engine.answer.resources import converters
+
+    calls: list[bool] = []
+    monkeypatch.setattr(
+        onnxruntime, "disable_telemetry_events", lambda: calls.append(True), raising=False
+    )
+    monkeypatch.setattr(converters, "_MODEL_TELEMETRY_DISABLED", False)
+    monkeypatch.delenv("ORT_DISABLE_TELEMETRY", raising=False)
+
+    converters.disable_model_telemetry()
+    converters.disable_model_telemetry()
+
+    assert calls == [True]
+    assert os.environ["ORT_DISABLE_TELEMETRY"] == "1", "an ONNX runtime here reports nothing"

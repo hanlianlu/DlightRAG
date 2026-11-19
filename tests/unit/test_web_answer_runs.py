@@ -1825,6 +1825,27 @@ def test_a_turn_carries_the_steering_its_run_received_in_order() -> None:
     assert turn.steering_messages == ["shorter", "in Chinese"]
 
 
+def test_a_turn_never_projects_contexts_it_does_not_draw(monkeypatch) -> None:
+    """The history page draws the answer and its sources; retrieval contexts never reach it."""
+    result = {
+        "answer": "Nothing to see here.",
+        "sources": [],
+        "contexts": {
+            "chunks": [{"chunk_id": "c1", "content": "an unused passage", "metadata": {}}],
+            "entities": [],
+            "relationships": [],
+        },
+    }
+    monkeypatch.setattr(
+        "dlightrag.engine.answer.results.project_contexts_for_client",
+        lambda *args, **kwargs: pytest.fail("a turn projected contexts it does not draw"),
+    )
+
+    turn = project_conversation_turn(linked_turn(answer_run(status="succeeded", result=result)))
+
+    assert turn.assistant_text == "Nothing to see here."
+
+
 @pytest.mark.parametrize("status", ["queued", "running"])
 def test_a_pending_turn_is_visible_without_an_answer(status: str) -> None:
     turn = project_conversation_turn(linked_turn(answer_run(status=status)))  # type: ignore[arg-type]

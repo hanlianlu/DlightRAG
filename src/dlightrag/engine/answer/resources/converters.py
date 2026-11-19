@@ -19,6 +19,7 @@ import base64
 import binascii
 import codecs
 import io
+import os
 import time
 import zipfile
 from dataclasses import dataclass, replace
@@ -29,7 +30,6 @@ from types import ModuleType
 
 import openpyxl
 from markdown_it import MarkdownIt
-from markitdown import MarkItDown, StreamInfo
 from openpyxl.utils import get_column_letter
 
 from dlightrag.engine.answer.resources.docx_assets import (
@@ -358,9 +358,43 @@ def _convert_anydoc(
     return replace(result, fallback_reason=reason)
 
 
+def disable_model_telemetry() -> None:
+    """Load the conversion stack without the ONNX runtime's telemetry client.
+
+    MarkItDown's file-type detector runs on an ONNX runtime that carries Microsoft's 1DS
+    telemetry: its uploader reports the runtime's own model metadata and this machine's
+    identifiers to a service the reader never asked for, and its HTTP worker races the runtime's
+    teardown and aborts the process. Both switches are set before the runtime initialises, so no
+    uploader, event, or persistent device identifier is created at all.
+    """
+    # Read while the runtime initialises, so it is set before the import below, and set rather
+    # than defaulted so an inherited value cannot turn it back on. It comes first so a concurrent
+    # conversion that finds this done still finds the switch on.
+    os.environ["ORT_DISABLE_TELEMETRY"] = "1"
+    global _MODEL_TELEMETRY_DISABLED
+    if _MODEL_TELEMETRY_DISABLED:
+        return
+    _MODEL_TELEMETRY_DISABLED = True
+    try:
+        import onnxruntime
+    except ImportError:  # pragma: no cover - the stack below depends on it
+        return
+    disable = getattr(onnxruntime, "disable_telemetry_events", None)
+    if disable is not None:
+        disable()
+
+
+_MODEL_TELEMETRY_DISABLED = False
+
+
 def _convert_markitdown(
     content: bytes, route: _Route, charset: str | None = None
 ) -> ConvertedResource:
+    # Imported here, not with the module: MarkItDown brings a file-type detector and an ONNX
+    # runtime, and a server that converts nothing must not carry them.
+    disable_model_telemetry()
+    from markitdown import MarkItDown, StreamInfo
+
     # One converter per call: registered converters and detector are never shared
     # across threads, so concurrent conversions cannot cross-contaminate.
     try:

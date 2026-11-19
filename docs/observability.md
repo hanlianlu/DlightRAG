@@ -154,6 +154,10 @@ user-authored is even shaped while capture is off:
   name is replaced except a flag, and a count under a name that merely contains
   `token` (such as `max_tokens`); inline image bytes are removed from message
   telemetry before it leaves the process.
+- The document-conversion stack's ONNX runtime is told to report nothing: its 1DS telemetry is
+  on by default, and every DlightRAG process sets `ORT_DISABLE_TELEMETRY=1` before that runtime
+  initialises and calls the binding's own switch too, so the process creates no uploader, event,
+  or persistent device identifier. Sidecars that ship their own runtime are not covered here.
 - Only DlightRAG's own observations are exported: Langfuse runs on a tracer
   provider of its own, so no span another library opens in this process reaches it,
   and the HTTP client and database spans of those libraries cannot pollute the

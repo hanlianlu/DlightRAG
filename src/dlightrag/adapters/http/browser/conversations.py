@@ -91,7 +91,8 @@ def project_conversation_turn(
     cancellation state, so a reloaded browser resubscribes without remembering
     the original 202 response. A failed or cancelled turn stays visible with its
     public terminal state until its run prunes. Only a succeeded turn carries an
-    answer, and that answer is projected from the run's canonical result.
+    answer, and that answer is projected from the run's canonical result. A turn draws no
+    retrieval contexts (only the answer, its parts and its sources), so the projection skips them.
     """
     run = turn.run
     request = AnswerRunRequest.from_request(run.request_input())
@@ -106,6 +107,7 @@ def project_conversation_turn(
             image_url_prefix=WEB_IMAGE_URL_BASE,
             run_id=run.run_id,
             artifact_url_prefix="/web/api/answer",
+            include_contexts=False,
         )
         answer = str(projected["answer"])
         presentation = build_answer_presentation(
