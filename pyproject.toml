@@ -10,8 +10,9 @@ license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 maintainers = [{ name = "HanlianLyu" }, { name = "hllyu" }]
 dependencies = [
-    # Standalone workspace package
+    # Standalone workspace packages
     "dlightrag-memory==2.1.0",
+    "dlightrag-observability==2.1.0",
     # Built-in model providers (batteries included)
     "openai>=3.3.0",
     "anthropic>=1.9.0",
@@ -125,10 +126,11 @@ requires = ["uv_build>=0.11.21"]
 build-backend = "uv_build"
 
 [tool.uv.workspace]
-members = ["packages/memory"]
+members = ["packages/memory", "packages/observability"]
 
 [tool.uv.sources]
 dlightrag-memory = { workspace = true }
+dlightrag-observability = { workspace = true }
 
 [tool.uv.build-backend]
 # uv_build includes generated module data even when gitignored; reject local OS metadata.
@@ -155,7 +157,7 @@ markers = [
 ]
 
 [tool.importlinter]
-root_packages = ["dlightrag", "dlightrag_memory"]
+root_packages = ["dlightrag", "dlightrag_memory", "dlightrag_observability"]
 include_external_packages = true
 
 [[tool.importlinter.contracts]]
@@ -163,7 +165,14 @@ id = "memory-package-independence"
 name = "Memory package stays host-neutral"
 type = "forbidden"
 source_modules = ["dlightrag_memory"]
-forbidden_modules = ["dlightrag", "lightrag", "fastapi"]
+forbidden_modules = ["dlightrag", "dlightrag_observability", "lightrag", "fastapi"]
+
+[[tool.importlinter.contracts]]
+id = "observability-package-independence"
+name = "Observability package stays host-neutral and states no product vocabulary"
+type = "forbidden"
+source_modules = ["dlightrag_observability"]
+forbidden_modules = ["dlightrag", "dlightrag_memory", "lightrag", "fastapi", "asyncpg", "mcp"]
 
 [[tool.importlinter.contracts]]
 id = "bm25-lightrag-independence"

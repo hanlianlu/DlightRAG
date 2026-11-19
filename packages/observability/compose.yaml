@@ -1,0 +1,178 @@
+# Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
+# ClickStack Open Source for DlightRAG: ClickHouse + HyperDX + the OTel collector + MongoDB.
+#
+# Vendored from hyperdxio/hyperdx `docker-compose.yml` at app 2.42.0 (2026-10-23) and trimmed:
+# the demo nginx and the StatsD receiver are gone, images are pinned to a version rather than a
+# floating major, data lives in named volumes, and every port but the UI and the OTLP endpoint is
+# bound to loopback. `docker compose -f packages/observability/compose.yaml --env-file <env> up -d`
+# starts it; `dlightrag-observability up` renders the env file first.
+#
+# The collector of the four required services is HyperDX's own: its receivers, exporters and
+# pipelines arrive over OpAMP, and it carries no custom pipeline. Host, per-container and Postgres
+# metrics come from the optional `metrics-agent` and `postgres-exporter` services
+# (`--profile metrics`), which run the same collector image standalone on `stack/collector.yaml`
+# and `stack/collector-standalone.yaml`.
+name: dlightrag-observability
+
+services:
+  db:
+    image: mongo:5.0.33-focal
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - otel
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  ch-server:
+    image: clickhouse/clickhouse-server:26.8-alpine
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - ch_data:/var/lib/clickhouse
+      - ch_logs:/var/log/clickhouse-server
+    ports:
+      # Loopback only: `bootstrap` applies retention through it, and an operator queries
+      # through it. Nothing outside this host needs the database port.
+      - '127.0.0.1:${HYPERDX_CH_HTTP_PORT:-8123}:8123'
+    networks:
+      - otel
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  otel-collector:
+    image: docker.clickhouse.com/clickhouse/clickstack-otel-collector:2.42.0
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_ENDPOINT: 'tcp://ch-server:9000?dial_timeout=10s'
+      HYPERDX_OTEL_EXPORTER_CLICKHOUSE_DATABASE: ${HYPERDX_OTEL_EXPORTER_CLICKHOUSE_DATABASE:-default}
+      HYPERDX_OTEL_EXPORTER_CREATE_LEGACY_SCHEMA: 'true'
+      # One TTL for every otel_* table; there is no per-signal variable. A table a signal creates
+      # with its first write gets the same TTL from `dlightrag-observability bootstrap` (an
+      # idempotent ALTER).
+      HYPERDX_OTEL_EXPORTER_TABLES_TTL: ${HYPERDX_OTEL_EXPORTER_TABLES_TTL:-720h}
+      HYPERDX_OTEL_EXPORTER_RECONCILE_TABLE_TTL: 'true'
+      # The shipped batch has no upper bound; a bounded one keeps a burst out of one giant insert.
+      HYPERDX_OTEL_BATCH_SEND_BATCH_MAX_SIZE: ${HYPERDX_OTEL_BATCH_SEND_BATCH_MAX_SIZE:-10000}
+      HYPERDX_LOG_LEVEL: ${HYPERDX_LOG_LEVEL:-info}
+      OPAMP_SERVER_URL: 'http://app:${HYPERDX_OPAMP_PORT:-4320}'
+      # This collector is HyperDX's: its receivers, exporters and pipelines arrive over OpAMP,
+      # and a custom pipeline that names them fails validation before that config exists. Host and
+      # per-container metrics therefore come from the `metrics-agent` service below, which is the
+      # same collector run standalone. Measured 2026-10-09: enabling CUSTOM_OTELCOL_CONFIG_FILE
+      # here left the agent reporting FAILED and took the OTLP receiver down with it.
+    ports:
+      - '127.0.0.1:${HYPERDX_OTEL_GRPC_PORT:-4317}:4317'
+      - '127.0.0.1:${HYPERDX_OTEL_HTTP_PORT:-4318}:4318'
+      - '127.0.0.1:${HYPERDX_OTEL_HEALTH_PORT:-13133}:13133'
+      - '127.0.0.1:${HYPERDX_OTEL_METRICS_PORT:-8888}:8888'
+    networks:
+      - otel
+    depends_on:
+      ch-server:
+        condition: service_healthy
+
+  app:
+    image: docker.hyperdx.io/hyperdx/hyperdx:2.42.0
+    restart: unless-stopped
+    environment:
+      HYPERDX_API_KEY: "${HYPERDX_API_KEY:?HYPERDX_API_KEY is required (bootstrap seeds it)}"
+      HYPERDX_API_PORT: ${HYPERDX_API_PORT:-8000}
+      HYPERDX_APP_PORT: ${HYPERDX_APP_PORT:-8300}
+      HYPERDX_APP_URL: ${HYPERDX_APP_URL:-http://localhost}
+      HYPERDX_LOG_LEVEL: ${HYPERDX_LOG_LEVEL:-info}
+      MONGO_URI: 'mongodb://db:27017/hyperdx'
+      SERVER_URL: http://127.0.0.1:${HYPERDX_API_PORT:-8000}
+      OPAMP_PORT: ${HYPERDX_OPAMP_PORT:-4320}
+      OTEL_EXPORTER_OTLP_ENDPOINT: 'http://otel-collector:4318'
+      OTEL_SERVICE_NAME: 'hyperdx-app'
+      USAGE_STATS_ENABLED: ${USAGE_STATS_ENABLED:-false}
+      WEBHOOK_HOSTNAME_ALLOWLIST: ${WEBHOOK_HOSTNAME_ALLOWLIST:-}
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:-}
+      # Defaults to "hyperdx is cool 👋"; set a real one before this leaves localhost.
+      EXPRESS_SESSION_SECRET: "${EXPRESS_SESSION_SECRET:?EXPRESS_SESSION_SECRET is required (bootstrap generates it)}"
+      # The first run must not ask a person to type a connection. The app is inside the
+      # compose network, so ClickHouse is `ch-server:8123` — `localhost:8123` is the app
+      # container itself. These also seed the four sources (logs, traces, metrics, sessions)
+      # the UI otherwise asks an operator to map column by column. Upstream ships the same
+      # pair; they apply when the deployment's first team is created.
+      DEFAULT_CONNECTIONS: '[{"name": "Local ClickHouse", "host": "http://ch-server:8123", "username": "default", "password": ""}]'
+      DEFAULT_SOURCES: '[{"from": {"databaseName": "default", "tableName": "otel_logs"}, "kind": "log", "timestampValueExpression": "Timestamp", "name": "Logs", "displayedTimestampValueExpression": "Timestamp", "implicitColumnExpression": "Body", "serviceNameExpression": "ServiceName", "bodyExpression": "Body", "eventAttributesExpression": "LogAttributes", "resourceAttributesExpression": "ResourceAttributes", "defaultTableSelectExpression": "Timestamp,ServiceName,SeverityText,Body", "severityTextExpression": "SeverityText", "traceIdExpression": "TraceId", "spanIdExpression": "SpanId", "metadataMaterializedViews": {"keyRollupTable": "otel_logs_key_rollup_15m", "kvRollupTable": "otel_logs_kv_rollup_15m", "granularity": "15 minute"}, "connection": "Local ClickHouse", "traceSourceId": "Traces", "sessionSourceId": "Sessions", "metricSourceId": "Metrics"}, {"from": {"databaseName": "default", "tableName": "otel_traces"}, "kind": "trace", "timestampValueExpression": "Timestamp", "name": "Traces", "displayedTimestampValueExpression": "Timestamp", "implicitColumnExpression": "SpanName", "serviceNameExpression": "ServiceName", "eventAttributesExpression": "SpanAttributes", "resourceAttributesExpression": "ResourceAttributes", "defaultTableSelectExpression": "Timestamp,ServiceName,StatusCode,round(Duration/1e6),SpanName", "traceIdExpression": "TraceId", "spanIdExpression": "SpanId", "durationExpression": "Duration", "durationPrecision": 9, "parentSpanIdExpression": "ParentSpanId", "spanNameExpression": "SpanName", "spanKindExpression": "SpanKind", "statusCodeExpression": "StatusCode", "statusMessageExpression": "StatusMessage", "metadataMaterializedViews": {"keyRollupTable": "otel_traces_key_rollup_15m", "kvRollupTable": "otel_traces_kv_rollup_15m", "granularity": "15 minute"}, "connection": "Local ClickHouse", "logSourceId": "Logs", "sessionSourceId": "Sessions", "metricSourceId": "Metrics"}, {"from": {"databaseName": "default", "tableName": ""}, "kind": "metric", "timestampValueExpression": "TimeUnix", "name": "Metrics", "resourceAttributesExpression": "ResourceAttributes", "metricTables": {"gauge": "otel_metrics_gauge", "histogram": "otel_metrics_histogram", "sum": "otel_metrics_sum", "_id": "682586a8b1f81924e628e808", "id": "682586a8b1f81924e628e808"}, "connection": "Local ClickHouse", "logSourceId": "Logs", "traceSourceId": "Traces", "sessionSourceId": "Sessions"}, {"from": {"databaseName": "default", "tableName": "hyperdx_sessions"}, "kind": "session", "timestampValueExpression": "TimestampTime", "name": "Sessions", "displayedTimestampValueExpression": "Timestamp", "implicitColumnExpression": "Body", "serviceNameExpression": "ServiceName", "bodyExpression": "Body", "eventAttributesExpression": "LogAttributes", "resourceAttributesExpression": "ResourceAttributes", "defaultTableSelectExpression": "Timestamp,ServiceName,SeverityText,Body", "severityTextExpression": "SeverityText", "traceIdExpression": "TraceId", "spanIdExpression": "SpanId", "connection": "Local ClickHouse", "logSourceId": "Logs", "traceSourceId": "Traces", "metricSourceId": "Metrics"}]'
+    ports:
+      - '127.0.0.1:${HYPERDX_APP_PORT:-8300}:${HYPERDX_APP_PORT:-8300}'
+      - '127.0.0.1:${HYPERDX_API_PORT:-8000}:${HYPERDX_API_PORT:-8000}'
+    networks:
+      - otel
+    depends_on:
+      ch-server:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+
+  # Host and per-container metrics, from the same image run without a supervisor: the file that
+  # declares those pipelines names an exporter, and a supervised agent has none until HyperDX
+  # sends one. `docker compose --profile metrics up -d` adds it; a stack without the profile is
+  # exactly HyperDX's own four containers.
+  metrics-agent:
+    image: docker.clickhouse.com/clickhouse/clickstack-otel-collector:2.42.0
+    restart: unless-stopped
+    profiles: ["metrics"]
+    # docker_stats reads the Docker socket, which the image's own user cannot open.
+    user: "0:0"
+    entrypoint: ["/otelcontribcol"]
+    command:
+      - --config=/etc/otelcol-contrib/standalone-agent.yaml
+      - --config=/etc/otelcol-contrib/custom.config.yaml
+    environment:
+      CLICKHOUSE_ENDPOINT: 'tcp://ch-server:9000?dial_timeout=10s'
+      HYPERDX_OTEL_EXPORTER_TABLES_TTL: ${HYPERDX_OTEL_EXPORTER_TABLES_TTL:-720h}
+    volumes:
+      - ./stack/collector-standalone.yaml:/etc/otelcol-contrib/standalone-agent.yaml:ro
+      - ./stack/collector.yaml:/etc/otelcol-contrib/custom.config.yaml:ro
+      - /:/hostfs:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - otel
+    depends_on:
+      ch-server:
+        condition: service_healthy
+
+  # Postgres for the application, exposed as Prometheus metrics for the `metrics/postgres`
+  # pipeline above. The application's Compose project is a different one, so this reaches its
+  # published port through the host gateway rather than a service name; the defaults are the
+  # application's own local-development defaults, and a deployment that changed them sets the
+  # same values here (stack/.env), because nothing else can know them.
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.20.1
+    restart: unless-stopped
+    profiles: ["metrics"]
+    environment:
+      # A URL, so a password with URL-significant characters must be percent-encoded here.
+      DATA_SOURCE_NAME: 'postgresql://${DLIGHTRAG_POSTGRES_USER:-dlightrag}:${DLIGHTRAG_POSTGRES_PASSWORD:-dlightrag}@${DLIGHTRAG_POSTGRES_HOST:-host.docker.internal}:${DLIGHTRAG_POSTGRES_PORT:-5432}/${DLIGHTRAG_POSTGRES_DATABASE:-dlightrag}?sslmode=disable'
+    extra_hosts:
+      # The application's Compose file sets this for the same reason: a literal host gateway is
+      # what makes `host.docker.internal` resolve off Docker Desktop too.
+      - 'host.docker.internal:host-gateway'
+    ports:
+      # Loopback only: the collector reads it on the stack's own network, and this is here so an
+      # operator can read one exposition without entering a container.
+      - '127.0.0.1:${DLIGHTRAG_POSTGRES_EXPORTER_PORT:-9187}:9187'
+    networks:
+      - otel
+
+volumes:
+  mongo_data:
+  ch_data:
+  ch_logs:
+
+networks:
+  otel:
+    name: dlightrag-otel

@@ -12,7 +12,7 @@ LANGFUSE_BOOTSTRAP = $(PYTHON) scripts/langfuse/headless.py --langfuse-env "$(LA
 PYTHON_LINT_PATHS = packages/ src/ tests/ scripts/ chart-render/ prerequisite_setup.py
 PYTHON_SECURITY_PATHS = packages/ src/ scripts/ chart-render/ prerequisite_setup.py
 
-.PHONY: mineru-install mineru-api mineru-gradio mineru-title-aided mineru-service-install mineru-service-start mineru-service-stop mineru-service-status mineru-service-logs mineru-service-uninstall langfuse-stack langfuse-bootstrap langfuse-up langfuse-down langfuse-reset langfuse-restart langfuse-status langfuse-logs langfuse-health hooks sync-dev lint lint-security format-check typecheck architecture-check shellcheck-all frontend-install frontend-typecheck frontend-lint frontend-test frontend-browser-install frontend-browser-test frontend-build frontend-audit frontend-ci chart-render-install chart-render-test release-check workspace-wheels test-unit runtime-faults runtime-pg18 load-runtime validate-runtime ci ci-full test-e2e ci-e2e dev-reset
+.PHONY: mineru-install mineru-api mineru-gradio mineru-title-aided mineru-service-install mineru-service-start mineru-service-stop mineru-service-status mineru-service-logs mineru-service-uninstall langfuse-stack langfuse-bootstrap langfuse-up langfuse-down langfuse-reset langfuse-restart langfuse-status langfuse-logs langfuse-health hyperdx-bootstrap hyperdx-up hyperdx-down hyperdx-status hyperdx-logs hyperdx-reset hooks sync-dev lint lint-security format-check typecheck architecture-check shellcheck-all frontend-install frontend-typecheck frontend-lint frontend-test frontend-browser-install frontend-browser-test frontend-build frontend-audit frontend-ci chart-render-install chart-render-test release-check workspace-wheels test-unit runtime-faults runtime-pg18 load-runtime validate-runtime ci ci-full test-e2e ci-e2e dev-reset
 
 mineru-install:
 	scripts/mineru/install.sh
@@ -85,6 +85,33 @@ langfuse-logs:
 
 langfuse-health:
 	curl -fsS $(LANGFUSE_HOST)/api/public/health && printf '\n'
+
+# ─────────────────────────────────────────────────────────────────
+# ClickStack / HyperDX observability stack (packages/observability)
+# ─────────────────────────────────────────────────────────────────
+# `hyperdx-bootstrap` writes stack/.env once (generated secrets), sends a probe span through the
+# collector, applies retention to every telemetry table, and reports whether the span landed — the
+# one check that says a freshly started stack actually ingests. `hyperdx-up` starts the four
+# containers.
+hyperdx-bootstrap:
+	uv run dlightrag-observability bootstrap
+
+hyperdx-up:
+	uv run dlightrag-observability up
+	uv run dlightrag-observability bootstrap
+	@echo "HyperDX UI: http://127.0.0.1:8300"
+
+hyperdx-down:
+	uv run dlightrag-observability down
+
+hyperdx-status:
+	uv run dlightrag-observability status
+
+hyperdx-logs:
+	uv run dlightrag-observability logs
+
+hyperdx-reset:
+	uv run dlightrag-observability reset
 
 # ─────────────────────────────────────────────────────────────────
 # CI targets — local dev matrix

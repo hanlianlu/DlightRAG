@@ -1,0 +1,238 @@
+{
+  "id": "6ac953fcdc434572666854f0",
+  "name": "DlightRAG",
+  "tiles": [
+    {
+      "id": "6ac96096dc43457266685668",
+      "name": "answer runs per interval",
+      "x": 0,
+      "y": 0,
+      "w": 12,
+      "h": 5,
+      "config": {
+        "displayType": "line",
+        "sourceId": "6ac9470bc0696e82a1080995",
+        "select": [
+          {
+            "aggFn": "count",
+            "where": "SpanName = 'run-answer'",
+            "whereLanguage": "sql",
+            "alias": "answer runs"
+          }
+        ],
+        "groupBy": "ServiceName",
+        "numberFormat": {
+          "output": "number",
+          "thousandSeparated": true
+        }
+      }
+    },
+    {
+      "id": "6ac96096dc43457266685669",
+      "name": "run-answer p95 duration",
+      "x": 12,
+      "y": 0,
+      "w": 12,
+      "h": 5,
+      "config": {
+        "displayType": "line",
+        "sourceId": "6ac9470bc0696e82a1080995",
+        "select": [
+          {
+            "aggFn": "quantile",
+            "level": 0.95,
+            "valueExpression": "Duration",
+            "where": "SpanName = 'run-answer'",
+            "whereLanguage": "sql",
+            "alias": "p95 duration",
+            "numberFormat": {
+              "output": "duration",
+              "factor": 1e-09
+            }
+          }
+        ],
+        "numberFormat": {
+          "output": "duration",
+          "factor": 1e-09
+        }
+      }
+    },
+    {
+      "id": "6ac96096dc4345726668566a",
+      "name": "failing runs by kind",
+      "x": 0,
+      "y": 5,
+      "w": 12,
+      "h": 5,
+      "config": {
+        "configType": "sql",
+        "displayType": "line",
+        "connectionId": "6ac9470bc0696e82a108098f",
+        "sourceId": "6ac9470bc0696e82a1080995",
+        "sqlTemplate": "SELECT $__timeInterval(Timestamp) AS ts,\n  multiIf(StatusMessage ILIKE '%run_abandoned%' OR StatusMessage ILIKE '%abandoned%', 'run_abandoned',\n          StatusMessage ILIKE '%dependency_unavailable%' OR StatusMessage ILIKE '%unavailable%', 'dependency_unavailable',\n          empty(StatusMessage), '(no message)',\n          'other') AS error_kind,\n  count() AS errors\nFROM $__sourceTable\nWHERE SpanName = 'run-answer'\n  AND StatusCode = 'Error'\n  AND $__timeFilter_ms(Timestamp)\n  AND $__filters\nGROUP BY ts, error_kind\nORDER BY ts\nLIMIT 1000"
+      }
+    },
+    {
+      "id": "6ac96096dc4345726668566b",
+      "name": "tokens by model",
+      "x": 12,
+      "y": 5,
+      "w": 12,
+      "h": 5,
+      "config": {
+        "displayType": "stacked_bar",
+        "sourceId": "6ac9470bc0696e82a1080995",
+        "select": [
+          {
+            "aggFn": "sum",
+            "valueExpression": "SpanAttributes['gen_ai.usage.input_tokens']",
+            "alias": "input tokens"
+          },
+          {
+            "aggFn": "sum",
+            "valueExpression": "SpanAttributes['gen_ai.usage.output_tokens']",
+            "alias": "output tokens"
+          }
+        ],
+        "groupBy": "SpanAttributes['gen_ai.request.model']",
+        "numberFormat": {
+          "output": "number",
+          "thousandSeparated": true
+        }
+      }
+    },
+    {
+      "id": "6ac96096dc4345726668566c",
+      "name": "host cpu load average",
+      "x": 0,
+      "y": 10,
+      "w": 8,
+      "h": 5,
+      "config": {
+        "displayType": "line",
+        "sourceId": "6ac9470bc0696e82a1080997",
+        "select": [
+          {
+            "aggFn": "avg",
+            "metricType": "gauge",
+            "metricName": "system.cpu.load_average.1m",
+            "alias": "1m"
+          },
+          {
+            "aggFn": "avg",
+            "metricType": "gauge",
+            "metricName": "system.cpu.load_average.5m",
+            "alias": "5m"
+          },
+          {
+            "aggFn": "avg",
+            "metricType": "gauge",
+            "metricName": "system.cpu.load_average.15m",
+            "alias": "15m"
+          }
+        ]
+      }
+    },
+    {
+      "id": "6ac96096dc4345726668566d",
+      "name": "host memory used",
+      "x": 8,
+      "y": 10,
+      "w": 8,
+      "h": 5,
+      "config": {
+        "configType": "sql",
+        "displayType": "line",
+        "connectionId": "6ac9470bc0696e82a108098f",
+        "sourceId": "6ac9470bc0696e82a1080997",
+        "numberFormat": {
+          "output": "percent",
+          "mantissa": 1
+        },
+        "sqlTemplate": "SELECT ts, 1 - free / total AS memory_used\nFROM (\n  SELECT $__timeInterval(TimeUnix) AS ts,\n         maxIf(Value, Attributes['state'] = 'free') AS free,\n         sum(Value) AS total\n  FROM $__sourceTable(sum)\n  WHERE MetricName = 'system.memory.usage'\n    AND $__timeFilter_ms(TimeUnix)\n    AND $__filters\n  GROUP BY ts\n)\nORDER BY ts\nLIMIT 1000"
+      }
+    },
+    {
+      "id": "6ac96096dc4345726668566e",
+      "name": "container cpu utilization",
+      "x": 16,
+      "y": 10,
+      "w": 8,
+      "h": 5,
+      "config": {
+        "displayType": "line",
+        "sourceId": "6ac9470bc0696e82a1080997",
+        "select": [
+          {
+            "aggFn": "avg",
+            "metricType": "gauge",
+            "metricName": "container.cpu.utilization",
+            "alias": "cpu"
+          }
+        ],
+        "groupBy": "ResourceAttributes['container.name']",
+        "seriesLimit": 8
+      }
+    },
+    {
+      "id": "6ac96096dc4345726668566f",
+      "name": "container memory percent",
+      "x": 0,
+      "y": 15,
+      "w": 8,
+      "h": 5,
+      "config": {
+        "displayType": "line",
+        "sourceId": "6ac9470bc0696e82a1080997",
+        "select": [
+          {
+            "aggFn": "avg",
+            "metricType": "gauge",
+            "metricName": "container.memory.percent",
+            "alias": "memory"
+          }
+        ],
+        "groupBy": "ResourceAttributes['container.name']",
+        "seriesLimit": 8
+      }
+    },
+    {
+      "id": "6ac99e7ddc43457266685f7f",
+      "name": "cache hit rate by span",
+      "x": 0,
+      "y": 20,
+      "w": 12,
+      "h": 5,
+      "config": {
+        "configType": "sql",
+        "displayType": "line",
+        "connectionId": "6ac9470bc0696e82a108098f",
+        "sourceId": "6ac9470bc0696e82a1080995",
+        "numberFormat": {
+          "output": "percent",
+          "mantissa": 1
+        },
+        "sqlTemplate": "SELECT $__timeInterval(Timestamp) AS ts,\n  SpanName AS span_name,\n  sum(toUInt64OrZero(SpanAttributes['gen_ai.usage.cache_read.input_tokens']))\n    / nullIf(sum(toUInt64OrZero(SpanAttributes['gen_ai.usage.input_tokens'])), 0) AS cache_hit_rate\nFROM $__sourceTable\nWHERE SpanName != 'embed-text'\n  AND SpanAttributes['gen_ai.usage.input_tokens'] != ''\n  AND $__timeFilter_ms(Timestamp)\n  AND $__filters\nGROUP BY ts, span_name\nORDER BY ts\nLIMIT 1000"
+      }
+    },
+    {
+      "id": "6ac99e7ddc43457266685f80",
+      "name": "fresh vs cached prompt tokens",
+      "x": 12,
+      "y": 20,
+      "w": 12,
+      "h": 5,
+      "config": {
+        "configType": "sql",
+        "displayType": "stacked_bar",
+        "connectionId": "6ac9470bc0696e82a108098f",
+        "sourceId": "6ac9470bc0696e82a1080995",
+        "numberFormat": {
+          "output": "number",
+          "thousandSeparated": true
+        },
+        "sqlTemplate": "SELECT $__timeInterval(Timestamp) AS ts,\n  sum(toUInt64OrZero(SpanAttributes['gen_ai.usage.input_tokens']))\n    - sum(toUInt64OrZero(SpanAttributes['gen_ai.usage.cache_read.input_tokens'])) AS fresh_tokens,\n  sum(toUInt64OrZero(SpanAttributes['gen_ai.usage.cache_read.input_tokens'])) AS cached_tokens\nFROM $__sourceTable\nWHERE SpanName != 'embed-text'\n  AND $__timeFilter_ms(Timestamp)\n  AND $__filters\nGROUP BY ts\nHAVING fresh_tokens > 0 OR cached_tokens > 0\nORDER BY ts\nLIMIT 1000"
+      }
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "id": "6ac96071dc4345726668562c",
+  "name": "a run was lost to an outage or an abandoned lease",
+  "displayName": "abandoned or lost runs",
+  "source": "inline",
+  "interval": "15m",
+  "threshold": 1,
+  "thresholdType": "above",
+  "channel": {
+    "type": "webhook",
+    "webhookId": "${DLIGHTRAG_TELEGRAM_WEBHOOK_ID}"
+  },
+  "message": "a run was lost to a dependency that stayed out or to a lease that was reclaimed one time too many; the bucket that breached saw {{value}}. the kind is the span's dlightrag.error.kind where its executor classified it and its status description otherwise, so a loss the durable store settled is grouped the same way, and the run's own row in postgres carries it durably.",
+  "tags": [
+    "dlightrag",
+    "answer-runs"
+  ],
+  "chartConfig": {
+    "configType": "sql",
+    "displayType": "line",
+    "connectionId": "6ac9470bc0696e82a108098f",
+    "sourceId": "6ac9470bc0696e82a1080995",
+    "name": "lost run-answer spans",
+    "sqlTemplate": "SELECT $__timeInterval(Timestamp) AS ts,\n  multiIf(SpanAttributes['dlightrag.error.kind'] IN ('run_abandoned', 'dependency_unavailable'),\n          SpanAttributes['dlightrag.error.kind'],\n          StatusMessage ILIKE '%run_abandoned%' OR StatusMessage ILIKE '%abandoned%', 'run_abandoned',\n          'dependency_unavailable') AS error_kind,\n  count() AS lost_runs\nFROM otel_traces\nWHERE SpanName = 'run-answer'\n  AND StatusCode = 'Error'\n  AND (SpanAttributes['dlightrag.error.kind'] IN ('run_abandoned', 'dependency_unavailable')\n       OR StatusMessage ILIKE '%run_abandoned%' OR StatusMessage ILIKE '%abandoned%'\n       OR StatusMessage ILIKE '%dependency_unavailable%' OR StatusMessage ILIKE '%unavailable%')\n  AND $__timeFilter_ms(Timestamp)\nGROUP BY ts, error_kind\nORDER BY ts\nLIMIT 1000"
+  }
+}

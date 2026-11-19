@@ -1,0 +1,50 @@
+# Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
+# The parts of a collector config that HyperDX otherwise supplies over OpAMP: the processors the
+# custom pipelines name, the exporter they write through, and — because it is the file a
+# standalone agent runs on its own — the one scrape this stack owns. Used only by the
+# `metrics-agent` service, which runs this collector standalone: a supervised agent validates its
+# config before the remote one arrives, so a custom pipeline that names the remote's exporter
+# fails there.
+receivers:
+  # The app's operational Postgres, through the exporter beside it. The collector image has no
+  # `postgresql` receiver compiled in, and the Prometheus receiver it does have is what reads the
+  # exporter's own exposition — the same shape the hosted HyperDX stack uses for a database it
+  # cannot instrument. The scrape lives here rather than in `collector.yaml` because this file is
+  # the one an unsupervised agent loads whole: the exporter and the pipeline that names it arrive
+  # together, and nothing waits on a remote config to define them.
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: postgres
+          scrape_interval: 30s
+          static_configs:
+            - targets: ['postgres-exporter:9187']
+extensions:
+  # The image healthchecks this process on 13133, and an agent without a supervisor has
+  # to serve that itself: the pipelines below cannot answer "am I alive". The image's
+  # check asks `localhost`, which resolves to the loopback of either family, so the
+  # listener is every interface rather than one of them.
+  health_check:
+    endpoint: 0.0.0.0:13133
+processors:
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 400
+    spike_limit_mib: 100
+  batch:
+    send_batch_size: 10000
+    send_batch_max_size: 10000
+    timeout: 5s
+exporters:
+  clickhouse:
+    endpoint: ${env:CLICKHOUSE_ENDPOINT}
+    database: default
+    create_schema: true
+    ttl: ${env:HYPERDX_OTEL_EXPORTER_TABLES_TTL:-720h}
+service:
+  extensions: [health_check]
+  pipelines:
+    metrics/postgres:
+      receivers: [prometheus]
+      processors: [memory_limiter, batch]
+      exporters: [clickhouse]

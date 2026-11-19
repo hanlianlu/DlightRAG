@@ -1,0 +1,30 @@
+{
+  "id": "6ac96843dc434572666857e9",
+  "name": "postgres is not answering, or a scrape is past 80% of max_connections",
+  "displayName": "postgres health",
+  "source": "inline",
+  "interval": "5m",
+  "threshold": 0.8,
+  "thresholdType": "above",
+  "channel": {
+    "type": "webhook",
+    "webhookId": "${DLIGHTRAG_TELEGRAM_WEBHOOK_ID}"
+  },
+  "message": "postgres answered unhealthy, or one scrape's backends passed 80% of the connection ceiling that scrape reported. 0.8 is a ceiling approach, not a level ordinary operation reaches: it fires with a fifth of the server's connections still free, which is where the next burst of concurrent Runs spends the last of the headroom. the value is the window's worst reading: `1 - pg_up` when the server is down, otherwise that scrape's own backends over the `pg_settings_max_connections` it reported. `backends` is one scrape's own count of distinct `pg_stat_activity_count` series, so label dimensions and the window's other scrapes cannot inflate it. a deployment that does not run the `metrics` profile exports no pg_ metric and stays quiet here.",
+  "tags": [
+    "dlightrag",
+    "postgres"
+  ],
+  "chartConfig": {
+    "configType": "sql",
+    "displayType": "number",
+    "connectionId": "6ac9470bc0696e82a108098f",
+    "sourceId": "6ac9470bc0696e82a1080997",
+    "name": "postgres pressure",
+    "numberFormat": {
+      "output": "percent",
+      "mantissa": 1
+    },
+    "sqlTemplate": "SELECT if(count() = 0, 0, max(pressure)) AS postgres_pressure\nFROM (\n  SELECT scrape,\n         if(max(maxconn) = 0, 0,\n            greatest(1 - max(up),\n                     max(backends) / greatest(max(maxconn), 1))\n         ) AS pressure\n  FROM (\n    SELECT scrape,\n           maxIf(Value, MetricName = 'pg_up') AS up,\n           maxIf(Value, MetricName = 'pg_settings_max_connections') AS maxconn,\n           sumIf(Value, MetricName = 'pg_stat_activity_count') AS backends\n    FROM (\n      SELECT DISTINCT TimeUnix AS scrape, MetricName, Value, Attributes\n      FROM otel_metrics_gauge\n      WHERE MetricName IN ('pg_up', 'pg_stat_activity_count', 'pg_settings_max_connections')\n        AND $__timeFilter_ms(TimeUnix)\n    )\n    GROUP BY scrape\n  )\n  GROUP BY scrape\n)\n"
+  }
+}

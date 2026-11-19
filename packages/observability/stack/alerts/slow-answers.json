@@ -1,0 +1,30 @@
+{
+  "id": "6ac96071dc4345726668565b",
+  "name": "p95 of a run-answer span is at least five minutes",
+  "displayName": "slow answers",
+  "source": "inline",
+  "interval": "5m",
+  "threshold": 300000000000,
+  "thresholdType": "above",
+  "channel": {
+    "type": "webhook",
+    "webhookId": "${DLIGHTRAG_TELEGRAM_WEBHOOK_ID}"
+  },
+  "message": "p95 of run-answer duration crossed five minutes; this window's p95 is {{value}} nanoseconds, against a threshold of 300000000000 (five minutes, the unit Duration is stored in). a slow answer is usually one provider call or one tool loop, so open the slowest run in the traces table first.",
+  "tags": [
+    "dlightrag",
+    "answer-runs"
+  ],
+  "chartConfig": {
+    "configType": "sql",
+    "displayType": "number",
+    "connectionId": "6ac9470bc0696e82a108098f",
+    "sourceId": "6ac9470bc0696e82a1080995",
+    "name": "p95 run-answer duration",
+    "numberFormat": {
+      "output": "duration",
+      "factor": 1e-09
+    },
+    "sqlTemplate": "SELECT quantile(0.95)(Duration) AS p95_duration_ns\nFROM otel_traces\nWHERE SpanName = 'run-answer'\n  AND $__timeFilter_ms(Timestamp)"
+  }
+}

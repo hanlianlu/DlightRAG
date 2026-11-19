@@ -1,0 +1,64 @@
+# Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
+# Collector additions for DlightRAG, loaded by the `metrics-agent` service as its second config file
+# (`--profile metrics`).
+#
+# The stack's own pipelines — `traces`, `metrics`, `logs/out-default`, `logs/out-rrweb` — are set
+# by HyperDX over OpAMP, and the remote config overwrites their `receivers:`/`exporters:` keys. So
+# nothing here touches them: a new pipeline NAME is the supported extension point, and it inherits
+# nothing, which is why `processors:` is declared explicitly.
+#
+# These two pipelines replace what would otherwise be three more containers. The shipped
+# `clickhouse/clickstack-otel-collector` compiles the `hostmetrics` and `docker_stats` receivers in
+# (contrib v0.155.0), so per-host CPU/memory/disk and per-container CPU/memory/network cost no
+# second agent. What it does not cover: cAdvisor's per-container filesystem and writable-layer
+# usage, and Postgres — `postgresqlreceiver` is not compiled in, so that one is scraped from a
+# `postgres-exporter` through the `prometheus` receiver the remote config already defines.
+#
+# Verified 2026-10-09 against the real ClickHouse, outside the OpAMP path: a one-off collector run
+# with this file plus an exporter stub wrote `container.cpu.utilization` and
+# `system.cpu.load_average.*` into `otel_metrics_gauge`, with no error of its own. Two things that
+# run taught, and that an operator needs:
+#   - `scrapers` is a MAP of enabled scrapers, not a list of names. A list is refused at config
+#     load with "unexpected sub-config value kind for key:scrapers".
+#   - `docker_stats` reads `/var/run/docker.sock`, so the collector's user must be able to open it;
+#     a container that runs as a user without that access exits with "permission denied while
+#     trying to connect to the docker API".
+receivers:
+  hostmetrics:
+    # The host's root, not the container's: /proc and /sys mounted on their own report the
+    # container's view, which is the wrong answer to "is the host running out of disk".
+    root_path: /hostfs
+    collection_interval: 30s
+    scrapers:
+      cpu:
+      memory:
+      disk:
+      filesystem:
+      network:
+      load:
+
+  docker_stats:
+    endpoint: unix:///var/run/docker.sock
+    collection_interval: 30s
+    # The receiver's default metric set is large and mostly unused here. These four answer the
+    # question an operator actually asks: which service is eating memory or network.
+    metrics:
+      container.cpu.utilization:
+        enabled: true
+      container.memory.usage.total:
+        enabled: true
+      container.network.io.usage.rx_bytes:
+        enabled: true
+      container.network.io.usage.tx_bytes:
+        enabled: true
+
+service:
+  pipelines:
+    metrics/host:
+      receivers: [hostmetrics]
+      processors: [memory_limiter, batch]
+      exporters: [clickhouse]
+    metrics/docker:
+      receivers: [docker_stats]
+      processors: [memory_limiter, batch]
+      exporters: [clickhouse]
