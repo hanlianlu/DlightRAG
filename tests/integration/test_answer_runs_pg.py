@@ -357,7 +357,8 @@ async def _assert_run_event_parent_guard(store: FingerprintingRunStore, pool: An
             )
     await remove(creation.run.run_id)
 
-    # Nonterminal events require a running parent with a present, live lease.
+    # Nonterminal events require a running parent with a lease owner; a lapsed window is not
+    # a missing owner (test_run_lease_renewal_pg pins that half).
     creation = await store.create_run(owner_id=_OWNER, request=_request("queued event"))
     async with pool.acquire() as conn:
         await conn.execute(
@@ -380,24 +381,6 @@ async def _assert_run_event_parent_guard(store: FingerprintingRunStore, pool: An
         await conn.execute(
             "UPDATE dlightrag_runs SET lease_owner = NULL, "
             "lease_expires_at = NULL, next_event_sequence = 2 WHERE run_id = $1",
-            uuid.UUID(creation.run.run_id),
-        )
-        with pytest.raises(asyncpg.exceptions.CheckViolationError):
-            await conn.execute(
-                "INSERT INTO dlightrag_run_events "
-                "(owner_id, run_id, event_sequence, event_type, payload) "
-                "VALUES ($1, $2, 1, 'progress', '{}'::jsonb)",
-                _OWNER,
-                uuid.UUID(creation.run.run_id),
-            )
-    await remove(creation.run.run_id)
-
-    creation = await store.create_run(owner_id=_OWNER, request=_request("expired event"))
-    await _claimed(store)
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE dlightrag_runs SET lease_expires_at = NOW() - INTERVAL '1 second', "
-            "next_event_sequence = 2 WHERE run_id = $1",
             uuid.UUID(creation.run.run_id),
         )
         with pytest.raises(asyncpg.exceptions.CheckViolationError):

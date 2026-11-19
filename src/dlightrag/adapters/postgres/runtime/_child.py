@@ -333,7 +333,7 @@ LIMIT $4
 """
 
 _LOCK_CONTROL_RUN = """
-SELECT r.status, r.lease_owner, r.lease_expires_at, r.fencing_epoch,
+SELECT r.status, r.lease_owner, r.fencing_epoch,
        rt.requested_mode, rt.resolved_mode
 FROM dlightrag_runs AS r
 JOIN dlightrag_answer_run_routing AS rt
@@ -595,15 +595,12 @@ def _parent_origin_holds_run(
     worker_id: str | None,
     fencing_epoch: int | None,
 ) -> bool:
-    lease_expires_at = row["lease_expires_at"]
     return bool(
         worker_id
         and fencing_epoch is not None
         and str(row["status"]) == "running"
         and str(row["lease_owner"] or "") == worker_id
         and int(row["fencing_epoch"]) == fencing_epoch
-        and lease_expires_at is not None
-        and lease_expires_at > datetime.now(UTC)
     )
 
 

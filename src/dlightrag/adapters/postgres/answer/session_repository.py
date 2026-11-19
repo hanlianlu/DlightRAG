@@ -3,7 +3,7 @@
 
 Every bound store embeds owner, run, worker, lease owner, and fencing epoch at
 claim time; its public methods carry no fencing parameters. Each mutating
-transaction starts by locking the run row under the live lease/epoch predicate,
+transaction starts by locking the run row under the lease-owner/epoch predicate,
 so a stale or lost lease changes zero rows.
 
 Runtime transitions atomically commit HostDelta, ordered Entries, exact typed

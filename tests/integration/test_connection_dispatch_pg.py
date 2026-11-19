@@ -134,7 +134,6 @@ async def test_committed_pending_owner_binding_dispatches_once():
         "disable_enable",
         "owner",
         "parent_fence",
-        "parent_expired",
         "parent_cancel",
         "session_fence",
         "no_pending",
@@ -166,7 +165,6 @@ async def test_dispatch_authority_denials_send_zero_calls(denial):
             if denial.startswith("parent_"):
                 change = {
                     "parent_fence": "fencing_epoch=fencing_epoch+1",
-                    "parent_expired": "lease_expires_at=now()-interval '1 second'",
                     "parent_cancel": "cancel_requested_at=now()",
                 }[denial]
                 await conn.execute("UPDATE dlightrag_runs SET " + change)
@@ -251,9 +249,7 @@ async def test_gate_first_revoke_is_in_flight_cancelled_unknown_without_network_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "mutation", [None, "fence", "expired", "cancel", "parent_cancel", "worker"]
-)
+@pytest.mark.parametrize("mutation", [None, "lapsed", "fence", "cancel", "parent_cancel", "worker"])
 async def test_interactive_child_requires_own_live_fence_and_parent(mutation):
     async with isolated_run_runtime("dispatch_child") as (runs, pool):
         service, store, mcp, view, bound, claim, tool, runtime = await dispatch_fixture(runs, pool)
@@ -283,9 +279,10 @@ async def test_interactive_child_requires_own_live_fence_and_parent(mutation):
             )
             if mutation == "parent_cancel":
                 await conn.execute("UPDATE dlightrag_runs SET cancel_requested_at=now()")
-            elif mutation in {"expired", "cancel", "worker"}:
+            elif mutation in {"lapsed", "cancel", "worker"}:
+                # A lapsed window only makes the Child reclaimable; its owner and epoch still hold it.
                 clause = {
-                    "expired": "lease_expires_at=now()-interval '1 second'",
+                    "lapsed": "lease_expires_at=now()-interval '1 second'",
                     "cancel": "cancel_requested_at=now()",
                     "worker": "lease_owner='other'",
                 }[mutation]
@@ -294,8 +291,9 @@ async def test_interactive_child_requires_own_live_fence_and_parent(mutation):
             runtime, execution_scope=str(child), fencing_epoch=6 if mutation == "fence" else 7
         )
         result = await tool.execute(tool.input_model.model_validate({"path": "x"}), runtime)
-        assert result.is_error == (mutation is not None)
-        assert mcp.call.await_count == (0 if mutation else 1)
+        denied = mutation not in {None, "lapsed"}
+        assert result.is_error == denied
+        assert mcp.call.await_count == (0 if denied else 1)
 
 
 @pytest.mark.asyncio
@@ -513,7 +511,7 @@ async def test_revoke_wins_locked_pg_gate_race_and_causes_zero_dispatch():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("cancel", ["parent", "lease", "shutdown"])
+@pytest.mark.parametrize("cancel", ["parent", "reclaim", "shutdown"])
 async def test_in_flight_local_index_cancels_network_and_releases_resources(cancel):
     import asyncio
 
@@ -542,7 +540,7 @@ async def test_in_flight_local_index_cancels_network_and_releases_resources(canc
                     + (
                         "cancel_requested_at=now()"
                         if cancel == "parent"
-                        else "lease_expires_at=now()-interval '1 second'"
+                        else "fencing_epoch=fencing_epoch+1"
                     )
                 )
         result = await asyncio.wait_for(task, 2)

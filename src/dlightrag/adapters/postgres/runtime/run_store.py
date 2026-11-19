@@ -360,6 +360,9 @@ CREATE TABLE IF NOT EXISTS dlightrag_run_events (
 )
 """
 
+# The trigger guards integrity: a nonterminal event needs a running, leased parent. Who owns the
+# Run is the writing statement's predicate (owner and epoch), never the clock, so a lapsed window
+# does not refuse the event.
 _ENFORCE_RUN_EVENT_CONSTRAINTS = """
 CREATE OR REPLACE FUNCTION public.dlightrag_enforce_run_event_constraints()
 RETURNS TRIGGER
@@ -434,9 +437,8 @@ BEGIN
         END IF;
     ELSIF parent_status IS DISTINCT FROM 'running'
           OR parent_lease_owner IS NULL
-          OR parent_lease_expires_at IS NULL
-          OR parent_lease_expires_at < NOW() THEN
-        RAISE EXCEPTION 'nonterminal event requires a live leased parent'
+          OR parent_lease_expires_at IS NULL THEN
+        RAISE EXCEPTION 'nonterminal event requires a leased parent'
             USING ERRCODE = '23514';
     END IF;
 

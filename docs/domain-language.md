@@ -487,7 +487,7 @@ _Avoid_: application default, product setting, secret
 ## Operations
 
 **Fencing Epoch**:
-The monotonically increasing write-generation of one Run lease; every durable write is predicated on the current epoch and a live lease.
+The monotonically increasing write-generation of one Run lease; every durable write is predicated on the current epoch and the lease owner. A lapsed lease window only makes the Run reclaimable; a reclaim is what bumps the epoch.
 _Avoid_: Workspace Epoch, Durable Progress
 
 **Full Development Reset**:
