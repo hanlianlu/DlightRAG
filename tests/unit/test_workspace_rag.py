@@ -17,6 +17,7 @@ from dlightrag.engine.ai.settings import (
     RerankSettings,
 )
 from dlightrag.engine.ai.telemetry import NoopTelemetry
+from dlightrag.engine.rag.retrieval.rerank_breaker import RerankBreaker
 from dlightrag.engine.rag.workspace.ports import WorkspaceCorpusBackend
 from dlightrag.engine.rag.workspace.settings import (
     CorpusSettings,
@@ -108,6 +109,7 @@ def test_workspace_rag_constructor_accepts_only_final_collaborators() -> None:
         backend=backend,
         scheduler=ModelScheduler(max_concurrency=1),
         telemetry=NoopTelemetry(),
+        rerank_breaker=RerankBreaker(),
         rerank_supports_vision=True,
     )
 
@@ -127,6 +129,7 @@ def test_workspace_rag_rejects_backend_workspace_drift() -> None:
             backend=backend,
             scheduler=ModelScheduler(max_concurrency=1),
             telemetry=NoopTelemetry(),
+            rerank_breaker=RerankBreaker(),
         )
 
 
@@ -141,6 +144,7 @@ def test_workspace_rag_rejects_backend_role_drift() -> None:
             backend=backend,
             scheduler=ModelScheduler(max_concurrency=1),
             telemetry=NoopTelemetry(),
+            rerank_breaker=RerankBreaker(),
         )
 
 
@@ -199,4 +203,5 @@ def test_workspace_rag_rejects_noncanonical_workspace_ids(workspace_id: str) -> 
             backend=_backend(),
             scheduler=ModelScheduler(max_concurrency=1),
             telemetry=NoopTelemetry(),
+            rerank_breaker=RerankBreaker(),
         )

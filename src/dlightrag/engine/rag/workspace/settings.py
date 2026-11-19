@@ -256,6 +256,11 @@ def _bm25_profiles() -> tuple[BM25ProfileSettings, ...]:
     )
 
 
+# Stays below the retrieval run's 300 s deadline; chat scorers can wait ~960 s (240 s x 3 retries).
+# Lives beside `RetrievalSettings.timeout`, whose value it must stay inside.
+RERANK_DEADLINE_SECONDS = 270
+
+
 class RetrievalSettings(FrozenSettings):
     top_k: int = Field(default=40, ge=1)
     chunk_top_k: int = Field(default=20, ge=1)

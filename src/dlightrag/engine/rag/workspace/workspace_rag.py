@@ -76,6 +76,7 @@ from dlightrag.engine.rag.retrieval.rerank import (
     build_rerank_func,
     rerank_consumes_images,
 )
+from dlightrag.engine.rag.retrieval.rerank_breaker import RerankBreaker
 from dlightrag.engine.rag.retrieval.visibility import ingest_finalization_complete
 from dlightrag.engine.rag.workspace.lifecycle import (
     defer_cancellation,
@@ -264,6 +265,7 @@ class WorkspaceRag:
             backend=backend,
             scheduler=scheduler,
             telemetry=telemetry,
+            rerank_breaker=rerank_breaker,
         )
     """
 
@@ -276,6 +278,7 @@ class WorkspaceRag:
         backend: WorkspaceCorpusBackend,
         scheduler: ModelScheduler,
         telemetry: Telemetry,
+        rerank_breaker: RerankBreaker,
         rerank_supports_vision: bool | None = None,
     ) -> WorkspaceRag:
         """Create and initialize one workspace capability."""
@@ -286,6 +289,7 @@ class WorkspaceRag:
             scheduler=scheduler,
             telemetry=telemetry,
             rerank_supports_vision=rerank_supports_vision,
+            rerank_breaker=rerank_breaker,
         )
         try:
             await instance.initialize()
@@ -305,6 +309,7 @@ class WorkspaceRag:
         backend: WorkspaceCorpusBackend,
         scheduler: ModelScheduler,
         telemetry: Telemetry,
+        rerank_breaker: RerankBreaker,
         rerank_supports_vision: bool | None = None,
     ) -> None:
         """Store immutable settings and collaborators without side effects."""
@@ -323,6 +328,7 @@ class WorkspaceRag:
         self._corpus_backend: WorkspaceCorpusBackend = backend
 
         self._rerank_supports_vision = rerank_supports_vision
+        self._rerank_breaker = rerank_breaker
         self._rerank_consumes_images: bool = True
 
         # Direct LightRAG runtime and DlightRAG orchestration.
@@ -416,6 +422,7 @@ class WorkspaceRag:
             scheduler=self._model_scheduler,
             supports_vision=self._rerank_supports_vision,
             telemetry=self.telemetry,
+            breaker=self._rerank_breaker,
         )
         self._rerank_func = rerank_func
         self._rerank_consumes_images = rerank_consumes_images(

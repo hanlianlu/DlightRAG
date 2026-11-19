@@ -4044,6 +4044,7 @@ async def test_recovery_after_a_stop_finalizes_only_what_was_not_published(
     from dlightrag.application.settings import rag_settings
     from dlightrag.engine.ai.scheduler import ModelScheduler
     from dlightrag.engine.ai.telemetry import NoopTelemetry
+    from dlightrag.engine.rag.retrieval.rerank_breaker import RerankBreaker
     from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
 
     service = WorkspaceRag(
@@ -4052,6 +4053,7 @@ async def test_recovery_after_a_stop_finalizes_only_what_was_not_published(
         backend=cast(Any, SimpleNamespace(workspace_id="default", read_only=False)),
         scheduler=ModelScheduler(max_concurrency=1),
         telemetry=NoopTelemetry(),
+        rerank_breaker=RerankBreaker(),
     )
     input_root = service._workspace_input_root()
     engine, deps, state = _archiving_engine(input_root, monkeypatch)

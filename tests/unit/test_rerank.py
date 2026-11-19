@@ -9,6 +9,9 @@ from functools import partial
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
+import httpx2
+import openai
 import pytest
 
 import dlightrag.engine.rag.retrieval.rerank as rerank_module
@@ -36,7 +39,9 @@ from dlightrag.engine.rag.retrieval.rerank import (
     _run_http_rerank,
     build_rerank_func,
 )
+from dlightrag.engine.rag.retrieval.rerank_breaker import RerankBreaker, RerankCircuitOpen
 from dlightrag.engine.rag.retrieval.rerank_fallback import rerank_with_fallback
+from dlightrag.engine.rag.workspace.settings import RERANK_DEADLINE_SECONDS, RetrievalSettings
 
 
 def _chunks() -> list[dict[str, Any]]:
@@ -417,6 +422,7 @@ class TestBuildRerankFunc:
             scheduler=ModelScheduler(max_concurrency=1),
             scoring_settings=ModelSettings(provider="openai", model="scoring-model"),
             telemetry=NOOP_TELEMETRY,
+            breaker=RerankBreaker(),
         )
         assert fn is not None
         await fn("query", [{"content": "chunk"}], 1)
@@ -431,6 +437,7 @@ class TestBuildRerankFunc:
             RerankSettings(strategy="voyage_reranker", api_key="voyage-key"),
             scheduler=ModelScheduler(max_concurrency=1),
             telemetry=NOOP_TELEMETRY,
+            breaker=RerankBreaker(),
         )
         assert fn is not None
         await fn("query", [{"content": "chunk"}], 1)
@@ -449,6 +456,7 @@ class TestBuildRerankFunc:
             ),
             scheduler=ModelScheduler(max_concurrency=1),
             telemetry=NOOP_TELEMETRY,
+            breaker=RerankBreaker(),
         )
         assert fn is not None
         await fn("query", [{"content": "chunk"}], 1)
@@ -461,6 +469,7 @@ class TestBuildRerankFunc:
                 RerankSettings(strategy="voyage_reranker"),
                 scheduler=ModelScheduler(max_concurrency=1),
                 telemetry=NOOP_TELEMETRY,
+                breaker=RerankBreaker(),
             )
 
     def test_provider_requires_base_url(self):
@@ -469,6 +478,7 @@ class TestBuildRerankFunc:
                 RerankSettings(strategy="aliyun_reranker", api_key="k"),
                 scheduler=ModelScheduler(max_concurrency=1),
                 telemetry=NOOP_TELEMETRY,
+                breaker=RerankBreaker(),
             )
 
     def test_multimodal_on_text_only_provider_raises(self):
@@ -481,6 +491,7 @@ class TestBuildRerankFunc:
                 ),
                 scheduler=ModelScheduler(max_concurrency=1),
                 telemetry=NOOP_TELEMETRY,
+                breaker=RerankBreaker(),
             )
 
     async def test_http_rerank_keeps_bounded_orchestration_observation(
@@ -513,6 +524,7 @@ class TestBuildRerankFunc:
             RerankSettings(strategy="voyage_reranker", api_key="key"),
             scheduler=ModelScheduler(max_concurrency=1),
             telemetry=Telemetry(),
+            breaker=RerankBreaker(),
         )
         assert fn is not None
 
@@ -523,6 +535,420 @@ class TestBuildRerankFunc:
         traced_query = calls[0]["input"]["query"]
         assert len(traced_query) < 1100
         assert "truncated 200 chars" in traced_query
+
+    async def test_a_down_reranker_is_skipped_by_every_workspace_without_reaching_it(
+        self,
+        monkeypatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        now = 0.0
+        breaker = RerankBreaker(clock=lambda: now)
+        models = [AsyncMock(), AsyncMock()]
+        for model in models:
+            model.score.side_effect = httpx.ConnectError("connection refused")
+        monkeypatch.setattr(rerank_module, "create_rerank_model", MagicMock(side_effect=models))
+        settings = RerankSettings(strategy="voyage_reranker", api_key="key")
+        # Two workspaces rerank through one endpoint; the composition root gives both one breaker.
+        workspaces = [
+            build_rerank_func(
+                settings,
+                scheduler=ModelScheduler(max_concurrency=1),
+                telemetry=NOOP_TELEMETRY,
+                breaker=breaker,
+            )
+            for _ in models
+        ]
+        assert workspaces[0] is not None and workspaces[1] is not None
+
+        async def rerank(workspace: int):
+            return await rerank_with_fallback(
+                query="query",
+                chunks=_chunks(),
+                top_k=2,
+                rerank_func=workspaces[workspace],
+            )
+
+        with caplog.at_level(logging.INFO, logger="dlightrag.engine.rag.retrieval"):
+            for _ in range(3):
+                failed = await rerank(0)
+                assert failed.error_type == "ConnectError"
+            logged = len(caplog.records)
+
+            skipped = await rerank(1)
+
+            assert skipped.reranked is False
+            assert skipped.error_type == "RerankCircuitOpen"
+            assert [chunk["chunk_id"] for chunk in skipped.chunks] == ["a", "b"]
+            assert models[0].score.await_count == 3
+            assert models[1].score.await_count == 0
+            assert len(caplog.records) == logged  # a skipped query logs nothing
+            assert sum(1 for record in caplog.records if record.exc_info) == 3
+            assert [
+                record.getMessage() for record in caplog.records if "opened" in record.getMessage()
+            ] == ["Rerank circuit opened after 3 consecutive failures; skipping rerank for 30s"]
+
+            # Once the wait is over, a query with nothing to rerank is not the trial. The next
+            # one with candidates is, and the reranker is still down, so the circuit reopens.
+            now = 30.0
+            assert await workspaces[1]("query", [], 2) == []
+            assert models[1].score.await_count == 0
+            assert (await rerank(1)).error_type == "ConnectError"
+            assert models[1].score.await_count == 1
+            assert (await rerank(1)).error_type == "RerankCircuitOpen"
+
+            # The reranker is back; the trial after the doubled wait resumes reranking.
+            now = 90.0
+            models[1].score.side_effect = None
+            models[1].score.return_value = [
+                {"index": 1, "relevance_score": 0.9},
+                {"index": 0, "relevance_score": 0.4},
+            ]
+            resumed = await rerank(1)
+
+        assert resumed.reranked is True
+        assert [chunk["chunk_id"] for chunk in resumed.chunks] == ["b", "a"]
+        assert models[1].score.await_count == 2
+
+    @pytest.mark.parametrize("strategy", ["voyage_reranker", "chat_llm_reranker"])
+    async def test_a_hanging_reranker_is_cut_at_the_deadline_and_the_cut_counts_as_a_failure(
+        self, monkeypatch, strategy: str
+    ) -> None:
+        started = asyncio.Event()
+
+        async def hang(*_args: Any, **_kwargs: Any) -> None:
+            started.set()
+            await asyncio.Event().wait()
+
+        endpoint = AsyncMock(side_effect=hang)
+        scoring_settings = None
+        if strategy == "voyage_reranker":
+            model = AsyncMock()
+            model.score = endpoint
+            monkeypatch.setattr(rerank_module, "create_rerank_model", MagicMock(return_value=model))
+            settings = RerankSettings(strategy="voyage_reranker", api_key="key")
+        else:
+            endpoint.aclose = AsyncMock()
+            monkeypatch.setattr(rerank_module, "CompletionModel", MagicMock(return_value=endpoint))
+            settings = RerankSettings(strategy="chat_llm_reranker")
+            scoring_settings = ModelSettings(provider="openai", model="scoring-model")
+        fn = build_rerank_func(
+            settings,
+            scheduler=ModelScheduler(max_concurrency=1),
+            scoring_settings=scoring_settings,
+            telemetry=NOOP_TELEMETRY,
+            breaker=RerankBreaker(),
+        )
+
+        async def rerank():
+            return await rerank_with_fallback(
+                query="query", chunks=_chunks(), top_k=2, rerank_func=fn
+            )
+
+        async with asyncio.timeout(20):  # a guard: with no deadline these calls would hang
+            # A cancel from outside is not the deadline: it propagates, and counts as nothing.
+            outside = asyncio.create_task(rerank())
+            await started.wait()
+            outside.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await outside
+
+            monkeypatch.setattr(rerank_module, "RERANK_DEADLINE_SECONDS", 0.05)
+            for _ in range(3):
+                cut = await rerank()
+                assert cut.reranked is False
+                assert cut.error_type == "TimeoutError"
+                assert [chunk["chunk_id"] for chunk in cut.chunks] == ["a", "b"]
+            reached = endpoint.await_count
+            skipped = await rerank()
+
+        assert skipped.error_type == "RerankCircuitOpen"  # the three cuts opened the breaker
+        assert endpoint.await_count == reached
+
+    def test_the_rerank_deadline_is_inside_the_default_retrieval_deadline(self) -> None:
+        # Otherwise the run cancels a hanging call first, and the breaker sees no failure.
+        assert RERANK_DEADLINE_SECONDS < RetrievalSettings().timeout
+
+
+class _Service:
+    """A reranker endpoint that counts the calls that reach it."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.error: BaseException | None = None
+
+    async def __call__(self) -> str:
+        self.calls += 1
+        if self.error is not None:
+            raise self.error
+        return "scored"
+
+
+def _http_error(status: int) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", "http://reranker.example/rerank")
+    return httpx.HTTPStatusError(
+        f"HTTP {status}", request=request, response=httpx.Response(status, request=request)
+    )
+
+
+def _sdk_error(status: int) -> openai.APIStatusError:
+    """What the chat reranker's scoring model raises when its endpoint answers ``status``."""
+    request = httpx2.Request("POST", "https://scorer.example/v1/chat/completions")
+    return openai.APIStatusError(
+        f"HTTP {status}", response=httpx2.Response(status, request=request), body=None
+    )
+
+
+def _failed_batch(cause: Exception) -> RerankBatchError:
+    error = RerankBatchError(batch_ordinal=1, batch_start=0, error_type=type(cause).__name__)
+    error.__cause__ = cause
+    return error
+
+
+async def _fail_until_open(breaker: RerankBreaker, service: _Service) -> None:
+    # Not a RuntimeError, so a refused call (a RuntimeError) can never pass for a failed one.
+    service.error = ConnectionError("reranker down")
+    for _ in range(3):
+        with pytest.raises(ConnectionError):
+            await breaker.call(service)
+
+
+class TestRerankBreaker:
+    async def test_third_consecutive_failure_opens_it_and_open_calls_never_reach_the_reranker(
+        self,
+    ) -> None:
+        now = 0.0
+        breaker = RerankBreaker(clock=lambda: now)
+        service = _Service()
+        service.error = ConnectionError("reranker down")
+
+        for _ in range(2):
+            with pytest.raises(ConnectionError):
+                await breaker.call(service)
+        service.error = None
+        assert await breaker.call(service) == "scored"  # an answer resets the count
+        service.error = ConnectionError("reranker down")
+        for _ in range(2):
+            with pytest.raises(ConnectionError):
+                await breaker.call(service)
+        assert service.calls == 5  # two failures, an answer, two failures: still closed
+
+        with pytest.raises(ConnectionError):  # the third failure in a row
+            await breaker.call(service)
+        reached = service.calls
+        now = 29.9
+        for _ in range(3):
+            with pytest.raises(RerankCircuitOpen):
+                await breaker.call(service)
+        assert service.calls == reached
+
+    async def test_after_thirty_seconds_one_trial_goes_through_and_its_answer_closes_it(
+        self,
+    ) -> None:
+        now = 0.0
+        breaker = RerankBreaker(clock=lambda: now)
+        service = _Service()
+        await _fail_until_open(breaker, service)
+        service.error = None
+        reached = service.calls
+        release = asyncio.Event()
+
+        async def trial_call() -> str:
+            await release.wait()
+            return "scored"
+
+        now = 30.0
+        trial = asyncio.create_task(breaker.call(trial_call))
+        await asyncio.sleep(0)
+        for _ in range(3):  # while the trial is in flight, everyone else still fails at once
+            with pytest.raises(RerankCircuitOpen):
+                await breaker.call(service)
+        assert service.calls == reached
+
+        release.set()
+        assert await trial == "scored"
+        assert await breaker.call(service) == "scored"
+        assert service.calls == reached + 1
+
+    async def test_failed_trial_reopens_for_twice_as_long_up_to_five_minutes_until_an_answer(
+        self,
+    ) -> None:
+        now = 0.0
+        breaker = RerankBreaker(clock=lambda: now)
+        service = _Service()
+        await _fail_until_open(breaker, service)
+
+        for wait in (30.0, 60.0, 120.0, 240.0, 300.0, 300.0):
+            now += wait - 1
+            with pytest.raises(RerankCircuitOpen):
+                await breaker.call(service)
+            now += 1
+            with pytest.raises(ConnectionError):  # the trial reaches the reranker and fails
+                await breaker.call(service)
+
+        service.error = None
+        now += 300
+        assert await breaker.call(service) == "scored"  # an answered trial closes it
+        await _fail_until_open(breaker, service)
+        now += 29
+        with pytest.raises(RerankCircuitOpen):
+            await breaker.call(service)
+        now += 1
+        with pytest.raises(ConnectionError):  # the wait is 30 s again, not 300 s
+            await breaker.call(service)
+
+    async def test_cancellation_is_not_a_failure_and_a_cancelled_trial_frees_its_place(
+        self,
+    ) -> None:
+        now = 0.0
+        breaker = RerankBreaker(clock=lambda: now)
+        service = _Service()
+
+        async def hang() -> str:
+            await asyncio.Event().wait()
+            return "scored"
+
+        for _ in range(3):
+            cancelled = asyncio.create_task(breaker.call(hang))
+            await asyncio.sleep(0)
+            cancelled.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await cancelled
+        assert await breaker.call(service) == "scored"  # three cancellations did not open it
+
+        await _fail_until_open(breaker, service)
+        service.error = None
+        now = 30.0
+        trial = asyncio.create_task(breaker.call(hang))
+        await asyncio.sleep(0)
+        with pytest.raises(RerankCircuitOpen):  # the trial holds the only place
+            await breaker.call(service)
+        trial.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await trial
+
+        # The cancelled trial gave its place back without closing the breaker: the next call
+        # is the trial, at once, and when the reranker is still down it opens again.
+        service.error = ConnectionError("reranker down")
+        with pytest.raises(ConnectionError):
+            await breaker.call(service)
+        with pytest.raises(RerankCircuitOpen):
+            await breaker.call(service)
+
+    @pytest.mark.parametrize(
+        ("error", "opens"),
+        [
+            pytest.param(_http_error(400), False, id="400"),
+            pytest.param(_http_error(401), False, id="401"),
+            pytest.param(_failed_batch(_sdk_error(400)), False, id="listwise-batch-400"),
+            pytest.param(_http_error(408), True, id="408"),
+            pytest.param(_http_error(429), True, id="429"),
+            pytest.param(_http_error(500), True, id="500"),
+            pytest.param(httpx.ReadTimeout("timed out"), True, id="read-timeout"),
+            pytest.param(ValueError("not json"), True, id="unreadable-answer"),
+        ],
+    )
+    async def test_only_a_4xx_other_than_408_and_429_is_an_answer(
+        self, error: Exception, opens: bool
+    ) -> None:
+        # One federated query reranks once per workspace through one breaker, so three
+        # refusals of the same query must not take the reranker out for everyone.
+        breaker = RerankBreaker(clock=lambda: 0.0)
+        service = _Service()
+        service.error = error
+        for _ in range(3):
+            with pytest.raises(type(error)):
+                await breaker.call(service)
+
+        with pytest.raises(RerankCircuitOpen if opens else type(error)):
+            await breaker.call(service)
+        assert service.calls == (3 if opens else 4)
+
+    async def test_a_refusal_resets_the_count_and_closes_the_trial_it_answers(self) -> None:
+        now = 0.0
+        breaker = RerankBreaker(clock=lambda: now)
+        service = _Service()
+        down = ConnectionError("reranker down")
+
+        # Failure, failure, refusal, failure, failure: the refusal broke the run of failures.
+        for error in (down, down, _http_error(400), down, down):
+            service.error = error
+            with pytest.raises(type(error)):
+                await breaker.call(service)
+
+        # A third failure opens it. The first trial fails, so the wait doubles to 60 s; the
+        # second is answered with a refusal, which closes the breaker and resets the wait.
+        service.error = down
+        with pytest.raises(ConnectionError):
+            await breaker.call(service)
+        now += 30
+        with pytest.raises(ConnectionError):
+            await breaker.call(service)
+        now += 60
+        service.error = _http_error(413)
+        with pytest.raises(httpx.HTTPStatusError):
+            await breaker.call(service)
+
+        await _fail_until_open(breaker, service)
+        now += 29
+        with pytest.raises(RerankCircuitOpen):
+            await breaker.call(service)
+        now += 1
+        with pytest.raises(ConnectionError):  # the wait is 30 s again, not 60 s
+            await breaker.call(service)
+
+    async def test_calls_that_began_before_it_opened_change_nothing_when_they_finish(
+        self,
+    ) -> None:
+        now = 0.0
+        breaker = RerankBreaker(clock=lambda: now)
+        service = _Service()
+        finish = {name: asyncio.Event() for name in ("answer", "failure", "late failure")}
+
+        async def slow(name: str, *, fails: bool) -> str:
+            await finish[name].wait()
+            if fails:
+                raise TimeoutError("timed out")
+            return "scored"
+
+        answer = asyncio.create_task(breaker.call(lambda: slow("answer", fails=False)))
+        failure = asyncio.create_task(breaker.call(lambda: slow("failure", fails=True)))
+        late_failure = asyncio.create_task(breaker.call(lambda: slow("late failure", fails=True)))
+        await asyncio.sleep(0)
+        await _fail_until_open(breaker, service)  # opens at 0 s, for 30 s
+        service.error = None
+
+        now = 20.0
+        finish["failure"].set()  # an old failure that lands mid-wait does not lengthen it
+        with pytest.raises(TimeoutError):
+            await failure
+        finish["answer"].set()  # and an old answer does not close the open breaker
+        assert await answer == "scored"
+        with pytest.raises(RerankCircuitOpen):
+            await breaker.call(service)
+
+        now = 30.0  # so the wait ends on time, and the trial begins and holds the place
+        release = asyncio.Event()
+
+        async def trial_call() -> str:
+            await release.wait()
+            return "scored"
+
+        trial = asyncio.create_task(breaker.call(trial_call))
+        await asyncio.sleep(0)
+        with pytest.raises(RerankCircuitOpen):  # the trial began on time and holds the place
+            await breaker.call(service)
+        release.set()
+        assert await trial == "scored"
+
+        finish["late failure"].set()  # nor does an old failure count against the closed breaker
+        with pytest.raises(TimeoutError):
+            await late_failure
+        service.error = ConnectionError("reranker down")
+        for _ in range(2):
+            with pytest.raises(ConnectionError):
+                await breaker.call(service)
+        service.error = None
+        assert await breaker.call(service) == "scored"
 
 
 class TestChatLlmRerank:
@@ -692,14 +1118,6 @@ class TestChatLlmRerank:
         assert caught.value.batch_ordinal == 1
         assert caught.value.batch_start == 0
         assert caught.value.error_type == "RuntimeError"
-
-    async def test_empty_chunks(self):
-        mock_scoring = AsyncMock()
-        result = await _chat_llm_rerank(
-            "query", [], top_k=10, scoring_func=mock_scoring, score_threshold=0.3
-        )
-        assert result == []
-        mock_scoring.assert_not_called()
 
     async def test_score_threshold_filters(self):
         mock_scoring = AsyncMock(return_value="[0.1, 0.9, 0.2]")
@@ -1128,20 +1546,6 @@ class TestRunHttpRerank:
         )
 
         assert result == []
-
-    async def test_empty_chunks_short_circuits(self):
-        model = _ScoreModel([])
-        result = await _run_http_rerank(
-            "query",
-            [],
-            top_k=5,
-            model=cast(Any, model),
-            modality="text",
-            score_threshold=None,
-            budget_factory=_budget_factory(),
-        )
-        assert result == []
-        assert model.documents is None
 
 
 class TestRerankProviders:

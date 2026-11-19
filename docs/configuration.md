@@ -763,7 +763,7 @@ Advanced fields:
 
 | Field | Default | Meaning |
 |---|---|---|
-| `timeout` | `300` | Claimed top-level Retrieval planning/search seconds; excludes queue residence and does not wrap Answer Runs |
+| `timeout` | `300` | Claimed top-level Retrieval planning/search seconds; excludes queue residence and does not wrap Answer Runs; must exceed the 270-second rerank deadline |
 | `bm25_k1` | `1.2` | BM25 term-frequency saturation |
 | `bm25_b` | `0.75` | BM25 length normalization |
 | `bm25_profiles` | built-in language set | pg_textsearch index signatures and language labels |

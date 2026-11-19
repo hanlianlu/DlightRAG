@@ -43,7 +43,7 @@ from dlightrag.engine.ai.settings import (
     thaw_settings_value,
 )
 from dlightrag.engine.ai.telemetry import hides_secret_value, is_secret_key
-from dlightrag.engine.rag.workspace.settings import CorpusSettings
+from dlightrag.engine.rag.workspace.settings import RERANK_DEADLINE_SECONDS, CorpusSettings
 from dlightrag.engine.rag.workspace.workspaces import (
     normalize_workspace,
     require_canonical_workspace_id,
@@ -1225,6 +1225,12 @@ class DlightragConfig(BaseSettings):
             raise ValueError("bm25_profiles names must be unique")
         if self.corpus.retrieval.bm25_enabled and not any(p.fallback for p in profiles):
             raise ValueError("bm25_profiles must include at least one fallback profile")
+        if self.corpus.retrieval.timeout <= RERANK_DEADLINE_SECONDS:
+            # Otherwise the run cancels a hanging rerank first, and the breaker sees no failure.
+            raise ValueError(
+                f"corpus.retrieval.timeout must exceed the {RERANK_DEADLINE_SECONDS}-second "
+                "rerank deadline"
+            )
         self._validate_auth()
         self._validate_storage_composition()
         return self
