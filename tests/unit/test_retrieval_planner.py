@@ -3,6 +3,7 @@
 
 import json
 import logging
+import os
 from datetime import datetime
 from functools import partial
 from typing import Any
@@ -298,6 +299,36 @@ class TestPlanWithLLM:
         }
         assert isinstance(structured_output, StructuredOutput)
         assert max_tokens > 0
+
+    async def test_corpus_stable_schema_precedes_the_request_in_the_payload(self):
+        """Two plans in one corpus share the schema, so the schema is the prefix.
+
+        The planner's user turn is JSON data, and a prefix cache matches it
+        token by token: with the request first, the workspace's own schema sits
+        behind a query that differs every call and is re-billed in full. The
+        system prompt is still the first thing the provider sees; this pins the
+        order inside the data turn.
+        """
+        captured: list[list[dict[str, object]]] = []
+
+        async def llm_func(**kwargs):
+            captured.append(list(kwargs["messages"]))
+            return json.dumps({"standalone_query": "rewritten", "filters": {}})
+
+        planner = RetrievalPlanner(llm_func=llm_func, model_profile=_TEST_PROFILE)
+        schema = {"filters": ["filename", "author"], "custom_keys": ["project"]}
+        await planner.plan("first question", schema=schema)
+        await planner.plan("second question", schema=schema)
+
+        first_payload = str(captured[0][1]["content"])
+        second_payload = str(captured[1][1]["content"])
+        stable = _build_schema_section(schema).strip()
+        assert first_payload.startswith('{"metadata_schema":')
+        assert stable in first_payload
+        assert first_payload.index(stable) < first_payload.index("first question")
+        assert captured[0][0]["content"] == captured[1][0]["content"]
+        shared = len(os.path.commonprefix([first_payload, second_payload]))
+        assert shared > len("first question")
 
     async def test_lightrag_prompt_style_callable_is_not_planner_contract(self):
         async def llm(

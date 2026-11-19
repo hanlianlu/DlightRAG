@@ -147,11 +147,15 @@ def _planner_user_payload(
     current_images: list[str] | None = None,
     preserve_query: bool = False,
 ) -> str:
-    payload: dict[str, Any] = {"query": query}
-    if preserve_query:
-        payload["preserve_query"] = True
+    # The metadata schema is fixed for the workspace and the request is not, so the
+    # stable part leads: a later planner call in the same corpus then shares that
+    # text with this one instead of re-billing it behind a query it does not.
+    payload: dict[str, Any] = {}
     if metadata_schema:
         payload["metadata_schema"] = metadata_schema
+    payload["query"] = query
+    if preserve_query:
+        payload["preserve_query"] = True
     history_text = _convert_history_to_text(history)
     if history_text:
         payload["conversation_history"] = history_text
