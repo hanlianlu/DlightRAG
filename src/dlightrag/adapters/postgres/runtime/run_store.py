@@ -2719,6 +2719,11 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
                 tables=RUN_SCHEMA_TABLES,
                 schema_error=RunSchemaError,
             )
+            # Stored code is code, not data: PostgreSQL never rewrites a function body when a
+            # table or column it names is renamed, and a recorded migration never re-runs - so a
+            # rename leaves this body naming what is no longer there, and every run event write
+            # fails at runtime. Each writer reconciles the body with this revision instead.
+            await conn.execute(_ENFORCE_RUN_EVENT_CONSTRAINTS)
 
         await self._run(_operation)
         self._initialized = True

@@ -41,6 +41,7 @@ from dlightrag.adapters.postgres.runtime.run_blob_store import (
     write_complete_blob,
 )
 from dlightrag.adapters.postgres.runtime.run_store import (
+    _ENFORCE_RUN_EVENT_CONSTRAINTS,
     RUN_MIGRATION_SCOPE,
     RUN_MIGRATIONS,
     RUN_SCHEMA_TABLES,
@@ -172,6 +173,15 @@ def _blob_store(store: PGRunStore) -> PGRunBlobStore:
     pool = store._operation_pool  # noqa: SLF001 - bind the separate blob seam in tests
     assert pool is not None
     return PGRunBlobStore(pool=pool)
+
+
+async def _constraint_body(conn: Any) -> str:
+    """The stored body of the run-event trigger function, as the database holds it."""
+    return str(
+        await conn.fetchval(
+            "SELECT prosrc FROM pg_proc WHERE proname = 'dlightrag_enforce_run_event_constraints'"
+        )
+    )
 
 
 @pytest.fixture
@@ -539,6 +549,33 @@ class TestSchema:
             )
 
             assert await catalog_definitions(conn) == baseline
+
+    async def test_a_stale_function_body_is_reconciled_at_the_next_writer_start(self, pool) -> None:
+        """PostgreSQL never rewrites a function body when the table it names is renamed.
+
+        A database initialized before such a rename keeps the old name inside the body, and every
+        run-event write then fails at runtime - that is how a long-lived deployment lost its runs,
+        its cancellations, and its reclaims at once. The body is stored code rather than data, so
+        a writer reconciles it with this revision instead of a migration that already ran.
+        """
+        # A database a previous revision already initialized: its baseline and migrations ran,
+        # so nothing but a writer's reconciliation can repair what a rename leaves behind.
+        await PGRunStore(pool=pool).initialize(validate_only=False)
+
+        async with pool.acquire() as conn:
+            # The body a rename leaves behind: PostgreSQL accepted it while that name existed,
+            # which is why nothing failed until the table was renamed away.
+            await conn.execute("SET check_function_bodies = off")
+            await conn.execute(
+                _ENFORCE_RUN_EVENT_CONSTRAINTS.replace("dlightrag_runs", "dlightrag_old_runs")
+            )
+            assert "dlightrag_old_runs" in await _constraint_body(conn)
+
+            await PGRunStore(pool=pool).initialize(validate_only=False)
+
+            body = await _constraint_body(conn)
+            assert "dlightrag_runs" in body
+            assert "dlightrag_old_runs" not in body
 
     async def test_a_refused_ledger_releases_the_scope_lock(self, pool) -> None:
         """A runner that refuses its ledger must not leave other callers waiting on it."""
