@@ -90,7 +90,7 @@ WITH bumped AS (
         next_event_sequence = next_event_sequence + 1
     WHERE owner_id = $1 AND run_id = $2
       AND lease_owner = $3 AND fencing_epoch = $4
-      AND status = 'running' AND lease_expires_at > NOW()
+      AND status = 'running'
       AND (NOT $12::boolean OR cancel_requested_at IS NULL)
       AND (
           $5::text <> 'succeeded'

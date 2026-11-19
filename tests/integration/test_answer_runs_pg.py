@@ -1472,18 +1472,6 @@ class TestLeaseFencing:
             )
         ).cancel_requested is True
 
-    async def test_expired_lease_is_never_revived(self, store, pool) -> None:
-        creation = await store.create_run(owner_id=_OWNER, request=_request())
-        claim = await _claimed(store)
-        await _expire_lease(pool, creation.run.run_id)
-        renewal = await store.heartbeat(
-            owner_id=_OWNER,
-            run_id=creation.run.run_id,
-            worker_id=_WORKER,
-            fencing_epoch=claim.run.fencing_epoch,
-        )
-        assert renewal.renewed is False
-
     async def test_stale_worker_cannot_write_after_reclaim(self, store, pool) -> None:
         creation = await store.create_run(owner_id=_OWNER, request=_request())
         stale = await _claimed(store)

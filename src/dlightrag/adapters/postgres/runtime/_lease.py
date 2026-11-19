@@ -4,7 +4,7 @@
 from typing import Any
 
 # Locks the Run row only while this worker's claim is still the live one: the
-# same owner and fencing epoch, still running, lease unexpired. Every fenced
+# same owner and fencing epoch, still running -- ownership, not the clock. Every fenced
 # write that is more than one statement takes this lock first, so a reclaimed
 # Run refuses a stale worker and one lock order holds across writers. The row
 # carries what a settlement decides by once it holds the lock.
@@ -14,7 +14,7 @@ SELECT durable_progress_version,
 FROM dlightrag_runs
 WHERE owner_id = $1 AND run_id = $2
   AND lease_owner = $3 AND fencing_epoch = $4
-  AND status = 'running' AND lease_expires_at > NOW()
+  AND status = 'running'
 FOR UPDATE
 """
 

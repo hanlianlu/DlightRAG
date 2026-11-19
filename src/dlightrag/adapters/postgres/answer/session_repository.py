@@ -89,7 +89,7 @@ SELECT 1
 FROM dlightrag_answer_child_sessions
 WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
   AND lease_owner = $4 AND fencing_epoch = $5
-  AND status = 'running' AND lease_expires_at > NOW()
+  AND status = 'running'
 FOR UPDATE
 """
 
@@ -112,7 +112,7 @@ _ACTIVE_SESSION_RUN = """
 SELECT 1
 FROM dlightrag_runs
 WHERE owner_id = $1 AND run_id = $2
-  AND status = 'running' AND lease_expires_at > NOW()
+  AND status = 'running'
 """
 
 _INSERT_ENTRIES = """
@@ -156,7 +156,7 @@ WITH bumped AS (
         updated_at = NOW()
     WHERE owner_id = $1 AND run_id = $2
       AND lease_owner = $3 AND fencing_epoch = $4
-      AND status = 'running' AND lease_expires_at > NOW()
+      AND status = 'running'
     RETURNING next_event_sequence - 1 AS event_sequence
 )
 INSERT INTO dlightrag_run_events (

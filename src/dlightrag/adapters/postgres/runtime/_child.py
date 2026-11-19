@@ -167,7 +167,7 @@ SET lease_expires_at = NOW() + ($6 * INTERVAL '1 second'),
     updated_at = NOW()
 WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
   AND lease_owner = $4 AND fencing_epoch = $5
-  AND status = 'running' AND lease_expires_at > NOW()
+  AND status = 'running'
 RETURNING 1
 """
 
@@ -870,7 +870,7 @@ class ChildRunStoreMixin:
         fencing_epoch: int,
         child_fencing_epoch: int,
     ) -> bool:
-        """Renew one unexpired Child lease under its live parent run claim."""
+        """Renew one Child lease the worker still owns under its live parent run claim."""
         owner = _require_owner(owner_id)
         run_uuid = parse_run_id(run_id)
         child_uuid = parse_run_id(child_session_id)

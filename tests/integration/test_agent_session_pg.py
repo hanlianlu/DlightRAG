@@ -2864,19 +2864,11 @@ async def _settlement_footprint(pool, run_id: str) -> tuple[Any, ...]:
     return (run["status"], run["durable_progress_version"], *counts)
 
 
-@pytest.mark.parametrize("fault", ["stale_epoch", "expired_lease", "wrong_progress"])
+@pytest.mark.parametrize("fault", ["stale_epoch", "wrong_progress"])
 async def test_progress_settlements_outside_the_fenced_run_write_nothing(pool, fault: str) -> None:
     claimed = await _claim(pool)
     run_id = claimed.run.run_id
     epoch = claimed.execution.fencing_epoch
-    if fault == "expired_lease":
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE dlightrag_runs SET lease_expires_at = NOW() - INTERVAL '1 second'"
-                " WHERE owner_id = $1 AND run_id = $2",
-                _OWNER,
-                uuid.UUID(run_id),
-            )
     progress = PGProgressStore(
         pool=pool,
         owner_id=_OWNER,
@@ -2916,6 +2908,64 @@ async def test_progress_settlements_outside_the_fenced_run_write_nothing(pool, f
     assert isinstance(stage, refusal)
     assert isinstance(terminal, refusal)
     assert await _settlement_footprint(pool, run_id) == before
+
+
+async def test_progress_settlements_after_a_lapse_are_the_owner_s_to_write(pool) -> None:
+    """A lapsed window is reclaimability, not ownership loss: the epoch fences, not the clock.
+
+    Settlements that go outside the run's fenced write are guarded by ownership -- owner, lease_owner
+    and fencing_epoch -- so a worker that stalled past the window and came back still settles its own
+    stage. What must refuse it is a reclaim (the epoch moved) or a stale progress version, and both
+    of those are pinned by ``test_progress_settlements_outside_the_fenced_run_write_nothing`` and
+    ``test_stale_epoch_writes_zero_rows``.
+    """
+    claimed = await _claim(pool)
+    run_id = claimed.run.run_id
+    epoch = claimed.execution.fencing_epoch
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE dlightrag_runs SET lease_expires_at = NOW() - INTERVAL '1 second'"
+            " WHERE owner_id = $1 AND run_id = $2",
+            _OWNER,
+            uuid.UUID(run_id),
+        )
+    progress = PGProgressStore(
+        pool=pool,
+        owner_id=_OWNER,
+        run_id=uuid.UUID(run_id),
+        worker_id=_WORKER,
+        lease_owner=_WORKER,
+        fencing_epoch=epoch,
+    )
+    content = b"stage evidence"
+    evidence = OpaqueEvidenceWrite(
+        session_id=SessionId.new().value,
+        intent_id=IntentId.new().value,
+        result_ordinal=0,
+        content_digest=hashlib.sha256(content).hexdigest(),
+        locator_digest=hashlib.sha256(b"locator").hexdigest(),
+        content=content,
+        locator=b"locator",
+    )
+    before = await _settlement_footprint(pool, run_id)
+
+    stage = await progress.settle_stage(
+        expected_progress_version=0,
+        stage_intent_id=StageIntentId.deterministic(run_id=run_id, name="fast:retrieval:0"),
+        stage_name="retrieval",
+        state={"results": []},
+        evidence=(evidence,),
+    )
+    terminal = await progress.settle_terminal(
+        expected_progress_version=0,
+        stage_intent_id=StageIntentId.deterministic(run_id=run_id, name="fast:final:0"),
+        state={"answer": "done"},
+        result={"answer": "done"},
+    )
+
+    assert not isinstance(stage, StageLeaseLost)
+    assert not isinstance(terminal, StageLeaseLost)
+    assert await _settlement_footprint(pool, run_id) != before
 
 
 async def test_stale_epoch_writes_zero_rows(pool) -> None:
