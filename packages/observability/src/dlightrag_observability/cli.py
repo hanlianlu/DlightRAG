@@ -12,8 +12,8 @@ It also owns the alerting half: the notification channel, the alerts, and the
 dashboard tiles ship as JSON under ``stack/``, and ``alerts push`` writes them
 through the REST API, so changing what a deployment watches is a file change and
 one command rather than a session of clicking. The files name no instance: the ids a
-stack hands out when it is seeded are read from the stack's own Mongo by ``bootstrap``
-and reach the files as ``${VARIABLES}``, and a push finds what it wrote by name.
+stack hands out when it is seeded are asked of the stack's own API at push time and reach
+the files as ``${VARIABLES}``, and a push finds what it wrote by name.
 
 Everything is standard library: a stack that needs a pip install to start is a
 stack that fails on the machine that matters.
@@ -66,13 +66,13 @@ _COLLECTION_KEYS: Final[Mapping[str, str]] = {
 CHANNEL_ID_VARIABLE = "HYPERDX_WEBHOOK_ID"
 
 #: The ids the artifacts name that a stack hands out when its first team is seeded
-#: (`DEFAULT_CONNECTIONS`, `DEFAULT_SOURCES`): where `bootstrap` finds each in the stack's own
-#: Mongo, as a collection and a filter. The oldest document that matches is the one the seeding
-#: wrote, so a second run on the same stack finds the same ids.
-STACK_IDS: Final[Mapping[str, tuple[str, str]]] = {
-    "HYPERDX_CONNECTION_ID": ("connections", "{}"),
-    "HYPERDX_SOURCE_TRACES": ("sources", '{"kind": "trace"}'),
-    "HYPERDX_SOURCE_METRICS": ("sources", '{"kind": "metric"}'),
+#: (`DEFAULT_CONNECTIONS`, `DEFAULT_SOURCES`): the API collection that lists each, and the
+#: `kind` of source it is (a connection has none). A push asks for the ones the environment
+#: does not state, and takes the oldest match, which is the one the seeding wrote.
+STACK_IDS: Final[Mapping[str, tuple[str, str | None]]] = {
+    "HYPERDX_CONNECTION_ID": ("connections", None),
+    "HYPERDX_SOURCE_TRACES": ("sources", "trace"),
+    "HYPERDX_SOURCE_METRICS": ("sources", "metric"),
 }
 
 #: The REST API a push talks to, and the environment variables it reads. The key is a
@@ -186,28 +186,6 @@ def _read_env(env_path: Path) -> dict[str, str]:
             key, _, value = line.partition("=")
             values[key.strip()] = value.strip()
     return values
-
-
-def write_env_values(env_path: Path, values: Mapping[str, str]) -> bool:
-    """Set each variable in the env file, leaving every other line alone.
-
-    A variable the file already assigns is replaced in place and one it does not is
-    appended. The file is rewritten, never recreated, so it keeps the owner-only mode
-    `ensure_env` gave it. Returns whether anything changed.
-    """
-    original = env_path.read_text(encoding="utf-8")
-    pending = dict(values)
-    lines = original.splitlines()
-    for index, line in enumerate(lines):
-        name, separator, _value = line.partition("=")
-        if separator and name.strip() in pending:
-            lines[index] = f"{name.strip()}={pending.pop(name.strip())}"
-    lines.extend(f"{name}={value}" for name, value in pending.items())
-    rendered = "\n".join(lines) + "\n"
-    if rendered == original:
-        return False
-    env_path.write_text(rendered, encoding="utf-8")
-    return True
 
 
 def probe_payload(
@@ -498,79 +476,6 @@ def wait_for_stack(app_port: int, *, seconds: float, delay: float = 3.0) -> bool
         time.sleep(delay)
 
 
-def mongo_ids_script() -> str:
-    """The mongosh program that prints the stack's own ids as one JSON object.
-
-    Each id is the oldest document in its collection that matches its filter, or an empty
-    string when there is none yet. Everything interpolated is a constant of `STACK_IDS`.
-    """
-    lookups = ", ".join(
-        f"{name}: oldest('{collection}', {query})"
-        for name, (collection, query) in STACK_IDS.items()
-    )
-    return (
-        "const oldest = (collection, query) => {"
-        " const found = db.getCollection(collection).find(query, {_id: 1}).sort({_id: 1}).limit(1).toArray();"
-        " return found.length ? found[0]._id.toString() : ''; };"
-        f" print(JSON.stringify({{{lookups}}}));"
-    )
-
-
-def stack_ids(
-    root: Path, env_path: Path, *, run: Callable[..., Any] = subprocess.run
-) -> dict[str, str]:
-    """The ids this stack's own Mongo holds, for every variable of `STACK_IDS` it has one for.
-
-    Raises `OSError` when the Mongo cannot be asked (no container, Docker down) and
-    `ValueError` when it answers with something that is not the JSON object requested.
-    """
-    command = compose_command(
-        root,
-        env_path,
-        "exec",
-        "-T",
-        "db",
-        "mongosh",
-        "--quiet",
-        "hyperdx",
-        "--eval",
-        mongo_ids_script(),
-    )
-    completed = run(command, capture_output=True, text=True, check=False, timeout=60)  # noqa: S603
-    if completed.returncode != 0:
-        raise OSError(completed.stderr.strip() or f"mongosh exited {completed.returncode}")
-    found = json.loads(
-        completed.stdout.strip().splitlines()[-1] if completed.stdout.strip() else ""
-    )
-    if not isinstance(found, dict):
-        raise ValueError("mongosh did not print a JSON object")
-    return {name: value for name, value in found.items() if name in STACK_IDS and value}
-
-
-def sync_stack_ids(
-    root: Path, env_path: Path, *, run: Callable[..., Any] = subprocess.run
-) -> tuple[bool, str]:
-    """Write the stack's own ids into `stack/.env`, and say what happened.
-
-    The artifacts name these ids as variables, so this is what ties one set of files to
-    this stack. A stack nobody has opened yet has no team, hence no sources: that is the
-    first-run state (`False`, with the way out), not an error. A second run on a seeded
-    stack finds the same ids and changes nothing.
-    """
-    try:
-        ids = stack_ids(root, env_path, run=run)
-    except (OSError, ValueError, subprocess.SubprocessError) as exc:
-        return False, f"stack ids not read ({exc})"
-    missing = [name for name in STACK_IDS if name not in ids]
-    changed = write_env_values(env_path, ids) if ids else False
-    if missing:
-        return False, (
-            f"the stack has no {', '.join(missing)} yet; create the administrator in the UI, "
-            f"then run this command again"
-        )
-    return True, f"stack ids {'written to' if changed else 'already in'} {env_path}"
-
-
 def _bootstrap(args: argparse.Namespace) -> int:
     root = stack_root()
     env_path = ensure_env(root)
@@ -586,10 +491,6 @@ def _bootstrap(args: argparse.Namespace) -> int:
             f"the UI did not answer in {args.wait_seconds:.0f}s; is the stack up?", file=sys.stderr
         )
         return 1
-    # Before the probe: the ids need a seeded team, not a collector that accepts OTLP, and
-    # they are what `alerts push` is waiting for.
-    seeded, report = sync_stack_ids(root, env_path)
-    print(report, file=sys.stdout if seeded else sys.stderr)
     if args.skip_probe:
         return 0
     try:
@@ -768,6 +669,54 @@ def _written_ids(
     return {str(item[key]): str(item["id"]) for item in items if key in item and "id" in item}
 
 
+def resolve_stack_ids(
+    environ: Mapping[str, str],
+    *,
+    api_url: str,
+    api_key: str,
+    opener: Callable[..., Any] = urllib.request.urlopen,
+) -> dict[str, str]:
+    """The environment, with the stack's own ids filled in where it states none.
+
+    A value the operator set (in the process environment or in ``stack/.env``) wins and is
+    never asked for; an empty one counts as unset. The rest come from the stack's API
+    (``GET /api/v2/connections`` and ``/sources``, each listed once): the oldest connection,
+    and the oldest source of each kind, which is what the stack's first seeding wrote. A stack
+    that has none of them yet has no team to hold them, so the push stops and says how to
+    get them rather than sending an empty id.
+    """
+    resolved = dict(environ)
+    missing = [name for name in STACK_IDS if not environ.get(name)]
+    listed: dict[str, list[dict[str, Any]]] = {}
+    for name in missing:
+        collection, kind = STACK_IDS[name]
+        if collection not in listed:
+            _, body = _call(
+                opener,
+                "GET",
+                f"/api/{API_VERSION}/{collection}",
+                api_url=api_url,
+                api_key=api_key,
+                label=f"list {collection}",
+            )
+            listed[collection] = body["data"]
+        # An ObjectId's leading bytes are its creation time, so the smallest id is the oldest.
+        found = sorted(
+            str(item["id"])
+            for item in listed[collection]
+            if kind is None or item.get("kind") == kind
+        )
+        if not found:
+            what = f"a {kind} source" if kind else "a connection"
+            raise SystemExit(
+                f"{name}: the stack has no {what}. Create the administrator and the sources in "
+                f"the UI first (the first administrator seeds them), then run `alerts push` "
+                f"again; or set {name} to use another."
+            )
+        resolved[name] = found[0]
+    return resolved
+
+
 def push_artifacts(
     pushes: Sequence[ArtifactPush],
     *,
@@ -810,16 +759,30 @@ def push_artifacts(
     return len(pushes)
 
 
-def _push_alerts(args: argparse.Namespace) -> int:
+def _push_alerts(
+    args: argparse.Namespace, *, opener: Callable[..., Any] = urllib.request.urlopen
+) -> int:
     root = stack_root()
     # The artifacts name the stack's ids, the webhook's URL, and the chat as ${VAR}
-    # placeholders. Those values live in stack/.env (written by bootstrap and edited by the operator), so
-    # read that file too: the process environment still wins, which keeps an explicit
-    # export working, and a `docker compose --env-file` operator is not required to
-    # have exported anything.
+    # placeholders. Those values live in stack/.env (edited by the operator), so read that
+    # file too: the process environment still wins, which keeps an explicit export working,
+    # and a `docker compose --env-file` operator is not required to have exported anything.
     env_path = root / "stack" / ".env"
     stacked = _read_env(env_path) if env_path.is_file() else {}
-    pushes = alerting_artifacts(root, environ={**stacked, **os.environ})
+    environ = {**stacked, **os.environ}
+    api_key = os.environ.get(API_KEY_VARIABLE, "") or stacked.get(API_KEY_VARIABLE, "")
+    api_url = os.environ.get(API_URL_VARIABLE) or stacked.get(API_URL_VARIABLE) or DEFAULT_API_URL
+    if args.dry_run:
+        # No request is sent, so an id the stack would be asked for is shown as that.
+        environ |= {name: f"<{name}>" for name in STACK_IDS if not environ.get(name)}
+    elif not api_key:
+        raise SystemExit(
+            f"{API_KEY_VARIABLE} is not set; export the access key ClickStack mints "
+            f"under Team Settings"
+        )
+    else:
+        environ = resolve_stack_ids(environ, api_url=api_url, api_key=api_key, opener=opener)
+    pushes = alerting_artifacts(root, environ=environ)
     if not pushes:
         print(
             f"nothing to push: {root / 'stack' / ALERTS_DIRECTORY} and "
@@ -831,14 +794,7 @@ def _push_alerts(args: argparse.Namespace) -> int:
         for push in pushes:
             print(f"UPSERT /api/{API_VERSION}/{push.collection} — {push.label}")
         return 0
-    api_key = os.environ.get(API_KEY_VARIABLE, "") or stacked.get(API_KEY_VARIABLE, "")
-    if not api_key:
-        raise SystemExit(
-            f"{API_KEY_VARIABLE} is not set; export the access key ClickStack mints "
-            f"under Team Settings"
-        )
-    api_url = os.environ.get(API_URL_VARIABLE) or stacked.get(API_URL_VARIABLE) or DEFAULT_API_URL
-    sent = push_artifacts(pushes, api_url=api_url, api_key=api_key)
+    sent = push_artifacts(pushes, api_url=api_url, api_key=api_key, opener=opener)
     print(f"pushed {sent} artifact(s) to {api_url}")
     return 0
 

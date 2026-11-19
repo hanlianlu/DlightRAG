@@ -17,7 +17,6 @@ import json
 import os
 import pkgutil
 import re
-import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -442,10 +441,16 @@ class _FakeApi:
     request is kept so a test can read what was sent and in what order.
     """
 
-    def __init__(self, documents: dict[str, dict[str, str]] | None = None) -> None:
+    def __init__(
+        self,
+        documents: dict[str, dict[str, str]] | None = None,
+        stack: dict[str, list[dict[str, str]]] | None = None,
+    ) -> None:
         self.documents = {
             collection: dict(names) for collection, names in (documents or {}).items()
         }
+        # The connections and sources the stack's first seeding made, as the API lists them.
+        self.stack = stack or {}
         self.sent: list[tuple[str, str, dict[str, Any] | None, urllib.request.Request]] = []
 
     def __call__(self, request: urllib.request.Request, **_kwargs: Any) -> _Response:
@@ -453,6 +458,8 @@ class _FakeApi:
         body = json.loads(request.data) if isinstance(request.data, bytes) else None
         self.sent.append((method, path, body, request))
         collection = path.split("/")[3]
+        if collection in self.stack:
+            return _Response({"data": self.stack[collection]})
         names = self.documents.setdefault(collection, {})
         key = cli._COLLECTION_KEYS[collection]  # noqa: SLF001 - the contract under test
         if method == "GET":
@@ -956,10 +963,15 @@ def test_no_shipped_artifact_names_a_stack_instance() -> None:
         assert all("id" not in tile for tile in document.get("tiles", [])), path.name
         assert set(cli._ENV_REFERENCE.findall(text)) <= known, path.name  # noqa: SLF001
 
+    # An id is never shipped as a value: the push asks the stack, and an operator may override.
     example = (cli.stack_root() / "stack" / ".env.example").read_text(encoding="utf-8")
-    declared = {line.partition("=")[0] for line in example.splitlines() if "=" in line}
-    assert set(cli.STACK_IDS) <= declared
-    assert "DLIGHTRAG_TELEGRAM_WEBHOOK_ID" not in declared, "the push learns the webhook's id"
+    active = {
+        line.partition("=")[0]
+        for line in example.splitlines()
+        if "=" in line and not line.startswith("#")
+    }
+    assert not set(cli.STACK_IDS) & active
+    assert "DLIGHTRAG_TELEGRAM_WEBHOOK_ID" not in active, "the push learns the webhook's id"
 
 
 def test_every_shipped_name_carries_the_product_so_two_products_can_share_a_stack() -> None:
@@ -1046,7 +1058,7 @@ def test_a_push_resolves_the_stack_ids_and_chat_from_the_environment() -> None:
 def test_a_push_reads_the_stack_env_file_the_operator_edits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """`stack/.env` is where `bootstrap` and the operator put the values; nobody has to export them."""
+    """`stack/.env` is where the operator puts the values; nobody has to export them."""
     import argparse
 
     alerts = tmp_path / "stack" / "alerts"
@@ -1089,161 +1101,139 @@ def test_a_push_reads_the_stack_env_file_the_operator_edits(
     assert "UPSERT /api/v2/webhooks — channel Product · Telegram" in printed
     assert "UPSERT /api/v2/alerts — alert Product · api 5xx" in printed
 
-    # An id `bootstrap` has not written yet is named, rather than pushed as an empty string.
+    # A dry run sends nothing, so an id the stack would be asked for does not stop it.
     (tmp_path / "stack" / ".env").write_text(
-        "DLIGHTRAG_TELEGRAM_CHAT_ID=chat-9\n"
-        "DLIGHTRAG_TELEGRAM_WEBHOOK_URL=https://example.invalid/bot\n"
-        "HYPERDX_CONNECTION_ID=\n",
+        "DLIGHTRAG_TELEGRAM_CHAT_ID=chat-9\nDLIGHTRAG_TELEGRAM_WEBHOOK_URL=https://example.invalid/bot\n",
         encoding="utf-8",
     )
-    with pytest.raises(SystemExit, match="HYPERDX_CONNECTION_ID"):
-        cli._push_alerts(argparse.Namespace(dry_run=True))  # noqa: SLF001
+    assert cli._push_alerts(argparse.Namespace(dry_run=True)) == 0  # noqa: SLF001
+    assert "UPSERT /api/v2/alerts — alert Product · api 5xx" in capsys.readouterr().out
 
 
-# ── bootstrap: the stack's own ids ───────────────────────────────────────────
+# ── The stack's own ids, asked of its API ────────────────────────────────────
 
-_SEEDED = {
-    "HYPERDX_CONNECTION_ID": "6ac9470bc0696e82a108098f",
-    "HYPERDX_SOURCE_TRACES": "6ac9470bc0696e82a1080995",
-    "HYPERDX_SOURCE_METRICS": "6ac9470bc0696e82a1080997",
-}
-
-
-class _FakeMongo:
-    """A `subprocess.run` that answers the way `mongosh --eval` does, and keeps the command."""
-
-    def __init__(self, printed: str, *, returncode: int = 0, stderr: str = "") -> None:
-        self.printed, self.returncode, self.stderr = printed, returncode, stderr
-        self.commands: list[list[str]] = []
-
-    def __call__(self, command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
-        self.commands.append(command)
-        return subprocess.CompletedProcess(command, self.returncode, self.printed, self.stderr)
+_SEEDED_SOURCES = [
+    {"id": "6ac9470bc0696e82a1080997", "kind": "metric", "name": "Metrics"},
+    {"id": "6ac9470bc0696e82a1080995", "kind": "trace", "name": "Traces"},
+    {"id": "6ac9470bc0696e82a1080994", "kind": "log", "name": "Logs"},
+    # A source an operator added later is newer, so it never displaces the one that was seeded.
+    {"id": "6ad0000000000000000000aa", "kind": "trace", "name": "Traces (staging)"},
+]
+_SEEDED_CONNECTIONS = [
+    {"id": "6ad0000000000000000000bb", "name": "Another"},
+    {"id": "6ac9470bc0696e82a108098f", "name": "Local ClickHouse"},
+]
 
 
-def _env_file(tmp_path: Path) -> Path:
-    stack = tmp_path / "stack"
-    stack.mkdir(exist_ok=True)
-    (stack / ".env.example").write_text(
-        "HYPERDX_API_KEY=\nEXPRESS_SESSION_SECRET=\n# the ids\nHYPERDX_CONNECTION_ID=\n"
-        "HYPERDX_SOURCE_TRACES=\nHYPERDX_SOURCE_METRICS=\nHYPERDX_APP_PORT=8300\n",
-        encoding="utf-8",
+class _FakeStackApi:
+    """The two listings a push asks for its ids, answered as ClickStack answers them."""
+
+    def __init__(self, connections: list[dict[str, str]], sources: list[dict[str, str]]) -> None:
+        self.listings = {"connections": connections, "sources": sources}
+        self.sent: list[urllib.request.Request] = []
+
+    def __call__(self, request: urllib.request.Request, **_kwargs: Any) -> _Response:
+        self.sent.append(request)
+        collection = urllib.parse.urlsplit(request.full_url).path.rpartition("/")[2]
+        return _Response({"data": self.listings[collection]})
+
+
+def _resolve(environ: dict[str, str], api: _FakeStackApi) -> dict[str, str]:
+    return cli.resolve_stack_ids(
+        environ, api_url="http://127.0.0.1:8000/", api_key="access-key", opener=api
     )
-    (tmp_path / "compose.yaml").write_text("services: {}\n", encoding="utf-8")
-    return cli.ensure_env(tmp_path)
 
 
-def test_bootstrap_reads_the_ids_from_the_stacks_own_mongo_and_writes_them_to_the_env(
-    tmp_path: Path,
-) -> None:
-    env_path = _env_file(tmp_path)
-    secrets_before = {
-        key: value
-        for key, value in cli._read_env(env_path).items()  # noqa: SLF001
-        if key in {"HYPERDX_API_KEY", "EXPRESS_SESSION_SECRET", "HYPERDX_APP_PORT"}
+def test_the_stack_ids_are_the_oldest_connection_and_the_oldest_source_of_each_kind() -> None:
+    """What the first seeding wrote is what a push reads, found through the stack's own API."""
+    api = _FakeStackApi(_SEEDED_CONNECTIONS, _SEEDED_SOURCES)
+
+    resolved = _resolve({"UNRELATED": "kept"}, api)
+
+    assert resolved == {
+        "UNRELATED": "kept",
+        "HYPERDX_CONNECTION_ID": "6ac9470bc0696e82a108098f",
+        "HYPERDX_SOURCE_TRACES": "6ac9470bc0696e82a1080995",
+        "HYPERDX_SOURCE_METRICS": "6ac9470bc0696e82a1080997",
     }
-    # mongosh may print a banner or a warning before the result: the last line is the answer.
-    mongo = _FakeMongo("warning: something unrelated\n" + json.dumps(_SEEDED) + "\n")
+    # Each listing is asked for once, however many ids come out of it.
+    assert [request.full_url for request in api.sent] == [
+        "http://127.0.0.1:8000/api/v2/connections",
+        "http://127.0.0.1:8000/api/v2/sources",
+    ]
+    assert all(request.get_method() == "GET" for request in api.sent)
+    assert all(request.get_header("Authorization") == "Bearer access-key" for request in api.sent)
 
-    ok, report = cli.sync_stack_ids(tmp_path, env_path, run=mongo)
 
-    assert ok and report == f"stack ids written to {env_path}"
-    values = cli._read_env(env_path)  # noqa: SLF001
-    assert {name: values[name] for name in cli.STACK_IDS} == _SEEDED
-    assert {key: values[key] for key in secrets_before} == secrets_before
-    assert env_path.stat().st_mode & 0o777 == 0o600
-    # The one command asks the `db` service of this stack's own Compose project.
-    command = mongo.commands[0]
-    assert command[:2] == ["docker", "compose"]
-    assert command[command.index("exec") :][:6] == [
-        "exec",
-        "-T",
-        "db",
-        "mongosh",
-        "--quiet",
-        "hyperdx",
+def test_a_value_the_operator_set_wins_and_is_not_asked_for() -> None:
+    explicit = {
+        "HYPERDX_CONNECTION_ID": "mine-connection",
+        "HYPERDX_SOURCE_TRACES": "mine-traces",
+        "HYPERDX_SOURCE_METRICS": "mine-metrics",
+    }
+    # An empty stack would stop the push if it were asked, so no request is the proof.
+    api = _FakeStackApi([], [])
+    assert _resolve(explicit, api) == explicit
+    assert api.sent == []
+
+    # Partly set: only what is missing is asked, and a variable set to nothing is missing.
+    api = _FakeStackApi(_SEEDED_CONNECTIONS, _SEEDED_SOURCES)
+    resolved = _resolve(
+        {"HYPERDX_CONNECTION_ID": "mine-connection", "HYPERDX_SOURCE_TRACES": ""}, api
+    )
+    assert resolved["HYPERDX_CONNECTION_ID"] == "mine-connection"
+    assert resolved["HYPERDX_SOURCE_TRACES"] == "6ac9470bc0696e82a1080995"
+    assert [urllib.parse.urlsplit(request.full_url).path for request in api.sent] == [
+        "/api/v2/sources"
     ]
 
 
-def test_a_second_bootstrap_on_the_same_stack_finds_the_same_ids_and_changes_nothing(
-    tmp_path: Path,
-) -> None:
-    env_path = _env_file(tmp_path)
-    cli.sync_stack_ids(tmp_path, env_path, run=_FakeMongo(json.dumps(_SEEDED)))
-    written = env_path.read_text(encoding="utf-8")
-
-    ok, report = cli.sync_stack_ids(tmp_path, env_path, run=_FakeMongo(json.dumps(_SEEDED)))
-
-    assert ok and report == f"stack ids already in {env_path}"
-    assert env_path.read_text(encoding="utf-8") == written
-
-
-def test_the_mongo_query_takes_the_oldest_document_of_each_kind() -> None:
-    """Oldest-first is what makes a re-run find the seeded id after an operator adds a source."""
-    script = cli.mongo_ids_script()
-    for name, (collection, query) in cli.STACK_IDS.items():
-        assert f"{name}: oldest('{collection}', {query})" in script
-    assert "sort({_id: 1}).limit(1)" in script
-    assert script.endswith("}));")
-
-
-def test_a_stack_nobody_has_opened_yet_has_no_ids_and_bootstrap_says_how_to_get_them(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("connections", "sources", "missing"),
+    [
+        ([], _SEEDED_SOURCES, "HYPERDX_CONNECTION_ID"),
+        (_SEEDED_CONNECTIONS, [_SEEDED_SOURCES[2]], "HYPERDX_SOURCE_TRACES"),
+        (_SEEDED_CONNECTIONS, _SEEDED_SOURCES[1:], "HYPERDX_SOURCE_METRICS"),
+    ],
+    ids=["no connection", "no trace source", "no metric source"],
+)
+def test_a_stack_without_what_a_query_reads_stops_the_push_and_says_how_to_get_it(
+    connections: list[dict[str, str]], sources: list[dict[str, str]], missing: str
 ) -> None:
     """The team, and with it the sources, is created when the first administrator is."""
-    env_path = _env_file(tmp_path)
-    before = env_path.read_text(encoding="utf-8")
-    empty = dict.fromkeys(cli.STACK_IDS, "")
+    with pytest.raises(SystemExit) as raised:
+        _resolve({}, _FakeStackApi(connections, sources))
 
-    ok, report = cli.sync_stack_ids(tmp_path, env_path, run=_FakeMongo(json.dumps(empty)))
-
-    assert not ok
-    assert "create the administrator" in report and "HYPERDX_SOURCE_TRACES" in report
-    assert env_path.read_text(encoding="utf-8") == before
+    message = str(raised.value)
+    assert message.startswith(f"{missing}: the stack has no ")
+    assert "Create the administrator and the sources in the UI first" in message
+    assert "`alerts push` again" in message
 
 
-def test_ids_a_stack_has_are_written_even_when_another_is_still_missing(tmp_path: Path) -> None:
-    env_path = _env_file(tmp_path)
-    partial = {**_SEEDED, "HYPERDX_SOURCE_METRICS": ""}
-
-    ok, report = cli.sync_stack_ids(tmp_path, env_path, run=_FakeMongo(json.dumps(partial)))
-
-    assert not ok and "HYPERDX_SOURCE_METRICS" in report
-    values = cli._read_env(env_path)  # noqa: SLF001
-    assert values["HYPERDX_SOURCE_TRACES"] == _SEEDED["HYPERDX_SOURCE_TRACES"]
-    assert values["HYPERDX_SOURCE_METRICS"] == ""
-
-
-@pytest.mark.parametrize(
-    "mongo",
-    [
-        _FakeMongo("", returncode=1, stderr="service db is not running"),
-        _FakeMongo("not json at all"),
-        _FakeMongo("[1, 2]"),
-        _FakeMongo(""),
-    ],
-    ids=["compose exec failed", "not json", "not an object", "nothing printed"],
-)
-def test_a_mongo_that_cannot_be_asked_is_reported_and_leaves_the_env_alone(
-    tmp_path: Path, mongo: _FakeMongo
+def test_a_push_asks_the_stack_for_its_ids_and_writes_them_into_the_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    env_path = _env_file(tmp_path)
-    before = env_path.read_text(encoding="utf-8")
+    """From the environment to the wire: the alert goes out naming the stack's own connection."""
+    import argparse
 
-    ok, report = cli.sync_stack_ids(tmp_path, env_path, run=mongo)
+    root = _stack(tmp_path)
+    (root / "stack" / ".env").write_text(
+        "TELEGRAM_URL=https://example.invalid/bot\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("DLIGHTRAG_OBSERVABILITY_STACK_DIR", str(root))
+    monkeypatch.setenv(cli.API_KEY_VARIABLE, "access-key")
+    monkeypatch.delenv(cli.API_URL_VARIABLE, raising=False)
+    for name in cli.STACK_IDS:
+        monkeypatch.delenv(name, raising=False)
+    api = _FakeApi(stack={"connections": _SEEDED_CONNECTIONS, "sources": _SEEDED_SOURCES})
 
-    assert not ok and report.startswith("stack ids not read (")
-    assert env_path.read_text(encoding="utf-8") == before
+    assert cli._push_alerts(argparse.Namespace(dry_run=False), opener=api) == 0  # noqa: SLF001
 
-
-def test_an_env_value_is_replaced_in_place_and_a_missing_one_is_appended(tmp_path: Path) -> None:
-    env_path = tmp_path / ".env"
-    env_path.write_text("# comment\nA=old\nB = keep\n", encoding="utf-8")
-
-    assert cli.write_env_values(env_path, {"A": "new", "C": "added"})
-
-    assert env_path.read_text(encoding="utf-8") == "# comment\nA=new\nB = keep\nC=added\n"
-    assert not cli.write_env_values(env_path, {"A": "new", "C": "added"})
+    alert = next(
+        body for method, path, body, _ in api.sent if method == "POST" and "alerts" in path
+    )
+    assert alert is not None
+    assert alert["chartConfig"]["connectionId"] == "6ac9470bc0696e82a108098f"
 
 
 # ── What the stack ships beside the artifacts ────────────────────────────────

@@ -624,7 +624,7 @@ but its collector does not accept OTLP yet.
 
 | Target | Behavior |
 |---|---|
-| `make hyperdx-bootstrap` | Write `stack/.env` once (generated secrets), read the stack's own connection and source ids into it, send a probe span, apply retention to every telemetry table, and report whether the probe landed |
+| `make hyperdx-bootstrap` | Write `stack/.env` once (generated secrets), send a probe span, apply retention to every telemetry table, and report whether the probe landed |
 | `make hyperdx-up` | Start the four containers, then bootstrap |
 | `make hyperdx-down` | Stop |
 | `make hyperdx-status` | Show containers |
@@ -749,11 +749,12 @@ per alert, `channel.json` for the webhook) and `.../stack/dashboards/`, and one
 command writes them through ClickStack's REST API. A file carries **no instance id**:
 the connection and the sources a query reads are `${HYPERDX_CONNECTION_ID}`,
 `${HYPERDX_SOURCE_TRACES}` and `${HYPERDX_SOURCE_METRICS}`, which are the ids *this*
-stack's MongoDB minted when its first team was seeded. `bootstrap` reads them from
-that Mongo (`docker compose exec db mongosh`, the oldest connection and the oldest
-source of each kind, so a re-run on the same stack finds the same ids) and writes them
-into `stack/.env`; on a stack nobody has opened yet it says to create the administrator
-and run it again. A push finds what it wrote **by name**: it lists the collection once
+stack's first seeding minted. `alerts push` asks the stack's own API for them
+(`GET /api/v2/connections` and `/api/v2/sources`: the oldest connection, and the oldest
+source of each kind) and uses what it gets; a value set in the environment or in
+`stack/.env` is used as written and not asked for. A stack nobody has opened yet has
+none, and the push stops and says to create the administrator and the sources in the UI
+first, then run it again. A push finds what it wrote **by name**: it lists the collection once
 (`GET /api/v2/webhooks`, `/alerts`, `/dashboards`, which ClickStack 2.42 serves), updates
 the document that carries the file's name (`PUT`) and creates the rest (`POST`). The
 channel goes first because every alert names it, as `${HYPERDX_WEBHOOK_ID}`, which the
@@ -764,8 +765,8 @@ export DLIGHTRAG_OBSERVABILITY_API_KEY=<the access key the UI mints under Team S
 uv run dlightrag-observability alerts push
 ```
 
-`alerts push --dry-run` prints the same requests without sending them;
-`DLIGHTRAG_OBSERVABILITY_API_URL` points the command at another stack
+`alerts push --dry-run` lists what it would write and sends nothing, so it does not ask
+the API for the stack's ids either; `DLIGHTRAG_OBSERVABILITY_API_URL` points the command at another stack
 (`http://127.0.0.1:8000` by default). The webhook's URL carries a bot token and is
 therefore a credential: `channel.json` names `${DLIGHTRAG_TELEGRAM_WEBHOOK_URL}`
 and the push resolves it, so nothing secret lives in the repository. The operator
@@ -773,8 +774,7 @@ sets two variables, and the command reads `stack/.env` when the process environm
 does not (`packages/observability/stack/.env.example` declares them):
 `DLIGHTRAG_TELEGRAM_CHAT_ID` (the conversation the bot posts to) and
 `DLIGHTRAG_TELEGRAM_WEBHOOK_URL` (which carries the token). The webhook has no id to
-keep: the push creates it and finds it again by its name. A push with an id still
-missing from `stack/.env` stops and names it. The artifacts are checked with:
+keep: the push creates it and finds it again by its name. The artifacts are checked with:
 
 ```bash
 uv run pytest tests/unit/test_observability_stack.py -q
