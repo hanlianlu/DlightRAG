@@ -23,6 +23,7 @@ from openai.types.responses import ResponseUsage
 from openai.types.responses.response_usage import InputTokensDetails, OutputTokensDetails
 from opentelemetry import trace
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 
 from dlightrag.engine.ai.contracts import ChatProvider
@@ -610,5 +611,38 @@ def test_no_endpoint_is_an_explicit_no_op(caplog: pytest.LogCaptureFixture) -> N
         assert [record.getMessage() for record in caplog.records] == [
             "OTLP tracing off (no endpoint configured)"
         ]
+    finally:
+        shutdown_telemetry()
+
+
+async def test_a_second_start_keeps_the_first_provider_instead_of_leaking_it() -> None:
+    """One provider per process: a repeat call must not strand the first one's export thread.
+
+    Replacing the provider without stopping it leaves its batch processor running with
+    nothing that will ever flush it, so the guard returns a handle on what is installed.
+    """
+    first, second = InMemorySpanExporter(), InMemorySpanExporter()
+    start_telemetry(
+        span_types=SPAN_TYPES,
+        usage_buckets=provider_usage_buckets,
+        endpoint="http://127.0.0.1:4318",
+        span_exporter=first,
+    )
+    try:
+        installed = otlp_module._installed  # noqa: SLF001 - the process state under test
+        assert installed is not None
+        telemetry = start_telemetry(
+            span_types=SPAN_TYPES,
+            usage_buckets=provider_usage_buckets,
+            endpoint="http://127.0.0.1:4318",
+            span_exporter=second,
+        )
+        # A call that asks for no export does not uninstall the one that is running either.
+        start_telemetry(span_types=SPAN_TYPES, usage_buckets=provider_usage_buckets, endpoint=None)
+        assert otlp_module._installed is installed  # noqa: SLF001
+        async with telemetry.observe("run-answer"):
+            pass
+        assert len(first.get_finished_spans()) == 1
+        assert second.get_finished_spans() == ()
     finally:
         shutdown_telemetry()

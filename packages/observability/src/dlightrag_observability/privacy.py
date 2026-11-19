@@ -21,7 +21,11 @@ Two rules the code states rather than leaves to a caller:
 from __future__ import annotations
 
 import hashlib
+from datetime import date, datetime
+from enum import Enum
+from pathlib import PurePath
 from typing import Any, Final, Literal
+from uuid import UUID
 
 type PrivacyClass = Literal["private", "exportable"]
 
@@ -239,8 +243,28 @@ def bounded_text(value: object, *, max_length: int = MAX_TEXT) -> str:
     return f"{text[:max_length]}... [truncated {len(text) - max_length} chars]"
 
 
+def _wire_form(value: Any) -> Any:
+    """Rewrite a value the wire has no type for as the text or list it stands for.
+
+    An identifier (UUID), a point in time (datetime, date), an enum member, and a
+    filesystem path are structural metadata that ADR 0039 exports, so each
+    is classified as the string it reads as: a secret name still hides it, and a
+    path under a path-shaped name is still private when it names a home directory.
+    A set, a frozenset, and a tuple become a list. A type nobody listed is left
+    alone for :func:`mask_payload` to fail closed on.
+    """
+    if isinstance(value, bool | int | float | str):
+        return value
+    if isinstance(value, UUID | datetime | date | Enum | PurePath):
+        return str(value)
+    if isinstance(value, set | frozenset | tuple):
+        return list(value)
+    return value
+
+
 def mask_payload(data: Any) -> Any:
     """Mask a payload before export: secrets, media, bytes, and long text."""
+    data = _wire_form(data)
     if data is None or isinstance(data, bool | int | float):
         return data
     if isinstance(data, dict):
@@ -249,15 +273,14 @@ def mask_payload(data: Any) -> Any:
         masked: dict[Any, Any] = {}
         for key, value in data.items():
             readable = _readable_key(key)
+            item = _wire_form(value)
             masked[readable] = (
-                _masked_value(readable, value)
-                if classify(readable, value) == "private"
-                else mask_payload(value)
+                _masked_value(readable, item)
+                if classify(readable, item) == "private"
+                else mask_payload(item)
             )
         return masked
     if isinstance(data, list):
-        return [mask_payload(item) for item in data]
-    if isinstance(data, tuple):
         return [mask_payload(item) for item in data]
     if isinstance(data, bytes | bytearray | memoryview):
         return f"[bytes omitted: {len(bytes(data))}]"
