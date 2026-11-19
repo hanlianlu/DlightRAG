@@ -26,6 +26,7 @@ from typing import Any, cast
 
 from dlightrag.engine.agent.context import ContextContribution, ContextProjector
 from dlightrag.engine.agent.session.fold import PriorTurns
+from dlightrag.engine.agent.session.provenance import PendingCall, prompt_digests
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ContextPolicy, ModelProfile
 from dlightrag.engine.ai.tokens import estimate_content_tokens, estimate_messages_tokens
 from dlightrag.engine.answer.citations.indexer import CitationIndexer
@@ -170,10 +171,15 @@ class AnswerSynthesizer:
 
         usage: dict[str, Any] = {}
         prepared.trace["usage"] = usage
+        # The model and parameters the answer ran with arrive in a holder of their own once the
+        # stream ends, apart from the usage: they are not usage, and the Run's usage and cost
+        # are summed from the usage alone. The request is digested off the event loop.
+        call = PendingCall(prompt=await asyncio.to_thread(prompt_digests, prepared.messages))
         call_kwargs: dict[str, Any] = {
             "messages": prepared.messages,
             "stream": True,
             "usage_holder": usage,
+            "call_holder": call.holder,
             "model_profile": self._model_profile,
         }
         if prepared.max_output_tokens is not None:
@@ -185,6 +191,7 @@ class AnswerSynthesizer:
         if hasattr(token_iterator, "__aiter__"):
             token_iterator = AnswerStream(token_iterator, indexer=prepared.indexer)
             cast(Any, token_iterator).trace = prepared.trace
+            cast(Any, token_iterator).call = call
 
         return prepared.contexts, token_iterator
 

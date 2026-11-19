@@ -17,9 +17,11 @@ from dlightrag.engine.ai.messages import (
     ToolStopReason,
     content_with_attachments,
 )
+from dlightrag.engine.ai.provenance import served_model_name
 from dlightrag.engine.ai.providers.base import (
     CompletionOutput,
     CompletionProvider,
+    capture_served_model,
     capture_stream_usage,
     closing_stream,
     usage_mapping,
@@ -310,6 +312,7 @@ class OpenAICompatibleProvider(CompletionProvider):
             usage_details=usage_to_dict(usage),
             cost_details=_cost_to_dict(usage),
             provider_state=_openai_provider_state(message),
+            served_model=served_model_name(getattr(response, "model", None)),
         )
 
     async def complete_tool_turn_streaming(
@@ -358,11 +361,13 @@ class OpenAICompatibleProvider(CompletionProvider):
         call_parts: dict[int, dict[str, str]] = {}
         finish_reason: Any = None
         usage: Any = None
+        served: Any = None
         async with closing_stream(response):
             async for chunk in response:
                 chunk_usage = getattr(chunk, "usage", None)
                 if chunk_usage is not None:
                     usage = chunk_usage
+                served = getattr(chunk, "model", None) or served
                 choices = getattr(chunk, "choices", None)
                 if not choices:
                     continue
@@ -423,6 +428,7 @@ class OpenAICompatibleProvider(CompletionProvider):
             usage_details=usage_to_dict(usage),
             cost_details=_cost_to_dict(usage),
             provider_state=provider_state or None,
+            served_model=served_model_name(served),
         )
 
     async def stream_tool_text(
@@ -509,11 +515,13 @@ class OpenAICompatibleProvider(CompletionProvider):
         response = await self._open_stream(call_kwargs)
         reasoning_parts: list[str] = []
         usage: Any = None
+        served: Any = None
         async with closing_stream(response):
             async for chunk in response:
                 chunk_usage = getattr(chunk, "usage", None)
                 if chunk_usage is not None:
                     usage = chunk_usage
+                served = getattr(chunk, "model", None) or served
                 choices = getattr(chunk, "choices", None)
                 if not choices:
                     continue
@@ -526,6 +534,7 @@ class OpenAICompatibleProvider(CompletionProvider):
                     yield delta.content
         self.last_reasoning = "".join(reasoning_parts)
         capture_stream_usage(usage_holder, usage, cost_fn=_cost_to_dict)
+        capture_served_model(usage_holder, served)
 
 
 def _openai_tool_call(raw: Any) -> ToolCall:

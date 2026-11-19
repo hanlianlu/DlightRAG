@@ -18,9 +18,11 @@ from dlightrag.engine.ai.messages import (
     content_with_attachments,
     message_text,
 )
+from dlightrag.engine.ai.provenance import served_model_name
 from dlightrag.engine.ai.providers.base import (
     CompletionOutput,
     CompletionProvider,
+    capture_served_model,
     capture_stream_usage,
     closing_stream,
     usage_to_dict,
@@ -318,6 +320,7 @@ class _Outcome:
     steps: list[dict[str, Any]]
     usage: dict[str, int] | None
     errors: tuple[str, ...] = ()
+    served_model: str | None = None
 
     @classmethod
     def of(cls, interaction: Any) -> _Outcome:
@@ -329,6 +332,7 @@ class _Outcome:
                 str(getattr(error, "code", None) or "")
                 for error in getattr(interaction, "errors", None) or ()
             ),
+            served_model=served_model_name(getattr(interaction, "model", None)),
         )
 
 
@@ -345,6 +349,7 @@ def _assistant_turn(outcome: _Outcome) -> AssistantTurn:
             tool_calls=tuple(calls),
             stop_reason="length",
             usage_details=outcome.usage,
+            served_model=outcome.served_model,
         )
     if outcome.status == "requires_action" and not calls:
         raise InteractionStatusError("Gemini interaction requires action but made no call")
@@ -360,6 +365,7 @@ def _assistant_turn(outcome: _Outcome) -> AssistantTurn:
         stop_reason="tool_use" if calls else "stop",
         usage_details=outcome.usage,
         provider_state={_STEPS_KEY: outcome.steps} if thought else None,
+        served_model=outcome.served_model,
     )
 
 
@@ -452,7 +458,7 @@ class _InteractionStream:
             raise InteractionUnavailableError("Gemini interaction stream ended before completing")
         steps = outcome.steps or [self._assembled(index) for index in sorted(self._steps)]
         usage = outcome.usage or _usage(self._usage)
-        return _Outcome(outcome.status, steps, usage, outcome.errors)
+        return _Outcome(outcome.status, steps, usage, outcome.errors, outcome.served_model)
 
     def _assembled(self, index: int) -> dict[str, Any]:
         step = self._steps[index]
@@ -627,8 +633,10 @@ class GeminiProvider(CompletionProvider):
         async with aclosing(events):
             async for text in events:
                 yield text
-        output = _completion(self._turn(stream.outcome()))
+        outcome = stream.outcome()
+        output = _completion(self._turn(outcome))
         capture_stream_usage(usage_holder, output.usage_details)
+        capture_served_model(usage_holder, outcome.served_model)
 
     async def stream_tool_text(
         self,

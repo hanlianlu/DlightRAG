@@ -79,6 +79,7 @@ from dlightrag.engine.agent.session.operation import (
 )
 from dlightrag.engine.agent.session.plan import AgentRunPlan
 from dlightrag.engine.agent.session.projection import ContextProjection
+from dlightrag.engine.agent.session.provenance import call_payload, request_prompt_digests
 from dlightrag.engine.agent.session.registers import (
     ContextProjectionRegister,
     DeleteRegister,
@@ -1001,6 +1002,12 @@ class AgentSessionRuntime[HostDeltaT]:
                 detail=f"provider returned duplicate Tool call ids: {duplicate_ids}",
             )
             return
+        request_record = _require_register(
+            view.context.snapshot, RegisterRef("request_snapshot", view.context.operation_id.value)
+        )
+        request = request_record.value
+        if not isinstance(request, RequestSnapshot):
+            raise TypeError("Request Snapshot register has the wrong value type")
         entry = AssistantMessageEntry(
             entry_id=EntryId.new(),
             session_id=view.context.session_id,
@@ -1012,6 +1019,17 @@ class AgentSessionRuntime[HostDeltaT]:
             usage=assistant.usage_details,
             cost=assistant.cost_details,
             provider_state=assistant.provider_state,
+            # The wrapper stated the model and parameters of the attempt that made this turn;
+            # the request it answered states the rest. Neither takes part in usage, cost, the
+            # Plan digest or recovery, so a Run that resumes across a deploy is judged as before.
+            call=call_payload(
+                assistant.call,
+                role=request.model_role,
+                prompt=request_prompt_digests(request),
+                plan_digest=request.plan_digest,
+            )
+            if assistant.call is not None
+            else None,
             parent_entry_id=_lane_head(view.context.snapshot, view.context.lane_id).entry_id,
         )
         repeated = _repeated_search_calls(view, assistant)
@@ -1050,9 +1068,6 @@ class AgentSessionRuntime[HostDeltaT]:
         snapshot = view.context.snapshot
         head_record = _require_register(snapshot, LaneHead(view.context.lane_id, None).ref)
         state_record = _state_record(snapshot, view.context.operation_id)
-        request_record = _require_register(
-            snapshot, RegisterRef("request_snapshot", view.context.operation_id.value)
-        )
         writes = [
             SetRegister(LaneHead(view.context.lane_id, entry.entry_id)),
             SetRegister(OperationStateRegister(next_state)),

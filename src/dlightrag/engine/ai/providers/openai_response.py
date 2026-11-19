@@ -15,8 +15,10 @@ from dlightrag.engine.ai.messages import (
     ToolDefinition,
     content_with_attachments,
 )
+from dlightrag.engine.ai.provenance import served_model_name
 from dlightrag.engine.ai.providers.base import (
     CompletionOutput,
+    capture_served_model,
     capture_stream_usage,
     closing_stream,
     usage_mapping,
@@ -451,6 +453,7 @@ def _assistant_turn(response: Any) -> AssistantTurn:
             stop_reason="length",
             usage_details=usage_to_dict(usage),
             cost_details=_cost_details(usage),
+            served_model=served_model_name(getattr(response, "model", None)),
         )
     if not text and not calls:
         raise ResponseStatusError("Responses request completed without text or function calls")
@@ -468,6 +471,7 @@ def _assistant_turn(response: Any) -> AssistantTurn:
                 "items": items,
             }
         },
+        served_model=served_model_name(getattr(response, "model", None)),
     )
 
 
@@ -826,6 +830,7 @@ async def stream_response_text(
     set_reasoning(reasoning)
     usage = getattr(response, "usage", None)
     capture_stream_usage(usage_holder, usage, cost_fn=_cost_details)
+    capture_served_model(usage_holder, getattr(response, "model", None))
 
 
 __all__ = [

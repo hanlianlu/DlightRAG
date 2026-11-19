@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from dlightrag.engine.ai.provenance import ModelCall
+
 type ToolChoice = Literal["auto", "required", "none"]
 type ToolStopReason = Literal["stop", "length", "tool_use"]
 
@@ -96,7 +98,13 @@ def tool_call_message(call: ToolCall) -> dict[str, Any]:
 
 @dataclass(frozen=True, slots=True)
 class AssistantTurn:
-    """Complete provider response with text, reasoning, or tool calls."""
+    """Complete provider response with text, reasoning, or tool calls.
+
+    ``served_model`` is the model name the server stated for the response, which the provider
+    adapter hands up. ``call`` is what the wrapper that sent the request says it ran with, set
+    by that wrapper for the attempt that produced this turn; neither takes part in usage or
+    cost, and a turn built from a stored entry has neither.
+    """
 
     text: str
     tool_calls: tuple[ToolCall, ...]
@@ -105,6 +113,8 @@ class AssistantTurn:
     usage_details: dict[str, int] | None = None
     cost_details: dict[str, float] | None = None
     provider_state: dict[str, Any] | None = None
+    served_model: str | None = None
+    call: ModelCall | None = None
 
 
 __all__ = [

@@ -138,9 +138,15 @@ cancellation takes, or its reservation, keeping the unanswered question.
 
 Before each provider call the Runtime commits the exact request snapshot and
 attempt. Assistant settlement records the complete response and its ordered Tool
-Batch Plan; Tool clearance, effect settlement, ToolResult placement, Host
-deltas, and progress then commit under the lease and epoch. A model call
-interrupted before settlement, compaction included, runs again. Compaction keeps
+Batch Plan, and in the same transaction the `call` that made it: the model,
+parameters, prompt digests and timings of the attempt that produced the response,
+which a Compaction Entry records for its summarizer call in the same way
+([ADR 0041](adr/0041-a-step-records-the-model-parameters-and-prompt-digests-it-ran-on.md)).
+That record takes no part in usage, cost, a Plan or acceptance digest, or any
+check that decides whether an active Run may resume. Tool clearance, effect
+settlement, ToolResult placement, Host deltas, and progress then commit under
+the lease and epoch. A model call interrupted before settlement, compaction
+included, runs again and records the attempt that settles. Compaction keeps
 or removes whole assistant and Tool exchanges. A Research compaction summary
 carries the twenty newest committed spills and up to eight published-Artifact
 handles, read from their rows, then Evidence citation handles from the Run's

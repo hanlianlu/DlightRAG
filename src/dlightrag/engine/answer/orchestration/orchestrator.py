@@ -597,7 +597,7 @@ class AnswerOrchestrator:
             2 ** max(0, attempt - 1)
         )
         try:
-            projection, _outcome = await coordinator.prepare(
+            projection, outcome = await coordinator.prepare(
                 snapshot,
                 tail_target_tokens=tail,
                 accounted_before=(
@@ -627,6 +627,13 @@ class AnswerOrchestrator:
                 covered_through_entry_id=projection.covered_through_entry_id,
                 first_retained_entry_id=projection.first_retained_entry_id,
                 source_digest=projection.source_digest,
+                call=(
+                    outcome.call.payload(
+                        role=run.model_role, plan_digest=runtime_context.meta.plan_digest
+                    )
+                    if outcome.call is not None
+                    else None
+                ),
             ),
         )
 

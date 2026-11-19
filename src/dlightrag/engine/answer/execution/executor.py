@@ -48,6 +48,7 @@ from dlightrag.engine.agent.session.operation import (
 )
 from dlightrag.engine.agent.session.plan import AgentRunPlan
 from dlightrag.engine.agent.session.projection import ContextProjection
+from dlightrag.engine.agent.session.provenance import PendingCall
 from dlightrag.engine.agent.session.registers import (
     ContextProjectionRegister,
     DeleteRegister,
@@ -1081,7 +1082,7 @@ class AnswerExecutor:
                 else []
             )
             try:
-                projection, _outcome = await coordinator.prepare(
+                projection, outcome = await coordinator.prepare(
                     snapshot,
                     tail_target_tokens=tail,
                     accounted_before=max(item["input_tokens"] for item in before.values()),
@@ -1121,6 +1122,8 @@ class AnswerExecutor:
                     lane_id=lane_id,
                     reservation_id=reservation_id,
                     projection=projection,
+                    # Fast summarizes on the query role, as it answers on it.
+                    call=outcome.call.payload(role="query") if outcome.call is not None else None,
                 )
             except asyncio.CancelledError, SessionLeaseLostError:
                 raise
@@ -2089,6 +2092,9 @@ class AnswerExecutor:
                         usage=(
                             trace.get("usage") if isinstance(trace.get("usage"), Mapping) else None
                         ),
+                        # The answer's own model and parameters, which its stream states once it
+                        # has ended; a turn settled from a stored result has none to state.
+                        call=_stream_call(stream),
                     )
                     fast_reservation_active = False
                     if fast_boundaries is not None and fast_commit is not None:
@@ -2675,6 +2681,16 @@ class AnswerExecutor:
                 "answer run targets another model invocation configuration"
             )
         return {role: pinned[role].profile for role in selectors}
+
+
+def _stream_call(stream: object) -> dict[str, Any] | None:
+    """The ``call`` a Fast answer's stream states for the answer it produced, if it states one.
+
+    Fast answers on the query role; the stream holds the request's digests and, once it has
+    ended, the model and parameters of the attempt that made it (ADR 0041).
+    """
+    pending = getattr(stream, "call", None)
+    return pending.payload(role="query") if isinstance(pending, PendingCall) else None
 
 
 def _measure_fast_history_targets(

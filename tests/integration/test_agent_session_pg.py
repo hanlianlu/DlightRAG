@@ -52,6 +52,7 @@ from dlightrag.engine.agent.session.projection import (
     ContextProjection,
     projection_source_digest,
 )
+from dlightrag.engine.agent.session.provenance import call_payload, prompt_digests
 from dlightrag.engine.agent.session.registers import (
     DeleteRegister,
     LaneHead,
@@ -77,7 +78,10 @@ from dlightrag.engine.agent.session.transactions import (
 )
 from dlightrag.engine.agent.tool_content import ToolResourceAttachmentPart, ToolTextPart
 from dlightrag.engine.agent.tools import AgentTool, ToolResult
+from dlightrag.engine.ai.fingerprints import model_invocation_fingerprint
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
+from dlightrag.engine.ai.provenance import ModelCall
+from dlightrag.engine.ai.settings import ModelSettings
 from dlightrag.engine.answer.fast import FastSessionHost, ensure_session_lane
 from dlightrag.engine.runtime.blob_chunks import BLOB_CHUNK_BYTES, plan_blob
 from dlightrag.engine.runtime.progress import (
@@ -492,6 +496,57 @@ async def test_agent_session_runtime_memory_and_pg_have_atomic_state_parity(pool
     assert len(memory.applied_host_deltas(memory_id)) == 1
     async with pool.acquire() as conn:
         assert await conn.fetchval("SELECT count(*) FROM dlightrag_answer_evidence") == 1
+
+
+async def test_a_step_keeps_its_call_through_postgres(pool) -> None:
+    """A `call` is written with its entry, read back as written, and absent where none was stated."""
+    claimed = await _claim(pool)
+    store = claimed.execution.session_repository
+    session_id = _claimed_session(claimed)
+    effects = Effects(session_id=session_id)
+    stated = ModelCall.of(
+        model_invocation_fingerprint(ModelSettings(model="m")),
+        served_model="m-2026",
+        temperature=0.2,
+        max_tokens=100,
+        tool_choice="auto",
+        response_format=None,
+        reasoning=None,
+        model_kwargs={},
+        queued_seconds=0.0,
+        duration_seconds=0.012,
+    )
+    effects.turns[0] = replace(effects.turns[0], call=stated)  # the second turn states none
+    runtime = AgentSessionRuntime(
+        repository=store,
+        effects=effects,
+        tools=[_TOOL],
+        fencing_epoch=claimed.execution.fencing_epoch,
+        holder="run",
+    )
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="call",
+        content="question",
+        plan=_PLAN,
+    )
+    final = await runtime.drive(session_id=session_id, operation_id=accepted.operation_id)
+    assert isinstance(final.state, OperationCompleted)
+
+    rows = await pool.fetch(
+        "SELECT payload_json FROM dlightrag_agent_session_entries"
+        " WHERE owner_id = $1 AND session_id = $2 AND entry_type = 'assistant_message'"
+        " ORDER BY sequence",
+        _OWNER,
+        uuid.UUID(session_id.value),
+    )
+    stored = [json.loads(row["payload_json"]).get("call") for row in rows]
+    prompt = prompt_digests([{"role": "user", "content": "exact"}], [])  # what Effects assembled
+    expected = call_payload(stated, role="query", prompt=prompt, plan_digest=_PLAN.digest)
+    assert stored == [expected, None]
+    entries = (await store.load(session_id)).entries
+    assert [e.call for e in entries if isinstance(e, AssistantMessageEntry)] == stored
 
 
 async def test_a_read_only_group_pends_and_recovers_through_postgres(pool) -> None:
