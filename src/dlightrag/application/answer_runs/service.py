@@ -2,6 +2,7 @@
 """Durable answer runs over already-authorized canonical workspaces."""
 
 import asyncio
+import re
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import aclosing, asynccontextmanager
 from dataclasses import asdict, dataclass, replace
@@ -9,8 +10,15 @@ from functools import partial
 from typing import Any, Literal, Protocol, cast
 from uuid import UUID
 
-from dlightrag.application.connections import BoundResearchConnections
-from dlightrag.application.errors import ApplicationConflictError, ApplicationInputError
+from dlightrag.application.connections.models import (
+    BoundConnectionSurface,
+    BoundResearchConnections,
+)
+from dlightrag.application.errors import (
+    ApplicationConflictError,
+    ApplicationInputError,
+    ApplicationUnavailableError,
+)
 from dlightrag.application.runs import (
     RunAdmission,
     RunAdmissionScheduler,
@@ -23,15 +31,24 @@ from dlightrag.application.runs import (
 )
 from dlightrag.engine.agent.session.ids import LaneId, SessionId
 from dlightrag.engine.agent.session.plan import AgentRunPlan
-from dlightrag.engine.agent.tools import ToolDeclaration
+from dlightrag.engine.agent.skill_protection import MASK_PLACEHOLDER, mask_reader_strings
+from dlightrag.engine.agent.skills import load_skill_document_pair
+from dlightrag.engine.agent.tools.contracts import ToolDeclaration
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
+from dlightrag.engine.ai.reasoning import request_under_ceiling
 from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS, ChatModelSelector, ModelSettings
-from dlightrag.engine.answer.agent_browser import MAY_REGISTER_PIN
+from dlightrag.engine.answer.agent_browser.accounts import (
+    MAY_REGISTER_PIN,
+)
 from dlightrag.engine.answer.capabilities import AnswerCapabilities, RequestModelContext
-from dlightrag.engine.answer.client_contracts import AnswerEffort, offered_answer_efforts
-from dlightrag.engine.answer.execution import ResolvedAnswerResources
+from dlightrag.engine.answer.client_contracts import (
+    ANSWER_EFFORT_LEVELS,
+    AnswerEffort,
+    offered_answer_efforts,
+)
+from dlightrag.engine.answer.errors import ACTIVE_RUN_LIMIT, ACTIVE_RUN_LIMIT_MESSAGE
 from dlightrag.engine.answer.execution.acceptance import (
     AnswerHistoryBudget,
     ResearchSeed,
@@ -40,8 +57,10 @@ from dlightrag.engine.answer.execution.acceptance import (
     routing_resources,
 )
 from dlightrag.engine.answer.execution.connection_binding import (
+    ConnectionSurface,
     RunConnectionBinding,
     StaleConnectionBindingError,
+    decode_connection_surface,
 )
 from dlightrag.engine.answer.execution.input import (
     AnswerRunInput,
@@ -55,6 +74,8 @@ from dlightrag.engine.answer.execution.input import (
     model_reasoning_settings,
     new_resource_identity,
 )
+from dlightrag.engine.answer.execution.resources import ResolvedAnswerResources
+from dlightrag.engine.answer.feedback import AnswerFeedback, normalize_feedback
 from dlightrag.engine.answer.image_capability import AnswerImageCapability
 from dlightrag.engine.answer.images import AnswerImagePolicy
 from dlightrag.engine.answer.mode import (
@@ -79,10 +100,14 @@ from dlightrag.engine.answer.tools.composition import (
 )
 from dlightrag.engine.network_admission import public_http_url_identity
 from dlightrag.engine.rag.corpus.sources.source_contract import safe_source_filename
-from dlightrag.engine.rag.retrieval import MetadataFilter, RetrievalOptions
+from dlightrag.engine.rag.retrieval.models import (
+    MetadataFilter,
+    RetrievalOptions,
+)
 from dlightrag.engine.rag.retrieval.planner import RetrievalPlanner
 from dlightrag.engine.rag.workspace.workspaces import require_canonical_workspace_id
 from dlightrag.engine.runtime.records import (
+    ActiveRunLimitExceededError,
     ArtifactReferenceKind,
     PendingArtifact,
     PendingArtifactReference,
@@ -108,6 +133,30 @@ from .child_roster import (
     child_result_lineage,
     public_child_status,
     stamp,
+)
+from .overview import (
+    FINDINGS_MAX,
+    RunOverview,
+    agent_rollups,
+    excerpt_of,
+    findings_of,
+    overview_totals,
+    run_usage,
+)
+from .timeline import (
+    MAIN_AGENT,
+    RunStepSearch,
+    RunTimelinePosition,
+    RunTimelineStep,
+    agent_identities,
+    merge_steps,
+    page_of,
+    with_page_content,
+)
+from .timeline_index import (
+    RunTimelineToken,
+    TimelineIndex,
+    TimelineIndexCache,
 )
 
 #: Accepted input uploads, in the precedence one ordinal resolves against.
@@ -139,16 +188,213 @@ def child_control_succeeded(outcome: str) -> bool:
     return outcome in CHILD_CONTROL_SUCCESS_OUTCOMES
 
 
-def _public_transcript_message(message: Mapping[str, Any]) -> dict[str, Any]:
-    """Keep useful conversation/tool lineage and drop private reasoning fields."""
+_HAN = re.compile(r"[0-9A-Za-z_]+|[\u3400-\u9fff]")
+
+
+def split_terms(text: str, *, loose: bool = False) -> tuple[str, ...]:
+    """The words a search is for: a quoted phrase stays whole, and Han is read whole too.
+
+    Chinese is written without spaces, so reading a run of Han as one word is what the reader
+    typed; ``loose`` reads it per character instead, which asks for those characters in any order
+    and is the second pass a reader gets when the words as written found nothing.
+    """
+    terms: list[str] = []
+    for token in re.findall(r'"[^"]*"|\S+', text):
+        phrase = token[1:-1].strip() if token.startswith('"') and token.endswith('"') else ""
+        if phrase:
+            terms.append(phrase)
+        elif loose:
+            terms.extend(re.findall(r"[0-9A-Za-z_]+|[\u3400-\u9fff]", token))
+        else:
+            terms.extend(re.findall(r"[0-9A-Za-z_]+|[\u3400-\u9fff]+", token))
+    return tuple(dict.fromkeys(term for term in terms if term))[:8]
+
+
+def _masked_skill_result(content: str, pair: tuple[str, str]) -> str:
+    """One protected ``load_skill`` result a reader may read: framing kept, document body gone.
+
+    The banner and the ``--- name/path ---`` marker are the fact the trace exists to state —
+    which document the Run read — and are not the author's own words. The body becomes
+    ``[...]`` whatever its size: the fingerprint gate needs a long enough passage, and a
+    short Skill document reads whole through this tool.
+    """
+    marker = f"--- {pair[0]}/{pair[1]} ---"
+    end = content.index(marker) + len(marker)
+    return f"{content[:end]}\n{MASK_PLACEHOLDER}"
+
+
+def _masked_argument_value(value: Any, mask_reader_text: Callable[[str], str] | None) -> Any:
+    """One stored Tool argument with every string inside it passed through the reader gate.
+
+    An argument is the text the model itself wrote to a Tool — a ``write_to`` body, a heredoc, a
+    document it asks a Tool to publish — so a protected document's words travel through
+    arguments exactly as they travel through results. A JSON string is masked whole; a decoded
+    object keeps its shape and only its string leaves change.
+    """
+    if mask_reader_text is None:
+        return value
+    return mask_reader_strings(value, mask_reader_text)
+
+
+def _masked_tool_call(
+    call: Mapping[str, Any], mask_reader_text: Callable[[str], str]
+) -> dict[str, Any]:
+    """One stored Tool call a reader may read: the call itself, its arguments masked."""
+    projected = dict(call)
+    for key in ("arguments", "argument_error"):
+        if key in projected:
+            projected[key] = _masked_argument_value(projected[key], mask_reader_text)
+    return projected
+
+
+def _masked_store_message(
+    message: Mapping[str, Any],
+    *,
+    protected: frozenset[tuple[str, str]],
+    mask_reader_text: Callable[[str], str] | None = None,
+    mask_tool_arguments: bool = True,
+) -> dict[str, Any]:
+    """One store-projected message, shape untouched, with protected Skill text replaced.
+
+    A ``load_skill`` result naming a protected document takes the header fast path: the banner
+    and the marker line stay readable and only the body is replaced. Every other string goes
+    through the fingerprint gate, which catches the same bytes arriving through a ``bash cat``,
+    a copied file read back, or a child agent's conclusion — the tool name cannot tell them
+    apart. A Tool call's arguments are text the Run wrote, so they are gated too: that is the
+    road a ``write_to`` body, a heredoc, or a ``publish_skill`` document takes to a reader.
+
+    ``mask_tool_arguments=False`` is for the projections that never emit what a call was asked
+    to do (they state its id, name and bounded subject alone): gating a field the reader cannot
+    receive is work the reader pays for and never sees, and it is the largest share of a timeline
+    page's masking. A projection that keeps the stored shape must leave this on.
+    """
+    projected = dict(message)
+    body = projected.get("content")
+    if (
+        projected.get("role") == "tool"
+        and projected.get("name") == "load_skill"
+        and isinstance(body, str)
+    ):
+        pair = load_skill_document_pair(body)
+        if pair is not None and pair in protected:
+            projected["content"] = _masked_skill_result(body, pair)
+    if mask_reader_text is not None:
+        body = projected.get("content")
+        if isinstance(body, str):
+            projected["content"] = mask_reader_text(body)
+        calls = projected.get("tool_calls")
+        if (
+            mask_tool_arguments
+            and isinstance(calls, Sequence)
+            and not isinstance(calls, (str, bytes))
+        ):
+            projected["tool_calls"] = [
+                _masked_tool_call(call, mask_reader_text) if isinstance(call, Mapping) else call
+                for call in calls
+            ]
+        facts = projected.get("facts")
+        if facts is not None:
+            projected["facts"] = mask_reader_strings(facts, mask_reader_text)
+    return projected
+
+
+def _without_reasoning(message: Mapping[str, Any]) -> dict[str, Any]:
+    """One store-projected message with the private reasoning field left behind.
+
+    The store projects an assistant entry's reasoning so the Inspector can draw it; a transcript
+    tail is not that surface, and ``_masked_store_message`` keeps a message's shape untouched, so
+    the field is dropped here rather than travelling to a reader unmasked.
+    """
+    return {key: value for key, value in message.items() if key != "reasoning"}
+
+
+def _public_search_hit(
+    hit: Mapping[str, Any],
+    *,
+    protected: frozenset[tuple[str, str]],
+    mask_reader_text: Callable[[str], str] | None = None,
+) -> dict[str, Any]:
+    """One search hit as a reader sees it: the words in their neighbourhood, or a placeholder.
+
+    A hit inside a ``load_skill`` result names the document, so a protected one is replaced by
+    its readable framing; any other hit keeps the neighbourhood the search measured and is
+    masked only where the words are a protected document's own text.
+    """
+    snippet = str(hit["snippet"])
+    if hit.get("name") == "load_skill":
+        content = str(hit.get("content") or "")
+        pair = load_skill_document_pair(content)
+        if pair is not None and pair in protected:
+            snippet = _masked_skill_result(content, pair)
+    if mask_reader_text is not None:
+        snippet = mask_reader_text(snippet)
+    return {
+        "sequence": int(hit["sequence"]),
+        "role": str(hit["role"]),
+        "snippet": snippet,
+        # The words this message holds, so the pane that shows the matches has something to
+        # show and something to mark. It is the neighbourhood the search already measured;
+        # the whole message would be megabytes a Run.
+        "content": snippet,
+        **({"agent": str(hit["agent"])} if hit.get("agent") else {}),
+        **({"agent_label": str(hit["agent_label"])} if hit.get("agent_label") else {}),
+    }
+
+
+#: The most reasoning text one public transcript message states.
+#: The Inspector draws a step's thinking beside its words, not as a page of its own; a provider's
+#: reasoning can run far longer than the answer it produces, so the reader edge bounds it. Slicing
+#: is the bound: no marker is appended, because the reader is not told a truncation it cannot see.
+PUBLIC_REASONING_MAX_CHARS = 4000
+
+
+def _public_transcript_message(
+    message: Mapping[str, Any],
+    *,
+    protected_skill_documents: frozenset[tuple[str, str]],
+    tool_subjects: Mapping[str, str] | None = None,
+    mask_reader_text: Callable[[str], str] | None = None,
+    include_reasoning: bool = False,
+) -> dict[str, Any]:
+    """Keep useful conversation/tool lineage; the model's reasoning only when asked for.
+
+    A protected Skill document reads as a placeholder: the trace says what the Run read without
+    handing over its author's text (ADR 0061). The model's own transcript is untouched.
+
+    ``include_reasoning`` is the Inspector activity page's surface alone: every other reader —
+    child observation, the transcript tail, search, the step-search excerpt — states no reasoning.
+    When it is asked for, the text is gated through the reader's masker (reasoning can quote a
+    protected document the Run read) and bounded by ``PUBLIC_REASONING_MAX_CHARS``.
+    """
+    message = _masked_store_message(
+        message,
+        protected=protected_skill_documents,
+        mask_reader_text=mask_reader_text,
+        # This projection states a call's id, name and bounded subject; what the call was asked
+        # to do never leaves it, so gating the stored arguments would mask text no reader receives.
+        mask_tool_arguments=False,
+    )
     role = str(message.get("role") or "")
     projected: dict[str, Any] = {"role": role, "content": message.get("content") or ""}
+    if message.get("agent") is not None:
+        projected["agent"] = str(message["agent"])
+    if message.get("agent_label") is not None:
+        projected["agent_label"] = str(message["agent_label"])
     if "sequence" in message:
         projected["sequence"] = int(message["sequence"])
+    # When the entry behind this message was written, which is what a client times a step by: a
+    # tool's own time is the gap between the message that called it and the result's. A message
+    # built from a request rather than a stored entry has no clock and says so by leaving it out.
+    if message.get("at") is not None:
+        projected["at"] = str(message["at"])
     if role == "assistant":
-        projected["tool_calls"] = [
-            {
-                "id": call.get("id"),
+        tool_calls: list[dict[str, Any]] = []
+        for call in message.get("tool_calls") or ():
+            if not isinstance(call, Mapping):
+                continue
+            call_id = call.get("id")
+            entry: dict[str, Any] = {
+                "id": call_id,
                 "name": call.get("name")
                 or (
                     call.get("function", {}).get("name")
@@ -156,22 +402,116 @@ def _public_transcript_message(message: Mapping[str, Any]) -> dict[str, Any]:
                     else None
                 ),
             }
-            for call in message.get("tool_calls") or ()
-            if isinstance(call, Mapping)
-        ]
+            # The bounded label the Tool derived from one of its inputs (a command, query or path),
+            # from the same event log; it is the Tool's own subject, never its raw argument or
+            # result payload.
+            subject = tool_subjects.get(str(call_id)) if tool_subjects and call_id else None
+            if subject:
+                entry["subject"] = subject
+            tool_calls.append(entry)
+        projected["tool_calls"] = tool_calls
+        if include_reasoning:
+            reasoning = str(message.get("reasoning") or "")
+            if reasoning.strip():
+                text = mask_reader_text(reasoning) if mask_reader_text is not None else reasoning
+                projected["reasoning"] = text[:PUBLIC_REASONING_MAX_CHARS]
     if role == "tool":
         projected["tool_call_id"] = str(message.get("tool_call_id") or "")
         projected["name"] = str(message.get("name") or "")
         projected["is_error"] = bool(message.get("is_error"))
+        # The facts a Tool reported are the bounded structure a step card states the call
+        # with, so they travel beside the result text rather than inside it. Shape is kept
+        # as stored: this projection only decides which message fields a reader sees.
+        facts = message.get("facts")
+        if isinstance(facts, Mapping):
+            projected["facts"] = (
+                mask_reader_strings(dict(facts), mask_reader_text)
+                if mask_reader_text is not None
+                else dict(facts)
+            )
     return projected
 
 
-def _public_control_record(row: Mapping[str, Any]) -> dict[str, Any]:
+def _project_timeline_messages(
+    messages: Sequence[Mapping[str, Any]],
+    *,
+    protected: frozenset[tuple[str, str]],
+    mask_reader_text: Callable[[str], str] | None,
+) -> dict[tuple[str, int], dict[str, Any]]:
+    """One Run read's entries projected for the reader, keyed by ``(Session, sequence)``.
+
+    The projection states the content a search row's excerpt and a finding's excerpt read, and no
+    reasoning: the step search is the only step list a Run read draws, and a list states no
+    reasoning (the Inspector activity page is that surface). A cold page's gate walks the loaded
+    text, which is work the event loop must not carry while it also runs the Run being watched: the
+    callers hand this to a thread. The projection itself is pure and touches no shared state beyond
+    the masker's own thread-safe cache.
+    """
+    return {
+        (str(message.get("session_id") or "").lower(), int(message.get("sequence") or 0)): (
+            _public_transcript_message(
+                message,
+                protected_skill_documents=protected,
+                mask_reader_text=mask_reader_text,
+            )
+        )
+        for message in messages
+    }
+
+
+def _project_activity_messages(
+    messages: Sequence[Mapping[str, Any]],
+    *,
+    protected: frozenset[tuple[str, str]],
+    tool_subjects: Mapping[str, str],
+    mask_reader_text: Callable[[str], str] | None,
+) -> tuple[dict[str, Any], ...]:
+    """One agent transcript page projected for the reader, oldest first.
+
+    The activity page is the one transcript surface that states reasoning; it runs off the event
+    loop for the same reason the Run read's projection does.
+    """
+    return tuple(
+        _public_transcript_message(
+            message,
+            protected_skill_documents=protected,
+            tool_subjects=tool_subjects,
+            mask_reader_text=mask_reader_text,
+            include_reasoning=True,
+        )
+        for message in messages
+    )
+
+
+def _tool_call_ids(messages: Sequence[Mapping[str, Any]]) -> list[str]:
+    """The tool call ids one transcript page names, in order, deduped.
+
+    Only ids the event log can answer for; the subjects join works on ids, so nothing else is needed.
+    """
+    ids: list[str] = []
+    for message in messages:
+        if message.get("role") != "assistant":
+            continue
+        for call in message.get("tool_calls") or ():
+            if isinstance(call, Mapping) and call.get("id"):
+                call_id = str(call["id"])
+                if call_id not in ids:
+                    ids.append(call_id)
+    return ids
+
+
+def _public_control_record(
+    row: Mapping[str, Any], *, mask_reader_text: Callable[[str], str] | None = None
+) -> dict[str, Any]:
+    """One Child control a reader may read; its content is text a Run or a reader wrote."""
+    content = str(row.get("content") or "")
+    if mask_reader_text is not None:
+        content = mask_reader_text(content)
     consumed_at = row.get("consumed_at")
     return {
         "control_sequence": int(row.get("control_sequence") or 0),
         "kind": str(row.get("kind") or ""),
-        "content": str(row.get("content") or ""),
+        "content": content,
         "origin": str(row.get("origin") or ""),
         "consumed": bool(row.get("consumed") if "consumed" in row else consumed_at),
         "consumed_at": stamp(consumed_at),
@@ -180,12 +520,21 @@ def _public_control_record(row: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _public_question_record(row: Mapping[str, Any]) -> dict[str, Any]:
+def _public_question_record(
+    row: Mapping[str, Any], *, mask_reader_text: Callable[[str], str] | None = None
+) -> dict[str, Any]:
+    """One Child guidance question and its reply, gated like every other reader text."""
+    question = str(row.get("question") or "")
+    reply = row.get("reply")
+    if mask_reader_text is not None:
+        question = mask_reader_text(question)
+        if isinstance(reply, str):
+            reply = mask_reader_text(reply)
     return {
         "request_id": str(row.get("request_id") or ""),
-        "question": str(row.get("question") or ""),
+        "question": question,
         "status": str(row.get("status") or ""),
-        "reply": row.get("reply"),
+        "reply": reply,
         "reply_origin": row.get("reply_origin"),
         "expires_at": stamp(row.get("expires_at")),
         "created_at": stamp(row.get("created_at")),
@@ -207,10 +556,42 @@ class AnswerHistoryResource:
 
 @dataclass(frozen=True, slots=True)
 class AgentEffortOffer:
-    """The agent efforts one deployment applies, and its own configured level."""
+    """The agent efforts one deployment applies for one caller, and the level that caller's
+    Answers run at when they choose none."""
 
     levels: tuple[AnswerEffort, ...]
     default: AnswerEffort | None
+
+
+class Caller(Protocol):
+    """Whoever submits an Answer: the verified facts a Runtime Policy may name them by.
+
+    It has the shape of the Application's ``Principal``, which every transport's identity
+    satisfies. It is stated here because Answer Runs import nothing of access: who may
+    submit was decided before a submission reaches them.
+    """
+
+    @property
+    def user_id(self) -> str: ...
+
+    @property
+    def auth_mode(self) -> str: ...
+
+    @property
+    def claims(self) -> Mapping[str, object]: ...
+
+
+class RunPolicies(Protocol):
+    """What the Runtime Policies decide about an Answer, read for whoever submits it.
+
+    Every call reads the current document, so a change holds for the next submission.
+    A document that can no longer be read raises, and a submission is then refused rather
+    than admitted under a default.
+    """
+
+    async def effort_ceiling(self, caller: Caller | None, /) -> AnswerEffort: ...
+
+    async def active_run_limit(self, caller: Caller | None, /) -> int | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -234,6 +615,10 @@ class AnswerRequest:
     mode: str | None = None
     parent_run_id: str | None = None
     continuation_kind: str | None = None
+    #: The goal identity of a goal round, so its settlement can tell which goal it served.
+    goal_id: str | None = None
+    goal_revision: int | None = None
+    goal_round: int | None = None
     agent_session_id: str = ""
     agent_lane_id: str = "main"
     source_lane_id: str | None = None
@@ -356,6 +741,9 @@ class ChildObservation:
 
 
 #: One Activity page holds this many messages unless the caller asks for fewer.
+# A search answers with every match in one Run, and a Run is bounded: the ceiling is a guard
+# against a single character matching thousands of messages, not a page size. The answer states
+# how many matches there are, so a reader is never shown a silently shortened list.
 ACTIVITY_PAGE_DEFAULT_LIMIT = 30
 ACTIVITY_PAGE_MAX_LIMIT = 50
 
@@ -382,7 +770,7 @@ class ActivityPage:
 
 
 class AnswerRequestError(ApplicationInputError):
-    """A steering, child-control, or continuation request is invalid as given."""
+    """A steering, child-control, continuation, or feedback request is invalid as given."""
 
 
 class AnswerConnectionsChangedError(ApplicationConflictError):
@@ -390,6 +778,20 @@ class AnswerConnectionsChangedError(ApplicationConflictError):
 
     def __init__(self) -> None:
         super().__init__("Connections changed; submit the Answer again")
+
+
+class ActiveRunLimitError(ApplicationUnavailableError):
+    """The owner already has as many Answers in progress as the policy lets them.
+
+    It is the caller's own limit rather than the deployment's, so transports answer it as a
+    refusal to retry once one of their Answers has ended (HTTP 429), under a kind of its own.
+    """
+
+    error_kind = ACTIVE_RUN_LIMIT
+
+    def __init__(self, limit: int) -> None:
+        super().__init__(ACTIVE_RUN_LIMIT_MESSAGE)
+        self.limit = limit
 
 
 class AnswerRunAcceptor[T](RunReplayer[T], Protocol):
@@ -405,6 +807,14 @@ class AnswerRunAcceptor[T](RunReplayer[T], Protocol):
         routing: RoutingAcceptance | None = None,
         connection_bindings: tuple[RunConnectionBinding, ...] = (),
     ) -> T | None: ...
+
+
+TranscriptScope = Literal["run", "lane"]
+"""Which messages a transcript read asks for: the named Run's, or a Session's lane across Runs.
+
+A conversation's agent is one Session across the Runs that continue it, so both questions are
+asked of the same Session and only the caller knows which one it means.
+"""
 
 
 class _AnswerRunRepository(AnswerRunAcceptor[RuntimeRunCreation], Protocol):
@@ -433,10 +843,62 @@ class _AnswerRunRepository(AnswerRunAcceptor[RuntimeRunCreation], Protocol):
         *,
         owner_id: str,
         run_id: str,
-        session_id: str,
+        session_id: str | None,
         limit: int,
         before: int | None = None,
+        scope: TranscriptScope = ...,
+        since: int | None = None,
     ) -> tuple[Mapping[str, Any], ...]: ...
+
+    async def search_run_transcript(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        terms: Sequence[str],
+        require_all: bool,
+        limit: int = ...,
+    ) -> tuple[Mapping[str, Any], ...]: ...
+
+    async def load_run_timeline_steps(
+        self, *, owner_id: str, run_id: str
+    ) -> tuple[Mapping[str, Any], ...]: ...
+
+    async def load_run_timeline_token(
+        self, *, owner_id: str, run_id: str
+    ) -> Mapping[str, Any] | None: ...
+
+    async def load_timeline_entries(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        keys: Sequence[tuple[str, int]],
+    ) -> tuple[Mapping[str, Any], ...]: ...
+
+    async def load_tool_subjects(
+        self, *, owner_id: str, run_id: str, call_ids: Sequence[str]
+    ) -> Mapping[str, str]: ...
+
+    async def put_answer_feedback(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        agent: str,
+        sequence: int,
+        value: str,
+        reasons: Sequence[str],
+        note: str | None,
+    ) -> AnswerFeedback | None: ...
+
+    async def delete_answer_feedback(
+        self, *, owner_id: str, run_id: str, agent: str, sequence: int
+    ) -> None: ...
+
+    async def list_answer_feedback(
+        self, *, owner_id: str, run_id: str
+    ) -> tuple[AnswerFeedback, ...]: ...
 
     async def load_child_session(
         self, *, owner_id: str, run_id: str, child_session_id: str
@@ -513,6 +975,10 @@ class _AnswerRunRepository(AnswerRunAcceptor[RuntimeRunCreation], Protocol):
 
     async def read_run_resource_row(
         self, *, owner_id: str, run_id: str, resource_id: str
+    ) -> RunFetchedResource | None: ...
+
+    async def latest_run_attachment(
+        self, *, owner_id: str, run_id: str, safe_name: str
     ) -> RunFetchedResource | None: ...
 
 
@@ -682,6 +1148,9 @@ def _normalized_request(request: AnswerRequest) -> AnswerRunRequest:
         mode=request.mode or "auto",
         parent_run_id=request.parent_run_id,
         continuation_kind=request.continuation_kind,
+        goal_id=request.goal_id,
+        goal_revision=request.goal_revision,
+        goal_round=request.goal_round,
         agent_session_id=request.agent_session_id,
         agent_lane_id=request.agent_lane_id,
         source_lane_id=request.source_lane_id,
@@ -746,9 +1215,12 @@ class AnswerService:
         ],
         child_roster_cursor_secret: bytes,
         agent_may_register: Callable[..., Awaitable[bool]],
+        policies: RunPolicies,
         research_tool_declarations: ResearchToolDeclarations | None = None,
         bind_research: Callable[..., Awaitable[BoundResearchConnections]] | None = None,
         memory_capability: Callable[..., Awaitable[tuple[bool, int]]] | None = None,
+        protected_skill_documents: Callable[[], frozenset[tuple[str, str]]],
+        protected_text: Callable[[str], str] | None = None,
         run_retention_seconds: int = 365 * 24 * 3600,
     ) -> None:
         self._store = store
@@ -763,7 +1235,13 @@ class AnswerService:
         self._research_tool_declarations = research_tool_declarations
         self._bind_research = bind_research
         self._memory_capability = memory_capability
+        self._protected_skill_documents = protected_skill_documents
+        # The content gate behind every reader-facing transcript surface. None in a
+        # process composed without one (tests, a tool-only slice): the header fast path
+        # still masks a load_skill result, and nothing else is replaced.
+        self._protected_text = protected_text
         self._agent_may_register = agent_may_register
+        self._policies = policies
         self._admission = RunAdmission(
             run_kind="answer",
             lane="query",
@@ -773,6 +1251,10 @@ class AnswerService:
             scheduler=coordinator,
         )
         self._child_roster_codec = ChildRosterCursorCodec(child_roster_cursor_secret)
+        # The Run's derived index is built once per Run version here and shared by the overview
+        # and the step search; the cache is bounded and disposable, and a page pays for its own
+        # content only.
+        self._timeline_indexes = TimelineIndexCache()
 
     @staticmethod
     def _continuation_fingerprint(request: AnswerRequest) -> str:
@@ -794,6 +1276,7 @@ class AnswerService:
         *,
         request: AnswerRequest,
         owner_id: str,
+        caller: Caller | None,
         idempotency_key: str | None = None,
         idempotency_fingerprint: str | None = None,
     ) -> RunCreation:
@@ -807,6 +1290,7 @@ class AnswerService:
         creation = await self.accept(
             request=request,
             owner_id=owner_id,
+            caller=caller,
             idempotency_key=idempotency_key,
             idempotency_fingerprint=idempotency_fingerprint,
             acceptor=self._store,
@@ -820,6 +1304,7 @@ class AnswerService:
         *,
         request: AnswerRequest,
         owner_id: str,
+        caller: Caller | None,
         acceptor: AnswerRunAcceptor[T],
         idempotency_key: str | None = None,
         idempotency_fingerprint: str | None = None,
@@ -828,6 +1313,10 @@ class AnswerService:
 
         The Run store accepts the run alone; a Web conversation's acceptor also
         writes its turn in the same transaction. Both go through one pipeline.
+
+        ``caller`` is who submits, which the Runtime Policies are read for. They are read once,
+        here, after a replay has been answered: the Run is accepted under what they said and
+        carries it, so a change to a policy never reaches a Run already accepted.
         """
         run_request = _normalized_request(request)
         fingerprint = idempotency_fingerprint or run_request_fingerprint(run_request.as_request())
@@ -878,6 +1367,11 @@ class AnswerService:
             memory_enabled, memory_epoch = await self._memory_capability(owner_id=owner_id)
         # Read once, like the memory capability: the Run's tools are what it was accepted with.
         agent_may_register = await self._agent_may_register(owner_id=owner_id)
+        # The Runtime Policies are read once too, and the Run is pinned to what they said. A
+        # document that cannot be read refuses the submission: a default would admit it
+        # without the limit or the ceiling the document sets for this caller.
+        effort_ceiling = await self._policies.effort_ceiling(caller)
+        active_run_limit = await self._policies.active_run_limit(caller)
         async with self._prepare_input(
             run_request,
             resources=acceptance_resources or None,
@@ -886,6 +1380,7 @@ class AnswerService:
             allowed_modes=allowed_modes,
             memory_enabled=memory_enabled,
             agent_may_register=agent_may_register,
+            effort_ceiling=effort_ceiling,
         ) as prepare:
             for attempt in range(2):
                 bound = (
@@ -895,7 +1390,9 @@ class AnswerService:
                     and "research" in allowed_modes
                     else BoundResearchConnections()
                 )
-                run_input, effective_modes = await prepare(bound.tools)
+                run_input, effective_modes = await prepare(
+                    bound.tools, bound.surface, bound.resource_tools_available
+                )
                 run_input = replace(run_input, run_connection_bindings=bound.bindings)
                 prepared_input = _prepared_input_payload(run_input, requested_mode=requested_mode)
                 prepared_input["profile_memory_enabled"] = memory_enabled
@@ -929,7 +1426,10 @@ class AnswerService:
                         fingerprint=fingerprint,
                         payload=prepared_input,
                         accepted_input=accepted_input_envelope(prepared_input),
+                        active_run_limit=active_run_limit,
                     )
+                except ActiveRunLimitExceededError as exc:
+                    raise ActiveRunLimitError(exc.limit) from exc
                 except StaleConnectionBindingError as exc:
                     replay = await self._admission.replay(
                         acceptor,
@@ -1087,6 +1587,35 @@ class AnswerService:
         if descriptor is None:
             return None
         return await self._blob_store.size(owner_id=owner_id, digest=descriptor.digest)
+
+    async def latest_run_attachment(
+        self, *, owner_id: str, run_id: str, safe_name: str
+    ) -> tuple[RunResourceDescriptor, bytes] | None:
+        """Read the newest attachment a Run stored under ``safe_name``, whole.
+
+        A tool attachment is durable Run state like any other resource: this names the most
+        recent one by the name the tool gave it, which is what a reader shows when there is
+        nothing newer left to show. An unknown Run, or one that stored none, answers None.
+        """
+        if await self._get_answer_run(owner_id=owner_id, run_id=run_id) is None:
+            return None
+        row = await self._store.latest_run_attachment(
+            owner_id=owner_id, run_id=run_id, safe_name=safe_name
+        )
+        if row is None:
+            return None
+        return (
+            RunResourceDescriptor(
+                resource_id=row.resource_id,
+                registry="resource",
+                reference_kind=None,
+                ordinal=row.ordinal,
+                filename=row.filename,
+                mime_type=row.mime_type,
+                digest=row.digest,
+            ),
+            await self._read_digest(owner_id=owner_id, digest=row.digest),
+        )
 
     async def run_external_source_map(self, *, owner_id: str, run_id: str) -> dict[str, str]:
         """Map each external URL this run holds bytes for to its resource id.
@@ -1390,7 +1919,10 @@ class AnswerService:
                 child_session_id=UUID(str(last["child_session_id"])),
             )
         return ChildRosterPage(
-            children=tuple(public_child_status(row) for row in result.children),
+            children=tuple(
+                public_child_status(row, mask_reader_text=self._protected_text)
+                for row in result.children
+            ),
             next_cursor=next_cursor,
             fetched_rows=result.fetched_rows,
         )
@@ -1438,14 +1970,64 @@ class AnswerService:
             child_session_id=child_session_id,
             limit=cap,
         )
+        child_subjects = await self._tool_subjects(
+            owner_id=owner_id, run_id=run_id, messages=transcript
+        )
+        # Once per page, not once per message: discovery is a directory read, and a page of
+        # thirty messages would otherwise pay for thirty of them on every follow poll.
+        protected = self._protected_skill_documents()
         return ChildObservation(
             run_id=run_id,
-            child=public_child_status(row),
-            transcript=tuple(_public_transcript_message(message) for message in transcript),
-            controls=tuple(_public_control_record(item) for item in controls),
-            questions=tuple(_public_question_record(item) for item in questions),
-            result=child_result_lineage(row),
+            child=public_child_status(row, mask_reader_text=self._protected_text),
+            transcript=tuple(
+                _public_transcript_message(
+                    message,
+                    protected_skill_documents=protected,
+                    tool_subjects=child_subjects,
+                    mask_reader_text=self._protected_text,
+                )
+                for message in transcript
+            ),
+            controls=tuple(
+                _public_control_record(item, mask_reader_text=self._protected_text)
+                for item in controls
+            ),
+            questions=tuple(
+                _public_question_record(item, mask_reader_text=self._protected_text)
+                for item in questions
+            ),
+            result=child_result_lineage(row, mask_reader_text=self._protected_text),
         )
+
+    async def _tool_subjects(
+        self, *, owner_id: str, run_id: str, messages: Sequence[Mapping[str, Any]]
+    ) -> Mapping[str, str]:
+        """The bounded Tool subjects for one transcript page, joined from the Run's durable events."""
+        call_ids = _tool_call_ids(messages)
+        if not call_ids:
+            return {}
+        return await self._store.load_tool_subjects(
+            owner_id=owner_id, run_id=run_id, call_ids=call_ids
+        )
+
+    async def _session_of(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        record: RunRecord,
+        child_session_id: str | None,
+    ) -> tuple[str, bool] | None:
+        """The Session a transcript request is about, and whether its agent is still working."""
+        if child_session_id is None:
+            session_id = str(record.request_input().get("agent_session_id") or "")
+            return session_id, not record.terminal
+        row = await self._store.load_child_session(
+            owner_id=owner_id, run_id=run_id, child_session_id=child_session_id
+        )
+        if row is None:
+            return None
+        return child_session_id, public_child_status(row)["status"] == "running"
 
     async def activity_page(
         self,
@@ -1455,22 +2037,22 @@ class AnswerService:
         child_session_id: str | None = None,
         before: int | None = None,
         limit: int = ACTIVITY_PAGE_DEFAULT_LIMIT,
+        since: int | None = None,
     ) -> ActivityPage | None:
-        """Return one page of a Run's main Session, or of one of its Child Sessions, or None if unknown."""
+        """One page of a Run's main Session or of a Child Session, or None if unknown.
+
+        ``before`` reads the page older than a sequence; ``since`` reads the messages written after
+        one, oldest first, which is how a reader that already holds a transcript appends to it.
+        """
         record = await self._get_answer_run(owner_id=owner_id, run_id=run_id)
         if record is None:
             return None
-        if child_session_id is None:
-            session_id = str(record.request_input().get("agent_session_id") or "")
-            running = not record.terminal
-        else:
-            row = await self._store.load_child_session(
-                owner_id=owner_id, run_id=run_id, child_session_id=child_session_id
-            )
-            if row is None:
-                return None
-            session_id = child_session_id
-            running = public_child_status(row)["status"] == "running"
+        bound = await self._session_of(
+            owner_id=owner_id, run_id=run_id, record=record, child_session_id=child_session_id
+        )
+        if bound is None:
+            return None
+        session_id, running = bound
         cap = max(1, min(int(limit), ACTIVITY_PAGE_MAX_LIMIT))
         # One message beyond the page says whether an older page exists.
         fetched = (
@@ -1481,18 +2063,330 @@ class AnswerService:
                     session_id=session_id,
                     limit=cap + 1,
                     before=before,
+                    since=since,
                 )
             )
             if session_id
             else []
         )
-        older = len(fetched) > cap
-        messages = fetched[1:] if older else fetched
+        # A page walks back from the newest and states the cursor that reaches the one before it. A
+        # delta keeps the oldest of what it found, so a reader asking again from the last message it
+        # holds never skips one, and it states no cursor: the older pages are not its business.
+        delta = since is not None
+        shortened = len(fetched) > cap
+        messages = fetched[:cap] if delta else (fetched[1:] if shortened else fetched)
+        tool_subjects = await self._tool_subjects(
+            owner_id=owner_id, run_id=run_id, messages=messages
+        )
+        # One discovery per page; see observe_child.
+        protected = self._protected_skill_documents()
+        # The Inspector draws a step's thinking in its activity pane; this is the one reader
+        # surface that states it, masked and bounded at the projection. The gate walks the page's
+        # whole text, so the projection runs off the event loop.
+        projected = await asyncio.to_thread(
+            _project_activity_messages,
+            messages,
+            protected=protected,
+            tool_subjects=tool_subjects,
+            mask_reader_text=self._protected_text,
+        )
         return ActivityPage(
-            messages=tuple(_public_transcript_message(message) for message in messages),
-            next_before=int(messages[0]["sequence"]) if older else None,
+            messages=projected,
+            next_before=None if delta or not shortened else int(messages[0]["sequence"]),
             running=running,
         )
+
+    async def _timeline_index(self, *, owner_id: str, run_id: str) -> TimelineIndex | None:
+        """The Run's whole timeline index, rebuilt only when the Run moved since it was derived.
+
+        None when the Run is unknown: the version row is the owner-scoped existence check. Every
+        page and the overview read from this one derivation, so they cannot disagree about which
+        steps the Run has, and a page costs its own entries rather than the whole Run.
+        """
+        token_row = await self._store.load_run_timeline_token(owner_id=owner_id, run_id=run_id)
+        if token_row is None:
+            return None
+        token = RunTimelineToken.from_store(token_row)
+        held = self._timeline_indexes.get(owner_id, run_id, token)
+        if held is not None:
+            return held
+        agents = agent_identities(
+            tuple(
+                {"child_session_id": child_session_id, "objective": objective}
+                for child_session_id, objective in token.roster
+            )
+        )
+        rows = await self._store.load_run_timeline_steps(owner_id=owner_id, run_id=run_id)
+        call_ids = tuple(
+            dict.fromkeys(str(row.get("call_id") or "") for row in rows if row.get("call_id"))
+        )
+        subjects = (
+            await self._store.load_tool_subjects(
+                owner_id=owner_id,
+                run_id=run_id,
+                call_ids=call_ids,
+            )
+            if call_ids
+            else {}
+        )
+        index = TimelineIndex.build(
+            token=token,
+            agents=agents,
+            steps=merge_steps(agents=agents, rows=rows, subjects=subjects),
+        )
+        self._timeline_indexes.put(owner_id, run_id, index)
+        return index
+
+    def _labelled(self, page: Sequence[RunTimelineStep]) -> tuple[RunTimelineStep, ...]:
+        """The page's steps with each agent's roster label gated for the reader."""
+        if self._protected_text is None:
+            return tuple(page)
+        return tuple(
+            replace(step, agent_label=self._protected_text(step.agent_label)) for step in page
+        )
+
+    async def run_overview(self, *, owner_id: str, run_id: str) -> RunOverview | None:
+        """One Run's whole-Run overview: its totals, its agents, and its capped findings.
+
+        The read reuses the derived index the step list reads, so the panel's numbers are the same
+        facts the steps state, and every number is the whole Run's rather than a page's. Only the
+        capped findings' entries are loaded — the excerpt is the one text a finding carries — and
+        they are projected through the same reader content gate every transcript surface applies;
+        the roster's labels are gated at emission too, so a Skill root that becomes protected
+        reaches a cached label.
+
+        ``usage`` is the Run result's own record and stays None when the record states none; no
+        number here is recomputed from the steps. ``version`` is the derived index's, which the
+        route turns into the panel's cache validator.
+
+        None when the Run is unknown, so a caller can answer 404.
+        """
+        record = await self._get_answer_run(owner_id=owner_id, run_id=run_id)
+        if record is None:
+            return None
+        index = await self._timeline_index(owner_id=owner_id, run_id=run_id)
+        if index is None:
+            return None
+        agents = (
+            tuple(index.agents)
+            if self._protected_text is None
+            else tuple(
+                replace(agent, label=self._protected_text(agent.label)) for agent in index.agents
+            )
+        )
+        findings, findings_total = findings_of(index.steps, index.marks, FINDINGS_MAX)
+        if findings:
+            messages = await self._store.load_timeline_entries(
+                owner_id=owner_id,
+                run_id=run_id,
+                keys=tuple((finding.session_id, finding.sequence) for finding in findings),
+            )
+            # One discovery per read; the same gate the transcript surfaces apply, so a dossier
+            # states no more of a protected document than an agent's own page does. A cold read's
+            # gate walks the loaded text, so the projection runs off the event loop.
+            protected = self._protected_skill_documents()
+            projected = await asyncio.to_thread(
+                _project_timeline_messages,
+                messages,
+                protected=protected,
+                mask_reader_text=self._protected_text,
+            )
+            # The projection keys a message by its lower-cased Session; a step carries the
+            # Session as its row stated it.
+            excerpts = {
+                key: excerpt_of(message.get("content")) for key, message in projected.items()
+            }
+            findings = tuple(
+                replace(
+                    finding,
+                    excerpt=excerpts.get((finding.session_id.lower(), finding.sequence), ""),
+                )
+                for finding in findings
+            )
+        return RunOverview(
+            run_id=run_id,
+            totals=overview_totals(index.steps, index.marks),
+            agents=agent_rollups(index.steps, index.marks, agents),
+            findings=findings,
+            findings_total=findings_total,
+            usage=run_usage(record.result),
+            version=index.version,
+        )
+
+    async def search_run_steps(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        query: str,
+        limit: int,
+        before: RunTimelinePosition | None = None,
+    ) -> RunStepSearch | None:
+        """The Run's steps whose messages hold a search's words, as a paged list read.
+
+        The successor of the timeline read's search mode: the same whole-Run transcript search and
+        the same merged index, narrowed to the steps the words found. Thinking steps are excluded —
+        a search result is the message's actionable step, and a list states no reasoning — so a
+        thought never arrives without the turn it produced. ``before`` is the step the previous
+        page stopped in front of, so a page is strictly older than it and walks matches newest page
+        first, in the merge's order within the page.
+
+        ``matched`` counts the Run's searchable matches, so a page never reads as the whole result;
+        the marks are the whole Run's, so a repeated call's other half does not have to be on this
+        page for the row to state it. A query with no words in it matches nothing: it is a search
+        that read no words, not a request for the Run.
+
+        None when the Run is unknown, so a caller can answer 404.
+        """
+        index = await self._timeline_index(owner_id=owner_id, run_id=run_id)
+        if index is None:
+            return None
+        words = query.strip()
+        terms: tuple[str, ...] = ()
+        matched = 0
+        match = "all"
+        shown: tuple[RunTimelineStep, ...] = ()
+        if words:
+            searched = await self.search_run_traces(owner_id=owner_id, run_id=run_id, query=words)
+            if searched is None:
+                return None
+            terms, hits, _total, match = searched
+            keys = {(str(hit.get("agent") or MAIN_AGENT), int(hit["sequence"])) for hit in hits}
+            shown = tuple(
+                step
+                for step in index.steps
+                if step.kind != "thinking" and (step.agent, step.sequence) in keys
+            )
+            matched = len(shown)
+        page, has_older = page_of(shown, limit=limit, before=before, agents=index.agents)
+        # The roster's objective is reader text like any other: it is gated at emission, not when
+        # the index was built, so a Skill root that becomes protected reaches a cached label too.
+        page = self._labelled(page)
+        if page:
+            messages = await self._store.load_timeline_entries(
+                owner_id=owner_id,
+                run_id=run_id,
+                keys=tuple((step.session_id, step.sequence) for step in page),
+            )
+            # One discovery per read; the same gate the transcript surfaces apply, so a search
+            # row states no more than an agent's own page does. A cold page's gate walks the
+            # loaded text, so the projection runs off the event loop.
+            protected = self._protected_skill_documents()
+            projected = await asyncio.to_thread(
+                _project_timeline_messages,
+                messages,
+                protected=protected,
+                mask_reader_text=self._protected_text,
+            )
+            page = with_page_content(page, projected)
+        return RunStepSearch(
+            page=page,
+            has_older=has_older,
+            matched=matched,
+            marks=index.marks,
+            terms=terms,
+            match=match,
+        )
+
+    async def search_run_traces(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        query: str,
+    ) -> tuple[tuple[str, ...], tuple[Mapping[str, Any], ...], int, str] | None:
+        """Every message of every agent of one Run that holds the words of ``query``.
+
+        Oldest first, each carrying the words in their neighbourhood, naming its agent. Answers the
+        words the search read (which is what a client marks), the matches, how many the Run holds
+        before the per-agent bound shortened the list, and whether the words as written answered or
+        the looser pass did. None when the Run is unknown, so a caller can answer 404.
+        """
+        record = await self._get_answer_run(owner_id=owner_id, run_id=run_id)
+        if record is None:
+            return None
+        # The words as written first, then the same characters loose: a reader who typed two
+        # Chinese words gets those words, and only if they match nothing does the looser pass run.
+        for loose in (False, True):
+            terms = split_terms(query, loose=loose)
+            if not terms:
+                return ((), (), 0, "all")
+            found = await self._store.search_run_transcript(
+                owner_id=owner_id,
+                run_id=run_id,
+                terms=terms,
+                require_all=not loose,
+            )
+            if found:
+                break
+        total = int(found[0].get("total") or len(found)) if found else 0
+        protected = self._protected_skill_documents()
+        return (
+            terms,
+            tuple(
+                _public_search_hit(
+                    hit,
+                    protected=protected,
+                    mask_reader_text=self._protected_text,
+                )
+                for hit in found
+            ),
+            total,
+            "any" if loose else "all",
+        )
+
+    async def record_feedback(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        agent: str,
+        sequence: int,
+        value: str,
+        reasons: Sequence[str],
+        note: str | None,
+    ) -> AnswerFeedback | None:
+        """Keep the reader's judgement of one message of one agent of a Run, replacing an earlier.
+
+        ``agent`` is ``main`` or a Child Session's id, and ``sequence`` the message's own place in
+        that agent's Session, which a transcript states on every message. The judgement is shaped
+        before anything is stored, so one that cannot be kept is refused as the request it is.
+        None says the Run, the agent, or the message is not there to judge, so a caller can
+        answer 404.
+        """
+        try:
+            kept_value, kept_reasons, kept_note = normalize_feedback(value, reasons, note)
+        except ValueError as exc:
+            raise AnswerRequestError(str(exc)) from None
+        return await self._store.put_answer_feedback(
+            owner_id=owner_id,
+            run_id=run_id,
+            agent=agent,
+            sequence=sequence,
+            value=kept_value,
+            reasons=kept_reasons,
+            note=kept_note,
+        )
+
+    async def retract_feedback(
+        self, *, owner_id: str, run_id: str, agent: str, sequence: int
+    ) -> None:
+        """Take the reader's judgement of one message back. One never given is no error."""
+        await self._store.delete_answer_feedback(
+            owner_id=owner_id, run_id=run_id, agent=agent, sequence=sequence
+        )
+
+    async def answer_feedback(
+        self, *, owner_id: str, run_id: str
+    ) -> tuple[AnswerFeedback, ...] | None:
+        """The judgements the reader gave the messages of one Run, or None if the Run is unknown.
+
+        The Run's own agent comes first, then each Child, and within an agent the oldest message
+        first: the order the transcript search answers in.
+        """
+        if await self._get_answer_run(owner_id=owner_id, run_id=run_id) is None:
+            return None
+        return await self._store.list_answer_feedback(owner_id=owner_id, run_id=run_id)
 
     @property
     def child_roster_cursor_codec(self) -> ChildRosterCursorCodec:
@@ -1515,20 +2409,29 @@ class AnswerService:
                 run_id=run_id,
                 session_id=session_id,
                 limit=cap,
+                # A conversation's projection is its lane, which spans the Runs that continued it.
+                scope="lane",
             )
             if canonical:
+                protected = self._protected_skill_documents()
                 return AgentTranscriptTail(
                     run_id=run_id,
                     status=record.status,
-                    messages=tuple(dict(message) for message in canonical),
+                    messages=tuple(
+                        _masked_store_message(
+                            # A tail states no reasoning: the field is the activity page's alone.
+                            _without_reasoning(message),
+                            protected=protected,
+                            mask_reader_text=self._protected_text,
+                        )
+                        for message in canonical
+                    ),
                 )
         # A Run whose Session holds none of its turns yet (still queued, or failed
         # before its question was accepted) projects its accepted invocation and
         # final result through the same transport-neutral message shape.
-        messages = [
-            dict(message)
-            for message in request.get("history") or ()
-            if isinstance(message, Mapping)
+        messages: list[Mapping[str, Any]] = [
+            message for message in request.get("history") or () if isinstance(message, Mapping)
         ]
         query = str(request.get("query") or "")
         if query:
@@ -1537,10 +2440,19 @@ class AnswerService:
         answer = str(result.get("answer") or "")
         if answer:
             messages.append({"role": "assistant", "content": answer})
+        protected = self._protected_skill_documents()
         return AgentTranscriptTail(
             run_id=run_id,
             status=record.status,
-            messages=tuple(messages[-cap:]),
+            messages=tuple(
+                _masked_store_message(
+                    # An accepted invocation's history is a stored message too: no reasoning here.
+                    _without_reasoning(message),
+                    protected=protected,
+                    mask_reader_text=self._protected_text,
+                )
+                for message in messages[-cap:]
+            ),
         )
 
     async def continuation_workspaces(
@@ -1556,6 +2468,7 @@ class AnswerService:
         self,
         *,
         owner_id: str,
+        caller: Caller | None,
         run_id: str,
         query: str,
         idempotency_key: str | None = None,
@@ -1574,6 +2487,7 @@ class AnswerService:
         return await self.create(
             request=request,
             owner_id=owner_id,
+            caller=caller,
             idempotency_key=idempotency_key,
             idempotency_fingerprint=self._continuation_fingerprint(request),
         )
@@ -1582,6 +2496,7 @@ class AnswerService:
         self,
         *,
         owner_id: str,
+        caller: Caller | None,
         run_id: str,
         query: str,
         idempotency_key: str | None = None,
@@ -1600,6 +2515,7 @@ class AnswerService:
         return await self.create(
             request=request,
             owner_id=owner_id,
+            caller=caller,
             idempotency_key=idempotency_key,
             idempotency_fingerprint=self._continuation_fingerprint(request),
         )
@@ -1733,12 +2649,14 @@ class AnswerService:
         request: AnswerRequest,
         *,
         owner_id: str,
+        caller: Caller | None,
         idempotency_key: str | None = None,
     ) -> AnswerResult:
         """Create one durable answer run and wait for its canonical result."""
         creation = await self.create(
             request=request,
             owner_id=owner_id,
+            caller=caller,
             idempotency_key=idempotency_key,
         )
         return await self.wait(owner_id=owner_id, run_id=creation.run.run_id)
@@ -1748,12 +2666,14 @@ class AnswerService:
         request: AnswerRequest,
         *,
         owner_id: str,
+        caller: Caller | None,
         idempotency_key: str | None = None,
     ) -> AsyncGenerator[RunEvent]:
         """Create one durable answer run and follow its events until it ends."""
         creation = await self.create(
             request=request,
             owner_id=owner_id,
+            caller=caller,
             idempotency_key=idempotency_key,
         )
         run = creation.run
@@ -1776,23 +2696,33 @@ class AnswerService:
         """
         return self._capabilities.current_profiles()["query"]
 
-    def agent_effort_offer(self) -> AgentEffortOffer:
-        """Return the agent efforts this deployment applies, and its own level among them.
+    async def agent_effort_offer(self, caller: Caller | None) -> AgentEffortOffer:
+        """Return the agent efforts this deployment applies for ``caller``, and the level
+        their Answers run at when they choose none.
 
         One call states both, so a control can neither advertise a level the run would
         ignore nor mark a default it is not offering. A role that owns its reasoning
         through raw model kwargs applies no typed level at all, so it offers none; an
         uncatalogued model offers all three because its best-effort profile maps
-        every level.
+        every level. The caller's ceiling takes the levels above it away, and the default
+        is the level the Run will run at: the deployment's own, lowered to the ceiling
+        where it is above it. A ceiling policy that cannot be read raises.
         """
         settings = self._models.model_settings("query")
-        levels: tuple[AnswerEffort, ...] = ()
-        if not settings.raw_agentic_reasoning_keys:
-            levels = offered_answer_efforts(self.answering_model_profile())
-        configured = settings.effective_agentic_reasoning
-        default: AnswerEffort | None = None
-        if configured is not None and configured in levels:
-            default = cast(AnswerEffort, configured)
+        if settings.raw_agentic_reasoning_keys:
+            return AgentEffortOffer(levels=(), default=None)
+        ceiling = await self._policies.effort_ceiling(caller)
+        profile = self.answering_model_profile()
+        top = ANSWER_EFFORT_LEVELS.index(ceiling)
+        levels: tuple[AnswerEffort, ...] = tuple(
+            level
+            for level in offered_answer_efforts(profile)
+            if ANSWER_EFFORT_LEVELS.index(level) <= top
+        )
+        running = request_under_ceiling(
+            profile.reasoning, settings.effective_agentic_reasoning, ceiling
+        )
+        default = cast(AnswerEffort, running) if running is not None and running in levels else None
         return AgentEffortOffer(levels=levels, default=default)
 
     async def read_input_artifact(
@@ -1851,10 +2781,12 @@ class AnswerService:
         requested_mode: AnswerMode,
         allowed_modes: frozenset[ResolvedMode],
         agent_may_register: bool,
+        effort_ceiling: AnswerEffort,
         memory_enabled: bool = True,
     ) -> AsyncIterator[
         Callable[
-            [Sequence[ToolDeclaration]], Awaitable[tuple[AnswerRunInput, frozenset[ResolvedMode]]]
+            [Sequence[ToolDeclaration], Sequence[BoundConnectionSurface], bool],
+            Awaitable[tuple[AnswerRunInput, frozenset[ResolvedMode]]],
         ]
     ]:
         """Resolve one normalized request and its capacity-narrowed mode set."""
@@ -1868,13 +2800,36 @@ class AnswerService:
             allowed_modes=allowed_modes,
             memory_enabled=memory_enabled,
             agent_may_register=agent_may_register,
+            effort_ceiling=effort_ceiling,
             resource_identity=resource_identity,
         ) as project:
 
             async def prepare(
                 connection_tools: Sequence[ToolDeclaration],
+                surface_entries: Sequence[BoundConnectionSurface],
+                resource_tools_available: bool,
             ) -> tuple[AnswerRunInput, frozenset[ResolvedMode]]:
-                projection = await project(connection_tools)
+                try:
+                    connection_surface = decode_connection_surface(
+                        [
+                            (
+                                ConnectionSurface(
+                                    connection_id=entry.connection_id,
+                                    token=entry.token,
+                                    label=entry.label,
+                                    instructions=entry.instructions,
+                                )
+                            ).as_json()
+                            for entry in surface_entries
+                        ]
+                    )
+                except ValueError:
+                    raise AnswerRequestError(
+                        "This Run's Connection instructions exceed what a Run may pin"
+                    ) from None
+                projection = await project(
+                    connection_tools, connection_surface, resource_tools_available
+                )
                 return AnswerRunInput(
                     query=request.query,
                     workspaces=request.workspaces,
@@ -1892,13 +2847,18 @@ class AnswerService:
                     idempotency_fingerprint=idempotency_fingerprint,
                     resource_identity=resource_identity,
                     agent_run_plan=projection.agent_run_plan,
+                    connection_surface=connection_surface,
                     image_descriptions=projection.image_descriptions,
                     parent_run_id=request.parent_run_id,
                     continuation_kind=request.continuation_kind,
+                    goal_id=request.goal_id,
+                    goal_revision=request.goal_revision,
+                    goal_round=request.goal_round,
                     agent_session_id=request.agent_session_id or SessionId.new().value,
                     agent_lane_id=request.agent_lane_id,
                     source_lane_id=request.source_lane_id,
                     effort=request.effort,
+                    effort_ceiling=effort_ceiling,
                 ), projection.valid_modes
 
             yield prepare
@@ -1912,9 +2872,15 @@ class AnswerService:
         requested_mode: AnswerMode,
         allowed_modes: frozenset[ResolvedMode],
         agent_may_register: bool,
+        effort_ceiling: AnswerEffort,
         memory_enabled: bool = True,
         resource_identity: str,
-    ) -> AsyncIterator[Callable[[Sequence[ToolDeclaration]], Awaitable[_AcceptanceProjection]]]:
+    ) -> AsyncIterator[
+        Callable[
+            [Sequence[ToolDeclaration], Sequence[ConnectionSurface], bool],
+            Awaitable[_AcceptanceProjection],
+        ]
+    ]:
         """Resolve the exact shared-history envelopes without building the run rig."""
         model_profiles = self._capabilities.current_profiles()
         resolved = await self._resources.resolve(
@@ -1952,7 +2918,11 @@ class AnswerService:
             )
             web_search = resolved.web_sources is not None and resolved.web_sources.search_enabled
 
-            async def project(connection_tools: Sequence[ToolDeclaration]) -> _AcceptanceProjection:
+            async def project(
+                connection_tools: Sequence[ToolDeclaration],
+                connection_surface: Sequence[ConnectionSurface],
+                resource_tools_available: bool,
+            ) -> _AcceptanceProjection:
                 pinned_models = self._pin_model_profiles(model_profiles)
                 agent_run_plan: AgentRunPlan | None = None
                 research: ResearchSeed | None = None
@@ -1962,12 +2932,17 @@ class AnswerService:
                             web_search=web_search,
                             memory=memory_enabled,
                             agent_may_register=agent_may_register,
-                            model_guidance=child_model_guidance(pinned_models),
+                            model_guidance=child_model_guidance(
+                                pinned_models, effort_ceiling=effort_ceiling
+                            ),
                             injected=connection_tools,
+                            mcp_resources=resource_tools_available and bool(connection_surface),
                         )
                         if self._research_tool_declarations is not None
                         else research_tool_declarations(
-                            web_search=web_search, injected=connection_tools
+                            web_search=web_search,
+                            injected=connection_tools,
+                            mcp_resources=resource_tools_available and bool(connection_surface),
                         )
                     )
                     agent_run_plan = AgentRunPlan.from_tools(
@@ -1982,6 +2957,7 @@ class AnswerService:
                         query_images=resolved.query_images,
                         resource_manifest=resolved.resource_manifest,
                         image_budget=resolved.image_budget,
+                        connection_surface=tuple(connection_surface),
                     )
                 accepted = accept_history(
                     budget,
@@ -2024,6 +3000,7 @@ class AnswerService:
 
 
 __all__ = [
+    "ActiveRunLimitError",
     "AnswerConnectionsChangedError",
     "AnswerRequestError",
     "AnswerHistoryResource",

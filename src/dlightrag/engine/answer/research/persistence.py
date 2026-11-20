@@ -54,6 +54,19 @@ class ListChildren(Protocol):
     def __call__(self, *, owner_id: str, run_id: str) -> Awaitable[tuple[dict[str, Any], ...]]: ...
 
 
+class LoadChildTranscript(Protocol):
+    def __call__(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        session_id: str,
+        limit: int,
+        before: int | None = None,
+        since: int | None = None,
+    ) -> Awaitable[tuple[dict[str, Any], ...]]: ...
+
+
 class FinishChild(Protocol):
     def __call__(
         self,
@@ -226,6 +239,17 @@ class ResearchRunStore(Protocol):
 
     async def list_child_sessions(
         self, *, owner_id: str, run_id: str
+    ) -> tuple[dict[str, Any], ...]: ...
+
+    async def load_agent_transcript(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        session_id: str,
+        limit: int,
+        before: int | None = None,
+        since: int | None = None,
     ) -> tuple[dict[str, Any], ...]: ...
 
     async def finish_child_session(

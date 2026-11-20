@@ -8,6 +8,7 @@ to turn monitoring off, so nothing here may depend on one.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, date, datetime
 from enum import Enum
@@ -83,6 +84,14 @@ def test_a_long_string_is_bounded_and_says_so() -> None:
     assert len(str(masked["text"])) < 4100
 
 
+def test_classify_separates_private_from_exportable() -> None:
+    assert classify("api_key", "sk-1") == "private"
+    assert classify("query", "what is this?") == "exportable"
+    assert classify("blob", b"\x00") == "private"
+    assert classify("model", "deepseek-flash") == "exportable"
+    assert classify("run_id", "abc") == "exportable"
+
+
 @pytest.mark.parametrize(
     "key",
     [
@@ -100,7 +109,7 @@ def test_a_path_naming_a_home_directory_is_private_whatever_key_carries_it(key: 
 
     The key only has to name a filesystem location; the *value* is what decides.
     """
-    assert classify(key, "/Users/operator/Github/dlightrag/src/toolchain.py") == "private"
+    assert classify(key, "/Users/operator/Github/DlightRAG/src/toolchain.py") == "private"
     assert classify(key, "/home/deploy/app/answer.py") == "private"
 
 
@@ -236,6 +245,12 @@ def test_the_classifier_is_the_decision_the_masker_takes() -> None:
     for key, value in payload.items():
         expected = "private" if masked[key] != value else "exportable"
         assert classify(key, value) == expected
+
+
+def test_the_digest_is_stable_and_short() -> None:
+    expected = hashlib.sha256(b"same").hexdigest()[:12]
+    assert digest("same") == expected
+    assert len(digest(12345)) == 12
 
 
 class _Stage(Enum):

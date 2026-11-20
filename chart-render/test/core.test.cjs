@@ -459,20 +459,6 @@ test('a horizontal bar chart is as tall as its categories need', () => {
   assert.ok(p.height >= 12 * 30, `height ${p.height}`);
 });
 
-test('from four lines up, each line has its own dash and marker; three keep the plain look', () => {
-  const lines = (n) =>
-    chart({
-      dataset: {source: Array.from({length: n}, (_, i) => ({q: 'Q1', r: `s${i}`, v: i}))},
-      xAxis: {type: 'category'},
-      yAxis: {type: 'value'},
-      series: [{type: 'line', seriesBy: 'r', encode: {x: 'q', y: 'v'}}],
-    });
-  const four = plan(lines(4)).option.series;
-  assert.equal(new Set(four.map((s) => `${JSON.stringify(s.lineStyle.type)}${s.symbol}`)).size, 4);
-  const three = plan(lines(3)).option.series;
-  assert.ok(three.every((s) => s.lineStyle.type === undefined && s.symbol === undefined));
-});
-
 test('the palette an option asks for chooses the theme, and an author colour wins', () => {
   const spec = bars({});
   spec.option.palette = 'highlight';
@@ -533,4 +519,22 @@ test('filterValues lists the distinct values of the charts that name the slicer,
   const c = chart({dataset: {source: [{region: '不相干'}]}, series: []});
   assert.deepEqual(Core.filterValues(region, [a, b, c]), ['华东', '华北', '华南', '西南']);
   assert.deepEqual(Core.filterValues({...region, values: ['z', 'y']}, [a]), ['z', 'y']);
+});
+
+test('a chart a slicer does not drive says so under its title, and one that obeys stays quiet', () => {
+  const titled = {...bars({}).option, title: {text: '各地区对比', subtext: '单位：万元'}};
+  const defs = {region: {...region, label: '地区'}, metric};
+  const subtitle = (extra, lang = 'zh') =>
+    Core.prepare(chart(titled, {slicers: defs, ...extra}), {}, 900, {themes, lang}).caption.subtitle;
+
+  assert.equal(subtitle({}), '单位：万元');
+  assert.equal(subtitle({filters: ['region']}), '单位：万元');
+  assert.equal(subtitle({unfiltered: ['region']}), '单位：万元 · 不受「地区」筛选影响');
+  // The object form reads the same on the page and keeps the reason in the source.
+  assert.equal(subtitle({unfiltered: {region: '全国口径'}}), '单位：万元 · 不受「地区」筛选影响');
+  // Several read as one phrase, an id with no label falls back to itself, and English says its own words.
+  assert.equal(subtitle({unfiltered: ['region', 'metric']}), '单位：万元 · 不受「地区、metric」筛选影响');
+  assert.equal(subtitle({unfiltered: ['region']}, 'en'), '单位：万元 · not filtered by 地区');
+  // Without a title there is no caption for the note to ride on.
+  assert.equal(plan(chart(bars({}).option, {slicers: defs, unfiltered: ['region']})).caption, null);
 });

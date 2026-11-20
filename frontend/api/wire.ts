@@ -28,6 +28,9 @@ export function noteRefusal(status: number): void {
   if (status === 401) signIn.dispatchEvent(new Event('signed-out'));
 }
 
+/** A moment the server states as an ISO-8601 string, read as a `Date`. */
+export const timestamp = v.pipe(v.string(), v.isoTimestamp(), v.transform((value) => new Date(value)));
+
 /** The server's public `error_type` vocabulary (docs/interfaces.md). */
 const API_ERROR_TYPES = [
   'validation',
@@ -39,9 +42,9 @@ const API_ERROR_TYPES = [
   'internal',
 ] as const;
 
-export type ApiErrorType = (typeof API_ERROR_TYPES)[number];
+type ApiErrorType = (typeof API_ERROR_TYPES)[number];
 
-export interface ApiErrorFields {
+interface ApiErrorFields {
   readonly detail?: string | null;
   readonly errorType?: ApiErrorType | null;
   readonly errorKind?: string | null;
@@ -72,17 +75,25 @@ export class ApiError extends Error {
   }
 }
 
-function envelopeOf(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
+/** The fields a refusal body states, read the one way every refusal is read: a JSON object is its own
+ *  fields, and anything else (no body, a proxy's page, a list) states none. A route answers either the
+ *  general envelope `{detail, error_type, error_kind?}` or its module's own, such as `{kind, message}`. */
+export function refusalEnvelope(body: unknown): Record<string, unknown> {
+  return body !== null && typeof body === 'object' && !Array.isArray(body)
+    ? body as Record<string, unknown>
     : {};
+}
+
+/** A refused response's body as JSON, or null when it is not. */
+export async function refusalBody(response: Response): Promise<unknown> {
+  return await response.json().catch(() => null);
 }
 
 /** Read a refusal body already parsed as JSON (null when it was not), noting its
  *  status; a body that is not the envelope keeps only its status. */
 export function apiErrorFromBody(status: number, body: unknown): ApiError {
   noteRefusal(status);
-  const {detail, error_type: errorType, error_kind: errorKind} = envelopeOf(body);
+  const {detail, error_type: errorType, error_kind: errorKind} = refusalEnvelope(body);
   return new ApiError(status, {
     // FastAPI's own request validation answers a list here; that is no reason.
     detail: typeof detail === 'string' && detail.trim() ? detail : null,
@@ -93,7 +104,7 @@ export function apiErrorFromBody(status: number, body: unknown): ApiError {
 
 /** Parse one refused response through the general envelope. */
 export async function apiError(response: Response): Promise<ApiError> {
-  return apiErrorFromBody(response.status, await response.json().catch(() => null));
+  return apiErrorFromBody(response.status, await refusalBody(response));
 }
 
 /** Parse a response through its schema; refusals go through `refused`. */

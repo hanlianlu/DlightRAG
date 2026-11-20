@@ -9,7 +9,7 @@ export type WorkspaceRecord = WorkspacePageItem;
 const PRIMARY_COOKIE = 'dlightrag_workspace';
 const ACTIVE_COOKIE = 'dlightrag_workspace_ids';
 
-export type WorkspacePageLoader = (
+type WorkspacePageLoader = (
   cursor: string | null,
   signal?: AbortSignal,
 ) => Promise<WorkspacePage>;
@@ -105,7 +105,12 @@ export class WorkspaceStore extends Store {
   constructor() {
     super();
     this.#pager = new KeysetPager<WorkspacePage>(
-      (cursor, signal) => this.#loader!(cursor, signal),
+      async (cursor, signal) => {
+        // Without a loader `init` offered no next page, so this is asked only of a store that has one.
+        const loader = this.#loader;
+        if (loader === null) throw new Error('no page loader');
+        return await loader(cursor, signal);
+      },
       () => this.changed(),
     );
   }

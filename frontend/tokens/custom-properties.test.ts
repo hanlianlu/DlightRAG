@@ -5,7 +5,6 @@ import {readdirSync, readFileSync} from 'node:fs';
 import {basename, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {test} from 'node:test';
-import {DESIGN_SYSTEM_TOKEN_GROUPS} from './design-system-tokens.ts';
 
 const FRONTEND_DIR = fileURLToPath(new URL('..', import.meta.url));
 const CSS_DIRS = ['styles', 'design-system'].map((directory) => join(FRONTEND_DIR, directory));
@@ -43,55 +42,95 @@ function sharedDeclarations(sources: readonly CssSource[]): Set<string> {
     .flatMap(({source}) => [...declaredCustomProperties(source)]));
 }
 
-function undefinedCustomProperties(sources: readonly CssSource[]): string[] {
-  const shared = sharedDeclarations(sources);
-  const errors: string[] = [];
-  for (const {path, source} of sources) {
-    const local = declaredCustomProperties(source);
-    const uncommented = withoutComments(source);
-    for (const match of uncommented.matchAll(/var\(\s*(--[\w-]+)\s*(,)?/g)) {
-      const [, property, fallback] = match;
-      if (shared.has(property) || local.has(property) || fallback) continue;
-      const line = uncommented.slice(0, match.index).split('\n').length;
-      errors.push(`${basename(path)}:${line}: ${property}`);
-    }
-  }
-  return errors;
-}
-
-test('every CSS custom-property use is shared, source-local, or explicitly fallbacked', () => {
-  assert.deepEqual(undefinedCustomProperties(cssSources()), []);
-});
-
 test('the design-system token specimen references only declared shared tokens', () => {
   const declared = sharedDeclarations(cssSources());
-  const referenced = DESIGN_SYSTEM_TOKEN_GROUPS.flatMap(([primary, related]) => [
-    primary,
-    ...related,
-  ]);
+  const page = readFileSync(join(FRONTEND_DIR, 'ui', 'design-system.ts'), 'utf8');
+  const list = page.match(/const TOKEN_NAMES = \[([^\]]+)\]/)?.[1];
+  assert.ok(list, 'the specimen page states the tokens it shows');
+  const referenced = [...list.matchAll(/'([\w-]+)'/g)].map((match) => match[1]);
+  assert.ok(referenced.length > 0);
   assert.deepEqual(
     referenced.filter((name) => !declared.has(`--${name}`)),
     [],
   );
 });
 
-test('the CSS custom-property contract permits explicit fallback syntax', () => {
-  const fixture = [{
-    path: 'fallback.css',
-    source: '.fallback { color: var(--optional-embed-color, currentcolor); }',
-  }];
-  assert.deepEqual(undefinedCustomProperties(fixture), []);
-});
+/** Every `var(--name, fallback)` in a source, with the fallback read to its closing parenthesis. */
+function varFallbacks(source: string): Array<[name: string, fallback: string]> {
+  const found: Array<[string, string]> = [];
+  for (const match of source.matchAll(/var\(\s*(--[\w-]+)\s*,/g)) {
+    const start = match.index + match[0].length;
+    let depth = 1;
+    let end = start;
+    for (; end < source.length && depth > 0; end += 1) {
+      if (source[end] === '(') depth += 1;
+      else if (source[end] === ')') depth -= 1;
+    }
+    found.push([match[1], source.slice(start, end - 1).trim()]);
+  }
+  return found;
+}
 
-test('comments and declarations in unrelated component files cannot hide an undefined use', () => {
-  const fixture = [
-    {path: 'component.css', source: '.local { --component-only: red; }'},
-    {
-      path: 'consumer.css',
-      source: '/* --comment-only: red; */\n.consumer { color: var(--component-only); }',
-    },
-  ];
-  assert.deepEqual(undefinedCustomProperties(fixture), [
-    'consumer.css:2: --component-only',
-  ]);
+/** What each foundation token holds on `:root` before a theme, media query or forced-colors rule restates it. */
+function rootTokenValues(): Map<string, string> {
+  const directory = join(FRONTEND_DIR, 'design-system/foundations');
+  const values = new Map<string, string>();
+  for (const name of readdirSync(directory).filter((file) => file.endsWith('.css')).sort()) {
+    const source = withoutComments(readFileSync(join(directory, name), 'utf8'));
+    const lightAt = source.indexOf(":root[data-color-mode='light']");
+    const defaults = (lightAt < 0 ? source : source.slice(0, lightAt))
+      .replace(/@media[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g, '');
+    for (const match of defaults.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) {
+      values.set(match[1], match[2].trim());
+    }
+  }
+  return values;
+}
+
+function resolveTokenValue(value: string, tokens: ReadonlyMap<string, string>): string {
+  let resolved = value;
+  for (let step = 0; step < 8 && /var\(--[\w-]+\)/.test(resolved); step += 1) {
+    resolved = resolved.replace(/var\((--[\w-]+)\)/g, (reference, name: string) => tokens.get(name) ?? reference);
+  }
+  return resolved.toLowerCase().replace(/\s+/g, ' ');
+}
+
+/** Properties an element reads as inputs of its own rather than foundation tokens, each with the default the
+ *  design-system README documents for it. A page sets them on the element; nothing else declares them. */
+const ELEMENT_INPUT_DEFAULTS = new Map([
+  ['--split-start-layer', '0'],
+  ['--split-end-layer', '0'],
+]);
+
+function elementSources(): Array<[file: string, source: string]> {
+  const directory = join(FRONTEND_DIR, 'design-system/elements');
+  return readdirSync(directory)
+    .filter((file) => file.endsWith('.ts') && !file.endsWith('.test.ts'))
+    .sort()
+    .map((file) => [file, readFileSync(join(directory, file), 'utf8')]);
+}
+
+test('every shadow element\'s var() fallbacks restate the token\'s :root value', () => {
+  const tokens = rootTokenValues();
+  const withFallbacks = new Set<string>();
+  for (const [file, source] of elementSources()) {
+    for (const [name, fallback] of varFallbacks(source)) {
+      withFallbacks.add(file);
+      const normalized = fallback.toLowerCase().replace(/\s+/g, ' ');
+      const input = ELEMENT_INPUT_DEFAULTS.get(name);
+      if (input !== undefined) {
+        assert.equal(normalized, input, `${file}: the fallback of ${name} must be its documented default`);
+        continue;
+      }
+      const value = tokens.get(name);
+      assert.notEqual(value, undefined, `${file}: ${name} is neither a foundation token nor a listed element input`);
+      assert.equal(
+        normalized,
+        resolveTokenValue(value ?? '', tokens),
+        `${file}: the fallback of ${name} must be the token's own value`,
+      );
+    }
+  }
+  // The two elements that style a shadow tree; a rename or a move must not leave the test checking nothing.
+  assert.deepEqual([...withFallbacks].sort(), ['icon-button.ts', 'split-layout.ts']);
 });

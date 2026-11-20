@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from dlightrag.application.config import load_config
+from dlightrag.application.config.loading import load_config
 from dlightrag.engine.ai.settings import EmbeddingSettings, reject_url_credentials
 
 _SECRET = "never-echo-url-secret"

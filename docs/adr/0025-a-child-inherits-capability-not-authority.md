@@ -10,10 +10,16 @@ cross.
 
 Accepted and implemented. Every slice under [Consequences](#consequences) has
 landed and passed a two-axis review (Standards and Spec) before the next one began. It refines the Child Session contract in
-[domain language](../domain-language.md#current-execution-and-workspace-concepts)
+[domain language](../domain-language.md#current-execution-and-agentspace-concepts)
 and complements [ADR 0024](0024-the-agent-sees-only-its-workspace.md): a child's
 processes are confined by the same policy as its parent's, because the working
 copy they run in is the same one.
+
+Amended 2026-10-11: the memory Tools are renamed by [ADR 0045](0045-profile-memory-is-maintained-per-session-and-owned-across-them.md)
+— `remember`, `forget` and `recall_memory` below are now `memory_remember`,
+`memory_forget` and `memory_lookup` — and `memory_undo` joins the authority a child
+never holds, beside `memory_remember` and `memory_forget`: a child may look memory
+up, never change it, and compensating a change is changing it.
 
 Amended 2026-10-03: the built-in `council` Skill no longer asks for a narrower child.
 Its children are ordinary children and hold the default set, with no read-only
@@ -82,7 +88,7 @@ capability one sentence at a time. The rule partitions the tool surface once:
 
 | Authority | Tools |
 |---|---|
-| Splitting and the roster | `spawn_agent`, `subagent_status`, `wait_subagent`, `cancel_subagent`, `steer_subagent`, `continue_subagent`, `reply_subagent` |
+| Splitting and the roster | `spawn_agent`, `subagent_status`, `wait_subagent`, `read_subagent`, `cancel_subagent`, `steer_subagent`, `continue_subagent`, `reply_subagent` |
 | Durable owner memory | `remember`, `forget` |
 | Publication | `attach_artifact`, `publish_skill`, `delete_skill`, `set_skill_enabled` |
 

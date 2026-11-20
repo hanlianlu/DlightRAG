@@ -21,7 +21,10 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from dlightrag.application.errors import ApplicationNotFoundError
-from dlightrag.engine.answer.agent_browser import AgentAccountStore, reseal_agent_accounts
+from dlightrag.engine.answer.agent_browser.accounts import (
+    AgentAccountStore,
+    reseal_agent_accounts,
+)
 from dlightrag.engine.credential_cipher import CredentialCipher
 
 logger = logging.getLogger(__name__)

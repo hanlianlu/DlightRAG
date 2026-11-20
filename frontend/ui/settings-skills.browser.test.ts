@@ -5,7 +5,7 @@ import {buttonNamed, waitFor} from '../testing/dom.ts';
 import {type Handler, mountSettings, openSettings, ownerSkills, type Wire, wire, wireSkill} from '../testing/settings.ts';
 import type {DlSettingsDialog} from './settings.ts';
 import type {DlSettingsSkills} from './settings-skills.ts';
-import type {DlToastRegion} from './toast.ts';
+import {type DlToastRegion, type ToastTone, toastRegionOf} from './toast.ts';
 
 const originalFetch = window.fetch;
 
@@ -62,8 +62,8 @@ function status(settings: DlSettingsDialog): {short: string; detail: string} {
   };
 }
 
-function notice(settings: DlSettingsDialog): DlToastRegion {
-  return settings.querySelector('dl-toast-region')!;
+function notice(settings: DlSettingsDialog, tone: ToastTone = 'receipt'): DlToastRegion {
+  return toastRegionOf(settings, tone)!;
 }
 
 /** Open Settings on Skills and wait until the page has an answer to show, whichever it is. */
@@ -170,7 +170,7 @@ it('keeps the authoritative state after a failed toggle, and says so', async () 
   const toggle = switchOf(settings, 'pdf-extract');
   toggle.focus();
   toggle.click();
-  await waitFor(() => !toggle.disabled && (notice(settings).textContent?.includes('Could not update pdf-extract.') ?? false));
+  await waitFor(() => !toggle.disabled && (notice(settings, 'error').textContent?.includes('Could not update pdf-extract.') ?? false));
 
   expect(toggle.getAttribute('aria-checked')).to.equal('true');
   expect(rowOf(settings, 'pdf-extract').textContent).not.to.contain('Disabled');
@@ -219,7 +219,7 @@ it('keeps the Skill and says so when the delete fails', async () => {
   trigger.click();
   await waitFor(() => dialog.open);
   dialog.querySelector<HTMLButtonElement>('button[value=delete]')!.click();
-  await waitFor(() => notice(settings).textContent?.includes('Could not delete pdf-extract.') ?? false);
+  await waitFor(() => notice(settings, 'error').textContent?.includes('Could not delete pdf-extract.') ?? false);
 
   expect(names(settings)).to.have.length(3);
   await waitFor(() => !trigger.disabled && document.activeElement === trigger);
@@ -258,8 +258,8 @@ describe('a Skill that no longer exists', () => {
       await waitFor(() => !names(settings).includes('pdf-extract'));
 
       expect(names(settings)).to.deep.equal(['csv-report', 'old-style-guide']);
-      expect(notice(settings).textContent).to.contain('pdf-extract no longer exists, so it was removed from the list.');
-      expect(notice(settings).textContent).not.to.contain('Could not');
+      expect(notice(settings, 'error').textContent).to.contain('pdf-extract no longer exists, so it was removed from the list.');
+      expect(notice(settings, 'error').textContent).not.to.contain('Could not');
       expect(status(settings)).to.deep.equal({short: '1/2', detail: '1 of 2 on'});
     });
   }
@@ -360,13 +360,14 @@ it('says there is nothing yet, in the page and in the navigation, and says how t
   expect(status(settings)).to.deep.equal({short: '', detail: 'None yet'});
 });
 
-it('shows loading, then a failed first read in its own note with Retry, and reads again from it', async () => {
+it('shows loading, then a failed first read in its own note with Retry, and reads again from it, keeping focus', async () => {
   let reads = 0;
   let release!: (response: Response) => void;
   serving({
     'GET /web/api/skills/mine': () => {
       reads += 1;
-      return reads === 1 ? new Promise<Response>((resolve) => { release = resolve; }) : ownerSkills(SKILLS);
+      if (reads === 1) return new Promise<Response>((resolve) => { release = resolve; });
+      return reads === 2 ? new Response('unavailable', {status: 503}) : ownerSkills(SKILLS);
     },
   });
   const {settings} = mountSettings();
@@ -381,8 +382,19 @@ it('shows loading, then a failed first read in its own note with Retry, and read
   expect(page(settings).querySelector('[role=alert]')).not.to.equal(null);
   expect(status(settings)).to.deep.equal({short: '', detail: ''});
 
+  const retry = buttonNamed(page(settings), 'Retry')!;
+  retry.focus();
+  retry.click();
+  // The read fails again and the note is drawn anew: focus follows to the Retry that replaced the one pressed.
+  await waitFor(() => {
+    const again = buttonNamed(page(settings), 'Retry');
+    return reads === 2 && again !== null && again !== retry && document.activeElement === again;
+  });
+
   buttonNamed(page(settings), 'Retry')!.click();
   await waitFor(() => names(settings).length === 3);
-  expect(reads).to.equal(2);
+  expect(reads).to.equal(3);
   expect(status(settings).short).to.equal('2/3');
+  // Pressed from the keyboard, Retry hands focus to the first control of the list it revealed.
+  await waitFor(() => document.activeElement === switchOf(settings, 'csv-report'));
 });

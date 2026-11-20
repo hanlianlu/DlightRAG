@@ -21,12 +21,18 @@ await initializeLanguagePreference();
 const appModule = await import('./app.ts');
 void appModule;
 const {initializeBrowserAdapters} = await import('./browser-adapters.ts');
+const {initializeObservability} = await import('./observability.ts');
 
 // Dynamic imports can finish after DOMContentLoaded on a cold load. Start
 // immediately when parsing already completed, otherwise wait for it once.
 const start = (): void => {
   const app = document.querySelector<DlApp>('dl-app');
-  if (app) void initializeBrowserAdapters(app);
+  if (!app) return;
+  void initializeBrowserAdapters(app);
+  // After the render the bootstrap resolved, and never before it: the browser
+  // channel is off the render path, where a blocked or failing SDK costs
+  // telemetry and nothing else.
+  void app.ready.then((bootstrap) => initializeObservability(bootstrap.observability));
 };
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', start, {once: true});

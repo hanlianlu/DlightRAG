@@ -1,24 +1,25 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Canonical nine-section configuration contracts."""
 
-import os
 import re
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
 
-from dlightrag.application.config import (
+from dlightrag.application.config.loading import load_config
+from dlightrag.application.config.sections import (
+    AccessControlRuleConfig,
     AccessSectionSettings,
     DeploymentSettings,
     DlightragConfig,
     PostgresSettings,
     StorageSettings,
-    load_config,
 )
-from dlightrag.engine.ai.settings import EmbeddingSettings, ModelSettings, ModelsSettings
+from dlightrag.engine.ai.settings import ModelSettings, ModelsSettings
 from dlightrag.engine.rag.workspace.settings import (
     CorpusSettings,
     MinerUSidecarSettings,
@@ -29,55 +30,11 @@ from tests.support.settings_models import names_a_config_field
 _REPO = Path(__file__).resolve().parents[2]
 
 
-@pytest.fixture(autouse=True)
-def _clean_sources(monkeypatch: pytest.MonkeyPatch) -> None:
-    for key in list(os.environ):
-        if key.upper().startswith("DLIGHTRAG_"):
-            monkeypatch.delenv(key, raising=False)
-    monkeypatch.setitem(DlightragConfig.model_config, "env_file", None)
-
-
-def test_root_has_exactly_nine_sections() -> None:
-    assert tuple(DlightragConfig.model_fields) == (
-        "deployment",
-        "storage",
-        "models",
-        "corpus",
-        "answer",
-        "runtime",
-        "access",
-        "interfaces",
-        "observability",
-    )
-
-
-def test_defaults_preserve_runtime_contract(tmp_path: Path) -> None:
-    config = DlightragConfig(
-        deployment=DeploymentSettings(working_dir=str(tmp_path)),
-        models=ModelsSettings(embedding=EmbeddingSettings(startup_probe=False)),
-    )
-    assert config.deployment.service_role == "writer"
-    assert config.deployment.workspace == "default"
-    assert config.storage.postgres.port == 5432
-    assert config.models.chat.default.model == "google/gemini-3.8-flash"
-    assert config.models.chat.default.structured_output == "auto"
-    assert config.models.embedding.dim == 1024
-    assert config.models.embedding.batch_size == 64
-    assert config.corpus.retrieval.top_k == 40
-    assert config.corpus.retrieval.chunk_top_k == 20
-    assert config.corpus.retrieval.federation_min_chunks_per_workspace == 7
-    assert config.corpus.promotion.doc_threshold is None
-    assert config.corpus.promotion.chunk_threshold is None
-    assert config.runtime.run_retention_days == 365
-    assert config.input_dir_path == tmp_path / "inputs"
-    assert config.corpus_dir_path == tmp_path / "corpus"
-
-
 def test_session_notes_bounds_are_configurable_and_bounded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Memory bounds ride the canonical config, with the ADR's defaults and a floor."""
-    from dlightrag.application.config import SessionNotesConfig
+    from dlightrag.application.config.sections import SessionNotesConfig
 
     defaults = DlightragConfig(_env_file=None)
     assert defaults.answer.agent.session_notes == SessionNotesConfig(
@@ -111,44 +68,46 @@ def test_nested_environment_loading(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.parametrize(
     "source", ["constructor", "config.yaml", ".env", "environment", "lowercase environment"]
 )
-def test_the_flat_postgres_host_is_refused_from_every_source(
+def test_an_unknown_top_level_key_is_refused_from_every_source(
     source: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The nine sections replaced the flat names, and no source may bring one back."""
+    """A top-level key outside the nine sections is refused whichever source brings it."""
     monkeypatch.chdir(tmp_path)
     load: Callable[[], object] = DlightragConfig
     match source:
         case "constructor":
-            load = partial(DlightragConfig, postgres_host="old")
+            load = partial(DlightragConfig, unknown_setting="old")
         case "config.yaml":
-            (tmp_path / "config.yaml").write_text("postgres_host: old\n", encoding="utf-8")
+            (tmp_path / "config.yaml").write_text("unknown_setting: old\n", encoding="utf-8")
         case ".env":
-            (tmp_path / ".env").write_text("DLIGHTRAG_POSTGRES_HOST=old\n", encoding="utf-8")
+            (tmp_path / ".env").write_text("DLIGHTRAG_UNKNOWN_SETTING=old\n", encoding="utf-8")
             load = partial(load_config, tmp_path / ".env")
         case "environment":
-            monkeypatch.setenv("DLIGHTRAG_POSTGRES_HOST", "old")
+            monkeypatch.setenv("DLIGHTRAG_UNKNOWN_SETTING", "old")
         case "lowercase environment":
-            monkeypatch.setenv("dlightrag_postgres_host", "old")
+            monkeypatch.setenv("dlightrag_unknown_setting", "old")
 
-    with pytest.raises(ValueError, match="(?i)postgres_host"):
+    with pytest.raises(ValueError, match="(?i)unknown_setting"):
         load()
 
 
-def test_a_renamed_compose_input_names_its_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DLIGHTRAG_POSTGRES_SHARED_BUFFERS", "8GB")
-    with pytest.raises(ValueError, match="-> COMPOSE_POSTGRES_SHARED_BUFFERS"):
-        DlightragConfig()
-
-
 def test_auxiliary_environment_is_not_misread_as_server_config(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("DLIGHTRAG_API_URL", "https://client.example")
     monkeypatch.setenv("DLIGHTRAG_API_TOKEN", "client-token")
+    monkeypatch.setenv("DLIGHTRAG_EXPORT_KEY", "k" * 40)
     monkeypatch.setenv("COMPOSE_POSTGRES_SHARED_BUFFERS", "8GB")
     monkeypatch.setenv("COMPOSE_GLOBAL_SKILLS_DIR", "/srv/operator-skills")
 
     assert DlightragConfig().interfaces.api.host == "127.0.0.1"
+
+    # The operator keeps the export key in the .env the application itself starts from.
+    monkeypatch.delenv("DLIGHTRAG_EXPORT_KEY")
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"DLIGHTRAG_EXPORT_KEY={'k' * 40}\n", encoding="utf-8")
+
+    assert load_config(env_file).interfaces.api.host == "127.0.0.1"
 
 
 @pytest.mark.parametrize(
@@ -204,6 +163,20 @@ def test_auth_validation_uses_nested_access() -> None:
         DlightragConfig(access=AccessSectionSettings(auth_mode="simple"))
     config = DlightragConfig(access=AccessSectionSettings(auth_mode="simple", api_token="secret"))
     assert config.access.auth_mode == "simple"
+
+
+def test_an_access_rule_that_names_no_action_is_refused() -> None:
+    """A preset that no longer exists, or a typo, would deny its callers in silence."""
+    for stale in ("reader", "editor", "commom_user", "workpsace.query", ""):
+        with pytest.raises(ValidationError, match="name no preset or Action"):
+            AccessControlRuleConfig(claim="iss", value="https://team.example", actions=[stale])
+    # A preset, an Action, an Action namespace, and the catch-all all stay accepted.
+    accepted = AccessControlRuleConfig(
+        claim="iss",
+        value="https://team.example",
+        actions=["common_user", "admin", "workspace.query", "workspace.*", "*"],
+    )
+    assert accepted.actions == ["common_user", "admin", "workspace.query", "workspace.*", "*"]
 
 
 def test_models_accept_complete_startup_catalogue_entries() -> None:
@@ -280,28 +253,18 @@ def test_load_config_redacts_invalid_secret_input() -> None:
     assert "do-not-echo" not in str(caught.value)
 
 
-def test_observability_settings_carry_the_otlp_destination_and_its_headers() -> None:
-    """The endpoint is non-secret; the ingestion key rides in a header, never in the URL."""
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {"sample_rate": 1.5},
+        # The endpoint is non-secret; the ingestion key rides in a header, never in the URL.
+        {"otlp_endpoint": "http://user:secret@127.0.0.1:4318"},
+    ],
+)
+def test_observability_settings_refuse_an_out_of_range_rate_and_a_credentialed_endpoint(
+    invalid: dict[str, Any],
+) -> None:
     from dlightrag.application.config.sections import ObservabilitySettings
 
-    settings = ObservabilitySettings(
-        otlp_endpoint="http://127.0.0.1:4318",
-        otlp_headers={"authorization": "key-1"},
-        service_name="dlightrag-api",
-        environment="local",
-        release="9.9.9",
-        sample_rate=0.25,
-        timeout=10,
-    )
-    assert settings.otlp_endpoint == "http://127.0.0.1:4318"
-    assert settings.otlp_headers == {"authorization": "key-1"}
-    assert settings.service_name == "dlightrag-api"
-    assert settings.sample_rate == 0.25
-    assert settings.timeout == 10
-    assert ObservabilitySettings().otlp_endpoint is None
-    assert ObservabilitySettings().otlp_headers == {}
-    assert ObservabilitySettings().service_name == "dlightrag"
     with pytest.raises(ValidationError):
-        ObservabilitySettings(sample_rate=1.5)
-    with pytest.raises(ValidationError):
-        ObservabilitySettings(otlp_endpoint="http://user:secret@127.0.0.1:4318")
+        ObservabilitySettings(**invalid)

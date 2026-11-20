@@ -24,7 +24,7 @@ from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
 from dlightrag.engine.ai.providers.openai_response import response_input
 from dlightrag.engine.ai.replay import bind_provider_replay, messages_for_model
-from tests.in_memory_session_repository import MemoryAgentSessionRepository
+from tests.support.in_memory_session_repository import MemoryAgentSessionRepository
 
 
 def _user(session_id: SessionId, content: str) -> UserMessageEntry:

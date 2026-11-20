@@ -23,13 +23,13 @@ from dlightrag.engine.answer.continuation_handles import (
     SESSION_NOTE_DIRECTORY,
     is_session_note,
 )
-from dlightrag.engine.runtime.workspace import (
+from dlightrag.engine.runtime.agentspace import (
     DEFAULT_SESSION_NOTES_LIMITS,
     SESSION_NOTES_BUDGET_REFUSED,
     SESSION_NOTES_LEASE_LOST,
+    AgentspaceStore,
     SessionNoteRecord,
     SessionNotesLimits,
-    WorkspaceStore,
     note_digest,
 )
 
@@ -156,7 +156,7 @@ class SessionNotesPlane:
     def __init__(
         self,
         *,
-        store: WorkspaceStore,
+        store: AgentspaceStore,
         session_id: str,
         workspace: Path | None = None,
         limits: SessionNotesLimits = DEFAULT_SESSION_NOTES_LIMITS,

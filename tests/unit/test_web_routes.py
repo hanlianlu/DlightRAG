@@ -12,34 +12,39 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from dlightrag.adapters.http.server import create_app
-from dlightrag.application.access import (
-    DEPLOYMENT_OWNER_ID,
-    WorkspaceRecord,
+from dlightrag.application.access.control import (
+    AccessAction,
     access_control_from_settings,
+)
+from dlightrag.application.access.principal import (
+    DEPLOYMENT_OWNER_ID,
     owner_id_from_principal,
 )
+from dlightrag.application.access.workspaces import WorkspaceRecord
 from dlightrag.application.answer_runs.service import AgentEffortOffer
-from dlightrag.application.config import (
+from dlightrag.application.config.sections import (
     AccessControlConfig,
     AccessControlRuleConfig,
     DlightragConfig,
 )
-from dlightrag.application.corpus_admin import (
+from dlightrag.application.corpus_admin.errors import WorkspaceNotFoundError
+from dlightrag.application.corpus_admin.file_panel import (
     FilePanelCursor,
     FilePanelCursorCodec,
     FilePanelPageRequest,
-    UploadLimits,
+)
+from dlightrag.application.corpus_admin.mutations import UploadLimits
+from dlightrag.application.corpus_admin.workspace_catalog import (
     WorkspaceCatalogCursor,
     WorkspaceCatalogCursorCodec,
     WorkspaceCatalogPage,
-    WorkspaceNotFoundError,
 )
 from dlightrag.application.runs import RunAdmissionLimitExceededError
-from dlightrag.application.settings import access_settings
+from dlightrag.application.settings.projections import access_settings
 from dlightrag.engine.agent.skills import SkillCatalog, builtin_skills_root, owner_skill_root
 from dlightrag.engine.answer.image_capability import AnswerImageCapability
-from tests.config_helpers import mutate_config
 from tests.support.application_double import application_double
+from tests.support.config_helpers import mutate_config
 from tests.unit.conftest import answer_capabilities
 
 CONVERSATION_ID = "11111111-1111-4111-8111-111111111111"
@@ -92,6 +97,14 @@ def _listing(*others: dict[str, str]) -> dict[str, list[dict[str, str]]]:
 # Allow-all deployments offer every Corpus Mutation, and the default is never deleted.
 _EVERY_CHANGE = ["ingest", "replace", "delete", "retry", "reset", "delete_workspace"]
 _DEFAULT_CHANGES = ["ingest", "replace", "delete", "retry", "reset"]
+# Read-only is no preset: a deployment that wants it names the read Actions.
+_READ_ONLY_ACTIONS = [
+    AccessAction.WORKSPACE_QUERY,
+    AccessAction.WORKSPACE_LIST_FILES,
+    AccessAction.WORKSPACE_DOWNLOAD_SOURCE,
+    AccessAction.WORKSPACE_READ_METADATA,
+    AccessAction.WORKSPACE_READ_VISUAL_ASSET,
+]
 
 
 class _Creators:
@@ -128,6 +141,8 @@ def mock_application(test_config: DlightragConfig):
     application.answers.agent_effort_offer.return_value = AgentEffortOffer(
         ("low", "high", "max"), None
     )
+    # Answer feedback is offered, as in a deployment whose policy nobody has edited.
+    application.policies.value_for.return_value = True
     corpora = application.corpora
     corpora.list_workspaces.return_value = ["default", "test_ws"]
     corpora.workspace_exists.return_value = True
@@ -407,7 +422,8 @@ async def test_turning_an_owners_skill_off_takes_only_its_own_name_out_of_comple
     assert off.status_code == off_again.status_code == lonely.status_code == 200
     assert off.json() == off_again.json()
     assert off.json() == {"name": "review", "description": "My review.", "enabled": False}
-    # Settings still lists what is off, marked; completion offers only what can be loaded.
+    # Settings still lists what is off, marked; completion offers only what can be loaded, and
+    # the Skill an override had hidden is back.
     assert [
         (skill["name"], skill["enabled"])
         for skill in (await client.get("/web/api/skills/mine")).json()["skills"]
@@ -747,7 +763,8 @@ class TestWebAuth:
 
         async with _web_client_for(mock_application) as client:
             client.cookies.set(
-                "dlightrag_web_auth", base64.urlsafe_b64encode(b"stale-token").decode().rstrip("=")
+                "dlightrag_web_auth",
+                base64.urlsafe_b64encode(b"stale-token").decode().rstrip("="),
             )
             fetched = await client.get(
                 download, headers={"Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "empty"}
@@ -808,19 +825,43 @@ class TestWebAuth:
         assert parse_qs(urlsplit(navigation.headers["location"]).query)["next"] == [page]
         assert "dlightrag_web_auth=" in navigation.headers["set-cookie"]
 
-    async def test_simple_invalid_bearer_rejected(
-        self, test_config: DlightragConfig, mock_application
+    @pytest.mark.parametrize(
+        ("mode", "valid", "status"),
+        [("simple", False, 401), ("simple", True, 200), ("jwt", False, 401), ("jwt", True, 200)],
+        ids=["simple-invalid", "simple-valid", "jwt-invalid", "jwt-valid"],
+    )
+    async def test_a_bearer_header_grants_web_access_only_when_it_is_valid(
+        self,
+        test_config: DlightragConfig,
+        mock_application,
+        mode: str,
+        valid: bool,
+        status: int,
     ) -> None:
-        mutate_config(test_config, "access.auth_mode", "simple")
-        mutate_config(test_config, "access.api_token", "secret-token")
-
-        async with _web_client_for(mock_application) as c:
-            resp = await c.get(
-                "/web/api/files",
-                headers={"Authorization": "Bearer wrong-token"},
+        key = "test-jwt-verification-key-for-web-route-tests"
+        mutate_config(test_config, "access.auth_mode", mode)
+        if mode == "simple":
+            mutate_config(test_config, "access.api_token", "secret-token")
+            token = "secret-token" if valid else "wrong-token"
+        else:
+            mutate_config(test_config, "access.jwt_verification_key", key)
+            token = (
+                jwt.encode(
+                    {
+                        "sub": "user-1",
+                        "exp": datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=5),
+                    },
+                    key,
+                    algorithm="HS256",
+                )
+                if valid
+                else "not-a-jwt"
             )
 
-        assert resp.status_code == 401
+        async with _web_client_for(mock_application) as c:
+            resp = await c.get("/web/api/files", headers={"Authorization": f"Bearer {token}"})
+
+        assert resp.status_code == status
 
     async def test_simple_login_page_is_static_and_no_store(
         self, test_config: DlightragConfig, mock_application
@@ -880,7 +921,7 @@ class TestWebAuth:
     async def test_simple_login_cookie_downloads_source_without_bearer(
         self, test_config: DlightragConfig, mock_application
     ) -> None:
-        from dlightrag.application.corpus_admin import LocalDownloadTarget
+        from dlightrag.application.corpus_admin.errors import LocalDownloadTarget
 
         mutate_config(test_config, "access.auth_mode", "simple")
         mutate_config(test_config, "access.api_token", "secret-token")
@@ -943,64 +984,6 @@ class TestWebAuth:
         assert resp.headers["location"].startswith("/web/login")
         assert "dlightrag_web_auth=" in resp.headers["set-cookie"]
 
-    async def test_bearer_header_grants_web_access(
-        self, test_config: DlightragConfig, mock_application
-    ) -> None:
-        mutate_config(test_config, "access.auth_mode", "simple")
-        mutate_config(test_config, "access.api_token", "secret-token")
-
-        async with _web_client_for(mock_application) as c:
-            resp = await c.get(
-                "/web/api/files",
-                headers={"Authorization": "Bearer secret-token"},
-            )
-
-        assert resp.status_code == 200
-
-    async def test_jwt_invalid_bearer_rejected(
-        self, test_config: DlightragConfig, mock_application
-    ) -> None:
-        mutate_config(test_config, "access.auth_mode", "jwt")
-        mutate_config(
-            test_config,
-            "access.jwt_verification_key",
-            "test-jwt-verification-key-for-web-route-tests",
-        )
-
-        async with _web_client_for(mock_application) as c:
-            resp = await c.get(
-                "/web/api/files",
-                headers={"Authorization": "Bearer not-a-jwt"},
-            )
-
-        assert resp.status_code == 401
-
-    async def test_jwt_bearer_header_grants_web_access(
-        self, test_config: DlightragConfig, mock_application
-    ) -> None:
-        mutate_config(test_config, "access.auth_mode", "jwt")
-        mutate_config(
-            test_config,
-            "access.jwt_verification_key",
-            "test-jwt-verification-key-for-web-route-tests",
-        )
-        token = jwt.encode(
-            {
-                "sub": "user-1",
-                "exp": datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=5),
-            },
-            "test-jwt-verification-key-for-web-route-tests",
-            algorithm="HS256",
-        )
-
-        async with _web_client_for(mock_application) as c:
-            resp = await c.get(
-                "/web/api/files",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-
-        assert resp.status_code == 200
-
 
 # ---------------------------------------------------------------------------
 # TestWebIndex
@@ -1027,7 +1010,6 @@ class TestWebIndex:
             "/web/",
             f"/web/conversations/{CONVERSATION_ID}",
             "/web/design-system",
-            "/web/product-showcase",
         ],
     )
     async def test_every_web_document_refuses_to_be_framed(
@@ -1042,7 +1024,7 @@ class TestWebIndex:
         self, client: AsyncClient
     ) -> None:
         # An unauthenticated, unprotected twin of the application document would be framable.
-        for entry in ("index", "login", "design-system", "product-showcase"):
+        for entry in ("index", "login", "design-system"):
             assert (await client.get(f"/static/app/{entry}.html")).status_code == 404
 
     async def test_explicit_conversation_route_serves_the_same_application_document(
@@ -1060,14 +1042,6 @@ class TestWebIndex:
         assert response.status_code == 200
         assert "DlightRAG Design System" in response.text
         assert "/static/app/assets/design-system-" in response.text
-        assert "<dl-app>" not in response.text
-
-    async def test_product_showcase_route_serves_its_vite_entry(self, client: AsyncClient) -> None:
-        response = await client.get("/web/product-showcase")
-
-        assert response.status_code == 200
-        assert "DlightRAG Product Showcase" in response.text
-        assert "/static/app/assets/product-showcase-" in response.text
         assert "<dl-app>" not in response.text
 
     async def test_unknown_web_page_does_not_fall_through_to_the_shell(
@@ -1109,7 +1083,10 @@ async def test_a_person_lists_the_default_and_their_own_workspaces_with_their_ch
         AccessControlConfig(
             rules=[
                 AccessControlRuleConfig(
-                    claim="iss", value=team, workspaces=["default"], actions=["reader"]
+                    claim="iss",
+                    value=team,
+                    workspaces=["default"],
+                    actions=_READ_ONLY_ACTIONS,
                 )
             ],
         ),
@@ -1154,7 +1131,7 @@ class TestWebBootstrap:
 
         assert response.status_code == 200
         assert response.json() == {
-            "contract_version": 5,
+            "contract_version": 6,
             "workspaces": [
                 {
                     "workspace": "default",
@@ -1192,7 +1169,52 @@ class TestWebBootstrap:
                 "levels": ["low", "high", "max"],
                 "default": None,
             },
+            "answer_feedback_enabled": True,
         }
+
+    async def test_carries_the_browser_channel_where_both_its_settings_are_set(
+        self, client: AsyncClient, test_config: DlightragConfig
+    ) -> None:
+        """The page is handed a destination and a key together, and a snapshot no cache may keep."""
+        mutate_config(test_config, "observability.browser_otlp_url", "http://collector:4318")
+        mutate_config(test_config, "observability.browser_api_key", "team-ingestion-key")
+
+        response = await client.get("/web/api/bootstrap")
+
+        assert response.status_code == 200
+        assert response.json()["observability"] == {
+            "url": "http://collector:4318",
+            "apiKey": "team-ingestion-key",
+            "service": "dlightrag-web",
+            # Every session is recorded unless the deployment says otherwise.
+            "replay_sample_rate": 1.0,
+        }
+        assert response.headers["cache-control"] == "private, no-store"
+
+    async def test_hands_the_page_the_replay_sample_rate(
+        self, client: AsyncClient, test_config: DlightragConfig
+    ) -> None:
+        """Replay is the sampled signal; the page makes the coin flip, so it needs the rate."""
+        mutate_config(test_config, "observability.browser_otlp_url", "http://collector:4318")
+        mutate_config(test_config, "observability.browser_api_key", "team-ingestion-key")
+        mutate_config(test_config, "observability.browser_replay_sample_rate", 0.1)
+
+        response = await client.get("/web/api/bootstrap")
+
+        assert response.json()["observability"]["replay_sample_rate"] == 0.1
+
+    async def test_omits_the_browser_channel_when_half_of_it_is_configured(
+        self, client: AsyncClient, test_config: DlightragConfig
+    ) -> None:
+        """A destination alone would send unauthenticated telemetry; a key alone has nowhere to go."""
+        mutate_config(test_config, "observability.browser_otlp_url", "http://collector:4318")
+        without_key = await client.get("/web/api/bootstrap")
+        mutate_config(test_config, "observability.browser_otlp_url", None)
+        mutate_config(test_config, "observability.browser_api_key", "team-ingestion-key")
+        without_url = await client.get("/web/api/bootstrap")
+
+        assert "observability" not in without_key.json()
+        assert "observability" not in without_url.json()
 
     async def test_advertises_the_deployment_attachment_limits(
         self, client: AsyncClient, test_config: DlightragConfig
@@ -1237,26 +1259,6 @@ class TestWebBootstrap:
         assert "<dl-app>" in app_page.text
         # The 503 is the inventory's outage, not a call the real signature refused.
         mock_application.corpora.alist_workspace_records.assert_awaited_once_with()
-
-    @pytest.mark.parametrize(
-        "old_path",
-        [
-            "/web/answer",
-            "/web/conversations",
-            "/web/files",
-            "/web/ingest-status",
-            "/web/workspaces/create",
-            # The positional attachment address was replaced by the run-resource
-            # address; the old shape is not kept as an alias.
-            "/web/api/runs/019893f4-0000-7000-8000-000000000001/attachments/0",
-        ],
-    )
-    async def test_old_browser_data_paths_have_no_compatibility_alias(
-        self, client: AsyncClient, old_path: str
-    ) -> None:
-        response = await client.get(old_path)
-
-        assert response.status_code == 404
 
 
 # ---------------------------------------------------------------------------
@@ -1698,7 +1700,7 @@ class TestWebFiles:
     async def test_upload_maps_a_cap_refusal_to_413_and_discards_the_stage(
         self, client: AsyncClient, mock_application
     ) -> None:
-        from dlightrag.application.corpus_admin import UploadTooLargeError
+        from dlightrag.application.corpus_admin.errors import UploadTooLargeError
 
         mock_application.corpus_mutations.stage_uploads.side_effect = UploadTooLargeError(
             "upload exceeds 536870912 bytes"
@@ -1908,7 +1910,7 @@ class TestWebWorkspaceCreate:
     async def test_create_workspace_duplicate(
         self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        from dlightrag.application.corpus_admin import WorkspaceExistsError
+        from dlightrag.application.corpus_admin.errors import WorkspaceExistsError
 
         mock_application.corpora.create_workspace.side_effect = WorkspaceExistsError(
             "Workspace 'default' already exists"
@@ -2101,7 +2103,7 @@ async def test_reset_workspace_accepts_a_durable_corpus_run(
 async def test_workspace_commands_on_a_read_only_replica_pass_the_refusal_through(
     client: AsyncClient, mock_application, path: str
 ) -> None:
-    from dlightrag.application.corpus_admin import CorpusMutationUnavailableError
+    from dlightrag.application.corpus_admin.errors import CorpusMutationUnavailableError
 
     refusal = CorpusMutationUnavailableError(request="the request")
     mock_application.corpora.create_workspace.side_effect = refusal
@@ -2279,7 +2281,10 @@ class TestSourcePresentation:
 
     def test_page_number_and_download_are_projected(self) -> None:
         from dlightrag.adapters.http.browser.presentation import build_answer_presentation
-        from dlightrag.engine.answer.citations.contracts import ChunkSnippet, SourceReferencePayload
+        from dlightrag.engine.answer.citations.contracts import (
+            ChunkSnippet,
+            SourceReferencePayload,
+        )
 
         presentation = build_answer_presentation(
             answer="Answer [1].",
@@ -2347,7 +2352,7 @@ class TestSourcePresentation:
         A read-only replica's typed refusal must pass through those catches, so the panel
         can say why the deployment declined instead of "please try again".
         """
-        from dlightrag.application.corpus_admin import CorpusMutationUnavailableError
+        from dlightrag.application.corpus_admin.errors import CorpusMutationUnavailableError
 
         refusal = CorpusMutationUnavailableError(request="the upload")
         mock_application.corpus_mutations.stage_uploads.side_effect = refusal
@@ -2384,7 +2389,7 @@ _NO_CANONICAL_ID = "1" * 64  # gains a leading underscore: 65 characters
 async def test_browser_routes_refuse_a_workspace_name_without_a_canonical_id(
     client: AsyncClient, mock_application, path: str, params: dict[str, str] | None
 ) -> None:
-    """Formerly a 500 or 503: the name normalized, but to no canonical id."""
+    """Refused as a validation error: the name normalizes but yields no canonical id."""
     response = await client.get(path, params=params)
 
     assert response.status_code == 422

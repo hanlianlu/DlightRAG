@@ -20,6 +20,18 @@ Amended by [ADR 0032](0032-the-agent-browser.md): the Extract text of the hosted
 providers stays a text view and never a second representation, while the chain's
 browser entry appends a rendered representation to the Resource instead.
 
+Amended 2026-10-06: the group bound is `MAX_CONCURRENT_TOOL_CALLS = 16`, raised from
+eight so a turn that fans out across several providers, several corpora, and the
+workspace at once still runs in one round. Every other rule below is unchanged, and
+the consequences the wider bound carries are noted with the others.
+
+Amended 2026-10-09: `read_subagent` joins the read-only Tools below.
+
+Amended 2026-10-11: the memory Tools are renamed by [ADR 0045](0045-profile-memory-is-maintained-per-session-and-owned-across-them.md)
+— `remember`, `forget` and `recall_memory` below are now `memory_remember`,
+`memory_forget` and `memory_lookup`, and `memory_undo` joins them. All four stay
+sequential; the lookup still only reads, and still runs alone.
+
 ## Context
 
 `AgentSessionRuntime` records a call's intent (`ToolEffectPending`) before running it
@@ -64,21 +76,24 @@ gate refuses a pending Connection call marked read-only.
 | `read` | Reads a workspace path, a Run Resource, or a public URL. A URL fetch lands in a Resource under its own intent's settlement. Adopting an earlier Run's Resource, and the first read of an upload held lazily, spend this Run's attachment allowance, so they wait for source order. |
 | `view` | Reads pixels from the same sources. It spends the shared image budget only in source order. |
 | `ls`, `grep`, `find` | Read the workspace under the access scheduler. Any output they spill goes to a uniquely named Run-owned file. |
+| `read_subagent` | Reads the transcript of one of this Run's children. It admits no evidence and spends no budget. |
 
 Every other Tool stays sequential. That covers `bash`, `write`, `edit`,
-`attach_artifact`, `remember`, `forget`, the Skills tools, the subagent tools, and
+`attach_artifact`, `remember`, `forget`, the Skills tools, the other subagent tools, and
 every Connection tool, whose effects belong to the remote account. `recall_memory`
 also stays sequential, though it only reads, because nothing has measured a need for
 it to run in a group.
 
-**Adjacent read-only calls begin together, at most eight at a time.** The pure
+**Adjacent read-only calls begin together, at most sixteen at a time.** The pure
 interpreter starts a group from a read-only executable call and the read-only
-executable calls directly after it, up to `MAX_CONCURRENT_TOOL_CALLS = 8`. Eight
-covers a web-heavy turn in one round while bounding what one batch asks of a
-provider at once. The bound is per Agent Session, so a parent and each of its Child
-Sessions run their own groups. Any other position ends the group: a call with side
-effects, or a call that never executes (unknown, denied, invalid, or truncated). That
-call runs alone, so a barrier stays exactly where the model put it.
+executable calls directly after it, up to `MAX_CONCURRENT_TOOL_CALLS = 16`. Eight
+covered a web-heavy turn in one round; sixteen covers the wider fan-out of one round
+over several providers, corpora, and the workspace, while still bounding what one
+batch asks of a provider at once. The bound is per Agent Session, so a parent and
+each of its Child Sessions run their own groups. Any other position ends the group:
+a call with side effects, or a call that never executes (unknown, denied, invalid,
+or truncated). That call runs alone, so a barrier stays exactly where the model put
+it.
 
 **One intent record per group, one settlement per call, in source order.** Before
 anything runs, the Runtime commits one `ToolEffectPending`. It names the first call
@@ -162,14 +177,17 @@ A web-heavy turn's four to eight searches run in one round instead of in sequenc
 Committing results takes as many transactions as before, and a group writes one
 intent record instead of one per call.
 
-A crash in the middle of a group can leave up to eight calls unknown instead of one.
-Each is closed by its own contract, and the model can ask again.
+A crash in the middle of a group can leave up to sixteen calls unknown instead of
+one. Each is closed by its own contract, and the model can ask again.
 
 A group's `tool_start` events arrive together, so the live trace shows several
 running rows at once. The trace keeps its five newest rows, so a group of more than
 five shows only its last five while they run. A call's measured duration includes any
 time it spent waiting for an earlier call. Concurrent searches share their provider's
-rate limit, and a refusal reaches the model as an ordinary Tool error.
+rate limit, and a refusal reaches the model as an ordinary Tool error; sixteen asks
+for twice the burst eight did, so a provider's limit shows here first. Within one
+host, file work of a group still passes the access scheduler, so a wide group's
+effective parallelism is lower than its bound.
 
 The contract binds the Tool author. A read-only Tool that touches shared state before
 `in_source_order` makes the batch nondeterministic. Tests pin the order for:

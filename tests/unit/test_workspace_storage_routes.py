@@ -9,7 +9,8 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from dlightrag.adapters.http.server import create_app
-from dlightrag.application.config import DlightragConfig, set_config
+from dlightrag.application.config.loading import set_config
+from dlightrag.application.config.sections import DlightragConfig
 from dlightrag.application.errors import WorkspaceWriteFencedError
 from dlightrag.engine.ai.settings import EmbeddingSettings, ModelRoleSettings, ModelSettings
 from tests.support.application_double import application_double

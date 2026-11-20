@@ -47,12 +47,69 @@ test('the route\'s other refusals answer the general envelope and keep their rea
 });
 
 test('presets arrive as display copy plus the tab they imply, and an unknown tab is rejected', async () => {
-  const preset = {preset_id: 'notion', label: 'Notion', endpoint: 'https://mcp.notion.com/mcp', default_authentication: 'oauth'};
+  const preset = {preset_id: 'notion', label: 'Notion', endpoint: 'https://mcp.notion.com/mcp', default_authentication: 'oauth',
+    endpoint_headers: [], credential_header: 'Authorization', credential_prefix: 'Bearer '};
   globalThis.fetch = async () => Response.json({revision: '0', connections: [], presets: [preset]});
   assert.deepEqual((await getConnections()).presets, [
-    {presetId: 'notion', label: 'Notion', endpoint: 'https://mcp.notion.com/mcp', defaultAuthentication: 'oauth'},
+    {presetId: 'notion', label: 'Notion', endpoint: 'https://mcp.notion.com/mcp', defaultAuthentication: 'oauth',
+      endpointHeaders: [], credentialHeader: 'Authorization', credentialPrefix: 'Bearer '},
   ]);
   globalThis.fetch = async () => Response.json({revision: '0', connections: [], presets: [{...preset, default_authentication: 'token'}]});
+  await assert.rejects(getConnections(), ApiError);
+});
+
+test('a preset may state the headers its endpoint needs and the header a credential uses', async () => {
+  const feishu = {preset_id: 'feishu', label: 'Feishu/Lark', endpoint: 'https://mcp.feishu.cn/mcp', default_authentication: 'header',
+    endpoint_headers: [['X-Lark-MCP-Allowed-Tools', 'create-doc,fetch-doc']], credential_header: 'X-Lark-MCP-TAT', credential_prefix: ''};
+  globalThis.fetch = async () => Response.json({revision: '0', connections: [], presets: [feishu]});
+  assert.deepEqual((await getConnections()).presets, [
+    {presetId: 'feishu', label: 'Feishu/Lark', endpoint: 'https://mcp.feishu.cn/mcp', defaultAuthentication: 'header',
+      endpointHeaders: [['X-Lark-MCP-Allowed-Tools', 'create-doc,fetch-doc']], credentialHeader: 'X-Lark-MCP-TAT', credentialPrefix: ''},
+  ]);
+});
+
+test('a Connection reply states its endpoint headers and refuses a reply that hides them', async () => {
+  const connection = {connection_id: 'one', label: 'Feishu/Lark', endpoint: 'https://mcp.feishu.cn/mcp', enabled: false,
+    activation_epoch: 1, generation: 0, authentication: 'header',
+    endpoint_headers: [['X-Lark-MCP-Allowed-Tools', 'create-doc']],
+    credential_header: 'X-Lark-MCP-TAT', credential_prefix: '', authorization_status: null, status: 'disabled',
+    tool_count: 3, declaration_tokens: 512};
+  globalThis.fetch = async () => Response.json({revision: '0', connections: [connection], presets: []});
+  assert.deepEqual((await getConnections()).connections[0]?.endpointHeaders, [['X-Lark-MCP-Allowed-Tools', 'create-doc']]);
+  // The credential's own header and prefix are read back, because they are not secrets; the
+  // token they travel with is not on the wire at all.
+  assert.deepEqual(
+    [(await getConnections()).connections[0]?.credentialHeader,
+      (await getConnections()).connections[0]?.credentialPrefix],
+    ['X-Lark-MCP-TAT', ''],
+  );
+  globalThis.fetch = async () => Response.json({revision: '0', connections: [{...connection, credential_header: null}], presets: []});
+  assert.equal((await getConnections()).connections[0]?.credentialHeader, null);
+  const {endpoint_headers: _hidden, ...without} = connection;
+  globalThis.fetch = async () => Response.json({revision: '0', connections: [without], presets: []});
+  await assert.rejects(getConnections(), ApiError);
+});
+
+test('a Connection states its published catalogue size and what declaring it costs a request', async () => {
+  const connection = {connection_id: 'one', label: 'Feishu/Lark', endpoint: 'https://mcp.feishu.cn/mcp',
+    enabled: false, activation_epoch: 1, generation: 0, authentication: 'header',
+    endpoint_headers: [], credential_header: null, credential_prefix: null,
+    authorization_status: null, status: 'disabled', tool_count: 12, declaration_tokens: 12_300};
+  globalThis.fetch = async () => Response.json({revision: '0', connections: [connection], presets: []});
+  const published = (await getConnections()).connections[0]!;
+  assert.equal(published.toolCount, 12);
+  assert.equal(published.declarationTokens, 12_300);
+
+  // Until a catalogue is published both facts are null, never a claimed zero or cost.
+  globalThis.fetch = async () => Response.json({revision: '0',
+    connections: [{...connection, tool_count: null, declaration_tokens: null}], presets: []});
+  const unpublished = (await getConnections()).connections[0]!;
+  assert.equal(unpublished.toolCount, null);
+  assert.equal(unpublished.declarationTokens, null);
+
+  // The reply is still strict: hiding the new facts is refused, not read as "no catalogue".
+  const {tool_count: _count, declaration_tokens: _tokens, ...hidden} = connection;
+  globalThis.fetch = async () => Response.json({revision: '0', connections: [hidden], presets: []});
   await assert.rejects(getConnections(), ApiError);
 });
 
@@ -74,4 +131,40 @@ test('bearer candidate sends explicit new endpoint and only the write-only crede
     return Response.json({revision: 'next', connections: [], presets: []});
   };
   await changeConnection('revision', {kind: 'bearer', connectionId: 'connection', bearer: 'new-test-token', endpoint: 'https://candidate.example/mcp'});
+});
+
+test('a header credential sends its own header and prefix beside the write-only token', async () => {
+  const {changeConnection} = await import('./connections.ts');
+  globalThis.fetch = async (url, init) => {
+    assert.equal(url, '/web/api/connections/mcp/connection/header');
+    assert.equal(init?.method, 'PUT');
+    assert.deepEqual(JSON.parse(String(init?.body)), {
+      expected_revision: 'revision', header: 'X-Lark-MCP-TAT', prefix: '', token: 'new-test-token',
+      endpoint: 'https://mcp.feishu.cn/mcp',
+    });
+    return Response.json({revision: 'next', connections: [], presets: []});
+  };
+  await changeConnection('revision', {kind: 'header', connectionId: 'connection', header: 'X-Lark-MCP-TAT',
+    prefix: '', token: 'new-test-token', endpoint: 'https://mcp.feishu.cn/mcp'});
+});
+
+test('create and edit state endpoint headers as non-secret pairs', async () => {
+  const {changeConnection} = await import('./connections.ts');
+  globalThis.fetch = async (url, init) => {
+    assert.equal(url, '/web/api/connections/mcp');
+    assert.equal(init?.method, 'POST');
+    assert.deepEqual(JSON.parse(String(init?.body)), {expected_revision: 'revision', label: 'Feishu/Lark',
+      endpoint: 'https://mcp.feishu.cn/mcp', endpoint_headers: [['X-Lark-MCP-Allowed-Tools', 'create-doc,fetch-doc']]});
+    return Response.json({revision: 'next', connections: [], presets: []});
+  };
+  await changeConnection('revision', {kind: 'create', label: 'Feishu/Lark', endpoint: 'https://mcp.feishu.cn/mcp',
+    endpointHeaders: [['X-Lark-MCP-Allowed-Tools', 'create-doc,fetch-doc']]});
+  globalThis.fetch = async (url, init) => {
+    assert.equal(url, '/web/api/connections/mcp/connection');
+    assert.deepEqual(JSON.parse(String(init?.body)), {expected_revision: 'revision', kind: 'edit', label: 'Feishu/Lark',
+      endpoint: 'https://mcp.feishu.cn/mcp', endpoint_headers: []});
+    return Response.json({revision: 'next', connections: [], presets: []});
+  };
+  await changeConnection('revision', {kind: 'edit', connectionId: 'connection', label: 'Feishu/Lark',
+    endpoint: 'https://mcp.feishu.cn/mcp', endpointHeaders: []});
 });

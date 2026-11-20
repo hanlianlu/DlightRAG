@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from dlightrag.application.config import PostgresSettings
+    from dlightrag.application.config.sections import PostgresSettings
 
 
 def pg_connection_kwargs(settings: PostgresSettings) -> dict[str, Any]:

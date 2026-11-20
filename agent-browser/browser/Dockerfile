@@ -6,7 +6,7 @@
 # every pin together (docs/operations.md): pyproject.toml, uv.lock, this ARG, and
 # package.json with its lock. The npm package is installed here because the container has
 # no route to the internet when it runs.
-ARG PLAYWRIGHT_VERSION=1.63.0
+ARG PLAYWRIGHT_VERSION=1.65.1
 FROM mcr.microsoft.com/playwright:v${PLAYWRIGHT_VERSION}-noble
 ARG PLAYWRIGHT_VERSION
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1

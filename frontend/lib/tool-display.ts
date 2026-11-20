@@ -26,9 +26,10 @@ const TOOL_VERBS: Record<string, string> = {
   publish_skill: 'Publishing skill',
   delete_skill: 'Removing skill',
   set_skill_enabled: 'Updating skill',
-  remember: 'Saving a memory',
-  forget: 'Removing a memory',
-  recall_memory: 'Recalling memories',
+  memory_remember: 'Saving a memory',
+  memory_forget: 'Removing a memory',
+  memory_undo: 'Undoing a memory change',
+  memory_lookup: 'Looking up memories',
   spawn_agent: 'Dispatching a child agent',
   wait_subagent: 'Waiting for a child agent',
   steer_subagent: 'Steering a child agent',
@@ -36,9 +37,10 @@ const TOOL_VERBS: Record<string, string> = {
   cancel_subagent: 'Cancelling a child agent',
   reply_subagent: 'Replying to a child agent',
   subagent_status: 'Checking a child agent',
+  read_subagent: 'Reading a child agent',
 };
 
-export interface ToolDisplay {
+interface ToolDisplay {
   readonly verb: string;
   readonly verbId: string | null;
   readonly known: boolean;

@@ -26,32 +26,50 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any, Literal, Protocol
 
 from playwright.async_api import Browser, async_playwright
 
 from dlightrag.adapters.agent_browser.leased_browser import PlaywrightLeasedBrowser
 from dlightrag.application.agent_accounts import AgentAccountDirectory, AgentAccountSummary
-from dlightrag.engine.agent.tools import ToolResult, ToolRuntime
+from dlightrag.engine.agent.tools.contracts import (
+    ToolResult,
+    ToolRuntime,
+)
 from dlightrag.engine.agent.tools.files import ResourceReadRequest
-from dlightrag.engine.answer.agent_browser import (
+from dlightrag.engine.answer.agent_browser.accounts import (
     AgentAccountsBinding,
     AgentAccountStore,
+    RunAgentAccounts,
+    StoredAgentAccount,
+)
+from dlightrag.engine.answer.agent_browser.contracts import (
     AgentBrowserError,
     AgentBrowserSettings,
-    AgentMailbox,
     BrowserHolder,
-    FilledPasswords,
     LeasedBrowser,
-    MailListing,
     PageEvents,
     PageLimits,
     PageObservation,
     PageState,
     RenderedPage,
-    RunAgentAccounts,
+    SessionState,
+    browser_failure,
+)
+from dlightrag.engine.answer.agent_browser.live import (
+    LiveControl,
+    LiveControlState,
+)
+from dlightrag.engine.answer.agent_browser.mailbox import (
+    AgentMailbox,
+    MailListing,
+)
+from dlightrag.engine.answer.agent_browser.passwords import (
+    FilledPasswords,
+)
+from dlightrag.engine.answer.agent_browser.run import (
     RunAgentBrowser,
-    StoredAgentAccount,
 )
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.answer.tools.browser import BrowserToolHost
@@ -59,6 +77,16 @@ from dlightrag.engine.credential_cipher import CredentialCipher
 from tests.support.loopback import LoopbackCertificate
 
 _HEAD_LIMIT = 64 * 1024
+
+
+def client_connection(*, closed: bool = False) -> Any:
+    """The ``_impl_obj`` of a fake Playwright browser: the one private state the adapter reads.
+
+    A ``closed`` connection is one whose far end went away, which Playwright flags on the
+    browser itself only later (``is_connected`` still true).
+    """
+    error = Exception("The connection closed.") if closed else None
+    return SimpleNamespace(_connection=SimpleNamespace(_closed_error=error))
 
 
 class RunServer:
@@ -271,8 +299,14 @@ class LaunchedProvider:
     def __init__(self, browser: Browser) -> None:
         self._browser = browser
 
-    async def lease(self, holder: BrowserHolder, *, wait_seconds: float) -> LeasedBrowser:
-        return PlaywrightLeasedBrowser(self._browser, _nothing_to_release)
+    def page_for(self, holder: BrowserHolder) -> FakeLivePage | None:
+        """A browser launched outside the pool has no live surface to watch."""
+        return None
+
+    async def lease(
+        self, holder: BrowserHolder, *, wait_seconds: float, headed: bool = False
+    ) -> LeasedBrowser:
+        return PlaywrightLeasedBrowser(self._browser, _nothing_to_release, headless=not headed)
 
     async def aclose(self) -> None:
         pass
@@ -322,10 +356,16 @@ def browser_settings(
     depth: int = 12,
     download_bytes: int = 1024 * 1024,
     idle: float = 600.0,
+    headed: bool = False,
 ) -> AgentBrowserSettings:
-    """The Agent Browser settings of a test: a one-member pool, and the bounds a test varies."""
+    """The Agent Browser settings of a test: a one-member pool, and the bounds a test varies.
+
+    ``headed`` makes the one member a headed one, as a deployment whose compose runs the
+    headed member does.
+    """
     return AgentBrowserSettings(
         endpoints=("ws://pool-1/",),
+        headed_endpoints=("ws://pool-1/",) if headed else (),
         egress_proxy="http://egress:3128",
         chromium_sandbox=True,
         connect_timeout_seconds=15.0,
@@ -372,21 +412,57 @@ class FakePage:
     """An Agent Page as its Run sees it: it can be called, asked where it is, and closed.
 
     A ``failure`` is what every call raises, as a browser that disconnected would.
+    ``session`` is what it answers a capture with, and ``restored`` what a move
+    gave it; a page that is told to fail a capture answers none, as a browser that will
+    not say what it held does.
     """
 
-    def __init__(self, *, failure: AgentBrowserError | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        failure: AgentBrowserError | None = None,
+        session: SessionState | None = None,
+        capture_fails: bool = False,
+        events: PageEvents | None = None,
+        snapshot: str | None = "",
+    ) -> None:
         self.failure = failure
+        self.session = session if session is not None else SessionState(url="")
+        self.capture_fails = capture_fails
+        self.events = events if events is not None else PageEvents()
+        self.snapshot = snapshot
+        self.restored: list[SessionState] = []
         self.visited: list[str] = []
+        self.verdicts: list[str | None] = []
+        self.waits: list[float | None] = []
         self.closed = 0
 
     def current_url(self) -> str | None:
         return self.visited[-1] if self.visited else None
 
+    async def answer_dialogs(self, verdict: str | None) -> None:
+        """Record the verdict the call that follows answers its dialogs with."""
+        self.verdicts.append(verdict)
+
     async def navigate(self, url: str) -> PageObservation:
         if self.failure is not None:
             raise self.failure
         self.visited.append(url)
-        return PageObservation(PageState(url, ""), PageEvents(), "")
+        return PageObservation(PageState(url, ""), self.events, self.snapshot)
+
+    async def wait(
+        self, *, text: str | None, text_gone: str | None, seconds: float | None
+    ) -> PageObservation:
+        self.waits.append(seconds)
+        return PageObservation(PageState(self.current_url() or "", ""), self.events, self.snapshot)
+
+    async def capture_session(self) -> SessionState:
+        if self.capture_fails:
+            raise browser_failure("disconnected")
+        return self.session
+
+    async def restore_session(self, session: SessionState) -> None:
+        self.restored.append(session)
 
     async def aclose(self) -> None:
         self.closed += 1
@@ -398,7 +474,8 @@ class FakeLease:
     ``gate`` holds every render until it is set, so a test can have renders in flight, and
     ``peak`` is the most that were. ``call_failure`` is what every call on a page it opens
     raises, and ``opening_failure`` what opening one raises. ``passwords`` holds the set of
-    filled passwords each page it opened was given.
+    filled passwords each page it opened was given. ``headless`` is what the lease runs
+    without a display, which the provider a test leases through sets from what it was asked.
     """
 
     def __init__(
@@ -408,11 +485,20 @@ class FakeLease:
         gate: asyncio.Event | None = None,
         call_failure: AgentBrowserError | None = None,
         opening_failure: AgentBrowserError | None = None,
+        session: SessionState | None = None,
+        capture_fails: bool = False,
+        headless: bool = True,
+        page: FakePage | None = None,
     ) -> None:
         self.failure = failure
         self.gate = gate
         self.call_failure = call_failure
         self.opening_failure = opening_failure
+        self.session = session if session is not None else SessionState(url="")
+        self.capture_fails = capture_fails
+        self.headless = headless
+        self.page = page
+        self.restored: list[SessionState] = []
         self.rendered: list[str] = []
         self.pages: list[FakePage] = []
         self.limits: list[PageLimits] = []
@@ -441,9 +527,19 @@ class FakeLease:
             raise self.opening_failure
         self.limits.append(limits)
         self.passwords.append(passwords)
-        page = FakePage(failure=self.call_failure)
+        page = self.page or FakePage(
+            failure=self.call_failure, session=self.session, capture_fails=self.capture_fails
+        )
         self.pages.append(page)
         return page
+
+    async def capture_session(self) -> SessionState:
+        if self.capture_fails:
+            raise browser_failure("disconnected")
+        return self.session
+
+    async def restore_session(self, session: SessionState) -> None:
+        self.restored.append(session)
 
     async def aclose(self) -> None:
         self.closed += 1
@@ -454,13 +550,33 @@ class FakeLeases:
 
     A store whose database is down raises from every operation it is told to fail. A claim
     that works takes the first endpoint not excluded, and every claim and release is
-    recorded.
+    recorded. ``holder`` is what the read-only lookup a live session opens against answers.
     """
 
-    def __init__(self, *failing: Literal["register_endpoints", "claim", "release"]) -> None:
+    def __init__(
+        self,
+        *failing: Literal["register_endpoints", "claim", "release"],
+        holder: BrowserHolder | None = None,
+        control_failure: bool = False,
+    ) -> None:
         self._failing = set(failing)
+        self.holder = holder
+        self.control_failure = control_failure
         self.claimed: list[str] = []
         self.released: list[str] = []
+        self.control: list[LiveControlState] = []
+
+    async def holder_for(self, *, owner_id: str, run_id: str) -> BrowserHolder | None:
+        if self.holder is None:
+            return None
+        if (self.holder.owner_id, self.holder.run_id) != (owner_id, run_id):
+            return None
+        return self.holder
+
+    async def set_control(self, holder: BrowserHolder, state: LiveControlState) -> None:
+        if self.control_failure:
+            raise ConnectionError("the database is down")
+        self.control.append(state)
 
     def _operation(self, name: str) -> None:
         if name in self._failing:
@@ -483,25 +599,66 @@ class FakeLeases:
         self._operation("release")
 
 
-class FakeProvider:
-    """A pool that hands out leased browsers in turn, or fails a lease it is told to."""
+class FakeLivePage:
+    """A live surface as the Engine reads it: the driving seat of one Run's browser."""
 
-    def __init__(self, *outcomes: LeasedBrowser | AgentBrowserError) -> None:
+    def __init__(self, control: LiveControl | None = None) -> None:
+        self.control = control if control is not None else LiveControl()
+
+    def taken_over(self) -> bool:
+        """Whether a person holds this browser's seat, as the Engine's one question asks."""
+        return self.control.taken_over
+
+    def take_drive_notice(self) -> bool:
+        """Whether a person has driven this browser since this was last asked."""
+        return self.control.take_drive_notice()
+
+
+class FakeProvider:
+    """A pool that hands out leased browsers in turn, or fails a lease it is told to.
+
+    ``headed`` holds what each lease asked for, in order; the pool keeps no record of what a
+    Run leased before, so the lease a test reads is the whole of the state.
+    """
+
+    def __init__(
+        self,
+        *outcomes: LeasedBrowser | AgentBrowserError,
+        live: FakeLivePage | None = None,
+        may_go_headed: bool = True,
+    ) -> None:
         self._outcomes = list(outcomes)
+        self.live = live
+        self.may_go_headed = may_go_headed
         self.holders: list[BrowserHolder] = []
         self.waits: list[float] = []
+        self.headed: list[bool] = []
         self.closed = False
+
+    def page_for(self, holder: BrowserHolder) -> FakeLivePage | None:
+        """The live surface of a browser this pool leased, as the provider answers."""
+        if self.live is None or holder not in self.holders:
+            return None
+        return self.live
 
     @property
     def leased(self) -> int:
         return len(self.holders)
 
-    async def lease(self, holder: BrowserHolder, *, wait_seconds: float) -> LeasedBrowser:
+    async def lease(
+        self, holder: BrowserHolder, *, wait_seconds: float, headed: bool = False
+    ) -> LeasedBrowser:
+        if headed and not self.may_go_headed:
+            # The deployment leases none, as the pool's own provider refuses one.
+            raise browser_failure("not_configured")
         self.holders.append(holder)
         self.waits.append(wait_seconds)
+        self.headed.append(headed)
         outcome = self._outcomes.pop(0) if self._outcomes else FakeLease()
         if isinstance(outcome, AgentBrowserError):
             raise outcome
+        if isinstance(outcome, FakeLease):
+            outcome.headless = not headed
         return outcome
 
     async def aclose(self) -> None:
@@ -575,7 +732,7 @@ class MemoryAccountStore:
 class StubMailbox:
     """An ``AgentMailbox`` on a domain whose bucket holds no mail."""
 
-    def __init__(self, alias_domain: str = "orliantra.cc") -> None:
+    def __init__(self, alias_domain: str = "mail.example") -> None:
         self.alias_domain = alias_domain
 
     async def messages(

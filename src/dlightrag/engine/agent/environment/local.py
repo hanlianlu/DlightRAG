@@ -13,12 +13,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
 
-from dlightrag.engine.agent.environment.confinement import WorkspaceConfinement
+from dlightrag.engine.agent.environment.confinement import AgentspaceConfinement
 from dlightrag.engine.agent.environment.errors import (
     WORKSPACE_MAX_BYTES,
     WORKSPACE_MAX_ENTRIES,
+    AgentspaceQuotaExceeded,
     PathRejected,
-    WorkspaceQuotaExceeded,
 )
 
 
@@ -57,7 +57,7 @@ class CompletedProcess:
 class LocalExecutionEnvironment:
     """POSIX workspace rooted at one directory, confined to it when a policy is set."""
 
-    def __init__(self, root: Path, *, confinement: WorkspaceConfinement | None = None) -> None:
+    def __init__(self, root: Path, *, confinement: AgentspaceConfinement | None = None) -> None:
         resolved = root.expanduser().resolve()
         if not resolved.is_absolute():
             raise ValueError("execution environment root must be absolute")
@@ -67,7 +67,7 @@ class LocalExecutionEnvironment:
             self._integrity_violations,
             self._usage_entries,
             self._usage_bytes,
-        ) = self._scan_workspace_state()
+        ) = self._scan_agentspace_state()
         self._quota_violation = self._quota_error(
             entries=self._usage_entries,
             total_bytes=self._usage_bytes,
@@ -99,14 +99,14 @@ class LocalExecutionEnvironment:
             self._integrity_violations,
             self._usage_entries,
             self._usage_bytes,
-        ) = self._scan_workspace_state()
+        ) = self._scan_agentspace_state()
         self._quota_violation = self._quota_error(
             entries=self._usage_entries,
             total_bytes=self._usage_bytes,
         )
         return self._integrity_violations
 
-    def _scan_workspace_state(self) -> tuple[tuple[str, ...], int, int]:
+    def _scan_agentspace_state(self) -> tuple[tuple[str, ...], int, int]:
         """Scan at most one quota envelope; Bash cannot force unbounded state growth."""
         violations: list[str] = []
         entries = 0
@@ -169,7 +169,7 @@ class LocalExecutionEnvironment:
             entries=self._usage_entries + len(missing),
             total_bytes=self._usage_bytes,
         ):
-            raise WorkspaceQuotaExceeded(error)
+            raise AgentspaceQuotaExceeded(error)
         if missing:
             try:
                 home.mkdir(parents=True, exist_ok=True)
@@ -177,7 +177,7 @@ class LocalExecutionEnvironment:
                 for directory in reversed(missing):
                     self._fsync_directory(directory.parent)
             except Exception:
-                self._usage_entries, self._usage_bytes = self._scan_workspace_usage()
+                self._usage_entries, self._usage_bytes = self._scan_agentspace_usage()
                 self._quota_violation = self._quota_error(
                     entries=self._usage_entries,
                     total_bytes=self._usage_bytes,
@@ -265,7 +265,7 @@ class LocalExecutionEnvironment:
         proposed_entries = self._usage_entries + len(missing_parents) + (0 if existed else 1)
         proposed_bytes = self._usage_bytes - old_size + len(data)
         if error := self._quota_error(entries=proposed_entries, total_bytes=proposed_bytes):
-            raise WorkspaceQuotaExceeded(error)
+            raise AgentspaceQuotaExceeded(error)
 
         descriptor: int | None = None
         tmp: Path | None = None
@@ -382,7 +382,7 @@ class LocalExecutionEnvironment:
             nonlocal last_output_at
             returncode = await process.wait()
             # A successful shell may leave redirected background jobs in its
-            # process group. End them before Bash releases WorkspaceAccess and
+            # process group. End them before Bash releases AgentspaceAccess and
             # performs its final integrity/quota scan.
             self._terminate_group(process)
             last_output_at = asyncio.get_running_loop().time()
@@ -488,8 +488,8 @@ class LocalExecutionEnvironment:
         except ProcessLookupError, PermissionError:
             return
 
-    def _scan_workspace_usage(self) -> tuple[int, int]:
-        _violations, entries, total_bytes = self._scan_workspace_state()
+    def _scan_agentspace_usage(self) -> tuple[int, int]:
+        _violations, entries, total_bytes = self._scan_agentspace_state()
         return entries, total_bytes
 
     @staticmethod

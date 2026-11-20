@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""A process-local WorkspaceStore for unit tests of what a Run does with its workspace.
+"""A process-local AgentspaceStore for unit tests of what a Run does with its workspace.
 
-PostgreSQL's PGWorkspaceStore is the product's store; its handoff, inventory,
+PostgreSQL's PGAgentspaceStore is the product's store; its handoff, inventory,
 spill and Session-note rules run against a real database in
 tests/integration/test_answer_runs_pg.py and test_agent_session_pg.py.
 """
@@ -9,8 +9,7 @@ tests/integration/test_answer_runs_pg.py and test_agent_session_pg.py.
 from collections.abc import Sequence
 from heapq import nsmallest
 
-from dlightrag.engine.runtime.settlements import InventoryPathRecord
-from dlightrag.engine.runtime.workspace import (
+from dlightrag.engine.runtime.agentspace import (
     DEFAULT_SESSION_NOTES_LIMITS,
     SESSION_NOTES_BUDGET_REFUSED,
     SESSION_NOTES_LEASE_LOST,
@@ -26,6 +25,7 @@ from dlightrag.engine.runtime.workspace import (
     _validate_spill_page_limit,
     select_promotable_session_notes,
 )
+from dlightrag.engine.runtime.settlements import InventoryPathRecord
 
 
 class InMemoryWorkspaceStore:

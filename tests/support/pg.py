@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import uuid
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from functools import partial
@@ -19,7 +20,10 @@ import asyncpg
 import pytest
 
 from dlightrag.adapters.postgres.core._migrations import ForeignKeyRequirement, TableRequirement
-from dlightrag.adapters.postgres.core._notifications import PGNotificationHub, dedicated_connection
+from dlightrag.adapters.postgres.core._notifications import (
+    PGNotificationHub,
+    dedicated_connection,
+)
 
 # `localhost` is ambiguous on a machine that also runs a host PostgreSQL on [::1]: the resolver
 # prefers that IPv6 instance over the container's IPv4 mapping, so the suite silently tested against
@@ -57,10 +61,66 @@ async def skip_without_postgres() -> None:
         pytest.skip("PostgreSQL not available")
 
 
-async def require_postgres() -> None:
-    """Fail a validation command before skip-capable suites if PostgreSQL is unavailable."""
-    if not await postgres_available():
-        raise RuntimeError("PostgreSQL is not available")
+async def release_session_work(conn: Any, *, owner_id: str, run_id: str) -> None:
+    """Release the Session work slot one admitted Run holds, exactly as its terminal does.
+
+    Fixtures that need a second turn after the first was never executed release the slot the way
+    the coordinator's terminal transition would, rather than weakening the admission fence.
+    """
+    await conn.execute(
+        """
+        UPDATE dlightrag_session_work_heads AS heads
+        SET active_run_id = NULL,
+            revision = heads.revision + 1,
+            updated_at = NOW()
+        FROM dlightrag_answer_run_routing AS routing
+        WHERE routing.owner_id = $1
+          AND routing.run_id = $2
+          AND heads.owner_id = routing.owner_id
+          AND heads.session_id = routing.agent_session_id
+          AND heads.active_run_id = $2
+        """,
+        owner_id,
+        uuid.UUID(run_id),
+    )
+
+
+async def ensure_agent_session(
+    conn: Any,
+    *,
+    owner_id: str,
+    session_id: str,
+    lease_run_id: str | None = None,
+    fencing_epoch: int = 1,
+    commit_sequence: int = 0,
+    last_sequence: int = 0,
+) -> None:
+    """Give a fixture's Session the row ``create_conversation`` may already have created.
+
+    A conversation is its Agent Session from creation, so a fixture that hand-builds the Session
+    row must be idempotent against that row instead of colliding with it.
+    """
+    await conn.execute(
+        """
+        INSERT INTO dlightrag_agent_sessions (
+            owner_id, session_id, lease_run_id, commit_sequence, last_sequence, fencing_epoch
+        )
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (owner_id, session_id) DO UPDATE SET
+            commit_sequence = GREATEST(
+                dlightrag_agent_sessions.commit_sequence, EXCLUDED.commit_sequence
+            ),
+            last_sequence = GREATEST(
+                dlightrag_agent_sessions.last_sequence, EXCLUDED.last_sequence
+            )
+        """,
+        owner_id,
+        uuid.UUID(session_id),
+        uuid.UUID(lease_run_id) if lease_run_id is not None else uuid.UUID(session_id),
+        commit_sequence,
+        last_sequence,
+        fencing_epoch,
+    )
 
 
 class DropAdmin(Protocol):
@@ -196,49 +256,6 @@ _CATALOG_TRIGGERS = """SELECT t.tgname AS name
 FROM pg_catalog.pg_trigger t
 WHERE t.tgrelid = $1::regclass AND NOT t.tgisinternal
 """
-
-
-# Every object's full definition, keyed by table-qualified name.
-_CATALOG_DEFINITIONS = {
-    "columns": """SELECT c.relname || '.' || a.attname AS key,
-            format_type(a.atttypid, a.atttypmod) || ' not null=' || a.attnotnull
-            || ' default=' || coalesce(pg_get_expr(d.adbin, d.adrelid), '') AS definition
-        FROM pg_catalog.pg_attribute a
-        JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
-        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-        LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
-        WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND c.relname LIKE 'dlightrag%'
-          AND a.attnum > 0 AND NOT a.attisdropped""",
-    "constraints": """SELECT c.relname || '.' || con.conname AS key,
-            pg_get_constraintdef(con.oid) AS definition
-        FROM pg_catalog.pg_constraint con
-        JOIN pg_catalog.pg_class c ON c.oid = con.conrelid
-        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'public' AND c.relname LIKE 'dlightrag%'""",
-    "indexes": """SELECT i.relname AS key, pg_get_indexdef(i.oid) AS definition
-        FROM pg_catalog.pg_index x
-        JOIN pg_catalog.pg_class i ON i.oid = x.indexrelid
-        JOIN pg_catalog.pg_class t ON t.oid = x.indrelid
-        JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
-        WHERE n.nspname = 'public' AND t.relname LIKE 'dlightrag%'""",
-    "triggers": """SELECT t.tgname AS key, pg_get_triggerdef(t.oid) AS definition
-        FROM pg_catalog.pg_trigger t
-        JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
-        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'public' AND NOT t.tgisinternal AND c.relname LIKE 'dlightrag%'""",
-    "functions": """SELECT p.proname AS key, pg_get_functiondef(p.oid) AS definition
-        FROM pg_catalog.pg_proc p
-        JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
-        WHERE n.nspname = 'public' AND p.proname LIKE 'dlightrag%'""",
-}
-
-
-async def catalog_definitions(conn: Any) -> dict[str, dict[str, str]]:
-    """Every DlightRAG column, constraint, index, trigger, and function, by definition."""
-    return {
-        kind: {str(row["key"]): str(row["definition"]) for row in await conn.fetch(query)}
-        for kind, query in _CATALOG_DEFINITIONS.items()
-    }
 
 
 async def catalog_tables(conn: Any) -> set[str]:

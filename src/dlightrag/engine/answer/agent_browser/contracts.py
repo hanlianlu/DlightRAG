@@ -8,13 +8,15 @@ reading nor Run policy imports a browser driver.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass
-from typing import Literal, Protocol
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import Any, Literal, Protocol
 
 from pydantic import SecretStr
 
 from dlightrag.engine.answer.agent_browser.accounts import AgentAccountsBinding
+from dlightrag.engine.answer.agent_browser.block import Block
+from dlightrag.engine.answer.agent_browser.live import LiveBrowserPage, LiveControlState
 from dlightrag.engine.answer.agent_browser.passwords import FilledPasswords
 
 
@@ -29,6 +31,35 @@ class BrowserHolder:
 
 
 @dataclass(frozen=True, slots=True)
+class StorageState:
+    """One origin's web storage, as a move to another browser carries it."""
+
+    local: Mapping[str, str] = field(default_factory=dict)
+    """The origin's ``localStorage``; its keys and values, which are always strings."""
+    session: Mapping[str, str] = field(default_factory=dict)
+    """The origin's ``sessionStorage``, which the context would otherwise lose with its page."""
+
+
+@dataclass(frozen=True, slots=True)
+class SessionState:
+    """What a move to another browser carries from the one being left (ADR 0032).
+
+    The session of the page that was being driven: the context's cookies, each origin's web
+    storage, and where the page was. What a session is *not* is the page's DOM: a form that
+    was half filled is gone with the context it was typed into, and the model reads that and
+    fills it again. Contexts are anonymous and this state is never written anywhere but the
+    new context; it dies with the Run as the session it came from does.
+    """
+
+    url: str
+    """Where the page was, so the browser that follows can revisit it; empty when none was open."""
+    cookies: tuple[Mapping[str, Any], ...] = ()
+    """The context's cookies, in Playwright's own ``add_cookies`` shape."""
+    origins: Mapping[str, StorageState] = field(default_factory=dict)
+    """Each origin's web storage, by origin, as the pages that were open held it."""
+
+
+@dataclass(frozen=True, slots=True)
 class RenderedPage:
     """One page as the browser serialized it after its scripts ran."""
 
@@ -38,10 +69,23 @@ class RenderedPage:
     """UTF-8 of the serialized DOM, whatever the page's own ``<meta charset>`` says."""
     status: int | None
     """The last main-frame navigation response, when the browser saw one."""
+    headless: bool = True
+    """Whether the browser that rendered this page runs without a display."""
+    settled: bool = True
+    """Whether the page went quiet within the settle wait before it was serialized."""
 
 
 #: The most files one call delivers from its pages; a page that downloads more has the rest refused.
 MAX_DOWNLOADS_PER_CALL = 4
+#: The most dialogs one call reports; a page that raises more has the rest counted, not hidden.
+MAX_DIALOGS_PER_CALL = 20
+#: The most download refusals one call reports; a page that raises more has the rest counted.
+MAX_REFUSALS_PER_CALL = 20
+#: The grammar of a ref: the name one snapshot line prints for an element — ``eN``, or ``fN``
+#: before it for an element in a frame the page holds — which the next call acts on. The
+#: adapter that prints a ref and the tool that accepts one read it here, so the two cannot
+#: drift apart.
+REF_PATTERN = r"(?:f[0-9]+)?e[0-9]+"
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,7 +109,7 @@ class PageState:
 
     url: str
     title: str
-    """One line of at most 200 characters."""
+    """The page's title on one line, cut to 200 characters with the cut marked and counted."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,15 +131,22 @@ class DownloadRefusal:
     reason: Literal["too_large", "timeout", "failed", "limit"]
 
 
+#: What a call may tell a dialog it meets: accept it, or dismiss it.
+DialogVerdict = Literal["accept", "dismiss"]
+
+
 @dataclass(frozen=True, slots=True)
 class PageDialog:
-    """One JavaScript dialog a page showed, and whether it was told yes."""
+    """One JavaScript dialog a page showed, and what became of it."""
 
     kind: str
     """alert, confirm, beforeunload, or prompt."""
     message: str
-    """One line of at most 200 characters."""
-    accepted: bool
+    """One line, cut to 200 characters with the cut marked."""
+    answer: Literal["accepted", "dismissed", "waiting"]
+    """What the dialog was told, or that nobody has answered it and the page is stopped."""
+    default: str = ""
+    """A prompt's default text, which nothing has typed; empty for every other dialog."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,8 +155,23 @@ class PageEvents:
 
     downloads: tuple[DownloadedFile, ...] = ()
     refused_downloads: tuple[DownloadRefusal, ...] = ()
+    """The downloads the pages started and did not deliver, each with the reason it was refused.
+
+    At most ``MAX_REFUSALS_PER_CALL`` of them, with ``omitted_refusals`` counting the rest: a
+    page can start downloads without end, so what the model reads is bounded and says what it
+    left out rather than a list that reads as the whole of them.
+    """
+    omitted_refusals: int = 0
+    """How many download refusals ``refused_downloads`` does not hold, past the bound."""
     dialogs: tuple[PageDialog, ...] = ()
-    """The dialogs the page showed, at most five."""
+    """The dialogs the pages showed since the last call, in the order they showed them.
+
+    At most ``MAX_DIALOGS_PER_CALL`` of them, with ``omitted_dialogs`` counting the rest: a
+    page can raise dialogs without end, so what the model reads is bounded and says what it
+    left out. The dialog each page is stopped on follows them, and the bound never drops it.
+    """
+    omitted_dialogs: int = 0
+    """How many dialogs the pages showed that ``dialogs`` does not hold, past the bound."""
     new_page: bool = False
     """A popup or a new tab became the active page."""
     returned: bool = False
@@ -114,6 +180,11 @@ class PageEvents:
     """The last page closed: nothing is open until the next navigate."""
     http_status: int | None = None
     """The active page's last main-frame navigation response during the call."""
+    settled: bool | None = None
+    """Whether the page went quiet within the settle wait before this call read it.
+
+    True when it did, False when the wait ran out first — what the call read may be a page
+    that was still loading — and None when no wait was made, which claims neither."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,7 +204,8 @@ class FoundElements:
     page: PageState
     events: PageEvents
     lines: tuple[str, ...]
-    """The snapshot lines that match, at most ``limit``, each cut to 300 characters."""
+    """The snapshot lines that match, at most ``limit``, each cut to 300 characters with the
+    cut marked and counted."""
     total: int
     """How many lines matched, shown or not."""
 
@@ -193,7 +265,7 @@ type AgentBrowserFailure = Literal[
     "disconnected",
     "timeout",
     "navigation_failed",
-    "http_status",
+    "egress_refused",
     "download",
     "too_large",
     "no_text",
@@ -208,11 +280,18 @@ type AgentBrowserFailure = Literal[
     "not_file_input",
     "wait_timeout",
     "action_failed",
+    "blocked",
+    "verification_required",
     "wrong_site",
     "not_password_field",
     "not_text_field",
     "field_rejected",
     "password_held",
+    "password_too_long",
+    "password_limit_too_small",
+    "taken_over",
+    "expired",
+    "dialog_waiting",
 ]
 
 #: What the model reads when a render fails, one stable sentence per reason. Page URLs
@@ -231,12 +310,41 @@ _PUBLIC_MESSAGES: dict[AgentBrowserFailure, str] = {
     ),
     "timeout": "The page did not finish loading within {seconds:g} seconds in the Agent Browser.",
     "navigation_failed": "The Agent Browser could not load the page{detail}.",
-    "http_status": "The page answered HTTP {status} to the Agent Browser.",
+    "egress_refused": (
+        "This deployment's egress proxy refused the connection, so the site was never "
+        "reached. The Agent Browser leaves through that proxy, and it admits public "
+        "destinations on ports 80 and 443 only; work from the direct read or another source."
+    ),
     "download": "The URL starts a download, not a page; a rendered read cannot read it.",
     "too_large": "The rendered page exceeds {limit} bytes.",
     "no_text": "The rendered page produced no text.",
+    "expired": (
+        "This live browser session reached the hard cap one session may last, so there is "
+        "nothing live to watch. Start the preview again for a fresh session."
+    ),
     "final_url_refused": (
         "The rendered page ended at a URL this deployment does not admit; nothing was admitted."
+    ),
+    "blocked": (
+        "The page was refused for being automated: a bot filter answered the Agent Browser "
+        "instead of the page, so nothing was read.{detail} Do not try to defeat the check. "
+        "A Run whose deployment leases headed browsers can ask for one with headed=true on "
+        "the next call, and keeps it for the rest of the Run."
+    ),
+    "verification_required": (
+        "The page shows a human-verification check, so nothing was read.{detail} That path "
+        "stops here: never solve, bypass, or outsource the check."
+    ),
+    "password_too_long": (
+        "This site's password field takes at most {limit} characters and {asked} were asked "
+        "for; ask for {limit} or fewer."
+    ),
+    #: The field takes fewer characters than the composition leaves room for, so no ask this
+    #: mechanism can honour fits it: there is no shorter password to ask for, and the sentence
+    #: says so rather than advising an ask that cannot be made.
+    "password_limit_too_small": (
+        "This site's password field takes at most {limit} characters, and the shortest password "
+        "this mechanism makes is {minimum}: no registration can succeed on this site."
     ),
 }
 
@@ -289,6 +397,16 @@ _PAGE_MESSAGES: dict[AgentBrowserFailure, str] = {
         "The page holds a filled password, so no screenshot was taken. Take it after the form "
         "is submitted."
     ),
+    "taken_over": (
+        "The person watching this Run has taken control of its browser, so this page action was "
+        "refused. It is theirs until they hand it back; the Run goes on and other work is "
+        "unaffected."
+    ),
+    "dialog_waiting": (
+        'The page is waiting on a {kind} dialog nobody has answered: "{message}".{detail} '
+        'Answer it with dialog="accept" or dialog="dismiss" on the call that reads the page '
+        "again; until then the page stays as it is."
+    ),
 }
 
 
@@ -302,12 +420,21 @@ class AgentBrowserError(Exception):
 
 
 def browser_failure(reason: AgentBrowserFailure, **fields: object) -> AgentBrowserError:
-    """The error for ``reason``, with the fields its sentence names (``seconds``, ``status``,
-    ``limit``, or ``detail`` for a network error token)."""
-    if reason == "navigation_failed":
+    """The error for ``reason``, with the fields its sentence names (``seconds``, ``limit`` with
+    ``asked`` or ``minimum``, ``marker`` for a refusal's evidence, or ``detail`` for a network
+    error token)."""
+    if reason in ("blocked", "verification_required"):
+        marker = fields.get("marker")
+        fields = {"detail": f' The page carries "{marker}".' if marker else ""}
+    elif reason == "navigation_failed":
         detail = fields.get("detail")
         fields = {"detail": f" ({detail})" if detail else ""}
     return AgentBrowserError(reason, _PUBLIC_MESSAGES[reason].format(**fields))
+
+
+def refusal_failure(block: Block) -> AgentBrowserError:
+    """The error for a page that was refused for being automated, with the evidence it used."""
+    return browser_failure(block.reason, marker=block.marker)
 
 
 def page_failure(reason: AgentBrowserFailure, **fields: object) -> AgentBrowserError:
@@ -333,6 +460,18 @@ class AgentPage(Protocol):
     """
 
     def current_url(self) -> str | None: ...
+
+    async def answer_dialogs(self, verdict: DialogVerdict | None) -> None:
+        """Say what the pages' dialogs are answered with for the call that follows.
+
+        ``verdict`` answers both the dialog each page is stopped on now — the one an earlier
+        call met and nobody answered — and every dialog the call meets, and each page's own
+        waiting dialog is kept until then. ``None`` is the default and answers nothing: a
+        dialog the agent has not answered leaves its page waiting, and the call that met it
+        reports the dialog rather than deciding for the agent. A call that finds the page it
+        acts on waiting and carries no verdict does nothing else.
+        """
+        ...
 
     async def navigate(self, url: str) -> PageObservation: ...
 
@@ -392,9 +531,31 @@ class AgentPage(Protocol):
         """Close the context. Failing, it logs; it never raises."""
         ...
 
+    async def capture_session(self) -> SessionState:
+        """What this page's session holds now: its URL, its origins' web storage.
+
+        The per-page half of what a move carries; the context's cookies are the
+        lease's (``LeasedBrowser.capture_session``). Read before anything closes: a closed
+        context holds nothing.
+        """
+        ...
+
+    async def restore_session(self, session: SessionState) -> None:
+        """Give this page the storage state of a page that was carried over.
+
+        Called once, before the navigation that revisits the URL, so the state is in place
+        for the page's own scripts.
+        """
+        ...
+
 
 class LeasedBrowser(Protocol):
     """One browser a Run holds until it is closed."""
+
+    @property
+    def headless(self) -> bool:
+        """Whether this browser runs without a display; a headed lease never goes back."""
+        ...
 
     async def render(
         self, url: str, *, navigation_timeout: float, settle_timeout: float
@@ -409,11 +570,38 @@ class LeasedBrowser(Protocol):
         """Disconnect the browser, then release its lease."""
         ...
 
+    async def capture_session(self) -> SessionState:
+        """The session of the page this lease is driving: its cookies and their storage.
+
+        A move reads this from the browser it is leaving and restores it into the
+        browser it goes to; a lease driving no page still answers its context's cookies.
+        """
+        ...
+
+    async def restore_session(self, session: SessionState) -> None:
+        """Put a carried-over session into the page this lease is about to drive."""
+        ...
+
 
 class BrowserProvider(Protocol):
     """The port that leases a Run's browser endpoint."""
 
-    async def lease(self, holder: BrowserHolder, *, wait_seconds: float) -> LeasedBrowser: ...
+    async def lease(
+        self, holder: BrowserHolder, *, wait_seconds: float, headed: bool = False
+    ) -> LeasedBrowser:
+        """A browser for ``holder``: headless, or a headed one that runs with a display.
+
+        A deployment that leases no headed browser refuses a headed lease as not configured.
+        The lease is the Run's for as long as it holds it, so a Run that has one headed never
+        asks again: there is no counter here to spend.
+        """
+        ...
+
+    def page_for(self, holder: BrowserHolder) -> LiveBrowserPage | None:
+        """The live surface of the browser ``holder`` leases here, or None when this process
+        leases it none. It is read-only: the lease's claim, exclusion and expiry are not its,
+        and it answers for its own driving seat."""
+        ...
 
     async def aclose(self) -> None: ...
 
@@ -429,6 +617,21 @@ class BrowserLeases(Protocol):
 
     async def release(self, holder: BrowserHolder, endpoint: str) -> None: ...
 
+    async def holder_for(self, *, owner_id: str, run_id: str) -> BrowserHolder | None:
+        """The holder that Run leases an endpoint through, or None while it holds none.
+
+        A read-only question: the answer is the fenced holder of a running Run whose lease
+        has not expired, which is what a live session is opened against.
+        """
+        ...
+
+    async def set_control(self, holder: BrowserHolder, state: LiveControlState) -> None:
+        """Record who drives the holder's browser, for operators.
+
+        Called on a control handover only, never per input event.
+        """
+        ...
+
 
 @dataclass(frozen=True, slots=True)
 class AgentBrowserSettings:
@@ -441,6 +644,11 @@ class AgentBrowserSettings:
     """
 
     endpoints: tuple[str, ...]
+    headed_endpoints: tuple[str, ...]
+    """The subset of ``endpoints`` whose members run a headed browser with a display server.
+
+    Empty in a deployment that leases headless browsers alone, which is then the only thing
+    a Run may ask for (ADR 0032)."""
     egress_proxy: str
     chromium_sandbox: bool
     connect_timeout_seconds: float
@@ -451,6 +659,11 @@ class AgentBrowserSettings:
     snapshot_depth: int
     max_download_bytes: int
     idle_release_seconds: float
+
+    @property
+    def headed(self) -> bool:
+        """Whether this deployment leases a headed browser at all."""
+        return bool(self.headed_endpoints)
 
 
 @dataclass(frozen=True, slots=True)
@@ -464,7 +677,10 @@ class AgentBrowserBinding:
 
 
 __all__ = [
+    "MAX_DIALOGS_PER_CALL",
     "MAX_DOWNLOADS_PER_CALL",
+    "MAX_REFUSALS_PER_CALL",
+    "REF_PATTERN",
     "AgentBrowserBinding",
     "AgentBrowserError",
     "AgentBrowserFailure",
@@ -475,6 +691,7 @@ __all__ = [
     "AgentPage",
     "CredentialFill",
     "CredentialForm",
+    "DialogVerdict",
     "DownloadRefusal",
     "DownloadedFile",
     "FoundElements",
@@ -487,7 +704,10 @@ __all__ = [
     "PageScreenshot",
     "PageState",
     "RenderedPage",
+    "SessionState",
+    "StorageState",
     "UploadFile",
     "browser_failure",
     "page_failure",
+    "refusal_failure",
 ]

@@ -3,14 +3,20 @@
 import {msg} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import type {AnswerPresentation} from '../api/conversations.ts';
+import {isImeKey} from '../design-system/index.ts';
 import {COMPACT_SHELL_MEDIA} from '../lib/breakpoints.ts';
-import {focusedElement, raise, tabbables, wrapTabFocus} from '../lib/dom.ts';
+import {raise, tabbables, wrapTabFocus} from '../lib/dom.ts';
+import {FocusReturn} from '../lib/focus-return.ts';
 import {LightElement, MediaController} from '../lib/lit-host.ts';
 import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
-import type {TracesSource, DlInspectorTraces} from './inspector-traces.ts';
+import type {AnswerRunEvent} from '../lib/run-controller.ts';
+import type {TracesSource} from '../stores/traces-source.ts';
+import type {DlInspectorTraces} from './inspector-traces.ts';
 import './inspector-traces.ts';
 import type {DlInspectorFiles} from './inspector-files.ts';
 import './inspector-files.ts';
+import './inspector-agentspace.ts';
+import './inspector-live.ts';
 import type {
   DlInspectorSources,
   InspectorSourcesStateDetail,
@@ -18,7 +24,7 @@ import type {
 import './inspector-sources.ts';
 import './ingest-target.ts';
 
-export type InspectorKind = 'files' | 'sources' | 'traces';
+export type InspectorKind = 'files' | 'sources' | 'traces' | 'live' | 'agentspace';
 
 export interface InspectorStateDetail {
   open: boolean;
@@ -26,7 +32,7 @@ export interface InspectorStateDetail {
   compact: boolean;
 }
 
-export interface InspectorOpeningDetail {
+interface InspectorOpeningDetail {
   kind: InspectorKind;
 }
 
@@ -39,7 +45,9 @@ export class DlInspector extends LightElement {
     sourceHasItems: {state: true},
     sourcesExpanded: {state: true},
     tracesSource: {state: true},
+    liveRunId: {state: true},
     shellInert: {state: true},
+    answerFeedbackEnabled: {attribute: false},
   };
 
   declare handles: AppHandles;
@@ -48,12 +56,15 @@ export class DlInspector extends LightElement {
   declare sourceHasItems: boolean;
   declare sourcesExpanded: boolean;
   declare tracesSource: TracesSource | null;
+  /** The Run whose browser the live dock shows; null while no live dock is open. */
+  declare liveRunId: string | null;
   declare shellInert: boolean;
+  /** Whether the reader is offered the thumbs for what a child answered. */
+  declare answerFeedbackEnabled: boolean;
 
-  #returnFocus: HTMLElement | null = null;
+  readonly #focus = new FocusReturn();
   readonly #compact = new MediaController(this, COMPACT_SHELL_MEDIA, () => { this.#compactChanged(); });
   #stateSignature = '';
-  #focusGeneration = 0;
 
   constructor() {
     super();
@@ -63,7 +74,9 @@ export class DlInspector extends LightElement {
     this.sourceHasItems = false;
     this.sourcesExpanded = false;
     this.tracesSource = null;
+    this.liveRunId = null;
     this.shellInert = false;
+    this.answerFeedbackEnabled = false;
   }
 
   override connectedCallback(): void {
@@ -73,7 +86,7 @@ export class DlInspector extends LightElement {
   }
 
   override disconnectedCallback(): void {
-    this.#focusGeneration += 1;
+    this.#focus.invalidate();
     this.#files()?.pause();
     this.#stateSignature = '';
     super.disconnectedCallback();
@@ -121,6 +134,13 @@ export class DlInspector extends LightElement {
 
   /** Open one Run's Child agents. Asked for the Run the dock already shows, it keeps its source, and
    * so the child the reader has open and what they have typed. */
+  /** Open the conversation's Agentspace: its saved copies and the files each Run left. */
+  async openAgentspace(returnFocus?: HTMLElement | null): Promise<void> {
+    if (!this.#beginOpen('agentspace', returnFocus)) return;
+    await this.updateComplete;
+    await this.#focusOnCompact();
+  }
+
   async openTraces(source: TracesSource, returnFocus?: HTMLElement | null): Promise<void> {
     const showing = this.kind === 'traces' && this.tracesSource?.runId === source.runId;
     if (!this.#beginOpen('traces', returnFocus)) return;
@@ -129,9 +149,17 @@ export class DlInspector extends LightElement {
     await this.#focusOnCompact();
   }
 
-  /** Tell an open Child agents dock that its Run's children may have moved. */
-  refreshTracesIfFollowing(runId: string): void {
-    this.#children()?.refreshIfFollowing(runId);
+  /** Open the live browser preview of one Run, which subscribes to it until it closes. */
+  async openLive(runId: string, returnFocus?: HTMLElement | null): Promise<void> {
+    if (!this.#beginOpen('live', returnFocus)) return;
+    this.liveRunId = runId;
+    await this.updateComplete;
+    await this.#focusOnCompact();
+  }
+
+  /** Hand an open Child agents dock what its Run just said, so what it draws stays live. */
+  applyTracesEvents(runId: string, events: readonly AnswerRunEvent[]): void {
+    this.#children()?.applyEvents(runId, events);
   }
 
   /** Open Files if needed, then upload through the Files content owner. */
@@ -152,13 +180,13 @@ export class DlInspector extends LightElement {
   /** Close the Inspector and optionally restore the element that opened it. */
   close(restoreFocus = true): void {
     if (!this.open) return;
-    const focusGeneration = ++this.#focusGeneration;
     this.#files()?.pause();
     this.kind = null;
     this.presentation = null;
     this.sourceHasItems = false;
     this.sourcesExpanded = false;
     this.tracesSource = null;
+    this.liveRunId = null;
     this.#syncHostState();
     this.#publishState();
     const panel = this.querySelector<HTMLElement>('#panel');
@@ -168,21 +196,15 @@ export class DlInspector extends LightElement {
       panel.setAttribute('aria-hidden', 'true');
       delete panel.dataset.panelKind;
     }
-    const returnFocus = this.#returnFocus;
-    this.#returnFocus = null;
-    if (restoreFocus) {
-      window.requestAnimationFrame(() => {
-        if (focusGeneration !== this.#focusGeneration || this.open) return;
-        returnFocus?.focus();
-      });
-    }
+    if (restoreFocus) this.#focus.restore(() => this.open);
+    else this.#focus.discard();
   }
 
-  /** Close conversation-scoped Sources and Child agents while preserving workspace Files. */
+  /** Close conversation-scoped Sources, Child agents and the live browser, preserving Files and
+   *  the Agentspace, which follow the conversation the reader switches to. */
   closeConversationContent(): void {
-    if (this.kind !== 'sources' && this.kind !== 'traces') return;
+    if (this.kind !== 'sources' && this.kind !== 'traces' && this.kind !== 'live') return;
     this.close(false);
-    this.#returnFocus = null;
   }
 
   protected override render(): TemplateResult {
@@ -191,6 +213,8 @@ export class DlInspector extends LightElement {
     const files = this.kind === 'files';
     const sources = this.kind === 'sources';
     const children = this.kind === 'traces';
+    const live = this.kind === 'live';
+    const agentspace = this.kind === 'agentspace';
     return html`
       <aside
         class="panel inspector-surface${open ? ' open' : ''}"
@@ -229,8 +253,13 @@ export class DlInspector extends LightElement {
             @dl-inspector-sources-state-change=${this.#sourcesStateChanged}
           ></dl-inspector-sources>
           <dl-inspector-files .handles=${this.handles} .active=${files} ?hidden=${!files}></dl-inspector-files>
-          <dl-inspector-traces .source=${this.tracesSource} .active=${children}
+          <dl-inspector-traces .handles=${this.handles} .source=${this.tracesSource} .active=${children}
+            .answerFeedbackEnabled=${this.answerFeedbackEnabled}
             ?hidden=${!children}></dl-inspector-traces>
+          <dl-inspector-live .runId=${this.liveRunId} .active=${live}
+            ?hidden=${!live}></dl-inspector-live>
+          <dl-inspector-agentspace .handles=${this.handles} .active=${agentspace}
+            ?hidden=${!agentspace}></dl-inspector-agentspace>
         </div>
       </aside>
       <div class="inspector-backdrop" aria-hidden="true"
@@ -246,9 +275,8 @@ export class DlInspector extends LightElement {
       detail: {kind},
     });
     if (!this.dispatchEvent(event)) return false;
-    this.#focusGeneration += 1;
-    if (returnFocus) this.#returnFocus = returnFocus;
-    else if (!this.open) this.#returnFocus = focusedElement();
+    this.#focus.invalidate();
+    if (returnFocus || !this.open) this.#focus.remember(returnFocus);
     this.kind = kind;
     this.#syncHostState();
     return true;
@@ -259,6 +287,8 @@ export class DlInspector extends LightElement {
       case 'files': return msg('Files', {id: 'inspector.files'});
       case 'sources': return msg('Sources', {id: 'inspector.sources'});
       case 'traces': return msg('Agent traces', {id: 'inspector.agentTraces'});
+      case 'live': return msg('Live browser', {id: 'inspector.live'});
+      case 'agentspace': return msg('Agentspace', {id: 'inspector.agentspace'});
       default: return '';
     }
   }
@@ -274,6 +304,7 @@ export class DlInspector extends LightElement {
   #children(): DlInspectorTraces | null {
     return this.querySelector<DlInspectorTraces>('dl-inspector-traces');
   }
+
 
   #toggleAllSources = (): void => {
     const sources = this.#sources();
@@ -327,10 +358,8 @@ export class DlInspector extends LightElement {
   }
 
   #documentKeydown = (event: KeyboardEvent): void => {
-    // An Escape that cancels an IME composition belongs to the composition, not to the panel. WebKit
-    // delivers the IME's keydown after `compositionend`, where `isComposing` is false and `keyCode` is 229.
-    const composing = event.isComposing || event.keyCode === 229;
-    if (!this.open || event.key !== 'Escape' || event.defaultPrevented || composing) return;
+    // An Escape that cancels an IME composition belongs to the composition, not to the panel.
+    if (!this.open || event.key !== 'Escape' || event.defaultPrevented || isImeKey(event)) return;
     if (document.querySelector('dialog[open]')) return;
     event.preventDefault();
     this.close();

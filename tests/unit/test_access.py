@@ -7,24 +7,30 @@ from typing import Any
 
 import pytest
 
-from dlightrag.application.access import (
-    DEPLOYMENT_OWNER_ID,
+from dlightrag.application.access.control import (
+    ACTION_PRESETS,
     AccessAction,
     AccessDeniedError,
-    AccessGate,
-    UserContext,
-    WorkspaceRecord,
     access_control_from_settings,
     corpus_mutation_access_action,
+    unknown_action_patterns,
+)
+from dlightrag.application.access.principal import (
+    DEPLOYMENT_OWNER_ID,
+    UserContext,
     owner_id_from_user,
 )
-from dlightrag.application.config import (
+from dlightrag.application.access.workspaces import (
+    AccessGate,
+    WorkspaceRecord,
+)
+from dlightrag.application.config.sections import (
     AccessControlConfig,
     AccessControlRuleConfig,
     DlightragConfig,
 )
-from dlightrag.application.settings import access_settings
-from tests.config_helpers import mutate_config, replace_config
+from dlightrag.application.settings.projections import access_settings
+from tests.support.config_helpers import mutate_config, replace_config
 
 
 class _Creators:
@@ -132,6 +138,15 @@ async def test_jwt_claims_access_control_matches_claim_workspace_and_action(
 
 _TEAM = "https://team.cloudflareaccess.com"
 
+# Read-only is no preset: a deployment that wants it names the read Actions.
+_READ_ONLY_ACTIONS = [
+    AccessAction.WORKSPACE_QUERY,
+    AccessAction.WORKSPACE_LIST_FILES,
+    AccessAction.WORKSPACE_DOWNLOAD_SOURCE,
+    AccessAction.WORKSPACE_READ_METADATA,
+    AccessAction.WORKSPACE_READ_VISUAL_ASSET,
+]
+
 
 def _person(subject: str, email: str) -> UserContext:
     return UserContext(
@@ -156,7 +171,10 @@ async def test_people_hold_the_workspaces_they_create_and_see_no_one_elses(
                     claim="email", value="admin@example.com", workspaces=["*"], actions=["admin"]
                 ),
                 AccessControlRuleConfig(
-                    claim="iss", value=_TEAM, workspaces=["default"], actions=["reader"]
+                    claim="iss",
+                    value=_TEAM,
+                    workspaces=["default"],
+                    actions=_READ_ONLY_ACTIONS,
                 ),
                 AccessControlRuleConfig(
                     claim="iss",
@@ -200,6 +218,8 @@ async def test_people_hold_the_workspaces_they_create_and_see_no_one_elses(
     with pytest.raises(AccessDeniedError):
         await access.check(alice, AccessAction.MODEL_CATALOGUE_WRITE)
     await access.check(admin, AccessAction.MODEL_CATALOGUE_WRITE)
+    with pytest.raises(AccessDeniedError):
+        await access.check(alice, AccessAction.RUNTIME_POLICY_MANAGE, workspace="alice_notes")
 
 
 async def test_a_run_shows_to_its_submitter_and_never_to_the_next_holder_of_its_name(
@@ -216,7 +236,10 @@ async def test_a_run_shows_to_its_submitter_and_never_to_the_next_holder_of_its_
         AccessControlConfig(
             rules=[
                 AccessControlRuleConfig(
-                    claim="iss", value=_TEAM, workspaces=["default"], actions=["reader"]
+                    claim="iss",
+                    value=_TEAM,
+                    workspaces=["default"],
+                    actions=_READ_ONLY_ACTIONS,
                 )
             ],
         ),
@@ -253,7 +276,8 @@ async def test_a_run_shows_to_its_submitter_and_never_to_the_next_holder_of_its_
     )
 
 
-def _preset_access_control(preset: str, test_config: DlightragConfig):
+def _rule_access_control(role: str, actions: list[str], test_config: DlightragConfig):
+    """One rule matching ``roles: [finance.<role>]`` and granting the Actions it names."""
     mutate_config(test_config, "access.auth_mode", "jwt")
     mutate_config(test_config, "access.jwt_verification_key", "test-key")
     test_config = replace_config(
@@ -263,9 +287,9 @@ def _preset_access_control(preset: str, test_config: DlightragConfig):
             rules=[
                 AccessControlRuleConfig(
                     claim="roles",
-                    value=f"finance.{preset}",
+                    value=f"finance.{role}",
                     workspaces=["finance"],
-                    actions=[preset],
+                    actions=actions,
                 )
             ],
         ),
@@ -273,15 +297,15 @@ def _preset_access_control(preset: str, test_config: DlightragConfig):
     user = UserContext(
         user_id="alice",
         auth_mode="jwt",
-        claims={"roles": [f"finance.{preset}"]},
+        claims={"roles": [f"finance.{role}"]},
     )
     return access_control_from_settings(access_settings(test_config), creators=_Creators()), user
 
 
-async def test_reader_preset_allows_reads_and_denies_writes(
+async def test_naming_the_read_actions_allows_reads_and_denies_writes(
     test_config: DlightragConfig,
 ) -> None:
-    access_control, user = _preset_access_control("reader", test_config)
+    access_control, user = _rule_access_control("read-only", _READ_ONLY_ACTIONS, test_config)
 
     await access_control.check(user, AccessAction.WORKSPACE_QUERY, workspace="finance")
     await access_control.check(user, AccessAction.WORKSPACE_READ_METADATA, workspace="finance")
@@ -291,10 +315,10 @@ async def test_reader_preset_allows_reads_and_denies_writes(
         await access_control.check(user, AccessAction.WORKSPACE_RESET, workspace="finance")
 
 
-async def test_editor_preset_allows_corpus_edits_but_not_workspace_admin(
+async def test_common_user_preset_allows_corpus_edits_but_not_workspace_admin(
     test_config: DlightragConfig,
 ) -> None:
-    access_control, user = _preset_access_control("editor", test_config)
+    access_control, user = _rule_access_control("common_user", ["common_user"], test_config)
 
     await access_control.check(user, AccessAction.WORKSPACE_QUERY, workspace="finance")
     await access_control.check(user, AccessAction.WORKSPACE_INGEST, workspace="finance")
@@ -306,7 +330,7 @@ async def test_editor_preset_allows_corpus_edits_but_not_workspace_admin(
 
 
 async def test_admin_preset_allows_every_action(test_config: DlightragConfig) -> None:
-    access_control, user = _preset_access_control("admin", test_config)
+    access_control, user = _rule_access_control("admin", ["admin"], test_config)
 
     for action in (
         AccessAction.WORKSPACE_QUERY,
@@ -315,8 +339,53 @@ async def test_admin_preset_allows_every_action(test_config: DlightragConfig) ->
         AccessAction.WORKSPACE_RESET,
         AccessAction.WORKSPACE_DELETE,
         AccessAction.MODEL_CATALOGUE_WRITE,
+        AccessAction.RUNTIME_POLICY_MANAGE,
     ):
         await access_control.check(user, action, workspace="finance")
+
+
+async def test_only_admin_or_a_rule_naming_the_action_manages_runtime_policies(
+    test_config: DlightragConfig,
+) -> None:
+    """A policy lists the people it targets, so no preset below `admin` holds it, and it is
+    deployment-wide: a rule that names it over some workspaces does not reach it."""
+    mutate_config(test_config, "access.auth_mode", "jwt")
+    mutate_config(test_config, "access.jwt_verification_key", "test-key")
+    mutate_config(
+        test_config,
+        "access.control",
+        AccessControlConfig(
+            rules=[
+                AccessControlRuleConfig(
+                    claim="roles", value=role, workspaces=workspaces, actions=actions
+                )
+                for role, workspaces, actions in (
+                    ("read-only", ["*"], _READ_ONLY_ACTIONS),
+                    ("common_user", ["*"], ["common_user"]),
+                    ("scoped-admin", ["finance"], ["admin"]),
+                    ("scoped-manager", ["finance"], [AccessAction.RUNTIME_POLICY_MANAGE]),
+                    ("admin", ["*"], ["admin"]),
+                    ("manager", ["*"], [AccessAction.RUNTIME_POLICY_MANAGE]),
+                )
+            ],
+        ),
+    )
+    access = access_control_from_settings(access_settings(test_config), creators=_Creators())
+
+    for role, holds in (
+        ("read-only", False),
+        ("common_user", False),
+        ("scoped-admin", False),
+        ("scoped-manager", False),
+        ("admin", True),
+        ("manager", True),
+    ):
+        person = UserContext(user_id=role, auth_mode="jwt", claims={"roles": [role]})
+        if holds:
+            await access.check(person, AccessAction.RUNTIME_POLICY_MANAGE)
+        else:
+            with pytest.raises(AccessDeniedError):
+                await access.check(person, AccessAction.RUNTIME_POLICY_MANAGE)
 
 
 @pytest.mark.parametrize(
@@ -389,3 +458,47 @@ def test_direct_in_process_calls_share_the_deployment_owner() -> None:
     assert owner_id_from_user(UserContext(user_id="anonymous", auth_mode="none")) == (
         DEPLOYMENT_OWNER_ID
     )
+
+
+def test_two_presets_state_a_place_and_not_a_role() -> None:
+    """`common_user` reads a corpus and contributes to it; `admin` is every Action."""
+    assert set(ACTION_PRESETS) == {"common_user", "admin"}
+    assert ACTION_PRESETS["admin"] == ("*",)
+    common_user = set(ACTION_PRESETS["common_user"])
+    assert common_user == {
+        AccessAction.WORKSPACE_QUERY,
+        AccessAction.WORKSPACE_LIST_FILES,
+        AccessAction.WORKSPACE_DOWNLOAD_SOURCE,
+        AccessAction.WORKSPACE_READ_METADATA,
+        AccessAction.WORKSPACE_READ_VISUAL_ASSET,
+        AccessAction.WORKSPACE_INGEST,
+        AccessAction.WORKSPACE_UPDATE_METADATA,
+        AccessAction.WORKSPACE_DELETE_FILES,
+    }
+    # Operator-facing and deployment-wide Actions stay with `admin`, never a common user.
+    for operator_only in (
+        AccessAction.WORKSPACE_CREATE,
+        AccessAction.WORKSPACE_RESET,
+        AccessAction.WORKSPACE_DELETE,
+        AccessAction.WORKSPACE_STORAGE_STATUS,
+        AccessAction.MODEL_CATALOGUE_WRITE,
+        AccessAction.RUNTIME_POLICY_MANAGE,
+    ):
+        assert operator_only not in common_user
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    ["reader", "editor", "commonuser", "commom_user", "workpsace.query", "", "workspace."],
+)
+def test_a_pattern_that_can_never_match_a_product_action_is_unknown(pattern: str) -> None:
+    """These grant nothing, so Access configuration refuses them instead of loading them."""
+    assert unknown_action_patterns([pattern]) == (pattern,)
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    ["admin", "common_user", "*", AccessAction.WORKSPACE_QUERY, "workspace.*"],
+)
+def test_a_preset_an_action_and_an_action_namespace_are_known(pattern: str) -> None:
+    assert unknown_action_patterns([pattern]) == ()

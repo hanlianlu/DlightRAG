@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import asyncpg
 import pytest
 
-from tests.config_helpers import mutate_config
+from tests.support.config_helpers import mutate_config
 
 
 def _session_settings(
@@ -29,8 +29,39 @@ class TestPGPoolGet:
     """Tests for PGPool.get()."""
 
     @pytest.mark.asyncio
-    async def test_get_creates_pool(self) -> None:
-        """First call to get() creates the asyncpg pool with config values."""
+    @pytest.mark.parametrize(
+        ("configured", "expected"),
+        [
+            ({}, {}),
+            # Domain store pools use the same session tuning as LightRAG.
+            (
+                {
+                    "statement_cache_size": 128,
+                    "ef_search": 384,
+                    "session_settings": {"application_name": "dlightrag"},
+                },
+                {
+                    "statement_cache_size": 128,
+                    "server_settings": {
+                        "hnsw.ef_search": "384",
+                        "application_name": "dlightrag",
+                    },
+                },
+            ),
+            # Managed PostgreSQL SSL settings must reach the domain pools.
+            ({"ssl_mode": "require"}, {"ssl": True}),
+            ({"command_timeout": 60.0}, {"command_timeout": 60.0}),
+        ],
+        ids=[
+            "endpoint-and-sizes",
+            "session-settings-and-statement-cache",
+            "ssl",
+            "command-timeout",
+        ],
+    )
+    async def test_get_forwards_the_configured_connection_settings_to_asyncpg(
+        self, configured: dict[str, object], expected: dict[str, object]
+    ) -> None:
         from dlightrag.adapters.postgres.core._pool import PGPool
 
         mock_pool = MagicMock()
@@ -39,11 +70,26 @@ class TestPGPoolGet:
         mock_config = MagicMock()
         mutate_config(mock_config, "storage.postgres.pool_min_size", 2)
         mutate_config(mock_config, "storage.postgres.pool_max_size", 10)
-        mutate_config(mock_config, "storage.postgres.statement_cache_size", None)
-        mutate_config(mock_config, "storage.postgres.command_timeout", None)
-        _session_settings(mock_config)
+        mutate_config(
+            mock_config,
+            "storage.postgres.statement_cache_size",
+            configured.get("statement_cache_size"),
+        )
+        mutate_config(
+            mock_config, "storage.postgres.command_timeout", configured.get("command_timeout")
+        )
+        _session_settings(
+            mock_config,
+            ef_search=configured.get("ef_search", 256),  # type: ignore[arg-type]
+            extra=configured.get("session_settings"),  # type: ignore[arg-type]
+        )
         _endpoint(
-            mock_config, host="testhost", user="testuser", password="testpass", database="testdb"
+            mock_config,
+            host="primary",
+            user="writer",
+            password="secret",
+            database="dlightrag",
+            ssl_mode=configured.get("ssl_mode"),  # type: ignore[arg-type]
         )
 
         with (
@@ -51,20 +97,23 @@ class TestPGPoolGet:
                 "dlightrag.adapters.postgres.core._pool.asyncpg.create_pool",
                 new=AsyncMock(return_value=mock_pool),
             ) as mock_create,
-            patch("dlightrag.application.config.get_config", return_value=mock_config),
+            patch("dlightrag.application.config.loading.get_config", return_value=mock_config),
         ):
             result = await pool.get()
 
         assert result is mock_pool
         mock_create.assert_called_once_with(
-            host="testhost",
-            port=5432,
-            user="testuser",
-            password="testpass",
-            database="testdb",
-            min_size=2,
-            max_size=10,
-            server_settings={"hnsw.ef_search": "256"},
+            **{
+                "host": "primary",
+                "port": 5432,
+                "user": "writer",
+                "password": "secret",
+                "database": "dlightrag",
+                "min_size": 2,
+                "max_size": 10,
+                "server_settings": {"hnsw.ef_search": "256"},
+                **expected,
+            }
         )
 
     @pytest.mark.asyncio
@@ -85,7 +134,7 @@ class TestPGPoolGet:
                 "dlightrag.adapters.postgres.core._pool.asyncpg.create_pool",
                 new=AsyncMock(return_value=mock_pool),
             ) as mock_create,
-            patch("dlightrag.application.config.get_config", return_value=mock_config),
+            patch("dlightrag.application.config.loading.get_config", return_value=mock_config),
         ):
             result1 = await pool.get()
             result2 = await pool.get()
@@ -136,7 +185,7 @@ class TestPGPoolGet:
                 "dlightrag.adapters.postgres.core._pool.asyncpg.create_pool",
                 new=AsyncMock(side_effect=[mock_pool1, mock_pool2]),
             ) as mock_create,
-            patch("dlightrag.application.config.get_config", return_value=mock_config),
+            patch("dlightrag.application.config.loading.get_config", return_value=mock_config),
         ):
             r1 = await pool.get()
             await pool.close()
@@ -145,94 +194,6 @@ class TestPGPoolGet:
         assert r1 is mock_pool1
         assert r2 is mock_pool2
         assert mock_create.call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_get_applies_session_settings_and_statement_cache(self) -> None:
-        """Domain store pools should use the same PG session tuning as LightRAG."""
-        from dlightrag.adapters.postgres.core._pool import PGPool
-
-        mock_pool = MagicMock()
-        pool = PGPool()
-
-        mock_config = MagicMock()
-        mutate_config(mock_config, "storage.postgres.pool_min_size", 2)
-        mutate_config(mock_config, "storage.postgres.pool_max_size", 10)
-        mutate_config(mock_config, "storage.postgres.statement_cache_size", 128)
-        mutate_config(mock_config, "storage.postgres.command_timeout", None)
-        _session_settings(mock_config, ef_search=384, extra={"application_name": "dlightrag"})
-        _endpoint(
-            mock_config, host="primary", user="writer", password="secret", database="dlightrag"
-        )
-
-        with (
-            patch(
-                "dlightrag.adapters.postgres.core._pool.asyncpg.create_pool",
-                new=AsyncMock(return_value=mock_pool),
-            ) as mock_create,
-            patch("dlightrag.application.config.get_config", return_value=mock_config),
-        ):
-            result = await pool.get()
-
-        assert result is mock_pool
-        mock_create.assert_called_once_with(
-            host="primary",
-            port=5432,
-            user="writer",
-            password="secret",
-            database="dlightrag",
-            min_size=2,
-            max_size=10,
-            statement_cache_size=128,
-            server_settings={
-                "hnsw.ef_search": "384",
-                "application_name": "dlightrag",
-            },
-        )
-
-    @pytest.mark.asyncio
-    async def test_get_forwards_ssl_connection_kwargs(self) -> None:
-        """Managed PostgreSQL SSL settings must reach DlightRAG domain pools."""
-        from dlightrag.adapters.postgres.core._pool import PGPool
-
-        mock_pool = MagicMock()
-        pool = PGPool()
-
-        mock_config = MagicMock()
-        mutate_config(mock_config, "storage.postgres.pool_min_size", 2)
-        mutate_config(mock_config, "storage.postgres.pool_max_size", 10)
-        mutate_config(mock_config, "storage.postgres.statement_cache_size", None)
-        mutate_config(mock_config, "storage.postgres.command_timeout", None)
-        _session_settings(mock_config)
-        _endpoint(
-            mock_config,
-            host="primary",
-            user="writer",
-            password="secret",
-            database="dlightrag",
-            ssl_mode="require",
-        )
-
-        with (
-            patch(
-                "dlightrag.adapters.postgres.core._pool.asyncpg.create_pool",
-                new=AsyncMock(return_value=mock_pool),
-            ) as mock_create,
-            patch("dlightrag.application.config.get_config", return_value=mock_config),
-        ):
-            result = await pool.get()
-
-        assert result is mock_pool
-        mock_create.assert_called_once_with(
-            host="primary",
-            port=5432,
-            user="writer",
-            password="secret",
-            database="dlightrag",
-            ssl=True,
-            min_size=2,
-            max_size=10,
-            server_settings={"hnsw.ef_search": "256"},
-        )
 
     @pytest.mark.asyncio
     async def test_run_retries_operation_on_transient_error_without_destroying_pool(self) -> None:
@@ -276,7 +237,7 @@ class TestPGPoolGet:
                 "dlightrag.adapters.postgres.core._pool.asyncpg.create_pool",
                 new=AsyncMock(return_value=the_pool),
             ) as mock_create,
-            patch("dlightrag.application.config.get_config", return_value=mock_config),
+            patch("dlightrag.application.config.loading.get_config", return_value=mock_config),
         ):
             result = await pool.run(operation)
 
@@ -316,7 +277,7 @@ class TestPGPoolGet:
                 "dlightrag.adapters.postgres.core._pool.asyncpg.create_pool",
                 new=AsyncMock(return_value=the_pool),
             ),
-            patch("dlightrag.application.config.get_config", return_value=mock_config),
+            patch("dlightrag.application.config.loading.get_config", return_value=mock_config),
             pytest.raises(
                 asyncpg.exceptions.ConnectionDoesNotExistError,
                 match="commit outcome unknown",
@@ -326,35 +287,6 @@ class TestPGPoolGet:
 
         assert calls == 1
         the_pool.acquire.assert_called_once_with(timeout=12.5)
-
-    @pytest.mark.asyncio
-    async def test_get_applies_command_timeout(self) -> None:
-        """A configured command_timeout is forwarded to asyncpg.create_pool."""
-        from dlightrag.adapters.postgres.core._pool import PGPool
-
-        mock_pool = MagicMock()
-        pool = PGPool()
-
-        mock_config = MagicMock()
-        mutate_config(mock_config, "storage.postgres.pool_min_size", 2)
-        mutate_config(mock_config, "storage.postgres.pool_max_size", 10)
-        mutate_config(mock_config, "storage.postgres.statement_cache_size", None)
-        mutate_config(mock_config, "storage.postgres.command_timeout", 60.0)
-        _session_settings(mock_config)
-        _endpoint(
-            mock_config, host="primary", user="writer", password="secret", database="dlightrag"
-        )
-
-        with (
-            patch(
-                "dlightrag.adapters.postgres.core._pool.asyncpg.create_pool",
-                new=AsyncMock(return_value=mock_pool),
-            ) as mock_create,
-            patch("dlightrag.application.config.get_config", return_value=mock_config),
-        ):
-            await pool.get()
-
-        assert mock_create.call_args.kwargs["command_timeout"] == 60.0
 
     @pytest.mark.asyncio
     async def test_run_acquires_with_configured_timeout(self) -> None:
@@ -369,7 +301,11 @@ class TestPGPoolGet:
         mutate_config(mock_config, "storage.postgres.statement_cache_size", None)
         mutate_config(mock_config, "storage.postgres.command_timeout", None)
         mutate_config(mock_config, "storage.postgres.acquire_timeout", 12.5)
+        mutate_config(mock_config, "storage.postgres.pool_min_size", 2)
+        mutate_config(mock_config, "storage.postgres.pool_max_size", 10)
         mutate_config(mock_config, "storage.postgres.connection_retries", 1)
+        mutate_config(mock_config, "storage.postgres.connection_retry_backoff", 0)
+        mutate_config(mock_config, "storage.postgres.connection_retry_backoff_max", 0)
         _session_settings(mock_config)
         _endpoint(mock_config)
 
@@ -381,7 +317,7 @@ class TestPGPoolGet:
                 "dlightrag.adapters.postgres.core._pool.asyncpg.create_pool",
                 new=AsyncMock(return_value=the_pool),
             ),
-            patch("dlightrag.application.config.get_config", return_value=mock_config),
+            patch("dlightrag.application.config.loading.get_config", return_value=mock_config),
         ):
             result = await pool.run(operation)
 

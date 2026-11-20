@@ -423,6 +423,7 @@ class AnthropicProvider(CompletionProvider):
         *,
         tools: list[ToolDefinition],
         emit_text: Callable[[str], Awaitable[None]],
+        emit_reasoning: Callable[[str], Awaitable[None]] | None = None,
         tool_choice: ToolChoice = "auto",
         temperature: float | None = None,
         max_tokens: int | None = None,
@@ -511,9 +512,10 @@ class AnthropicProvider(CompletionProvider):
                         text_parts.append(text)
                         await emit_text(text)
                 elif delta_type == "thinking_delta":
-                    parts["thinking"] = str(parts.get("thinking") or "") + str(
-                        getattr(delta, "thinking", "") or ""
-                    )
+                    thinking = str(getattr(delta, "thinking", "") or "")
+                    parts["thinking"] = str(parts.get("thinking") or "") + thinking
+                    if thinking and emit_reasoning is not None:
+                        await emit_reasoning(thinking)
                 elif delta_type == "signature_delta":
                     parts["signature"] = str(parts.get("signature") or "") + str(
                         getattr(delta, "signature", "") or ""

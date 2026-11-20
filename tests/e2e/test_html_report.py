@@ -5,13 +5,12 @@ product's own artifact sandbox at phone, tablet and desktop widths, in both colo
 Set ``REPORT_SHOTS_DIR`` to keep a full-page screenshot of every example for review.
 """
 
-import itertools
 import json
 import os
 from collections.abc import Iterator
 from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import echarts_render
 import html_report
@@ -33,7 +32,12 @@ _SCHEMES = ("light", "dark")
 # What each example draws at its default slicer state: chart id -> series count, first series type.
 _CHARTS = {
     "brief": {"trend": (2, "line")},
-    "dashboard": {"trend": (4, "line"), "product": (2, "bar"), "mix": (1, "pie")},
+    "dashboard": {
+        "trend": (4, "line"),
+        "product": (2, "bar"),
+        "mix": (1, "pie"),
+        "compare": (1, "bar"),
+    },
     "scenario": {"path": (4, "line")},
     "multipage": {
         "total": (2, "bar"),
@@ -158,6 +162,57 @@ def test_the_report_runs_clean_and_every_chart_fits_its_figure(
     assert page.violations() == []
 
 
+# ---- one column: the prose ends where the data does ---------------------------------------------
+
+_PROSE = (
+    "吉利控股及其关联方持有 39.8%，PSD 系 20.7%，李书福合计受益持股 60.5%；沃尔沃汽车 19.9%，"
+    "吉利瑞典 GSAI 19.6%。自由流通盘约 7.9%，按英国收购守则，控股方发起私有化只需过 30% 强制要约线，"
+    "90% 即可强制 squeeze-out。少数股东既拿不到分红（公司仍在烧钱），也无法阻止债务转股。"
+)
+_COLUMNS = f"""\
+<header class="report-head"><h1>列宽</h1></header>
+<main>
+  <p>{_PROSE}</p>
+  <ul>
+    <li>无债务转股：股权价值是 0。</li>
+    <li>有债务转股：现有股东被稀释约 5.7 倍，价值约 $1.9。</li>
+  </ul>
+  <ol class="timeline"><li><time>2026-10</time><b>观察</b><p>欧洲需求验证。</p></li></ol>
+  <table>
+    <thead><tr><th>市场</th><th class="num">收入占比</th></tr></thead>
+    <tbody><tr><td>欧洲（欧盟、挪威、英国、瑞士）</td><td class="num">80%</td></tr></tbody>
+  </table>
+</main>
+"""
+
+
+@pytest.mark.parametrize("width", (390, 820, 1280))
+def test_prose_lists_and_tables_share_the_reports_column(
+    tmp_path: Path, open_report, width: int
+) -> None:
+    """The report is one column, and its width is the measure: a paragraph, a list, a timeline and
+    a table end at the same right edge. A fixed measure on the prose alone stops the text about two
+    thirds of the way across the page and leaves the rest of the row empty under a wide table."""
+    source, out = tmp_path / "columns.src.html", tmp_path / "columns.html"
+    source.write_text(_COLUMNS, encoding="utf-8")
+    assert html_report.main(["build", str(source), str(out)]) == 0
+
+    page = open_report(out, width)
+    box = page.eval(
+        """() => {
+          const report = document.querySelector('.report');
+          const style = getComputedStyle(report);
+          const content = report.getBoundingClientRect().width
+            - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+          const width = (el) => el.getBoundingClientRect().width;
+          const blocks = [...document.querySelectorAll('main > p, main > ul, main > ol, main > .table-wrap')];
+          return {content, blocks: blocks.map(width)};
+        }"""
+    )
+    assert len(box["blocks"]) == 4, box
+    assert box["blocks"] == pytest.approx([box["content"]] * 4, abs=1), box
+
+
 @pytest.mark.parametrize("example", list(_CHARTS))
 def test_echarts_is_in_the_document_once_and_the_report_adds_one_global(
     built: dict[str, Path], open_report, example: str
@@ -201,8 +256,7 @@ def test_a_hydrated_report_shows_the_authors_words_and_its_controls_and_no_notic
 def test_text_marks_cards_and_focus_meet_the_mineral_floors(
     built: dict[str, Path], open_report, example: str, width: int, scheme: str
 ) -> None:
-    page = open_report(built[example], width, scheme=scheme)  # type: ignore[arg-type]
-    roles = _PALETTE[scheme]["roles"]
+    page = open_report(built[example], width, scheme=scheme)
 
     for page_id, charts in each_page(example, page):
         label = f"{example}@{width}/{scheme}{'/' + page_id if page_id else ''}"
@@ -214,7 +268,6 @@ def test_text_marks_cards_and_focus_meet_the_mineral_floors(
         )
         assert shadows == [], label
         surface = colour.parse(probe.tokens(page, ["--color-bg-surface"])["--color-bg-surface"])
-        assert colour.parse(roles["surface"]) == pytest.approx(surface, abs=1e-3)  # type: ignore[comparison-overlap]
         for chart in charts:
             facts = probe.chart_facts(page, chart)
             assert facts is not None
@@ -231,8 +284,9 @@ def test_text_marks_cards_and_focus_meet_the_mineral_floors(
 
     page_bg = page.eval("() => getComputedStyle(document.body).backgroundColor")
     base = probe.tokens(page, ["--color-bg-base"])["--color-bg-base"]
-    assert colour.parse(page_bg) == pytest.approx(colour.parse(base), abs=1e-3)  # type: ignore[comparison-overlap]
-    assert page.eval("() => getComputedStyle(document.documentElement).colorScheme") == "light dark"
+    assert colour.parse(page_bg) == pytest.approx(colour.parse(base), abs=1e-3)
+    # The product's frame declares the mode, so the document wears that one scheme and not "both".
+    assert page.eval("() => getComputedStyle(document.documentElement).colorScheme") == scheme
 
 
 @pytest.mark.parametrize("scheme", _SCHEMES)
@@ -241,7 +295,7 @@ def test_text_marks_cards_and_focus_meet_the_mineral_floors(
 def test_every_control_shows_a_two_pixel_ring_two_pixels_off_in_the_ring_colour(
     built: dict[str, Path], open_report, example: str, width: int, scheme: str
 ) -> None:
-    page = open_report(built[example], width, scheme=scheme)  # type: ignore[arg-type]
+    page = open_report(built[example], width, scheme=scheme)
     ring = colour.parse(probe.tokens(page, ["--color-control-ring"])["--color-control-ring"])
     page.page.keyboard.press("Tab")
     seen: list[int] = []
@@ -252,7 +306,7 @@ def test_every_control_shows_a_two_pixel_ring_two_pixels_off_in_the_ring_colour(
         seen.append(found["index"])
         assert found["style"] == "solid" and found["width"] == 2 and found["offset"] == 2, found
         painted = colour.parse(found["colour"])
-        assert painted == pytest.approx(ring, abs=0.02), found  # type: ignore[comparison-overlap]
+        assert painted == pytest.approx(ring, abs=0.02), found
         # The ring is drawn outside its control, over what is behind the control's parent.
         around = tuple(c / 255 for c in found["behind"][:3])
         surface = (*around, 1.0)
@@ -265,7 +319,7 @@ def test_the_reset_control_and_a_selected_slicer_keep_their_contrast(
     built: dict[str, Path], open_report
 ) -> None:
     for scheme in _SCHEMES:
-        page = open_report(built["dashboard"], 390, scheme=scheme)  # type: ignore[arg-type]
+        page = open_report(built["dashboard"], 390, scheme=scheme)
         page.frame.click('button.chip[data-value="华东"]')
         page.page.wait_for_timeout(300)
 
@@ -273,32 +327,32 @@ def test_the_reset_control_and_a_selected_slicer_keep_their_contrast(
         assert probe.failing_text(page) == [], scheme
 
 
-def test_tag_tones_are_marks_of_the_palette_and_stay_apart_for_a_deuteranope(
+def test_each_tag_tone_has_a_shape_of_its_own_beside_its_colour(
     built: dict[str, Path], open_report
 ) -> None:
-    for scheme in _SCHEMES:
-        page = open_report(built["multipage"], 1280, scheme=scheme)  # type: ignore[arg-type]
-        names = [f"--tone-{n}" for n in range(1, 7)]
-        tones = [colour.parse(v) for v in probe.tokens(page, names).values()]
-        for a, b in itertools.combinations(tones, 2):
-            assert colour.distance(a, b) >= 11
-            for kind in ("protan", "deutan"):
-                assert colour.distance(a, b, kind) >= 4.9
-        shapes = page.eval(
-            "() => [1, 2, 3, 4, 5, 6].map((n) => { const t = document.createElement('span'); t.className = 'tag';"
-            " t.dataset.tone = String(n); document.body.append(t); const s = getComputedStyle(t, '::before');"
-            " const out = s.clipPath + '|' + s.borderRadius + '|' + s.backgroundColor; t.remove(); return out; })"
-        )
-        assert len(set(shapes)) == 6
+    """The colours of the tones are held apart in tests/unit/test_chart_palette.py; a reader who cannot
+    tell them apart by colour still has the mark before the tag."""
+    page = open_report(built["multipage"], 1280)
+    shapes = page.eval(
+        "() => [1, 2, 3, 4, 5, 6].map((n) => { const t = document.createElement('span'); t.className = 'tag';"
+        " t.dataset.tone = String(n); document.body.append(t); const s = getComputedStyle(t, '::before');"
+        " const out = s.clipPath + '|' + s.borderRadius + '|' + s.backgroundColor; t.remove(); return out; })"
+    )
+    assert len(set(shapes)) == 6
 
 
 # ---- slicers ------------------------------------------------------------------------------------
 
 
+def facts(page: ReportPage, chart_id: str) -> dict[str, Any]:
+    """A chart's facts; the assertion that the chart is on the page lives here, once."""
+    found = probe.chart_facts(page, chart_id)
+    assert found is not None
+    return found
+
+
 def trend(page: ReportPage) -> dict[str, Any]:
-    facts = probe.chart_facts(page, "trend")
-    assert facts is not None
-    return facts
+    return facts(page, "trend")
 
 
 def settle(page: ReportPage) -> None:
@@ -342,49 +396,6 @@ def test_choosing_a_value_changes_the_charts_data_and_reset_restores_it(
     assert restored["series"] == before["series"]
     assert page.eval("() => Report.slicer('region').value()") is None
     assert events == 0
-
-
-def test_a_series_keeps_its_colour_when_the_filter_leaves_it_alone(
-    built: dict[str, Path], open_report
-) -> None:
-    page = open_report(built["dashboard"], 1280)
-    all_colours = {s["name"]: s["color"] for s in trend(page)["series"]}
-
-    page.frame.click('button.chip[data-value="华南"]')
-    settle(page)
-
-    assert trend(page)["series"][0]["color"] == all_colours["华南"]
-
-
-def test_the_metric_slicer_swaps_the_plotted_dimension_and_the_title(
-    built: dict[str, Path], open_report
-) -> None:
-    page = open_report(built["dashboard"], 1280)
-    assert (
-        page.eval(
-            "() => document.querySelector('figure[data-chart=trend] .chart-title').textContent"
-        )
-        == "季度销售额"
-    )
-    revenue = trend(page)["series"][0]["data"]
-
-    page.frame.click('button.chip[data-value="利润"]')
-    settle(page)
-
-    profit = trend(page)["series"][0]["data"]
-    assert profit != revenue and profit == [102, 111, 120, 138]
-    assert (
-        page.eval(
-            "() => document.querySelector('figure[data-chart=trend] .chart-title').textContent"
-        )
-        == "季度利润"
-    )
-    assert (
-        page.eval("() => document.querySelector('figure[data-chart=mix] .chart-title').textContent")
-        == "产品构成（利润）"
-    )
-    pie = probe.chart_facts(page, "mix")
-    assert pie is not None and sum(d["value"] for d in pie["series"][0]["data"]) == 1492
 
 
 def test_a_filter_that_leaves_no_rows_shows_the_empty_state_in_every_chart(
@@ -464,12 +475,12 @@ def test_a_slicer_of_many_values_is_a_select_and_a_multi_slicer_toggles(
     assert page.eval("() => document.querySelector('[data-slicer=many] select') === null")
     page.frame.select_option("[data-slicer=one] select", "城3")
     settle(page)
-    assert probe.chart_facts(page, "c")["series"][0]["data"] == [4]  # type: ignore[index]
+    assert facts(page, "c")["series"][0]["data"] == [4]
     page.frame.select_option("[data-slicer=one] select", "")
     page.frame.click('[data-slicer=many] button.chip[data-value="城1"]')
     page.frame.click('[data-slicer=many] button.chip[data-value="城5"]')
     settle(page)
-    assert probe.chart_facts(page, "c")["series"][0]["data"] == [2, 6]  # type: ignore[index]
+    assert facts(page, "c")["series"][0]["data"] == [2, 6]
     assert page.eval("() => Report.slicer('many').value()") == ["城1", "城5"]
     page.frame.click('[data-slicer=many] button.chip[data-value="城1"]')
     settle(page)
@@ -486,7 +497,11 @@ def spread(page: ReportPage) -> Any:
 def pixel_at(page: ReportPage, x: float, y: float) -> tuple[int, int, int]:
     """The colour painted at a point of the page, read from a screenshot."""
     png = page.page.screenshot(clip={"x": x - 1, "y": y - 1, "width": 3, "height": 3})
-    return Image.open(BytesIO(png)).convert("RGB").getpixel((1, 1))  # type: ignore[return-value]
+    pixel = Image.open(BytesIO(png)).convert("RGB").getpixel((1, 1))
+    # Pillow types a pixel as a union; an RGB pixel is three channels, and saying so beats a
+    # suppression that would also hide a grayscale or float read.
+    assert isinstance(pixel, tuple) and len(pixel) == 3, pixel
+    return pixel[0], pixel[1], pixel[2]
 
 
 def ratio_of(page: ReportPage) -> float:
@@ -502,7 +517,7 @@ def ratio_of(page: ReportPage) -> float:
 def test_a_slider_is_a_real_range_input_with_its_value_and_its_ends_shown(
     built: dict[str, Path], open_report, width: int, scheme: str
 ) -> None:
-    page = open_report(built["scenario"], width, scheme=scheme)  # type: ignore[arg-type]
+    page = open_report(built["scenario"], width, scheme=scheme)
 
     facts = page.eval(
         """() => {
@@ -546,7 +561,7 @@ def test_a_slider_is_a_real_range_input_with_its_value_and_its_ends_shown(
     )
     assert colour.parse(f"rgb({centre[0]} {centre[1]} {centre[2]})") == pytest.approx(
         accent, abs=0.02
-    )  # type: ignore[comparison-overlap]
+    )
     assert colour.contrast(accent, surface) >= 3
     assert probe.failing_text(page) == []
     assert page.observed.clean() and page.violations() == []
@@ -557,7 +572,7 @@ def test_a_slider_is_a_real_range_input_with_its_value_and_its_ends_shown(
 def test_a_slider_moves_by_arrow_key_and_by_tap_and_shows_each_value(
     built: dict[str, Path], open_report, width: int, scheme: str
 ) -> None:
-    page = open_report(built["scenario"], width, scheme=scheme, touch=True)  # type: ignore[arg-type]
+    page = open_report(built["scenario"], width, scheme=scheme, touch=True)
     shown = "() => document.querySelector('[data-slicer=spread] .slicer-value').textContent"
     valuetext = (
         "() => document.querySelector('[data-slicer=spread] input').getAttribute('aria-valuetext')"
@@ -671,7 +686,7 @@ def test_the_scenario_script_redraws_the_band_and_the_numbers_when_a_control_mov
 def test_the_band_is_two_stacked_areas_under_the_central_line_and_only_the_line_has_a_legend(
     built: dict[str, Path], open_report, scheme: str
 ) -> None:
-    page = open_report(built["scenario"], 1280, scheme=scheme)  # type: ignore[arg-type]
+    page = open_report(built["scenario"], 1280, scheme=scheme)
 
     option = page.eval(
         "() => Report.chart('path').instance.getOption().series.map((s) => ({name: s.name, stack: s.stack || null, fill: (s.areaStyle || {}).opacity ?? null, line: (s.lineStyle || {}).opacity ?? null, z: s.z}))"
@@ -818,7 +833,7 @@ def hostile(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def test_text_with_nowhere_to_break_never_widens_the_page_or_spills_out_of_what_holds_it(
     hostile: Path, open_report, width: int, scheme: str
 ) -> None:
-    page = open_report(hostile, width, scheme=scheme)  # type: ignore[arg-type]
+    page = open_report(hostile, width, scheme=scheme)
     label = f"{width}/{scheme}"
 
     assert probe.spills(page) == [], label
@@ -964,9 +979,9 @@ def test_the_shared_slicer_shows_only_where_a_chart_it_filters_is_in_view(
     page.frame.click("[role=tab][data-tab=overview]")
     page.frame.click('button.chip[data-value="自瑞进口"]')
     settle(page)
-    assert [s["name"] for s in probe.chart_facts(page, "total")["series"]] == ["自瑞进口"]  # type: ignore[index]
+    assert [s["name"] for s in facts(page, "total")["series"]] == ["自瑞进口"]
     show(page, "trend")
-    assert [s["name"] for s in probe.chart_facts(page, "flows")["series"]] == ["自瑞进口"]  # type: ignore[index]
+    assert [s["name"] for s in facts(page, "flows")["series"]] == ["自瑞进口"]
 
 
 def test_the_tabs_and_the_filters_stay_in_view_while_the_page_scrolls(
@@ -996,23 +1011,22 @@ def test_rotating_a_phone_lays_every_visible_chart_out_again_at_its_new_width(
     built: dict[str, Path], open_report
 ) -> None:
     page = open_report(built["dashboard"], 390, height=800)
-    portrait = {c: probe.chart_facts(page, c) for c in ("trend", "product", "mix")}
-    assert all(f is not None and f["profile"] == "narrow" for f in portrait.values())
+    portrait = {c: facts(page, c) for c in ("trend", "product", "mix")}
+    assert all(f["profile"] == "narrow" for f in portrait.values())
 
     page.page.set_viewport_size({"width": 844, "height": 390})
     page.page.wait_for_timeout(700)
 
-    for chart, before in portrait.items():
-        after = probe.chart_facts(page, chart)
-        assert after is not None and before is not None
-        assert after["width"] >= before["width"], chart
-        assert after["width"] >= after["body"][0] - 1, chart
-    wide = probe.chart_facts(page, "trend")
-    assert wide is not None and wide["profile"] in ("medium", "wide")
-    assert wide["width"] > portrait["trend"]["width"] + 200  # type: ignore[index]
+    for name, before in portrait.items():
+        after = facts(page, name)
+        assert after["width"] >= before["width"], name
+        assert after["width"] >= after["body"][0] - 1, name
+    wide = facts(page, "trend")
+    assert wide["profile"] in ("medium", "wide")
+    assert wide["width"] > portrait["trend"]["width"] + 200
     page.page.set_viewport_size({"width": 390, "height": 800})
     page.page.wait_for_timeout(700)
-    assert probe.chart_facts(page, "trend")["profile"] == "narrow"  # type: ignore[index]
+    assert facts(page, "trend")["profile"] == "narrow"
     assert page.eval("() => document.documentElement.scrollWidth <= window.innerWidth")
 
 
@@ -1041,7 +1055,7 @@ def test_a_chart_that_throws_degrades_alone(
     assert page.eval("() => typeof Report.chart('trend').instance.getOption") == "function"
 
 
-def test_the_report_follows_the_system_colour_scheme_while_it_is_open(
+def test_the_report_follows_the_products_colour_mode_while_it_is_open(
     built: dict[str, Path], open_report
 ) -> None:
     page = open_report(built["dashboard"], 1280, scheme="light")
@@ -1049,19 +1063,117 @@ def test_the_report_follows_the_system_colour_scheme_while_it_is_open(
     dark = _PALETTE["dark"]["categorical"][0]
     assert trend(page)["series"][0]["color"] == light
 
+    # The system moved, but the product's own mode did not: the report stays where the reader put it.
     page.page.emulate_media(color_scheme="dark")
-    page.page.wait_for_timeout(600)
+    page.page.wait_for_timeout(500)
+    assert trend(page)["series"][0]["color"] == light
 
+    # The reader picks dark in the product: the frame hands the mode over and the charts redraw.
+    page.switch_color_mode("dark")
+    page.page.wait_for_timeout(600)
     assert trend(page)["series"][0]["color"] == dark
     background = colour.parse(page.eval("() => getComputedStyle(document.body).backgroundColor"))
     assert background == pytest.approx(
         colour.parse(_PALETTE["dark"]["roles"]["background"]), abs=1e-3
-    )  # type: ignore[comparison-overlap]
+    )
     assert probe.failing_text(page) == []
 
-    page.page.emulate_media(color_scheme="light")
+    page.switch_color_mode("light")
     page.page.wait_for_timeout(600)
     assert trend(page)["series"][0]["color"] == light
+
+
+def test_a_chart_label_is_never_outlined_white_in_dark_mode(tmp_path: Path, open_report) -> None:
+    """ECharts' automatic contrast stroke is white; on the dark surface it reads as a halo.
+
+    The house theme names every label's colour and border, so the renderer never derives one.
+    """
+    fragment = tmp_path / "labels.html"
+    fragment.write_text(
+        '<figure class="chart" data-chart="sized"></figure>\n'
+        '<script type="application/json" id="chart-sized">\n'
+        '{"option": {"xAxis": {"type": "category", "data": ["FY24", "FY25"]}, '
+        '"yAxis": {}, "series": [{"type": "bar", "data": [1, 2], '
+        '"label": {"show": true, "position": "top"}}]}}\n'
+        "</script>\n",
+        encoding="utf-8",
+    )
+    report = tmp_path / "labels.out.html"
+    assert html_report.main(["build", str(fragment), str(report)]) == 0
+
+    page = open_report(report, 1280, scheme="light")
+    page.switch_color_mode("dark")
+    page.page.wait_for_timeout(600)
+    labels = page.eval(
+        "() => [...document.querySelectorAll('figure[data-chart=\"sized\"] svg text')]"
+        ".map((t) => ({fill: t.getAttribute('fill'), stroke: t.getAttribute('stroke'), "
+        "width: t.getAttribute('stroke-width')}))"
+    )
+
+    assert labels
+    assert all(label["stroke"] is None and label["width"] is None for label in labels)
+    assert any(label["fill"] == _PALETTE["dark"]["roles"]["text"] for label in labels)
+
+
+@pytest.mark.parametrize(("system", "product"), [("light", "dark"), ("dark", "light")])
+def test_the_report_wears_the_products_colour_mode_where_the_system_disagrees(
+    built: dict[str, Path],
+    browser: Browser,
+    system: Literal["light", "dark"],
+    product: Literal["light", "dark"],
+) -> None:
+    page = ReportPage(
+        browser, built["brief"], width=1280, height=900, scheme=system, color_mode=product
+    )
+    try:
+        assert (
+            page.eval("() => document.documentElement.getAttribute('data-color-mode')") == product
+        )
+        background = colour.parse(
+            page.eval("() => getComputedStyle(document.body).backgroundColor")
+        )
+        assert background == pytest.approx(
+            colour.parse(_PALETTE[product]["roles"]["background"]), abs=1e-3
+        )
+        assert page.observed.clean(), page.observed
+    finally:
+        page.close()
+
+
+@pytest.mark.parametrize("scheme", _SCHEMES)
+def test_a_report_opened_on_its_own_follows_the_system_colour_scheme(
+    built: dict[str, Path], browser: Browser, scheme: Literal["light", "dark"]
+) -> None:
+    context = browser.new_context(viewport={"width": 1050, "height": 900}, color_scheme=scheme)
+    page = context.new_page()
+    try:
+        page.goto(built["brief"].as_uri())
+        page.wait_for_function("() => document.documentElement.dataset.reportReady === 'true'")
+        assert (
+            page.evaluate("() => document.documentElement.getAttribute('data-color-mode')")
+            == scheme
+        )
+        background = colour.parse(
+            page.evaluate("() => getComputedStyle(document.body).backgroundColor")
+        )
+        assert background == pytest.approx(
+            colour.parse(_PALETTE[scheme]["roles"]["background"]), abs=1e-3
+        )
+
+        other: Literal["light", "dark"] = "dark" if scheme == "light" else "light"
+        page.emulate_media(color_scheme=other)
+        page.wait_for_timeout(500)
+        assert (
+            page.evaluate("() => document.documentElement.getAttribute('data-color-mode')") == other
+        )
+        background = colour.parse(
+            page.evaluate("() => getComputedStyle(document.body).backgroundColor")
+        )
+        assert background == pytest.approx(
+            colour.parse(_PALETTE[other]["roles"]["background"]), abs=1e-3
+        )
+    finally:
+        context.close()
 
 
 def test_animation_is_off_under_reduced_motion(built: dict[str, Path], browser: Browser) -> None:

@@ -14,7 +14,7 @@ except Exception:
 
 if TYPE_CHECKING:
     from .application.application import Application
-    from .application.config import DlightragConfig
+    from .application.config.sections import DlightragConfig
 
 __all__ = ["Application", "DlightragConfig", "create_application", "__version__"]
 
@@ -25,7 +25,7 @@ def __getattr__(name: str) -> Any:
 
         return Application
     if name == "DlightragConfig":
-        from .application.config import DlightragConfig
+        from .application.config.sections import DlightragConfig
 
         return DlightragConfig
     raise AttributeError(name)

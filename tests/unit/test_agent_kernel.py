@@ -9,7 +9,10 @@ from dlightrag.engine.agent.context import ContextContribution, ContextProjector
 from dlightrag.engine.agent.session.entries import UserMessageEntry
 from dlightrag.engine.agent.session.graph import AgentSessionGraph
 from dlightrag.engine.agent.session.ids import EntryId, SessionId
-from dlightrag.engine.agent.tools import AgentTool, ToolResult
+from dlightrag.engine.agent.tools.contracts import (
+    AgentTool,
+    ToolResult,
+)
 from dlightrag.engine.agent.tools.registry import DuplicateToolError, ToolRegistry
 
 

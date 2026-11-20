@@ -7,11 +7,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from dlightrag.engine.rag.retrieval import RetrievalResult
 from dlightrag.engine.rag.retrieval.federation import (
     FederationMergePolicy,
     federated_retrieve,
     merge_results,
+)
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalResult,
 )
 
 

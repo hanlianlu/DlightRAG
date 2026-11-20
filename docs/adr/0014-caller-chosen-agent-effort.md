@@ -6,6 +6,8 @@ One Answer request may name the effort its own answering agent runs at, from the
 
 Accepted and implemented. Level names, request field, bootstrap offer, pinning, and the composer control landed together; `docs/interfaces.md` and `docs/configuration.md` are revised with it.
 
+Revised in part by [ADR 0042](0042-runtime-policies-are-read-at-the-door-and-pinned-into-the-run.md): a Run is also pinned to a ceiling an administrator's `agent_effort_ceiling` policy set for its caller, and its child agents run no higher than it. A child still runs at the level its own role was configured with, and a caller's choice still reaches only the Run's own agent; what changed is that a configured level above the ceiling is lowered to it.
+
 ## Context
 
 `agentic_reasoning` is deployment configuration owned by `models.chat.roles.<role>` ([ADR 0006](0006-configuration-ownership-and-deployment-bindings.md)): one level per role, fixed at startup, with `reasoning` inheritance and an explicit `null` disabling typed agentic reasoning. Every caller therefore shares one effort, even though the cost/latency of a Research answer is a per-question decision — a quick factual lookup and a long multi-source investigation are submitted from the same composer.

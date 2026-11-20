@@ -19,7 +19,10 @@ from dlightrag.engine.answer.excerpts import (
     source_handle,
 )
 from dlightrag.engine.answer.images import AnswerImageBudget
-from dlightrag.engine.rag.retrieval import ContextRow, RetrievalContexts
+from dlightrag.engine.rag.retrieval.models import ContextRow
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalContexts,
+)
 
 _NO_KG = "No knowledge graph context available."
 

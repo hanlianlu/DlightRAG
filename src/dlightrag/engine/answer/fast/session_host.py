@@ -357,7 +357,7 @@ class FastSessionHost:
     ) -> TransactionCommit:
         """CAS one projection against the exact snapshot it was prepared from.
 
-        ``call`` is the summarizer call's record, committed with the entry (ADR 0041).
+        ``call`` is the summarizer call's record, committed with the entry (ADR 0043).
         """
         if snapshot.session_id != session_id:
             raise ValueError("Fast compaction snapshot belongs to another Session")
@@ -505,8 +505,8 @@ class FastSessionHost:
             stop_reason="stop",
             # An Entry records the counters themselves: the caller may hand over the
             # Run's usage record (counters under `usage_details`, with child and
-            # inclusive breakdowns beside them), and a reader that took that record for
-            # the provider's payload used to fail the next Run while assembling turn 0.
+            # inclusive breakdowns beside them), and a reader that takes that record for
+            # the provider's payload fails the next Run while assembling turn 0.
             usage=usage_counters(usage),
             cost=cost,
             call=call,

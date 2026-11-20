@@ -7,15 +7,17 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from dlightrag.adapters.http.errors import error_type_for_status, install_error_handlers
-from dlightrag.application.access import AccessDeniedError
+from dlightrag.application.access.control import AccessDeniedError
+from dlightrag.application.answer_runs.service import ActiveRunLimitError
 from dlightrag.application.errors import (
     ApplicationClosedError,
     CorpusUnavailableError,
     StorageSchemaError,
     WorkspaceWriteFencedError,
 )
-from dlightrag.application.memory import MemoryDisabledError
+from dlightrag.application.memory.errors import MemoryDisabledError
 from dlightrag.application.runs import IdempotencyKeyConflict, RunAdmissionLimitExceededError
+from dlightrag.engine.answer.errors import ACTIVE_RUN_LIMIT_MESSAGE
 
 
 @pytest.mark.parametrize(
@@ -67,6 +69,17 @@ def _client(failure: BaseException) -> TestClient:
             {
                 "detail": "Deployment-wide nonterminal admission limit reached",
                 "error_type": "unavailable",
+            },
+        ),
+        (
+            # The caller's own limit, not the deployment's: a client retries once one of its
+            # Answers has ended, and tells it from an outage by the status and the kind.
+            ActiveRunLimitError(3),
+            429,
+            {
+                "detail": ACTIVE_RUN_LIMIT_MESSAGE,
+                "error_type": "unavailable",
+                "error_kind": "active_run_limit",
             },
         ),
         (

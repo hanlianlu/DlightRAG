@@ -24,7 +24,7 @@ class ExternalAccess:
 
 
 @dataclass(frozen=True, slots=True)
-class WorkspaceAccess:
+class AgentspaceAccess:
     """An operation, such as Bash, that may touch any workspace path.
 
     Workspace-wide access conflicts with path reads/writes/searches but not
@@ -33,7 +33,7 @@ class WorkspaceAccess:
     """
 
 
-type ToolAccess = PathAccess | ExternalAccess | WorkspaceAccess
+type ToolAccess = PathAccess | ExternalAccess | AgentspaceAccess
 
 
 class AccessScheduler:
@@ -62,7 +62,7 @@ class AccessScheduler:
                 self._changed.notify_all()
 
     def _conflicts(self, access: ToolAccess) -> bool:
-        if isinstance(access, WorkspaceAccess):
+        if isinstance(access, AgentspaceAccess):
             return (
                 self._workspace or bool(self._writers) or bool(self._readers) or self._searches > 0
             )
@@ -81,7 +81,7 @@ class AccessScheduler:
         return access.path in self._writers
 
     def _acquire(self, access: ToolAccess) -> None:
-        if isinstance(access, WorkspaceAccess):
+        if isinstance(access, AgentspaceAccess):
             self._workspace = True
             return
         if isinstance(access, ExternalAccess):
@@ -95,7 +95,7 @@ class AccessScheduler:
         self._readers[access.path] = self._readers.get(access.path, 0) + 1
 
     def _release(self, access: ToolAccess) -> None:
-        if isinstance(access, WorkspaceAccess):
+        if isinstance(access, AgentspaceAccess):
             self._workspace = False
             return
         if isinstance(access, ExternalAccess):
@@ -115,7 +115,7 @@ class AccessScheduler:
 
 __all__ = [
     "AccessScheduler",
-    "WorkspaceAccess",
+    "AgentspaceAccess",
     "ExternalAccess",
     "PathAccess",
     "ToolAccess",

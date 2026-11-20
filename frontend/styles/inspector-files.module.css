@@ -12,7 +12,7 @@
     gap: var(--space-tight);
     justify-content: space-between;
     padding: var(--space-tight) var(--space-component);
-    transition: background 0.1s;
+    transition: background var(--duration-instant);
 }
 
 .file-item:hover {
@@ -45,7 +45,7 @@
     justify-content: center;
     opacity: 0.45;
     padding: 0;
-    transition: all 0.15s;
+    transition: opacity var(--duration-control), background var(--duration-control), color var(--duration-control);
     width: var(--size-button);
 }
 
@@ -144,21 +144,21 @@
     border-top-color: var(--color-progress-fill);
     border-radius: var(--radius-circle);
     flex-shrink: 0;
-    animation: spin 0.7s linear infinite;
+    animation: var(--duration-spin) spin linear infinite;
 }
 
 @keyframes spin {
     to { transform: rotate(360deg); }
 }
 
-@keyframes spinner-pulse {
-    0%, 100% { opacity: 0.2; }
-    50% { opacity: 1; }
-}
-
+/* A reader who asked for no motion gets the spinner breathing in place of turning. */
 @media (prefers-reduced-motion: reduce) {
     .spinner {
-        animation: spinner-pulse 1.2s ease-in-out infinite;
+        --pulse-mid-opacity: 1;
+        --pulse-mid-scale: 1;
+        --pulse-start-opacity: 0.2;
+
+        animation: var(--duration-pulse) global(dl-pulse) ease-in-out infinite;
     }
 }
 
@@ -172,7 +172,7 @@
     color: var(--color-text-muted);
     cursor: pointer;
     margin-bottom: var(--space-related);
-    transition: border-color 0.2s, background 0.2s;
+    transition: border-color var(--duration-overlay), background var(--duration-overlay);
 }
 
 .upload-zone-file-action {
@@ -217,7 +217,7 @@
     text-decoration: underline;
     text-decoration-color: transparent;
     text-underline-offset: 0.2em;
-    transition: color 0.15s, text-decoration-color 0.15s;
+    transition: color var(--duration-control), text-decoration-color var(--duration-control);
 }
 
 .upload-folder-action:hover,

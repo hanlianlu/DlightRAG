@@ -100,10 +100,13 @@ def test_memory_compose_healthcheck_uses_configured_database_identity() -> None:
     assert 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"' in compose
 
 
-def test_mineru_template_defaults_to_cross_platform_core() -> None:
-    template = (_ROOT / ".env.mineru.example").read_text(encoding="utf-8")
+def test_mineru_template_lets_the_installer_derive_the_extras() -> None:
+    """An active line here would override the platform derivation, so the template has
+    none: copying it verbatim is safe on Apple Silicon and elsewhere alike."""
+    template = (_ROOT / "packages" / "mineru" / ".env.example").read_text(encoding="utf-8")
     active = [line for line in template.splitlines() if line.startswith("MINERU_INSTALL_EXTRAS=")]
-    assert active == ["MINERU_INSTALL_EXTRAS=core"]
+    assert active == []
+    assert "# MINERU_INSTALL_EXTRAS=core,mlx" in template
     assert "# MINERU_TITLE_AIDED_MODEL=deepseek-flash" in template
     assert "# MINERU_TITLE_AIDED_MODEL=deepseek-v4.1-flash" not in template
 
@@ -159,14 +162,14 @@ def test_llm_azure_requires_user_base_url(wiz):
 def test_known_llm_resolves_capacity_from_shared_catalog(wiz):
     block, _ = wiz.resolve_llm_choice(
         "OpenRouter",
-        model="google/gemini-3.8-flash",
+        model="google/gemini-4-hydrogen",
         base_url=None,
     )
 
     profile = wiz.catalog_model_profile(block)
 
     assert profile["context_window_tokens"] == 1_048_576
-    assert profile["max_output_tokens"] == 65_536
+    assert profile["max_output_tokens"] == 943_718
 
 
 def test_deepseek_default_resolves_capacity_from_shared_catalog(wiz):
@@ -320,14 +323,6 @@ def test_ask_model_returns_none_for_unauthenticated_local_provider(wiz):
 
 
 # --- Task 3: config.yaml writer -------------------------------------------
-def test_write_config_rejects_legacy_schema_with_actionable_message(wiz, tmp_path):
-    src = tmp_path / "config.yaml"
-    src.write_text("llm:\n  default:\n    model: old\n", encoding="utf-8")
-
-    with pytest.raises(ValueError, match="3.0 nine-section schema"):
-        wiz.write_config_yaml(src, llm_default={"model": "new"})
-
-
 def test_write_config_rejects_explicit_yaml_1_1(wiz, tmp_path):
     src = tmp_path / "config.yaml"
     src.write_text("%YAML 1.1\n---\nmodels: {}\n", encoding="utf-8")
@@ -376,7 +371,7 @@ def test_write_config_preserves_comments_and_updates(wiz, tmp_path):
         "execution_environment": "trust",
         "workspace_root": None,
     }
-    from dlightrag.application.config import DlightragConfig
+    from dlightrag.application.config.sections import DlightragConfig
 
     generated = DlightragConfig.model_validate(data)
     assert generated.answer.agent.connections.call_timeout == 60
@@ -797,7 +792,7 @@ def test_models_step_custom_replaces_roles_and_writes_role_env(wiz, tmp_path, mo
         [
             "Custom · separate extraction/keyword models",
             "OpenRouter",
-            "google/gemini-3.8-flash",
+            "google/gemini-4-hydrogen",
             "",
             "sk-llm",
             "DeepSeek",
@@ -1532,6 +1527,7 @@ def test_read_config_summary_masks_secrets_and_extracts(wiz, tmp_path):
         "Rerank": False,
         "Exa": False,
         "Tavily": False,
+        "DeepSeek": False,
     }
     assert s["web_research"] == {
         "direct_url_read": True,
@@ -1703,60 +1699,6 @@ def test_change_models_only(wiz, monkeypatch):
     assert parser == []
 
 
-def test_legacy_web_settings_migrate_to_exa(wiz, tmp_path) -> None:
-    env_path = tmp_path / ".env"
-    env_path.write_text(
-        "DLIGHTRAG_ANSWER__WEB_SEARCH__API_KEY=legacy-key\nOTHER=value\n",
-        encoding="utf-8",
-    )
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text("answer:\n  web_search:\n    api_key: null\n", encoding="utf-8")
-
-    assert wiz.legacy_web_settings_present(config_path=config_path, env_path=env_path)
-    assert wiz.migrate_legacy_web_settings(config_path=config_path, env_path=env_path)
-    assert not wiz.legacy_web_settings_present(config_path=config_path, env_path=env_path)
-    env_text = env_path.read_text(encoding="utf-8")
-    assert "DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEY=legacy-key" in env_text
-    assert "WEB_SEARCH" not in env_text
-    data = wiz._yaml().load(config_path)
-    assert data["answer"]["web_sources"]["exa"]["api_key"] is None
-    assert "web_search" not in data["answer"]
-
-
-def test_legacy_inline_web_secret_moves_to_env_with_backups(wiz, tmp_path) -> None:
-    env_path = tmp_path / ".env"
-    env_path.write_text("OTHER=value\n", encoding="utf-8")
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text(
-        "answer:\n  web_search:\n    api_key: inline-secret\n",
-        encoding="utf-8",
-    )
-
-    assert wiz.migrate_legacy_web_settings(config_path=config_path, env_path=env_path)
-
-    assert "DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEY=inline-secret" in (
-        env_path.read_text(encoding="utf-8")
-    )
-    data = wiz._yaml().load(config_path)
-    assert data["answer"]["web_sources"]["exa"]["api_key"] is None
-    assert list(tmp_path.glob("config.yaml.bak-*"))
-    assert list(tmp_path.glob(".env.bak-*"))
-
-
-def test_commented_legacy_web_key_does_not_trigger_migration(wiz, tmp_path) -> None:
-    env_path = tmp_path / ".env"
-    env_path.write_text(
-        "# DLIGHTRAG_ANSWER__WEB_SEARCH__API_KEY=example-only\n",
-        encoding="utf-8",
-    )
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text("answer: {}\n", encoding="utf-8")
-
-    assert not wiz.legacy_web_settings_present(config_path=config_path, env_path=env_path)
-    assert not wiz.migrate_legacy_web_settings(config_path=config_path, env_path=env_path)
-    assert "WEB_SEARCH" in env_path.read_text(encoding="utf-8")
-
-
 def test_web_setup_writes_independent_provider_orders(wiz, tmp_path, monkeypatch) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text("answer: {}\n", encoding="utf-8")
@@ -1772,6 +1714,7 @@ def test_web_setup_writes_independent_provider_orders(wiz, tmp_path, monkeypatch
             wiz.WEB_INDEPENDENT,
             wiz.WEB_TAVILY,
             wiz.WEB_EXA,
+            False,
             "exa-key",
             "tavily-key",
         ]
@@ -1786,6 +1729,7 @@ def test_web_setup_writes_independent_provider_orders(wiz, tmp_path, monkeypatch
     env_text = env_path.read_text(encoding="utf-8")
     assert "DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEY=exa-key" in env_text
     assert "DLIGHTRAG_ANSWER__WEB_SOURCES__TAVILY__API_KEY=tavily-key" in env_text
+    assert "DEEPSEEK" not in env_text
     assert list(tmp_path.glob("config.yaml.bak-*"))
     assert list(tmp_path.glob(".env.bak-*"))
 
@@ -1810,12 +1754,190 @@ def test_web_setup_rolls_back_config_and_env_when_validation_fails(
 
     with pytest.raises(ValueError, match="invalid"):
         wiz.run_web_research_step(
-            _ScriptedPrompter([wiz.WEB_EXA, "exa-key"]),
+            _ScriptedPrompter([wiz.WEB_EXA, False, "exa-key"]),
             optional=False,
         )
 
     assert config_path.read_bytes() == config_before
     assert env_path.read_bytes() == env_before
+
+
+_DEEPSEEK_WEB_KEY = "DLIGHTRAG_ANSWER__WEB_SOURCES__DEEPSEEK__API_KEY"
+
+
+def _web_setup_files(
+    wiz, tmp_path, monkeypatch, *, config: str = "answer: {}\n", env: str = ""
+) -> tuple:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(config, encoding="utf-8")
+    env_path = tmp_path / ".env"
+    env_path.write_text(env, encoding="utf-8")
+    monkeypatch.setattr(wiz, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(wiz, "ENV_PATH", env_path)
+    monkeypatch.setattr(wiz, "ENV_EXAMPLE_PATH", tmp_path / "missing")
+    monkeypatch.setattr(wiz, "validate_config", lambda: None)
+    return config_path, env_path
+
+
+_DEEPSEEK_MODELS_CONFIG = (
+    "models:\n"
+    "  chat:\n"
+    "    default:\n"
+    "      provider: openai\n"
+    "      model: glm\n"
+    "      base_url: https://openrouter.ai/api/v1\n"
+    "    roles:\n"
+    "      extract:\n"
+    "        provider: openai\n"
+    "        model: deepseek-flash\n"
+    "        base_url: https://api.deepseek.com\n"
+    "      query:\n"
+    "        provider: openai\n"
+    "        model: deepseek-flash\n"
+    "        base_url: https://api.deepseek.com\n"
+)
+
+
+def test_web_setup_adds_deepseek_last_with_the_model_key_reused(wiz, tmp_path, monkeypatch) -> None:
+    config_path, env_path = _web_setup_files(
+        wiz,
+        tmp_path,
+        monkeypatch,
+        config=_DEEPSEEK_MODELS_CONFIG,
+        env=(
+            "DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY=sk-openrouter\n"
+            # The extract role has no key of its own, so it runs on the default model.
+            "DLIGHTRAG_MODELS__CHAT__ROLES__EXTRACT__API_KEY=\n"
+            "DLIGHTRAG_MODELS__CHAT__ROLES__QUERY__API_KEY=sk-deepseek-model\n"
+        ),
+    )
+    prompter = _ScriptedPrompter(
+        [wiz.WEB_BOTH, wiz.WEB_COMMON_EXA, True, "exa-key", "tavily-key", True]
+    )
+
+    assert wiz.run_web_research_step(prompter, optional=False)
+
+    data = wiz._yaml().load(config_path)["answer"]["web_sources"]
+    assert data["search_providers"] == ["exa", "tavily", "deepseek"]
+    assert data["extract_providers"] == ["exa", "tavily", "deepseek"]
+    assert data["deepseek"]["api_key"] is None
+    env_text = env_path.read_text(encoding="utf-8")
+    assert f"{_DEEPSEEK_WEB_KEY}=sk-deepseek-model" in env_text
+    # Reusing copies the model's key beside it and leaves the model's own entry as it was.
+    assert "DLIGHTRAG_MODELS__CHAT__ROLES__QUERY__API_KEY=sk-deepseek-model" in env_text
+
+
+def test_web_setup_asks_for_a_deepseek_key_when_no_model_key_is_reusable(
+    wiz, tmp_path, monkeypatch
+) -> None:
+    # The default model is not on DeepSeek, and the DeepSeek role's key is blank.
+    config_path, env_path = _web_setup_files(
+        wiz,
+        tmp_path,
+        monkeypatch,
+        config=_DEEPSEEK_MODELS_CONFIG,
+        env=(
+            "DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY=sk-openrouter\n"
+            "DLIGHTRAG_MODELS__CHAT__ROLES__EXTRACT__API_KEY=\n"
+        ),
+    )
+    prompter = _ScriptedPrompter([wiz.WEB_TAVILY, True, "tavily-key", "ds-typed-key"])
+
+    assert wiz.run_web_research_step(prompter, optional=False)
+
+    data = wiz._yaml().load(config_path)["answer"]["web_sources"]
+    assert data["search_providers"] == ["tavily", "deepseek"]
+    assert data["extract_providers"] == ["tavily", "deepseek"]
+    assert f"{_DEEPSEEK_WEB_KEY}=ds-typed-key" in env_path.read_text(encoding="utf-8")
+
+
+def test_web_setup_asks_for_a_deepseek_key_when_the_model_key_is_not_reused(
+    wiz, tmp_path, monkeypatch
+) -> None:
+    config_path, env_path = _web_setup_files(
+        wiz,
+        tmp_path,
+        monkeypatch,
+        config=_DEEPSEEK_MODELS_CONFIG,
+        env="DLIGHTRAG_MODELS__CHAT__ROLES__QUERY__API_KEY=sk-deepseek-model\n",
+    )
+    prompter = _ScriptedPrompter([wiz.WEB_EXA, True, "exa-key", False, "ds-web-key"])
+
+    assert wiz.run_web_research_step(prompter, optional=False)
+
+    env_text = env_path.read_text(encoding="utf-8")
+    assert f"{_DEEPSEEK_WEB_KEY}=ds-web-key" in env_text
+    assert "sk-deepseek-model" in env_text.replace(f"{_DEEPSEEK_WEB_KEY}=ds-web-key", "")
+    data = wiz._yaml().load(config_path)["answer"]["web_sources"]
+    assert data["search_providers"] == ["exa", "deepseek"]
+
+
+def test_web_setup_without_deepseek_removes_a_stale_deepseek_key(
+    wiz, tmp_path, monkeypatch
+) -> None:
+    config_path, env_path = _web_setup_files(
+        wiz, tmp_path, monkeypatch, env=f"{_DEEPSEEK_WEB_KEY}=old\n"
+    )
+
+    assert wiz.run_web_research_step(
+        _ScriptedPrompter([wiz.WEB_EXA, False, "exa-key"]), optional=False
+    )
+
+    data = wiz._yaml().load(config_path)["answer"]["web_sources"]
+    assert data["search_providers"] == ["exa"]
+    assert _DEEPSEEK_WEB_KEY not in env_path.read_text(encoding="utf-8")
+
+
+def test_disabling_web_research_does_not_offer_deepseek(wiz, tmp_path, monkeypatch) -> None:
+    config_path, _env_path = _web_setup_files(wiz, tmp_path, monkeypatch)
+
+    # Any further question would run the scripted answers dry.
+    assert wiz.run_web_research_step(_ScriptedPrompter([wiz.WEB_DISABLE]), optional=False)
+
+    data = wiz._yaml().load(config_path)["answer"]["web_sources"]
+    assert data["search_providers"] == []
+    assert data["extract_providers"] == []
+
+
+def test_skipping_web_research_does_not_offer_deepseek(wiz, tmp_path, monkeypatch) -> None:
+    _web_setup_files(wiz, tmp_path, monkeypatch)
+
+    assert not wiz.run_web_research_step(_ScriptedPrompter([wiz.WEB_SKIP]), optional=True)
+
+
+def test_web_setup_with_deepseek_rolls_back_when_validation_fails(
+    wiz, tmp_path, monkeypatch
+) -> None:
+    config_path, env_path = _web_setup_files(wiz, tmp_path, monkeypatch, env="OTHER=value\n")
+    config_before, env_before = config_path.read_bytes(), env_path.read_bytes()
+    monkeypatch.setattr(
+        wiz, "validate_config", lambda: (_ for _ in ()).throw(ValueError("invalid"))
+    )
+
+    with pytest.raises(ValueError, match="invalid"):
+        wiz.run_web_research_step(
+            _ScriptedPrompter([wiz.WEB_EXA, True, "exa-key", "ds-key"]), optional=False
+        )
+
+    assert config_path.read_bytes() == config_before
+    assert env_path.read_bytes() == env_before
+
+
+def test_the_summary_reports_the_deepseek_web_key_without_its_value(wiz, tmp_path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("answer: {}\n", encoding="utf-8")
+    env_path = tmp_path / ".env"
+    env_path.write_text(f"{_DEEPSEEK_WEB_KEY}=ds-secret\n", encoding="utf-8")
+
+    summary = wiz.read_config_summary(config_path, env_path)
+
+    assert summary["keys_set"]["DeepSeek"] is True
+    assert summary["web_research"] == {
+        "direct_url_read": True,
+        "search": ["deepseek"],
+        "extract": ["deepseek"],
+    }
+    assert "ds-secret" not in repr(summary)
 
 
 def test_change_parser_only(wiz, monkeypatch):

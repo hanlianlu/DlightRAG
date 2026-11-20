@@ -70,6 +70,23 @@ SETTLE_TERMINATED_RUN_CHILDREN = """cancelled_children AS (
     RETURNING guidance.request_id
 )"""
 
+# A terminal Run releases the Session work slot it was admitted under. The Session is
+# named by the Run's own routing row (the same record that fixed it at acceptance), so a
+# non-answer Run releases nothing. Only this Run's claim is cleared: a slot already
+# re-admitted to a successor is left alone.
+_RELEASE_SESSION_WORK = """
+UPDATE dlightrag_session_work_heads AS heads
+SET active_run_id = NULL,
+    revision = heads.revision + 1,
+    updated_at = NOW()
+FROM dlightrag_answer_run_routing AS routing
+WHERE routing.owner_id = $1
+  AND routing.run_id = $2
+  AND heads.owner_id = routing.owner_id
+  AND heads.session_id = routing.agent_session_id
+  AND heads.active_run_id = $2
+"""
+
 # One fenced terminal transition that also appends the run's single terminal
 # event. Prepared input is cleared on every terminal transition.
 _FINISH_RUN_SQL = f"""
@@ -183,6 +200,7 @@ async def finish_fenced_run(
         )
         if sequence is None:
             return TerminalOutcome(committed=False, status=None, event_sequence=None)
+        await conn.execute(_RELEASE_SESSION_WORK, owner_id, run_id)
         return TerminalOutcome(
             committed=True,
             status=terminal_status,

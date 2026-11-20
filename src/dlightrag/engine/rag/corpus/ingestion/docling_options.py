@@ -15,7 +15,9 @@ devices exclude MPS -- so enrichment hard-fails on Apple Silicon.
 outline numbering and font style. docling-serve defaults it off, and without it
 Docling leaves every heading at level 1, so LightRAG's deliberately faithful IR
 builder collapses every chunk's ``parent_headings`` to the document title alone.
-It is always forwarded: turning it off only degrades the corpus. Needs
+It is always forwarded on the standard pipeline (the VLM pipeline,
+``DOCLING_PIPELINE=vlm``, never receives it): turning it off only degrades the
+corpus. Needs
 docling-serve >= 1.30.0 (docling-jobkit >= 3.3.0); older services accept the
 field and drop it silently. See docs/configuration.md.
 
@@ -55,6 +57,10 @@ def apply_docling_request_options(*, code_formula_preset: str | None = None) -> 
     @wraps(original)
     def patched_build_multipart_data(self: Any) -> dict[str, Any]:
         data = original(self)
+        # LightRAG 1.5.8's VLM pipeline sends no OCR or enrichment fields, and older
+        # servers reject a request that carries more; it infers no heading hierarchy.
+        if getattr(self, "pipeline", None) == "vlm":
+            return data
         if code_formula_preset and self.do_formula_enrichment:
             data.setdefault("code_formula_preset", code_formula_preset)
         data.setdefault("do_pdf_heading_hierarchy", _bool_form(True))

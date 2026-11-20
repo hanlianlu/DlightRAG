@@ -12,7 +12,7 @@ class PathRejected(ValueError):
     """A model path is absolute, escapes the root, or names a special file."""
 
 
-class WorkspaceQuotaExceeded(ValueError):
+class AgentspaceQuotaExceeded(ValueError):
     """A rooted write would exceed the fixed workspace byte or entry limit."""
 
 
@@ -28,5 +28,5 @@ __all__ = [
     "WORKSPACE_MAX_ENTRIES",
     "FullOutputUnavailable",
     "PathRejected",
-    "WorkspaceQuotaExceeded",
+    "AgentspaceQuotaExceeded",
 ]

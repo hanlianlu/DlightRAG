@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import shutil
 import subprocess
@@ -354,6 +355,50 @@ def _compose(
     )
 
 
+def _docker(*args: str) -> subprocess.CompletedProcess[str]:
+    argv = ["docker", *args]
+    return subprocess.run(  # noqa: S603 - fixed docker argv, host ops tool
+        argv,
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _resolved_volume_names(project: str) -> list[str] | str:
+    """Real Docker names of _COMPOSE_VOLUMES as Compose resolves them, or an error message."""
+    config = _compose("config", "--format", "json", project=project)
+    if config.returncode != 0:
+        return f"docker compose config failed: {config.stderr.strip() or config.stdout.strip()}"
+    try:
+        volumes = json.loads(config.stdout)["volumes"]
+        return [str(volumes[key]["name"]) for key in _COMPOSE_VOLUMES]
+    except ValueError, KeyError, TypeError:
+        return f"docker compose config does not resolve every volume in {_COMPOSE_VOLUMES}"
+
+
+def _remove_leftover_volumes(names: list[str], report: ResetReport) -> bool:
+    """Remove the named volumes that `down -v` skipped (no Compose labels) and still exist."""
+    for name in names:
+        inspect = _docker("volume", "inspect", name)
+        if inspect.returncode != 0:
+            if "no such volume" in inspect.stderr.lower():
+                continue
+            report.fail(
+                "compose-down",
+                f"docker volume inspect {name} failed: {inspect.stderr.strip()}",
+            )
+            return False
+        removed = _docker("volume", "rm", name)
+        if removed.returncode != 0:
+            report.fail(
+                "compose-down",
+                f"docker volume rm {name} failed: {removed.stderr.strip() or removed.stdout.strip()}",
+            )
+            return False
+    return True
+
+
 def run_docker_reset(
     target: PostgresTarget,
     report: ResetReport,
@@ -363,6 +408,10 @@ def run_docker_reset(
     """Delete all DlightRAG volumes, start PostgreSQL, and verify exact emptiness."""
     project = compose_project or _DEFAULT_COMPOSE_PROJECT
     report.record("compose", f"project {project}, file {_COMPOSE_FILE}")
+    names = _resolved_volume_names(project)
+    if isinstance(names, str):
+        report.fail("compose-config", names)
+        return
     down = _compose("down", "-v", project=project)
     if down.returncode != 0:
         report.fail(
@@ -370,9 +419,12 @@ def run_docker_reset(
             f"docker compose down -v failed: {down.stderr.strip() or down.stdout.strip()}",
         )
         return
+    # Compose skips a volume without its own labels and still exits 0, so remove it by name.
+    if not _remove_leftover_volumes(names, report):
+        return
     report.record(
         "compose-down",
-        f"deleted volumes {', '.join(_COMPOSE_VOLUMES)}; every service stopped",
+        f"deleted volumes {', '.join(names)}; every service stopped",
     )
 
     up = _compose("up", "-d", "postgres", project=project)

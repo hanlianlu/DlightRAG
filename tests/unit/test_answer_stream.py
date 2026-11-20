@@ -10,6 +10,7 @@ presentation.
 """
 
 import asyncio
+import inspect
 import json
 from collections.abc import AsyncIterator
 from functools import partial
@@ -21,7 +22,7 @@ import dlightrag.adapters.http.browser.answer_events as web_events
 import dlightrag.adapters.http.browser.routes.chat as web_routes
 import dlightrag.adapters.http.rest.routes.runs as rest_routes
 from dlightrag.adapters.http.streaming import answer_stream
-from dlightrag.adapters.http.streaming.answer_stream import follow_run_frames, resume_cursor
+from dlightrag.adapters.http.streaming.answer_stream import follow_frames, resume_cursor
 from dlightrag.application.runs import RunEvent
 from tests.unit.web.answer_run_fixtures import stored_result
 
@@ -32,8 +33,14 @@ _RENDERERS = {
         visual_workspaces=None,
         run_id="019893f4-0000-7000-8000-000000000001",
         run_kind="answer",
+        mask_reader_text=lambda text: text,
     ),
-    "web": partial(web_events.browser_frame, downloadable_workspaces=None, visual_workspaces=None),
+    "web": partial(
+        web_events.browser_frame,
+        downloadable_workspaces=None,
+        visual_workspaces=None,
+        mask_reader_text=lambda text: text,
+    ),
 }
 
 
@@ -89,11 +96,15 @@ async def test_a_quiet_run_keeps_alive_and_still_delivers_the_next_event(
     released = asyncio.Event()
     subscription = _QuietSubscription(released)
 
-    frames = follow_run_frames(subscription.events(), render)
+    frames = follow_frames(subscription.events(), render)
     first = await anext(frames)
     second = await anext(frames)
     released.set()
+    # A keepalive may still land between the release and the event on a busy host; the
+    # contract is that the event arrives, not that nothing precedes it.
     event = await anext(frames)
+    while event == ": keepalive\n\n":
+        event = await anext(frames)
     await frames.aclose()
 
     assert first == second == ": keepalive\n\n"
@@ -109,7 +120,7 @@ async def test_closing_early_detaches_the_subscriber(
     monkeypatch.setattr(answer_stream, "SSE_KEEPALIVE_SECONDS", 0.01)
     subscription = _QuietSubscription()
 
-    frames = follow_run_frames(subscription.events(), render)
+    frames = follow_frames(subscription.events(), render)
     assert await anext(frames) == ": keepalive\n\n"
     await frames.aclose()
 
@@ -122,7 +133,7 @@ async def test_cancelling_a_waiting_subscriber_propagates_and_still_detaches(
 ) -> None:
     monkeypatch.setattr(answer_stream, "SSE_KEEPALIVE_SECONDS", 60.0)
     subscription = _QuietSubscription()
-    frames = follow_run_frames(subscription.events(), render)
+    frames = follow_frames(subscription.events(), render)
     waiting = asyncio.create_task(anext(frames))
 
     await asyncio.sleep(0)
@@ -139,7 +150,7 @@ async def test_the_stream_ends_when_the_run_committed_its_terminal_event(render:
         yield _event(1, "progress", {"phase": "planning"})
         yield _event(2, "done", {"status": "cancelled"})
 
-    frames = [frame async for frame in follow_run_frames(_events(), render)]
+    frames = [frame async for frame in follow_frames(_events(), render)]
 
     assert [frame.split("\n")[0] for frame in frames] == ["id: 1", "id: 2"]
 
@@ -149,15 +160,17 @@ async def test_the_stream_ends_when_the_run_committed_its_terminal_event(render:
 # ---------------------------------------------------------------------------
 
 
-def _done_data(render: Any) -> Any:
+async def _done_data(render: Any) -> Any:
     frame = render(_event(9, "done", {"status": "succeeded", "result": stored_result()}))
+    if inspect.isawaitable(frame):
+        frame = await frame
     assert frame.startswith("id: 9\nevent: done\n")
     return json.loads(frame.split("data: ", 1)[1].strip())
 
 
-def test_rest_serves_the_canonical_result_and_the_browser_serves_presentation() -> None:
-    canonical = _done_data(_RENDERERS["rest"])
-    browser = _done_data(_RENDERERS["web"])
+async def test_rest_serves_the_canonical_result_and_the_browser_serves_presentation() -> None:
+    canonical = await _done_data(_RENDERERS["rest"])
+    browser = await _done_data(_RENDERERS["web"])
 
     assert set(canonical) == {"status", "result"}
     presentation = browser["presentation"]
@@ -178,3 +191,68 @@ def test_rest_serves_the_canonical_result_and_the_browser_serves_presentation() 
     }
     assert presentation["artifacts"] == []
     assert "result" not in browser
+
+
+async def test_both_transports_carry_the_facts_a_settled_tool_reported() -> None:
+    """A step card reads the same structure from a live frame as from the stored transcript."""
+    facts = {
+        "provider": "exa",
+        "hits": 2,
+        "degraded": False,
+        "cost": 0.0123,
+        "sources": [{"url": "https://example.org/a", "domain": "example.org"}],
+    }
+    payload = {
+        "tool_name": "search_web",
+        "call_id": "call-1",
+        "source_index": 0,
+        "outcome": "succeeded",
+        "duration_ms": 812,
+        "facts": facts,
+    }
+
+    frames: list[str] = []
+    for render in _RENDERERS.values():
+        frame = render(_event(7, "tool_end", payload))
+        if inspect.isawaitable(frame):
+            frame = await frame
+        frames.append(frame)
+
+    for frame in frames:
+        assert frame.startswith("id: 7\nevent: tool_end\n")
+        data = json.loads(frame.split("data: ", 1)[1].strip())
+        assert data["facts"] == facts
+        assert data["duration_ms"] == 812
+
+
+async def test_a_tool_event_without_facts_carries_none() -> None:
+    frames: list[str] = []
+    for render in _RENDERERS.values():
+        frame = render(_event(8, "tool_end", {"tool_name": "bash", "call_id": "call-2"}))
+        if inspect.isawaitable(frame):
+            frame = await frame
+        frames.append(frame)
+
+    for frame in frames:
+        data = json.loads(frame.split("data: ", 1)[1].strip())
+        assert "facts" not in data
+
+
+async def test_a_frame_without_a_content_gate_omits_facts() -> None:
+    """The canonical frame never ships a structured fact it could not mask (ADR 0061)."""
+    payload = {
+        "tool_name": "search_web",
+        "call_id": "call-1",
+        "source_index": 0,
+        "outcome": "succeeded",
+        "facts": {"query": "a query a reader's gate could not read"},
+    }
+    frame = rest_routes.run_frame(
+        _event(9, "tool_end", payload),
+        downloadable_workspaces=None,
+        visual_workspaces=None,
+        run_id="019893f4-0000-7000-8000-000000000001",
+        run_kind="answer",
+    )
+    data = json.loads(frame.split("data: ", 1)[1].strip())
+    assert "facts" not in data

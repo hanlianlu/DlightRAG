@@ -17,7 +17,18 @@ from dlightrag.engine.ai.tool_model import ToolModel
 from dlightrag.engine.answer.images import AnswerImagePolicy
 from dlightrag.engine.answer.resources.images import QueryImageDescriber
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
-from dlightrag.engine.answer.web_sources import ExaWebSource, TavilyWebSource, WebSourceService
+from dlightrag.engine.answer.web_sources.deepseek import (
+    DeepSeekWebSource,
+)
+from dlightrag.engine.answer.web_sources.exa import (
+    ExaWebSource,
+)
+from dlightrag.engine.answer.web_sources.service import (
+    WebSourceService,
+)
+from dlightrag.engine.answer.web_sources.tavily import (
+    TavilyWebSource,
+)
 from dlightrag.engine.rag.workspace.lifecycle import await_shared_cleanup
 
 logger = logging.getLogger(__name__)
@@ -33,6 +44,7 @@ class WebSourceRuntimeSettings:
 
     exa_api_key: str | None = field(default=None, repr=False)
     tavily_api_key: str | None = field(default=None, repr=False)
+    deepseek_api_key: str | None = field(default=None, repr=False)
     search_providers: tuple[str, ...] = ()
     extract_providers: tuple[str, ...] = ()
 
@@ -155,11 +167,13 @@ class AnswerModelRuntime:
         if not settings.search_providers and not hosted:
             return None
         if self._web_sources is None:
-            providers: dict[str, ExaWebSource | TavilyWebSource] = {}
+            providers: dict[str, ExaWebSource | TavilyWebSource | DeepSeekWebSource] = {}
             if settings.exa_api_key:
                 providers["exa"] = ExaWebSource(settings.exa_api_key)
             if settings.tavily_api_key:
                 providers["tavily"] = TavilyWebSource(settings.tavily_api_key)
+            if settings.deepseek_api_key:
+                providers["deepseek"] = DeepSeekWebSource(settings.deepseek_api_key)
             self._web_sources = WebSourceService(
                 search_providers=tuple(providers[name] for name in settings.search_providers),
                 extract_providers=tuple(providers[name] for name in hosted),

@@ -48,16 +48,20 @@ from typing import Any
 import httpx
 from pydantic import ValidationError
 
-from dlightrag.adapters.http.client import (
+from dlightrag.adapters.http.client import http as sdk_http
+from dlightrag.adapters.http.client.attachments import (
     AnswerAttachmentUpload,
+)
+from dlightrag.adapters.http.client.client import (
     AnswerResult,
     AnswerRunClient,
+)
+from dlightrag.adapters.http.client.requests import query_image_blocks_from_urls
+from dlightrag.application.corpus_admin.service import ingest_spec_from_payload
+from dlightrag.application.runs import (
     RunCancelledError,
     RunFailedError,
 )
-from dlightrag.adapters.http.client import http as sdk_http
-from dlightrag.adapters.http.client.requests import query_image_blocks_from_urls
-from dlightrag.application.corpus_admin import ingest_spec_from_payload
 from dlightrag.engine.rag.corpus.ingestion.paths import reserved_corpus_name
 
 

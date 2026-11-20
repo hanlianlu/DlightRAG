@@ -36,7 +36,9 @@ const cssModulePlugin = {
 // and maps styles/ imports to those class names, so components render exactly
 // the selectors the stylesheets hold.
 const productStylesPath = '/__product-styles__/';
-const productStyledFiles = ['ui/a11y.browser.test.ts'];
+// Layout, geometry and accessibility tests run there: a test that reads what the stylesheets do belongs to
+// this group, and its file name says `layout` (or is one of the two older names).
+const productStyledFiles = ['ui/a11y.browser.test.ts', 'ui/geometry.browser.test.ts', 'ui/*.layout.browser.test.ts'];
 let productStyles;
 
 /**
@@ -65,7 +67,7 @@ async function buildProductStyles() {
   const {output} = await build({
     configFile: join(process.cwd(), 'vite.config.ts'),
     logLevel: 'error',
-    build: {write: false},
+    build: {write: false, sourcemap: false},
     css: {modules: {getJSON: (file, names) => classNames.set(relative(process.cwd(), file), names)}},
   });
   return {stylesheet: applicationStylesheets(output).join('\n'), classNames};
@@ -73,9 +75,18 @@ async function buildProductStyles() {
 
 const productStylesPlugin = {
   name: 'product-styles',
+  // The build runs while the browsers start, so no test file waits on it against its own timeout. A build
+  // that fails fails every request for its styles, and with them the files that need them; the rejection is
+  // handled here as well, so a run that never asks is not killed by an unhandled one, and the reason is
+  // printed once, where the run starts.
+  serverStart({logger}) {
+    productStyles = buildProductStyles();
+    productStyles.catch((error) => {
+      logger.error(`The product styles did not build: ${error instanceof Error ? error.message : error}`);
+    });
+  },
   async serve(context) {
     if (!context.path.startsWith(productStylesPath)) return undefined;
-    productStyles ??= buildProductStyles();
     const {stylesheet, classNames} = await productStyles;
     const path = context.path.slice(productStylesPath.length);
     if (path === 'style.css') return {body: stylesheet, type: 'css'};
@@ -109,9 +120,10 @@ const browserProducts = (process.env.WTR_BROWSERS ?? 'chromium')
 
 export default {
   port: 7357,
+  // Every browser test runs in exactly one group: here, unless the product-styles group names it.
   files: [
-    'ui/**/*.browser.test.ts',
-    'design-system/**/*.browser.test.ts',
+    '**/*.browser.test.ts',
+    '!node_modules/**',
     ...productStyledFiles.map((file) => `!${file}`),
   ],
   groups: [{name: 'product-styles', files: productStyledFiles, testRunnerHtml: productStylesPage}],

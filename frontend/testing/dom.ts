@@ -58,3 +58,12 @@ export async function linkStyles(urls: readonly string[]): Promise<() => void> {
   })));
   return () => { for (const link of links) link.remove(); };
 }
+
+/** Choose files in a host's file picker the way a reader does: the input's files, then its change. */
+export function chooseFiles(host: ParentNode, files: readonly File[]): void {
+  const input = host.querySelector<HTMLInputElement>('input[type="file"]')!;
+  const transfer = new DataTransfer();
+  for (const file of files) transfer.items.add(file);
+  input.files = transfer.files;
+  input.dispatchEvent(new Event('change', {bubbles: true}));
+}

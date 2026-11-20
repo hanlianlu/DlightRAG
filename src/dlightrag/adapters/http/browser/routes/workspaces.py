@@ -19,20 +19,26 @@ from dlightrag.adapters.http.browser.workspace_models import (
     WebBootstrapWorkspace,
     project_workspace_records,
 )
-from dlightrag.application.access import AccessAction, WorkspaceRecord, owner_id_from_user
-from dlightrag.application.corpus_admin import (
+from dlightrag.application.access.control import AccessAction
+from dlightrag.application.access.principal import (
+    owner_id_from_user,
+)
+from dlightrag.application.access.workspaces import WorkspaceRecord
+from dlightrag.application.corpus_admin.service import workspace_id_for_name
+from dlightrag.application.corpus_admin.workspace_catalog import (
     WORKSPACE_CATALOG_PAGE_DEFAULT_LIMIT,
     WORKSPACE_CATALOG_PAGE_MAX_LIMIT,
     WorkspaceCatalogCursorError,
     WorkspaceCatalogPageRequest,
-    normalize_workspace,
-    workspace_id_for_name,
 )
 from dlightrag.application.errors import ApplicationError
 from dlightrag.engine.answer.client_contracts import ClientContractModel
+from dlightrag.engine.rag.workspace.workspaces import (
+    normalize_workspace,
+)
 
 if TYPE_CHECKING:
-    from dlightrag.application import Application
+    from dlightrag.application.application import Application
 
 logger = logging.getLogger(__name__)
 
@@ -185,7 +191,7 @@ async def create_workspace(
     workspace_name: str = Form(default=""),
 ):
     """Create a workspace, attributed to the caller, and return it as the Web lists it."""
-    from dlightrag.application.corpus_admin import validate_workspace_name
+    from dlightrag.application.corpus_admin.service import validate_workspace_name
 
     application = get_application(request)
 

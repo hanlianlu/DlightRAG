@@ -617,10 +617,10 @@ async def test_the_startup_probe_sends_both_image_requests_and_opens_no_trace(
     assert traced_by_the_probe == ()
     (span,) = otlp_export.spans()
     assert span.name == "embed-text"
+    # An embedding reports the provider's billable total as the prompt, so the
+    # bucket and the provider's own total counter agree and nothing nests.
     assert otlp_export.usage(span) == {"input": 7}
     assert otlp_export.total(span) == 7
-    # The Required attribute of an embeddings span, stated by the call site.
-    assert otlp_export.attributes(span)["gen_ai.provider.name"] == embedder.fingerprint.provider
 
 
 async def test_the_startup_probe_sends_both_requests_at_once_and_a_rejection_ends_both() -> None:

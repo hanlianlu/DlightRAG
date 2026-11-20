@@ -2,7 +2,7 @@
 """Startup and shutdown contract of the local composition root."""
 
 import asyncio
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from typing import Any, cast
 
 import pytest
@@ -11,23 +11,34 @@ from dlightrag._compose import _memory_embedder
 from dlightrag.adapters.postgres.core._pool import pg_pool
 from dlightrag.adapters.postgres.runtime.run_store import PGRunStore
 from dlightrag.adapters.postgres.web.web_conversations import PGWebConversationStore
-from dlightrag.application import Application, ApplicationClosedError
 from dlightrag.application import application as application_module
-from dlightrag.application.access import AllowAllAccessControl
-from dlightrag.application.answer_runs import AnswerService
-from dlightrag.application.application import _ApplicationComponents
-from dlightrag.application.config import DlightragConfig
-from dlightrag.application.corpus_admin import CorpusAdmin
+from dlightrag.application.access.control import (
+    AllowAllAccessControl,
+)
+from dlightrag.application.answer_runs.service import AnswerService
+from dlightrag.application.application import (
+    Application,
+    ApplicationClosedError,
+    _ApplicationComponents,
+)
+from dlightrag.application.config.sections import DlightragConfig
+from dlightrag.application.corpus_admin.service import CorpusAdmin
 from dlightrag.application.errors import StorageSchemaError
 from dlightrag.application.health import ApplicationHealth
-from dlightrag.application.memory import MemoryService
-from dlightrag.application.retrieval import PinnedRetrievalModel, RetrievalService
-from dlightrag.application.retrieval.execution import validate_active_retrieval_input
-from dlightrag.application.settings import model_settings_for_role
-from dlightrag.application.web_conversations import (
-    WebConversationSchemaError,
-    WebConversationService,
+from dlightrag.application.memory.service import MemoryService
+from dlightrag.application.policies.service import (
+    RuntimePolicies,
 )
+from dlightrag.application.privacy import Privacy
+from dlightrag.application.retrieval.execution import (
+    PinnedRetrievalModel,
+    validate_active_retrieval_input,
+)
+from dlightrag.application.retrieval.service import RetrievalService
+from dlightrag.application.settings.projections import model_settings_for_role
+from dlightrag.application.skills import identity_protection
+from dlightrag.application.web_conversations.models import WebConversationSchemaError
+from dlightrag.application.web_conversations.service import WebConversationService
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import (
@@ -52,7 +63,7 @@ from dlightrag.engine.runtime.errors import (
     IncompatibleActiveRunError,
     RunSchemaError,
 )
-from tests.config_helpers import mutate_config
+from tests.support.config_helpers import mutate_config
 
 _CLOSE_ORDER = [
     "close:corpora",
@@ -313,6 +324,14 @@ class _Maintenance(_Collaborator):
         self._record("start")
 
 
+class _SessionMemoryPasses(_Collaborator):
+    def __init__(self, recorder: _Recorder) -> None:
+        super().__init__(recorder, "session_memory_passes")
+
+    def start(self) -> None:
+        self._record("start")
+
+
 class _Parts:
     """The fakes behind one Application, addressable by the test that wired them."""
 
@@ -333,17 +352,22 @@ class _Parts:
         self.retrieval = _Retrieval(self.recorder)
         self.runs = object()
         self.answers = object()
+        self.policies = object()
+        self.privacy = object()
         self.memory = _Memory(self.recorder)
         self.agent_accounts = object()
+        self.goals = object()
         self.web_conversations = _WebConversations(self.recorder)
         self.search_toolchain: _SearchToolchain | None = None
         self.agent_account_maintenance: _Maintenance | None = None
+        self.session_memory_passes: _SessionMemoryPasses | None = None
 
     def application(
         self,
         config: DlightragConfig,
         *,
         web_enabled: bool = True,
+        recover_goal_rounds: Callable[[], Awaitable[None]] | None = None,
     ) -> Application:
         def current_fingerprint(role: str) -> ModelInvocationFingerprint:
             return model_invocation_fingerprint(model_settings_for_role(config, cast(Any, role)))
@@ -384,17 +408,34 @@ class _Parts:
                 validate_active_runs=validate_active_runs,
                 corpora=cast(CorpusAdmin, self.corpora),
                 access_control=AllowAllAccessControl(),
+                policies=cast(RuntimePolicies, self.policies),
+                privacy=cast(Privacy, self.privacy),
                 retrieval=cast(RetrievalService, self.retrieval),
                 runs=cast(Any, self.runs),
                 answers=cast(AnswerService, self.answers),
+                skill_protection=identity_protection(),
                 memory=cast(MemoryService, self.memory),
                 memory_store=cast(Any, self.memory_store),
                 memory_embedder=cast(Any, self.memory_embedder),
                 web_conversations=cast(WebConversationService, self.web_conversations),
                 agent_accounts=cast(Any, self.agent_accounts),
+                goals=cast(Any, self.goals),
                 search_toolchain=cast(Any, self.search_toolchain),
                 agent_account_maintenance=cast(Any, self.agent_account_maintenance),
                 close_agent_execution=self.agent_execution.aclose,
+                **(
+                    {"recover_goal_rounds": recover_goal_rounds}
+                    if recover_goal_rounds is not None
+                    else {}
+                ),
+                **(
+                    {
+                        "start_session_memory_passes": self.session_memory_passes.start,
+                        "close_session_memory_passes": self.session_memory_passes.aclose,
+                    }
+                    if self.session_memory_passes is not None
+                    else {}
+                ),
             ),
             web_enabled=web_enabled,
         )
@@ -521,6 +562,134 @@ async def test_application_exposes_only_typed_services_and_closes_in_dependency_
     assert application.health.is_closed is True
 
 
+async def test_startup_recovers_active_goal_rounds_after_the_conversations_exist(
+    test_config: DlightragConfig,
+) -> None:
+    """The restart recovery runs in the startup sequence, not on the next human turn."""
+    calls: list[str] = []
+    parts = _Parts()
+
+    async def recover_goal_rounds() -> None:
+        calls.append("recover")
+        parts.recorder.add("goal_recovery")
+
+    application = parts.application(test_config, recover_goal_rounds=recover_goal_rounds)
+
+    await application.astart()
+    try:
+        assert calls == ["recover"]
+        # It needs the coordinator to admit the round and the Web conversations to hold it.
+        ordered = parts.recorder.started()
+        assert ordered.index("coordinator:start") < ordered.index("goal_recovery")
+        assert ordered.index("web_conversations:start_retention") < ordered.index("goal_recovery")
+        assert application.health.is_ready is True
+    finally:
+        await application.aclose()
+
+
+async def test_startup_skips_goal_recovery_when_the_deployment_turns_it_off(
+    test_config: DlightragConfig,
+) -> None:
+    """One process owns the startup scan; a second serving the same database opts out."""
+    calls: list[str] = []
+
+    async def recover_goal_rounds() -> None:
+        calls.append("recover")
+
+    mutate_config(test_config, "deployment.goal_recovery", False)
+    parts = _Parts()
+    application = parts.application(test_config, recover_goal_rounds=recover_goal_rounds)
+
+    await application.astart()
+
+    assert calls == []
+    assert application.health.is_ready is True
+
+
+async def test_a_failing_goal_recovery_never_costs_the_boot(
+    test_config: DlightragConfig,
+) -> None:
+    async def recover_goal_rounds() -> None:
+        raise RuntimeError("the store is down")
+
+    parts = _Parts()
+    application = parts.application(test_config, recover_goal_rounds=recover_goal_rounds)
+
+    await application.astart()
+    try:
+        assert application.health.is_ready is True
+    finally:
+        await application.aclose()
+
+
+async def test_the_recovery_process_rescans_goals_periodically_until_shutdown(
+    test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A settlement task lost with its process is retried by the recovery process's sweep."""
+    monkeypatch.setattr(application_module, "_GOAL_RECOVERY_INTERVAL_SECONDS", 0.01)
+    calls: list[str] = []
+    parts = _Parts()
+
+    async def recover_goal_rounds() -> None:
+        calls.append("recover")
+
+    application = parts.application(test_config, recover_goal_rounds=recover_goal_rounds)
+    await application.astart()
+    try:
+        deadline = asyncio.get_running_loop().time() + 2.0
+        while len(calls) < 3 and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.01)
+        assert len(calls) >= 3, "the startup scan plus at least two periodic sweeps"
+    finally:
+        await application.aclose()
+    settled = len(calls)
+    await asyncio.sleep(0.03)
+    assert len(calls) == settled, "shutdown cancels the sweep"
+
+
+async def test_a_failing_periodic_recovery_pass_never_ends_the_sweep(
+    test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(application_module, "_GOAL_RECOVERY_INTERVAL_SECONDS", 0.01)
+    calls: list[str] = []
+    parts = _Parts()
+
+    async def recover_goal_rounds() -> None:
+        calls.append("recover")
+        if len(calls) > 1:
+            raise RuntimeError("the goal store is down")
+
+    application = parts.application(test_config, recover_goal_rounds=recover_goal_rounds)
+    await application.astart()
+    try:
+        deadline = asyncio.get_running_loop().time() + 2.0
+        while len(calls) < 3 and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.01)
+        assert len(calls) >= 3, "a failed sweep costs one pass, not the loop"
+    finally:
+        await application.aclose()
+
+
+async def test_the_periodic_recovery_never_starts_where_recovery_is_disabled(
+    test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(application_module, "_GOAL_RECOVERY_INTERVAL_SECONDS", 0.01)
+    calls: list[str] = []
+    parts = _Parts()
+
+    async def recover_goal_rounds() -> None:
+        calls.append("recover")
+
+    mutate_config(test_config, "deployment.goal_recovery", False)
+    application = parts.application(test_config, recover_goal_rounds=recover_goal_rounds)
+    await application.astart()
+    try:
+        await asyncio.sleep(0.05)
+        assert calls == []
+    finally:
+        await application.aclose()
+
+
 async def test_agent_account_maintenance_runs_from_the_stores_start_to_the_applications_close(
     test_config: DlightragConfig,
 ) -> None:
@@ -541,6 +710,45 @@ async def test_agent_account_maintenance_runs_from_the_stores_start_to_the_appli
     await application.aclose()
 
     assert parts.recorder.closed()[0] == "close:agent_account_maintenance"
+
+
+async def test_the_session_memory_sweep_starts_last_and_stops_before_the_runs_do(
+    test_config: DlightragConfig,
+) -> None:
+    parts = _Parts()
+    parts.session_memory_passes = _SessionMemoryPasses(parts.recorder)
+    application = parts.application(test_config)
+
+    await application.astart()
+
+    # Last of startup: the stores it reads are initialized and the Run coordinator is claiming.
+    started = parts.recorder.started()
+    assert started[-1] == "session_memory_passes:start"
+    assert started.index("session_memory_passes:start") > started.index("coordinator:start")
+    assert started.index("session_memory_passes:start") > started.index("memory_store:initialize")
+
+    await application.aclose()
+
+    # Closed before the coordinator that schedules passes and before the model runtime they use.
+    closed = parts.recorder.closed()
+    assert closed.index("close:session_memory_passes") < closed.index("close:coordinator")
+    assert closed.index("close:session_memory_passes") < closed.index("close:models")
+    assert closed.count("close:session_memory_passes") == 1
+
+
+async def test_a_startup_that_fails_closes_a_sweep_that_never_started(
+    test_config: DlightragConfig,
+) -> None:
+    parts = _Parts()
+    parts.session_memory_passes = _SessionMemoryPasses(parts.recorder)
+    parts.run_store.initialize_error = RunSchemaError("the schema is wrong")
+    application = parts.application(test_config)
+
+    with pytest.raises(RunSchemaError):
+        await application.astart()
+
+    assert "session_memory_passes:start" not in parts.recorder.started()
+    assert "close:session_memory_passes" in parts.recorder.closed()
 
 
 async def test_close_stops_live_run_producer_before_execution_adapter(

@@ -1,4 +1,4 @@
-#!/app/.venv/bin/python
+#!/usr/bin/env python3
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Build a self-contained interactive HTML report from a fragment of plain HTML.
 
@@ -7,16 +7,23 @@ fragment holds the report's prose, its slicers and pages, and one JSON block per
 checks it, then writes one document with the full ECharts build, the Mineral stylesheet and the
 runtime inlined, which runs inside the Artifact sandbox without a network. ``--preview`` draws
 every chart to PNG through the same code the browser runs, so the author can look before it ships.
+
+The document carries the fragment it was built from, deflated in its head, and ``source`` writes
+that back: an Agent Workspace does not outlive its Run and a Resource cannot be edited, so a later
+turn that must change a report would otherwise have no source to edit.
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import json
 import math
 import re
 import subprocess
 import sys
+import zlib
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
@@ -37,6 +44,12 @@ _SLICER_TYPES = ("filter", "metric", "slider")
 _TOKEN = re.compile(r"\{([^{}|]+)\}")
 _PREVIEW_WIDTHS = (360, 900)
 _PREVIEW_SCALE = {360: 2, 900: 1}
+# The fragment a report was built from rides in the report under this id; `source` reads it back.
+_SOURCE_ID = "report-source"
+# What the embedded block says of itself: its version, how the fragment is encoded, and the digest
+# that proves a round trip. A later version may add a codec; an older reader refuses rather than guesses.
+_SOURCE_FORMAT = 1
+_SOURCE_CODEC = "zlib+base64"
 
 # The series an option can draw from JSON alone (custom needs renderItem, map needs map data).
 _SERIES = echarts_render.SERIES
@@ -59,21 +72,25 @@ _URL_ATTRIBUTES = frozenset(
     "src href action data poster srcset xlink:href formaction ping background".split()
 )
 # What an author script must not touch: each is refused, or throws, inside the sandbox.
+#: Calls the sandbox refuses: (the name the refusal prints, the pattern that matches the call).
+#: The pattern starts at an identifier boundary, so a longer word that happens to end in one —
+#: `prefetch(` is not `fetch(`, `retrieval()` is not `eval(` — is the author's own function, not the
+#: refused API.
 _FORBIDDEN_CALLS = (
-    "localStorage",
-    "sessionStorage",
-    "document.cookie",
-    "fetch(",
-    "XMLHttpRequest",
-    "WebSocket",
-    "window.open",
-    "alert(",
-    "confirm(",
-    "prompt(",
-    "eval(",
-    "new Function",
-    "importScripts",
-    "navigator.sendBeacon",
+    ("localStorage", re.compile(r"(?<![\w$.])localStorage\b")),
+    ("sessionStorage", re.compile(r"(?<![\w$.])sessionStorage\b")),
+    ("document.cookie", re.compile(r"document\s*\.\s*cookie\b")),
+    ("fetch(", re.compile(r"(?<![\w$.])fetch\s*\(")),
+    ("XMLHttpRequest", re.compile(r"(?<![\w$.])XMLHttpRequest\b")),
+    ("WebSocket", re.compile(r"(?<![\w$.])WebSocket\b")),
+    ("window.open", re.compile(r"window\s*\.\s*open\s*\(")),
+    ("alert(", re.compile(r"(?<![\w$.])alert\s*\(")),
+    ("confirm(", re.compile(r"(?<![\w$.])confirm\s*\(")),
+    ("prompt(", re.compile(r"(?<![\w$.])prompt\s*\(")),
+    ("eval(", re.compile(r"(?<![\w$.])eval\s*\(")),
+    ("new Function", re.compile(r"new\s+Function\b")),
+    ("importScripts", re.compile(r"(?<![\w$.])importScripts\b")),
+    ("navigator.sendBeacon", re.compile(r"navigator\s*\.\s*sendBeacon\b")),
 )
 _DRAWING_HINTS = (
     re.compile(r"createElementNS\s*\([^)]*2000/svg", re.IGNORECASE),
@@ -168,6 +185,8 @@ class _Element:
     tag: str
     attrs: dict[str, str]
     line: int
+    # The data-page section this element sits in, or None when it sits outside every page.
+    page: str | None = None
 
 
 @dataclass
@@ -210,7 +229,8 @@ class _Parser(HTMLParser):
         self._h1_open = False
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        element = _Element(tag, {k: v or "" for k, v in attrs}, self.getpos()[0])
+        enclosing = self._pages[-1][1].id if self._pages else None
+        element = _Element(tag, {k: v or "" for k, v in attrs}, self.getpos()[0], enclosing)
         self.found.elements.append(element)
         attributes = element.attrs
         if tag == "script":
@@ -296,6 +316,8 @@ class _Chart:
     id: str
     line: int
     figure: _Element | None
+    # The page the figure sits in, or None outside every page.
+    page: str | None = None
     block_line: int | None = None
     spec: dict[str, Any] | None = None
 
@@ -313,6 +335,14 @@ class _Chart:
     @property
     def filters(self) -> list[str]:
         return self.spec.get("filters", []) if self.spec else []
+
+    @property
+    def unfiltered(self) -> list[str]:
+        """The slicers the chart says it does not obey, however the block writes them down."""
+        raw = self.spec.get("unfiltered", []) if self.spec else []
+        if isinstance(raw, dict):
+            return [key for key in raw if isinstance(key, str)]
+        return [item for item in raw if isinstance(item, str)] if isinstance(raw, list) else []
 
     @property
     def rows(self) -> list[dict[str, Any]]:
@@ -413,7 +443,7 @@ def _read_blocks(report: _Report) -> None:
             )
             continue
         seen[chart_id] = figure.line
-        report.charts[chart_id] = _Chart(chart_id, figure.line, figure)
+        report.charts[chart_id] = _Chart(chart_id, figure.line, figure, figure.page)
     ids: dict[str, int] = {}
     for block in fragment.blocks:
         block_id = block.attrs.get("id", "")
@@ -498,6 +528,8 @@ def _read_slicers(report: _Report) -> None:
         if ui not in ("auto", "chips", "select"):
             problems.append(f'data-ui "{ui}" must be auto, chips or select')
         slicer: dict[str, Any] = {"id": slicer_id, "type": kind, "mode": mode, "line": line}
+        slicer["page"] = element.page
+        slicer["label"] = attrs.get("data-label") or slicer_id
         if kind == "metric":
             options = _json_attribute(attrs.get("data-options"), problems, "data-options")
             good = (
@@ -597,11 +629,13 @@ def _check_chart(report: _Report, chart: _Chart) -> None:
         return
     name = f'chart "{chart.id}"'
     spec = chart.spec
-    unknown = sorted(set(spec) - {"option", "filters", "aspect", "minHeight", "orient"})
+    unknown = sorted(
+        set(spec) - {"option", "filters", "unfiltered", "aspect", "minHeight", "orient"}
+    )
     if unknown:
         report.warn(
             f"{name}: unknown key {', '.join(map(repr, unknown))}; the block takes option, "
-            "filters, aspect, minHeight and orient"
+            "filters, unfiltered, aspect, minHeight and orient"
         )
     filters = spec.get("filters", [])
     if not isinstance(filters, list) or not all(isinstance(f, str) for f in filters):
@@ -624,6 +658,7 @@ def _check_chart(report: _Report, chart: _Chart) -> None:
             report.error(
                 f'{name} lists slicer "{slicer_id}", which has no data-field to filter its rows by'
             )
+    _check_unfiltered(report, chart, name)
     if spec.get("orient", "auto") not in ("auto", "keep"):
         report.error(f'{name}: "orient" must be auto or keep')
     aspect = spec.get("aspect", "16:9")
@@ -655,6 +690,7 @@ def _check_chart(report: _Report, chart: _Chart) -> None:
             "a series its data"
         )
     _check_fields(report, chart)
+    _check_wiring(report, chart)
     if (
         "{metric}" in text
         and "metric" not in report.slicers
@@ -723,6 +759,66 @@ def _check_fields(report: _Report, chart: _Chart) -> None:
                 f'slicer "{slicer_id}" (line {slicer["line"]}) filters on field "{slicer["field"]}", '
                 f'which no row of chart "{chart.id}" has ({known})'
             )
+
+
+def _check_unfiltered(report: _Report, chart: _Chart, name: str) -> None:
+    """Read ``unfiltered``: the slicers the chart says it does not obey, and why, if it says why."""
+    raw = chart.block.get("unfiltered", [])
+    if isinstance(raw, dict):
+        if not all(isinstance(reason, str) and reason.strip() for reason in raw.values()):
+            report.error(
+                f'{name}: every "unfiltered" reason must say something; drop the empty one'
+            )
+            return
+    elif not isinstance(raw, list) or not all(isinstance(f, str) for f in raw):
+        report.error(
+            f'{name}: "unfiltered" must be a list of slicer ids, or an object of id to reason'
+        )
+        return
+    fields = _row_fields(chart)
+    for slicer_id in chart.unfiltered:
+        slicer = report.slicers.get(slicer_id)
+        if slicer is None:
+            report.error(
+                f'{name} is unfiltered by "{slicer_id}", but no slicer declares it; remove it, or '
+                f'add <div class="slicer" data-slicer="{slicer_id}" data-field="..."></div>'
+            )
+        elif slicer_id in chart.filters:
+            report.error(
+                f'{name} names "{slicer_id}" in both "filters" and "unfiltered"; a chart either '
+                "obeys a slicer or does not"
+            )
+        elif slicer["type"] != "filter" or not slicer["field"] or slicer["field"] not in fields:
+            report.error(
+                f'{name} is unfiltered by "{slicer_id}", which could never have reached it: say so '
+                "only for a filter slicer whose field its rows carry"
+            )
+
+
+def _reaches(slicer: dict[str, Any], chart: _Chart) -> bool:
+    """Whether the reader can work a slicer where the chart stands: shared anywhere, a page's own only there."""
+    return slicer["page"] is None or chart.page is None or slicer["page"] == chart.page
+
+
+def _check_wiring(report: _Report, chart: _Chart) -> None:
+    """A chart that draws rows a slicer could narrow must say whether it obeys that slicer."""
+    fields = _row_fields(chart)
+    for slicer_id, slicer in report.slicers.items():
+        if (
+            slicer["type"] != "filter"
+            or not slicer["field"]
+            or slicer["field"] not in fields
+            or slicer_id in chart.filters
+            or slicer_id in chart.unfiltered
+            or not _reaches(slicer, chart)
+        ):
+            continue
+        report.error(
+            f'chart "{chart.id}" (line {chart.line}) draws rows with field "{slicer["field"]}", '
+            f'which slicer "{slicer_id}" (line {slicer["line"]}) filters, but its "filters" does not '
+            f'list it; add "{slicer_id}" to "filters", or write "unfiltered": ["{slicer_id}"] if the '
+            f"chart is meant to keep every {slicer['field']}"
+        )
 
 
 def _expanded_series(chart: _Chart) -> int:
@@ -845,9 +941,10 @@ def _check_css(report: _Report, css: str, line: int) -> None:
 
 def _check_scripts(report: _Report) -> None:
     for text, line in report.fragment.scripts:
-        for call in _FORBIDDEN_CALLS:
-            if call in text:
-                at = line + text[: text.index(call)].count("\n")
+        for call, pattern in _FORBIDDEN_CALLS:
+            match = pattern.search(text)
+            if match is not None:
+                at = line + text[: match.start()].count("\n")
                 report.error(
                     f'script (line {at}) uses "{call}", which the sandbox refuses; compute with '
                     "plain JavaScript and show results in the page"
@@ -920,7 +1017,7 @@ def _slicer_defs(report: _Report, chart: _Chart) -> dict[str, dict[str, Any]]:
     for slicer_id in chart.filters:
         slicer = report.slicers.get(slicer_id)
         if slicer is not None:
-            out[slicer_id] = {k: v for k, v in slicer.items() if k != "line"}
+            out[slicer_id] = {k: v for k, v in slicer.items() if k not in ("line", "page")}
     return out
 
 
@@ -935,14 +1032,57 @@ def _is_chinese(found: _Fragment) -> bool:
     return han >= 2 and han >= 0.15 * (han + latin)
 
 
-def _node_context(report: _Report) -> dict[str, Any]:
+#: The document language a caller declares is a BCP-47-shaped tag. The toolkit's own runtime words
+#: ship in English and Chinese; any other tag is written on `<html lang>` and read back by `check`,
+#: while the runtime label strings fall back to English. The page's chrome language is the caller's
+#: business: a projected report ships the English pack around a small-language reader's prose.
+_LANGUAGE_TAG = re.compile(r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{1,8})*$")
+
+
+def _language_tag(value: object) -> str:
+    """A BCP-47-shaped language tag as given, trimmed, or ``''`` when the value is not one."""
+    if not isinstance(value, str):
+        return ""
+    text = value.strip().replace("_", "-")
+    return text if _LANGUAGE_TAG.fullmatch(text) else ""
+
+
+def _declared_language(lang: str | None) -> str:
+    """The document's declared language tag, or ``''`` when the caller declared none."""
+    return _language_tag(lang)
+
+
+def _is_chinese_document(found: _Fragment, lang: str | None = None) -> bool:
+    """Whether the document is Chinese: the declared language wins over the fragment's own words."""
+    declared = _declared_language(lang)
+    if declared:
+        return declared.lower().startswith("zh")
+    return _is_chinese(found)
+
+
+#: The document's own declared language, written into its `<html lang>` at build time. `check` reads
+#: it back so a page built with a declared language rebuilds to itself; without it the fragment's own
+#: words decide, as they did before the flag existed.
+_DOCUMENT_LANG = re.compile(r"<html\b[^>]*\blang\s*=\s*(?:\"([^\"]*)\"|'([^']*)')", re.IGNORECASE)
+
+
+def _document_language(document: str) -> str | None:
+    """The BCP-47 tag a built document declares on its `<html>` tag, or None if it declares none."""
+    match = _DOCUMENT_LANG.search(document)
+    if match is None:
+        return None
+    value = match.group(1) if match.group(1) is not None else match.group(2) or ""
+    return _language_tag(value) or None
+
+
+def _node_context(report: _Report, lang: str | None = None) -> dict[str, Any]:
     """What every chart job carries so a {id} token reads as it does in the browser."""
     return {
         "slicers": {
-            slicer_id: {k: v for k, v in slicer.items() if k != "line"}
+            slicer_id: {k: v for k, v in slicer.items() if k not in ("line", "page")}
             for slicer_id, slicer in report.slicers.items()
         },
-        "lang": "zh" if _is_chinese(report.fragment) else "en",
+        "lang": "zh" if _is_chinese_document(report.fragment, lang) else "en",
     }
 
 
@@ -967,7 +1107,7 @@ def _node(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return json.loads(drawn.stdout)
 
 
-def _check_drawing(report: _Report) -> None:
+def _check_drawing(report: _Report, lang: str | None = None) -> None:
     """Draw every chart at 360 and 900 for each state of its first filter, and keep ECharts' message."""
     jobs = [
         {
@@ -976,7 +1116,7 @@ def _check_drawing(report: _Report) -> None:
             "widths": list(_PREVIEW_WIDTHS),
             "sweep": True,
             "svg": False,
-            **_node_context(report),
+            **_node_context(report, lang),
         }
         for c in report.charts.values()
         if c.spec is not None
@@ -1004,7 +1144,7 @@ def _check_drawing(report: _Report) -> None:
                 )
 
 
-def _check(source: str) -> _Report:
+def _check(source: str, lang: str | None = None) -> _Report:
     report = _Report(_parse(source))
     _read_datasets(report)
     _read_blocks(report)
@@ -1019,7 +1159,9 @@ def _check(source: str) -> _Report:
         _warn_chart(report, chart)
     _check_boilerplate(report)
     if not report.errors:
-        _check_drawing(report)
+        _check_drawing(report, lang)
+    if not report.errors:
+        _check_wiring_responds(report, lang)
     return report
 
 
@@ -1050,8 +1192,73 @@ def _runtime() -> str:
     )
 
 
-def _document(fragment: str, found: _Fragment, title: str | None) -> str:
-    chinese = _is_chinese(found)
+def _embed_source(fragment: str, title: str | None) -> str:
+    """The fragment, deflated and base64-encoded, as the block a report carries in its head.
+
+    Deflated because the fragment holds the rows, and the report has a size limit; base64 because
+    the fragment holds anything a document may, including the end tag of a script. The digest is
+    what makes the round trip a fact rather than a hope.
+    """
+    raw = fragment.encode("utf-8")
+    payload = {
+        "format": _SOURCE_FORMAT,
+        "codec": _SOURCE_CODEC,
+        "bytes": len(raw),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "title": title,
+        "source": base64.b64encode(zlib.compress(raw, 9)).decode("ascii"),
+    }
+    return (
+        f'<script type="application/json" id="{_SOURCE_ID}">'
+        f"{_escape_script(json.dumps(payload, ensure_ascii=False))}</script>"
+    )
+
+
+def _read_source(document: str) -> dict[str, Any]:
+    """The fragment a built report carries, verified against the digest the block states."""
+    match = re.search(
+        rf'<script type="application/json" id="{_SOURCE_ID}">(.*?)</script>', document, re.DOTALL
+    )
+    if match is None:
+        raise ReportError(
+            f"this document carries no {_SOURCE_ID} block, so the fragment it was built from is not "
+            "in it; a report built before the source was embedded has none, and a hand-edited one "
+            "may have lost it"
+        )
+    try:
+        payload = json.loads(match.group(1))
+    except ValueError as error:
+        raise ReportError(
+            f"the {_SOURCE_ID} block is not valid JSON ({error}); build the report again"
+        ) from error
+    if not isinstance(payload, dict):
+        raise ReportError(f"the {_SOURCE_ID} block is not an object; build the report again")
+    if payload.get("format") != _SOURCE_FORMAT or payload.get("codec") != _SOURCE_CODEC:
+        raise ReportError(
+            f"the {_SOURCE_ID} block is in format {payload.get('format')!r} with codec "
+            f"{payload.get('codec')!r}, which this build does not read; use the html-report that "
+            "wrote the report, or build it again"
+        )
+    try:
+        raw = zlib.decompress(base64.b64decode(str(payload["source"]), validate=True))
+    except (KeyError, ValueError, zlib.error) as error:
+        raise ReportError(
+            f"the {_SOURCE_ID} block is damaged ({error}); build the report again"
+        ) from error
+    if hashlib.sha256(raw).hexdigest() != payload.get("sha256"):
+        raise ReportError(
+            f"the {_SOURCE_ID} block does not match the digest it carries, so the document was "
+            "edited after it was built; take the fragment from the report as it was published"
+        )
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ReportError(f"the {_SOURCE_ID} block is not valid UTF-8 ({error})") from error
+    return {"text": text, "title": payload.get("title"), "bytes": len(raw)}
+
+
+def _document(fragment: str, found: _Fragment, title: str | None, lang: str | None = None) -> str:
+    document_lang = _declared_language(lang) or ("zh-CN" if _is_chinese(found) else "en")
     try:
         library = _escape_script(echarts_render.echarts_library().read_text(encoding="utf-8"))
     except echarts_render.RenderError as error:
@@ -1059,7 +1266,7 @@ def _document(fragment: str, found: _Fragment, title: str | None) -> str:
     css = (_REPORT / "report.css").read_text(encoding="utf-8")
     heading = (title or found.h1 or "Report").replace("&", "&amp;").replace("<", "&lt;")
     return (
-        '<!doctype html>\n<html lang="' + ("zh-CN" if chinese else "en") + '">\n<head>\n'
+        '<!doctype html>\n<html lang="' + document_lang + '">\n<head>\n'
         '<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
         '<meta name="color-scheme" content="light dark">\n'
@@ -1067,21 +1274,75 @@ def _document(fragment: str, found: _Fragment, title: str | None) -> str:
         f"<style>\n{css}</style>\n"
         f"<script>{library}</script>\n"
         f"<script>\n{_runtime()}\n</script>\n"
+        f"{_embed_source(fragment, title)}\n"
         '</head>\n<body>\n<div class="report">\n'
         f"{fragment}\n"
         "</div>\n</body>\n</html>\n"
     )
 
 
-def _preview(report: _Report, directory: Path, dark: bool) -> None:
-    """Write DIR/<chart-id>-360.png and -900.png: each chart body at that container width."""
+def _check_wiring_responds(report: _Report, lang: str | None = None) -> None:
+    """Ask every chart that lists a slicer whether its drawing moves when that slicer does."""
+    jobs = [
+        {
+            "id": chart.id,
+            "spec": _runtime_spec(report, chart),
+            "width": _PREVIEW_WIDTHS[-1],
+            "sweep": True,
+            "render": False,
+            **_node_context(report, lang),
+        }
+        for chart in report.charts.values()
+        if chart.spec is not None and chart.filters
+    ]
+    if not jobs:
+        return
+    standing: dict[str, str] = {}
+    moved: dict[str, dict[str, tuple[Any, str]]] = {}
+    for result in _node(jobs):
+        if "error" in result:
+            continue  # what ECharts cannot draw is already an error, from _check_drawing
+        state = result.get("state")
+        if not state:
+            standing[result["id"]] = result["digest"]
+            continue
+        ((slicer_id, value),) = state.items()
+        moved.setdefault(result["id"], {})[slicer_id] = (value, result["digest"])
+    for chart_id, by_slicer in moved.items():
+        for slicer_id, (value, digest) in by_slicer.items():
+            if digest != standing.get(chart_id):
+                continue
+            report.warn(
+                f'chart "{chart_id}" lists "{slicer_id}" but draws the same with it set to '
+                f"{json.dumps(value, ensure_ascii=False)}; the slicer moves no row it draws, so "
+                'point the chart at the rows it narrows, or drop it from "filters"'
+            )
+
+
+def _preview_name(result: dict[str, Any]) -> str:
+    """A preview's file name: the chart and its width, plus the slicer state it was drawn in."""
+    state = result.get("state")
+    if not state:
+        return f"{result['id']}-{result['width']}.png"
+    ((slicer_id, value),) = state.items()
+    if isinstance(value, list):
+        value = "+".join(str(part) for part in value)
+    chosen = re.sub(r"[^\w.+-]+", "_", str(value)).strip("_")
+    return f"{result['id']}-{result['width']}@{slicer_id}={chosen}.png"
+
+
+def _preview(report: _Report, directory: Path, dark: bool, lang: str | None = None) -> None:
+    """Write each chart at DIR/<chart-id>-360.png and -900.png, plus its <chart>-900@<id>=<value> states."""
     jobs = [
         {
             "id": chart.id,
             "spec": _runtime_spec(report, chart),
             "width": width,
+            # The wide preview also draws the chart at a non-default state of every slicer it lists,
+            # so the author sees with their own eyes that it follows the controls.
+            "sweep": width == _PREVIEW_WIDTHS[-1] and bool(chart.filters),
             "mode": "dark" if dark else "light",
-            **_node_context(report),
+            **_node_context(report, lang),
         }
         for chart in report.charts.values()
         if chart.spec is not None
@@ -1090,13 +1351,22 @@ def _preview(report: _Report, directory: Path, dark: bool) -> None:
     for result in _node(jobs):
         if "error" in result:
             raise ReportError(f'chart "{result["id"]}": {result["error"]}')
-        target = directory / f"{result['id']}-{result['width']}.png"
+        target = directory / _preview_name(result)
         try:
             missing = echarts_render.rasterize(
                 result["svg"], target, _PREVIEW_SCALE[result["width"]]
             )
         except echarts_render.RenderError as error:
-            raise ReportError(f"preview: {error}") from error
+            # The report is the deliverable and the preview is an aid, so a rasteriser that is
+            # missing (or a chart it cannot draw) skips the previews, says so in the warnings the
+            # build already reports, and still writes the document. Losing a whole report to a
+            # missing optional tool is the defect this replaces.
+            report.warn(f"previews skipped: {error}")
+            # The collected warnings were printed before the charts were drawn, so this one is said
+            # here, in the same words and on the same stream; the closing summary still counts it.
+            print(f"html-report: warning: previews skipped: {error}", file=sys.stderr)
+            directory.mkdir(parents=True, exist_ok=True)
+            continue
         if missing:
             print(
                 f"html-report: warning: no font has {missing}; those characters show as boxes",
@@ -1104,17 +1374,36 @@ def _preview(report: _Report, directory: Path, dark: bool) -> None:
             )
 
 
-def build(source: Path, out: Path, title: str | None, preview: Path | None, dark: bool) -> int:
-    """Check the fragment and write the report; return the process exit code."""
+def build(
+    source: Path,
+    out: Path,
+    title: str | None,
+    preview: Path | None,
+    dark: bool,
+    lang: str | None = None,
+) -> int:
+    """Check the fragment and write the report; return the process exit code.
+
+    ``lang`` is the document's declared BCP-47 language tag. A caller that owns the reader's language
+    (a report projected from a case, for instance) passes it so the page's own ``<html lang>``, its
+    runtime labels and its chart previews follow the reader rather than the share of Han characters
+    the fragment happens to contain. Without it the fragment's own words decide, as before.
+    """
     try:
         fragment = source.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as error:
         print(f"html-report: cannot read {source}: {error}", file=sys.stderr)
         return 1
     try:
-        report = _check(fragment)
+        report = _check(fragment, lang)
         for warning in report.warnings:
             print(f"html-report: warning: {warning}", file=sys.stderr)
+        if not report.charts:
+            print(
+                "html-report: warning: the fragment declares no chart; a report with no chart is "
+                "not a delivered visual report (add a paired figure, or write Markdown instead)",
+                file=sys.stderr,
+            )
         if report.errors:
             shown = (
                 report.errors
@@ -1130,8 +1419,8 @@ def build(source: Path, out: Path, title: str | None, preview: Path | None, dark
                 )
             return 1
         if preview is not None:
-            _preview(report, preview, dark)
-        document = _document(fragment, report.fragment, title)
+            _preview(report, preview, dark, lang)
+        document = _document(fragment, report.fragment, title, lang)
     except ReportError as error:
         print(f"html-report: {error}", file=sys.stderr)
         return 1
@@ -1153,13 +1442,111 @@ def build(source: Path, out: Path, title: str | None, preview: Path | None, dark
     return 0
 
 
+def source(report: Path, out: Path) -> int:
+    """Write the fragment a built report carries; return the process exit code."""
+    try:
+        document = report.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        print(f"html-report: cannot read {report}: {error}", file=sys.stderr)
+        return 1
+    try:
+        found = _read_source(document)
+    except ReportError as error:
+        print(f"html-report: {error}", file=sys.stderr)
+        return 1
+    if str(out) == "-":
+        sys.stdout.write(found["text"])
+    else:
+        try:
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(found["text"], encoding="utf-8")
+        except OSError as error:
+            print(f"html-report: cannot write {out}: {error}", file=sys.stderr)
+            return 1
+        print(
+            f"html-report: wrote {out} ({found['bytes']} bytes, the fragment this report was built "
+            "from); edit it and build again"
+        )
+    if found["title"]:
+        print(
+            f'html-report: the report was built with --title "{found["title"]}"; pass the same flag '
+            "to keep the document title",
+            file=sys.stderr,
+        )
+    return 0
+
+
+def check(report: Path) -> int:
+    """Verify a finished report: the fragment it carries rebuilds to it, and it holds a chart.
+
+    Every refusal is one line naming the rebuild, because the Agent can still correct it. The
+    comparison is byte-identical because the document is deterministic (ADR 0038): no footer, no
+    timestamp, no mode from the environment.
+    """
+    try:
+        document = report.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        print(f"html-report: cannot read {report}: {error}", file=sys.stderr)
+        return 1
+    try:
+        found = _read_source(document)
+        declared = _document_language(document)
+        spec = _check(found["text"], declared)
+    except ReportError as error:
+        print(f"html-report: {error}", file=sys.stderr)
+        return 1
+    if spec.errors:
+        for error in spec.errors[:_MAX_ERRORS]:
+            print(f"html-report: {error}", file=sys.stderr)
+        print(
+            "html-report: the fragment this report carries does not build; edit report/src.html "
+            "and run html-report build again",
+            file=sys.stderr,
+        )
+        return 1
+    if not spec.charts:
+        print(
+            "html-report: this report carries no chart; a page with no paired chart is not a "
+            "delivered visual report. Add a paired chart and build again",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        rebuilt = _document(found["text"], spec.fragment, found["title"], declared)
+    except ReportError as error:
+        print(f"html-report: {error}", file=sys.stderr)
+        return 1
+    if rebuilt != document:
+        print(
+            "html-report: this document was edited after it was built (or built by another "
+            "html-report); edit the fragment and run html-report build again, never patch the "
+            "report by hand",
+            file=sys.stderr,
+        )
+        return 1
+    pages = len(spec.fragment.pages) if len(spec.fragment.pages) > 1 else 1
+    print(
+        f"html-report: {report} is the toolkit's report ({len(spec.charts)} charts, "
+        f"{len(spec.slicers)} slicers, {pages} page{'s' if pages != 1 else ''}), built from the "
+        "fragment it carries"
+    )
+    return 0
+
+
 _BUILD_RULES = """\
 slicers (<div class="slicer" data-slicer="ID" ...>; ID is not a, b, c, d, e or value):
-  filter (default)  data-field="row field" filters the rows of the charts that list ID in "filters";
+  filter (default)  data-field="row field" narrows the rows of every chart that obeys ID (below);
                     data-values='["a","b"]' fixes the choices (alone, when only a script or a {ID}
                     token reads it); data-mode="multi", data-all="false", data-ui="chips|select"
   metric            data-options='[{"label":"Sales","y":"revenue"}]' swaps the plotted field
   slider            data-min, data-max, data-step (numbers), data-value (default: data-min), data-unit
+
+a filter slicer reaches every chart whose rows carry its field. List ID in the chart's "filters", or
+name it in "unfiltered" (a list of ids, or an object of id to reason) when the chart keeps every value
+on purpose: a chart that does neither is refused, and one that lists a slicer moving no row it draws
+is warned about. An unfiltered chart says so under its title, so the reader is not left wondering why
+it alone stands still. A slicer inside a data-page section reaches that page, and content outside
+every page, and no other.
 
 a slider is a real <input type=range>. Its value is a Number: Report.slicer(ID).value() returns it,
 .set(n) clamps to min..max and snaps to the step. It is shown with as many decimals as data-step (or
@@ -1176,6 +1563,28 @@ slicer id stays as written.
 
 a slicer is in use when a chart lists it in "filters", a chart's text holds its {ID}, or an author
 script names its id in quotes; the build warns about any other.
+"""
+
+_SOURCE_RULES = """\
+every report carries the fragment it was built from, deflated in its head, so a later turn that must
+change a report does not need the workspace that built it: reopen the published report (its artifact:
+link names the resource_id), materialize it, and write the fragment back with
+
+  html-report source report.html report/src.html
+
+which writes it byte for byte, and `-` in place of the path writes it to standard output. Edit the
+fragment and build again; the built file is never patched by hand. A document with no such block, one
+whose block this build cannot read, or one whose bytes do not match the digest the block carries is
+refused, and the call says which.
+"""
+
+
+_CHECK_RULES = """\
+verify a finished report: it carries the fragment it was built from (html-report build embeds it),
+that fragment rebuilds to these exact bytes, and the page holds at least one paired chart (a
+<figure class="chart" data-chart="ID"> with its <script type="application/json" id="chart-ID">
+block). Run it before attach_artifact: a document with no source block, a document edited after it
+was built, and a page with no chart are refused, and the call names the rebuild that fixes it.
 """
 
 
@@ -1197,8 +1606,42 @@ def main(argv: list[str] | None = None) -> int:
     build_parser.add_argument(
         "--preview-dark", action="store_true", help="draw the previews in Mineral dark"
     )
+    build_parser.add_argument(
+        "--lang",
+        default=None,
+        help=(
+            "the document's declared BCP-47 language tag, e.g. en, zh-CN or ja-JP (default: inferred "
+            "from the fragment's own words); pass it when the caller knows the reader, so "
+            "<html lang>, the runtime's labels and the previews follow the reader. The toolkit's "
+            "runtime words ship in English and Chinese; any other tag is declared and read back, "
+            "with the runtime label strings in English"
+        ),
+    )
+    source_parser = commands.add_parser(
+        "source",
+        help="write the fragment a built report carries",
+        epilog=_SOURCE_RULES,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    source_parser.add_argument("report", type=Path, help="a report this command built")
+    source_parser.add_argument("out", type=Path, help="the fragment to write, or - for stdout")
+    check_parser = commands.add_parser(
+        "check",
+        help="verify a finished report was built by the toolkit and carries a paired chart",
+        epilog=_CHECK_RULES,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    check_parser.add_argument("report", type=Path, help="a report this command built")
     args = parser.parse_args(argv)
-    return build(args.source, args.out, args.title, args.preview, args.preview_dark)
+    if getattr(args, "lang", None) is not None and not _language_tag(args.lang):
+        parser.error(
+            f"--lang {args.lang!r} is not a BCP-47 language tag (examples: en, zh-CN, ja-JP)"
+        )
+    if args.command == "source":
+        return source(args.report, args.out)
+    if args.command == "check":
+        return check(args.report)
+    return build(args.source, args.out, args.title, args.preview, args.preview_dark, args.lang)
 
 
 if __name__ == "__main__":

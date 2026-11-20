@@ -43,9 +43,11 @@ _GEMINI_LEVELS = {
     "low": "low",
     "medium": "medium",
     "high": "high",
-    "xhigh": None,
+    "xhigh": "xhigh",
     "max": None,
 }
+# OpenRouter documents no xhigh for Gemini, so the routed entry stays at high.
+_GEMINI_ROUTER_LEVELS = {**_GEMINI_LEVELS, "xhigh": None}
 _KIMI_LEVELS = {
     "off": None,
     "minimal": None,
@@ -183,7 +185,7 @@ def test_packaged_catalog_revision_is_derived_from_models() -> None:
     [
         (
             "openai",
-            "gpt-6.1-sol",
+            "gpt-6.2-sol",
             None,
             1_050_000,
             922_000,
@@ -193,7 +195,27 @@ def test_packaged_catalog_revision_is_derived_from_models() -> None:
         ),
         (
             "anthropic",
+            "claude-fable-5-2",
+            None,
+            1_000_000,
+            None,
+            128_000,
+            "anthropic",
+            {**_ANTHROPIC_LEVELS, "off": None},
+        ),
+        (
+            "anthropic",
             "claude-opus-5-5",
+            None,
+            1_000_000,
+            None,
+            128_000,
+            "anthropic",
+            {**_ANTHROPIC_LEVELS, "off": None},
+        ),
+        (
+            "anthropic",
+            "claude-haiku-5-5",
             None,
             1_000_000,
             None,
@@ -213,7 +235,7 @@ def test_packaged_catalog_revision_is_derived_from_models() -> None:
         ),
         (
             "gemini",
-            "gemini-3.8-flash",
+            "gemini-4-hydrogen",
             None,
             1_048_576,
             None,
@@ -223,7 +245,7 @@ def test_packaged_catalog_revision_is_derived_from_models() -> None:
         ),
         (
             "openai",
-            "kimi-k3",
+            "kimi-k3.1-pro",
             "https://api.moonshot.ai/v1",
             1_048_576,
             None,
@@ -283,9 +305,9 @@ def test_packaged_catalogue_contains_requested_endpoint_profiles(
 @pytest.mark.parametrize(
     ("provider", "model", "endpoint"),
     [
-        ("openai", "gpt-6.1-sol", "https://api.openai.com/v1"),
+        ("openai", "gpt-6.2-sol", "https://api.openai.com/v1"),
         ("anthropic", "claude-opus-5-5", "https://api.anthropic.com/"),
-        ("gemini", "gemini-3.8-flash", "https://generativelanguage.googleapis.com"),
+        ("gemini", "gemini-4-hydrogen", "https://generativelanguage.googleapis.com"),
     ],
 )
 def test_a_provider_default_endpoint_written_out_resolves_its_catalogue_entry(
@@ -301,7 +323,7 @@ def test_a_provider_default_endpoint_written_out_resolves_its_catalogue_entry(
 
 def test_another_endpoint_of_a_catalogued_model_stays_uncatalogued() -> None:
     azure = model_endpoint_fingerprint(
-        "openai", "gpt-6.1-sol", "https://example.openai.azure.com/openai/v1"
+        "openai", "gpt-6.2-sol", "https://example.openai.azure.com/openai/v1"
     )
 
     profile = catalog.resolve_model_profile(azure)
@@ -332,7 +354,23 @@ def test_packaged_catalogue_contains_native_multimodal_deepseek_profile() -> Non
     ("model", "context_window", "max_input", "max_output", "images", "levels"),
     [
         (
+            "anthropic/claude-fable-5.2",
+            1_000_000,
+            None,
+            128_000,
+            True,
+            {**_ANTHROPIC_LEVELS, "off": None},
+        ),
+        (
             "anthropic/claude-opus-5.5",
+            1_000_000,
+            None,
+            128_000,
+            True,
+            {**_ANTHROPIC_LEVELS, "off": None},
+        ),
+        (
+            "anthropic/claude-haiku-5.5",
             1_000_000,
             None,
             128_000,
@@ -351,20 +389,20 @@ def test_packaged_catalogue_contains_native_multimodal_deepseek_profile() -> Non
             "deepseek/deepseek-v4.1-flash",
             1_048_576,
             None,
-            384_000,
+            393_216,
             True,
             _DEEPSEEK_ROUTER_LEVELS,
         ),
         (
-            "google/gemini-3.8-flash",
+            "google/gemini-4-hydrogen",
             1_048_576,
             None,
-            65_536,
+            943_718,
             True,
-            _GEMINI_LEVELS,
+            _GEMINI_ROUTER_LEVELS,
         ),
         (
-            "moonshotai/kimi-k3",
+            "moonshotai/kimi-k3.1-pro",
             1_048_576,
             None,
             943_718,
@@ -372,7 +410,7 @@ def test_packaged_catalogue_contains_native_multimodal_deepseek_profile() -> Non
             _KIMI_LEVELS,
         ),
         (
-            "openai/gpt-6.1-sol",
+            "openai/gpt-6.2-sol",
             1_050_000,
             922_000,
             128_000,
@@ -405,9 +443,9 @@ def test_packaged_catalogue_contains_native_multimodal_deepseek_profile() -> Non
         ),
         (
             "z-ai/glm-5.3-flash",
-            1_000_000,
+            1_048_576,
             None,
-            131_072,
+            943_717,
             True,
             _KIMI_LEVELS,
         ),

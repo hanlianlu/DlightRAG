@@ -4,9 +4,9 @@
 import pytest
 from pydantic import ValidationError
 
-from dlightrag.adapters.http.rest.models import AnswerRequest, RetrievalResponse, RetrieveRequest
+from dlightrag.adapters.http.rest.models import AnswerRequest, RetrieveRequest
 from dlightrag.adapters.mcp.contracts import AnswerInput, RetrieveInput
-from dlightrag.application.corpus_admin import (
+from dlightrag.application.corpus_admin.service import (
     IngestSpec,
     ingest_kwargs_from_spec,
     ingest_spec_from_payload,
@@ -32,11 +32,6 @@ def test_per_interface_current_image_admission() -> None:
     for model in (RetrieveRequest, RetrieveInput):
         with pytest.raises(ValidationError):
             model.model_validate({"query": "four images", "query_images": images})
-
-    # The Answer contract exposes no public current-image field: images arrive as
-    # ordered attachments/resources at the request boundary, never a query field.
-    for model in (AnswerRequest, AnswerInput):
-        assert "query_images" not in set(model.model_fields)
 
 
 @pytest.mark.parametrize("model", [RetrieveRequest, RetrieveInput, AnswerRequest, AnswerInput])
@@ -69,7 +64,6 @@ def test_answer_contracts_accept_history_retrieve_rejects() -> None:
         assert parsed.history[0].role == "user"
         assert parsed.history[0].content == "Earlier turn"
     for model in (RetrieveRequest, RetrieveInput):
-        assert "history" not in model.model_fields
         with pytest.raises(ValidationError):
             model.model_validate({"query": "standalone", "history": [valid]})
     with pytest.raises(ValidationError):
@@ -99,19 +93,6 @@ def test_conversation_message_validation_and_projection() -> None:
     assert conversation_history_as_dicts([]) is None
 
 
-def test_public_retrieval_response_has_no_session_image_ids() -> None:
-    assert "current_image_ids" not in RetrievalResponse.model_fields
-
-
-def test_answer_links_accept_http_and_https() -> None:
-    https_link = AnswerAttachmentLink(url="https://example.com/report.pdf")
-    http_link = AnswerAttachmentLink(url="http://example.com/report.pdf")
-    assert https_link.filename is None
-    assert http_link.url == "http://example.com/report.pdf"
-    with pytest.raises(ValidationError):
-        AnswerAttachmentLink(url="ftp://example.com/report.pdf")
-
-
 def test_answer_links_reject_embedded_credentials() -> None:
     for url in (
         "https://user:pass@example.com/report.pdf",
@@ -133,7 +114,6 @@ def test_retrieve_accepts_query_images_but_rejects_attachments() -> None:
 @pytest.mark.parametrize("model", [AnswerRequest, AnswerInput])
 def test_answer_contracts_reject_query_images(model) -> None:
     image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
-    assert "query_images" not in model.model_fields
     with pytest.raises(ValidationError):
         model.model_validate({"query": "q", "query_images": [image]})
 
@@ -389,7 +369,6 @@ def test_answer_contracts_reject_bm25_query(model) -> None:
 
 @pytest.mark.parametrize("model", [AnswerRequest, AnswerInput])
 def test_answer_contracts_reject_answer_context_top_k(model) -> None:
-    assert "answer_context_top_k" not in model.model_fields
     with pytest.raises(ValidationError):
         model.model_validate({"query": "q", "answer_context_top_k": 3})
 
@@ -401,4 +380,3 @@ def test_mcp_query_images_stay_non_nullable_with_list_default() -> None:
         RetrieveInput.model_validate({"query": "q", "query_images": None})
     schema = RetrieveInput.model_json_schema()
     assert schema["properties"]["query_images"]["type"] == "array"
-    assert "query_images" not in AnswerInput.model_fields

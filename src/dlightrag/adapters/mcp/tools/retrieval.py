@@ -18,8 +18,8 @@ from dlightrag.adapters.mcp.server import (
     QueryImagesParam,
     mcp_app,
 )
-from dlightrag.application.retrieval import MetadataFilter
-from dlightrag.application.retrieval import RetrieveRequest as ServiceRequest
+from dlightrag.application.retrieval.service import RetrieveRequest as ServiceRequest
+from dlightrag.engine.rag.retrieval.models import MetadataFilter
 
 
 @mcp_app.tool(

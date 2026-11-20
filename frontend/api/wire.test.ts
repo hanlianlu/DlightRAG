@@ -4,7 +4,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as v from 'valibot';
 import {webCommandError} from './web-command-error.ts';
-import {ApiError, apiError, apiErrorFromBody, onSignedOut, parseWire} from './wire.ts';
+import {
+  ApiError,
+  apiError,
+  apiErrorFromBody,
+  onSignedOut,
+  parseWire,
+  refusalBody,
+  refusalEnvelope,
+} from './wire.ts';
 
 const schema = v.pipe(
   v.object({run_id: v.string()}),
@@ -53,6 +61,18 @@ test('a body already read parses the same way', () => {
   assert.equal(error.detail, 'Access denied');
   assert.equal(error.errorType, 'auth');
   assert.equal(apiErrorFromBody(500, null).errorType, null);
+});
+
+test('one reader turns any refusal body into its fields, and a body that is no object into none', async () => {
+  // The general envelope and a module's own {kind, message} are read the same way.
+  assert.deepEqual(refusalEnvelope({detail: 'Gone.', error_type: 'not_found'}), {detail: 'Gone.', error_type: 'not_found'});
+  assert.deepEqual(refusalEnvelope({kind: 'taken_over', message: 'No.'}), {kind: 'taken_over', message: 'No.'});
+  for (const body of [null, undefined, 'text', 7, true, [], [{detail: 'a list is no envelope'}]]) {
+    assert.deepEqual(refusalEnvelope(body), {}, `${JSON.stringify(body)} stated fields`);
+  }
+  assert.deepEqual(await refusalBody(Response.json({kind: 'x'}, {status: 409})), {kind: 'x'});
+  assert.equal(await refusalBody(new Response('<html>Bad gateway</html>', {status: 502})), null);
+  assert.equal(await refusalBody(new Response('', {status: 410})), null);
 });
 
 test('parseWire translates a success and refuses an unreadable one with its status', async () => {

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import ast
 import email.parser
+import functools
 import hashlib
 import importlib
 import importlib.metadata
@@ -29,16 +30,24 @@ from urllib.request import url2pathname
 _EXPECTED_PACKAGES = {
     "dlightrag": "dlightrag",
     "dlightrag-memory": "dlightrag_memory",
+    "dlightrag-mineru": "dlightrag_mineru",
     "dlightrag-observability": "dlightrag_observability",
 }
 _EXPECTED_DLIGHTRAG_DEPENDENCIES = {
     "dlightrag": {"dlightrag-memory", "dlightrag-observability"},
     "dlightrag-memory": set(),
+    "dlightrag-mineru": set(),
     "dlightrag-observability": set(),
 }
+# Members that are not runtime dependencies of the application: a host tool that
+# rides in the development group, so the image never carries it (ADR 0054). The one
+# module allowed to import it is named by an import contract in the root manifest, so
+# this set only says which members are checked for presence there.
+_EXPECTED_DEVELOPMENT_GROUP_MEMBERS = {"dlightrag-mineru"}
 _EXPECTED_EXTRAS = {
     "dlightrag": {"milvus"},
     "dlightrag-memory": set(),
+    "dlightrag-mineru": set(),
     "dlightrag-observability": set(),
 }
 _REQUIRED_ROOT_DEPENDENCIES = frozenset(
@@ -62,15 +71,25 @@ _WORKSPACE_MANIFESTS = {
         "packages/memory",
         "src/dlightrag_memory",
     ),
+    "dlightrag-mineru": (
+        Path("packages/mineru/pyproject.toml"),
+        "packages/mineru",
+        "src/dlightrag_mineru",
+    ),
     "dlightrag-observability": (
         Path("packages/observability/pyproject.toml"),
         "packages/observability",
         "src/dlightrag_observability",
     ),
 }
-_EXPECTED_WORKSPACE_MEMBERS = ["packages/memory", "packages/observability"]
+_EXPECTED_WORKSPACE_MEMBERS = [
+    "packages/memory",
+    "packages/mineru",
+    "packages/observability",
+]
 _EXPECTED_WORKSPACE_SOURCES = {
     "dlightrag-memory": {"workspace": True},
+    "dlightrag-mineru": {"workspace": True},
     "dlightrag-observability": {"workspace": True},
 }
 _ROOT_CONSOLE_SCRIPTS = (
@@ -109,6 +128,7 @@ _SPECIFIC_SOURCE_PROHIBITIONS = {
 _REQUIRED_EXTERNAL_PROHIBITIONS = {
     "dlightrag": set(),
     "dlightrag-memory": {"lightrag", "fastapi"},
+    "dlightrag-mineru": {"lightrag", "fastapi"},
     "dlightrag-observability": {"lightrag", "fastapi"},
 }
 _DLIGHTRAG_DISTRIBUTIONS = frozenset(_EXPECTED_PACKAGES)
@@ -424,6 +444,19 @@ def _dynamic_import_candidates(
     return tuple(sorted(candidates))
 
 
+@functools.cache
+def _module_pattern(pattern: str) -> re.Pattern[str]:
+    """Compile an import-linter module expression: `*` is one segment, `**` one or more.
+
+    `fullmatch` selects the module itself, `match` the module or any of its descendants.
+    """
+    segments = (
+        r"[^.]+(?:\.[^.]+)*" if part == "**" else "[^.]+" if part == "*" else re.escape(part)
+        for part in pattern.split(".")
+    )
+    return re.compile(r"\.".join(segments) + r"(?=\.|$)")
+
+
 def _forbidden_import(
     imported: str,
     rules: tuple[ImportRule, ...],
@@ -433,8 +466,14 @@ def _forbidden_import(
     return any(
         (imported == prefix or imported.startswith(f"{prefix}."))
         and not any(
-            source_module == ignored_source
-            and (imported == ignored_target or imported.startswith(f"{ignored_target}."))
+            _module_pattern(ignored_source).fullmatch(source_module)
+            and (
+                _module_pattern(ignored_target).match(imported)
+                # An ignore may name a submodule of what the statement imports:
+                # import-linter resolves `from pkg import mod` to `pkg.mod`, while a
+                # reader of the statement sees `pkg`.
+                or ignored_target.startswith(f"{imported}.")
+            )
             for ignored_source, ignored_target in rule.ignored
         )
         for rule in rules
@@ -670,6 +709,7 @@ def verify_workspace_definition(workspace_root: Path) -> None:
             raise ValueError(f"{distribution}: source build must exclude {expected_source_exclude}")
         expected_source_include = {
             "dlightrag-memory": ["compose.yaml", "examples/**"],
+            "dlightrag-mineru": [".env.example"],
             "dlightrag-observability": ["compose.yaml", "stack/**"],
         }.get(distribution, [])
         if uv_build.get("source-include", []) != expected_source_include:
@@ -696,6 +736,20 @@ def verify_workspace_definition(workspace_root: Path) -> None:
         raise ValueError("root workspace members differ from the root-plus-Memory contract")
     if root_uv.get("sources") != _EXPECTED_WORKSPACE_SOURCES:
         raise ValueError("root workspace sources differ from the root-plus-Memory contract")
+
+    development_group = {
+        _requirement_name(str(requirement))
+        for requirement in (
+            configs["dlightrag"].get("dependency-groups", {}).get("dev", [])  # type: ignore[union-attr]
+        )
+    }
+    for distribution in sorted(_EXPECTED_DEVELOPMENT_GROUP_MEMBERS):
+        if distribution not in development_group:
+            raise ValueError(f"{distribution} must be a development dependency of dlightrag")
+        if distribution in direct_dependencies["dlightrag"]:
+            raise ValueError(
+                f"{distribution} cannot be both a runtime and a development dependency"
+            )
 
     lock_path = workspace_root / "uv.lock"
     try:
@@ -955,30 +1009,40 @@ def _smoke_root_interfaces(expected_examples: frozenset[str]) -> None:
 
     import dlightrag
     from dlightrag import Application, create_application
-    from dlightrag.adapters.http.client import AnswerRunClient
-    from dlightrag.application.access import DEPLOYMENT_OWNER_ID
-    from dlightrag.application.config import (
+    from dlightrag.adapters.http.client.client import (
+        AnswerRunClient,
+    )
+    from dlightrag.application.access.principal import (
+        DEPLOYMENT_OWNER_ID,
+    )
+    from dlightrag.application.config.sections import (
         DlightragConfig,
         LaneRuntimeConfig,
         RuntimeConfig,
     )
-    from dlightrag.application.corpus_admin import CorpusAdmin, CorpusAdminSettings
-    from dlightrag.application.retrieval import (
+    from dlightrag.application.corpus_admin.service import CorpusAdmin, CorpusAdminSettings
+    from dlightrag.application.retrieval.service import (
         ProjectedRetrieval,
-        RetrievalOptions,
         RetrievalService,
         RetrievalSettings,
     )
-    from dlightrag.application.settings import rag_settings
+    from dlightrag.application.settings.projections import rag_settings
     from dlightrag.application.skills import skills_bundle_factory
-    from dlightrag.engine.agent import AgentSessionRuntime, ContextContribution, ToolRegistry
+    from dlightrag.engine.agent.context import ContextContribution
+    from dlightrag.engine.agent.session.runtime import (
+        AgentSessionRuntime,
+    )
+    from dlightrag.engine.agent.tools.registry import ToolRegistry
     from dlightrag.engine.ai.settings import ModelsSettings
     from dlightrag.engine.ai.telemetry import NoopTelemetry
-    from dlightrag.engine.answer.execution import AnswerExecutor
-    from dlightrag.engine.answer.fast import FastRunBoundaries
-    from dlightrag.engine.answer.orchestration import AnswerOrchestrator
+    from dlightrag.engine.answer.execution.executor import AnswerExecutor
+    from dlightrag.engine.answer.fast.boundaries import FastRunBoundaries
+    from dlightrag.engine.answer.orchestration.orchestrator import AnswerOrchestrator
     from dlightrag.engine.answer.research.context import ContextAssembler
-    from dlightrag.engine.rag.retrieval import RetrievalResult
+    from dlightrag.engine.rag.retrieval.models import RetrievalOptions
+    from dlightrag.engine.rag.retrieval.results import (
+        RetrievalResult,
+    )
     from dlightrag.engine.rag.workspace.settings import (
         CorpusSettings,
         IngestionSettings,

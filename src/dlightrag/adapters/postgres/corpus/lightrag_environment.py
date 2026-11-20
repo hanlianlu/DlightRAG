@@ -15,7 +15,7 @@ from dlightrag.adapters.postgres.core._session_settings import (
     lightrag_pool_server_settings,
     setting_text,
 )
-from dlightrag.application.config import DlightragConfig
+from dlightrag.application.config.sections import DlightragConfig
 
 
 def lightrag_backend_env(config: DlightragConfig) -> dict[str, str]:

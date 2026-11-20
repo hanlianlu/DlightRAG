@@ -31,11 +31,8 @@ def _all_statements() -> str:
 
 
 class TestMigrationDeclaration:
-    def test_scope_and_versions_are_unique_and_ordered(self) -> None:
-        versions = [migration.version for migration in RUN_MIGRATIONS]
+    def test_the_scope_is_runs(self) -> None:
         assert RUN_MIGRATION_SCOPE == "runs"
-        assert versions[0] == "run_runtime_v1"
-        assert len(set(versions)) == len(versions)
 
     def test_run_artifacts_reference_blobs_not_a_content_table(self) -> None:
         statements = _all_statements()
@@ -60,6 +57,15 @@ class TestFixedRuntimeBounds:
 
     def test_workers_heartbeat_well_inside_their_lease(self) -> None:
         assert 0 < RUN_HEARTBEAT_SECONDS <= RUN_LEASE_SECONDS // 2
+
+    def test_the_lease_window_fits_the_work_a_run_does(self) -> None:
+        """The window is sized for tools that take minutes of synchronous time.
+
+        It is asserted as a number because it is a policy: a shorter one hands a live Run to a second
+        worker for being busy in a document parse or a report build, which is the defect the window
+        was raised to remove.
+        """
+        assert RUN_LEASE_SECONDS == 300
 
     def test_accepted_input_envelope_keeps_continuation_context_not_model_facts(self) -> None:
         from dlightrag.engine.answer.runs.envelope import accepted_input_envelope
@@ -96,6 +102,37 @@ class TestFixedRuntimeBounds:
         }
         assert "pinned_models" not in envelope
         assert "resource_manifest" not in envelope
+
+    def test_accepted_input_envelope_writes_continuation_kind_without_a_parent_run(self) -> None:
+        """A `/goal`-created round has no parent Run and still says what it continues."""
+        from dlightrag.engine.answer.runs.envelope import accepted_input_envelope
+
+        envelope = accepted_input_envelope(
+            {
+                "query": "continue the goal",
+                "mode": "research",
+                "continuation_kind": "goal_round",
+                "goal_id": "goal-1",
+                "goal_revision": 3,
+                "goal_round": 2,
+            }
+        )
+
+        assert envelope["continuation_kind"] == "goal_round"
+        assert envelope["goal_id"] == "goal-1"
+        assert envelope["goal_revision"] == 3
+        assert envelope["goal_round"] == 2
+        assert "parent_run_id" not in envelope
+
+    def test_accepted_input_envelope_omits_absent_continuation_identity(self) -> None:
+        from dlightrag.engine.answer.runs.envelope import accepted_input_envelope
+
+        envelope = accepted_input_envelope({"query": "why", "continuation_kind": ""})
+
+        assert "continuation_kind" not in envelope
+        assert "goal_id" not in envelope
+        assert "goal_revision" not in envelope
+        assert "goal_round" not in envelope
 
     def test_request_input_prefers_the_accepted_envelope(self) -> None:
         from dlightrag.engine.runtime.records import (

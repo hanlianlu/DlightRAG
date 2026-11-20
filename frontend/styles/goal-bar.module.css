@@ -1,0 +1,351 @@
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
+
+/* The Goal bar above the composer (ui/goal-bar.ts).
+ *
+ * One row, always: the phase pill, the objective in the reader's own words, the round, a blocked
+ * condition when there is one, and the controls. The objective truncates with an ellipsis instead of
+ * growing the bar; the card only expands when the reader edits the goal, because that is the one
+ * moment the words need room. A finished or blocked goal adds one small line beneath the card: its
+ * state is visible without the reader opening anything, and it does not claim a row inside the bar.
+ *
+ * It belongs to the conversation, not to the composer and not to the transcript: a card in the
+ * content column, narrower than the window and wider than one line of words, standing off the
+ * composer the way the transcript stands off the bar. The composer's own measures are the
+ * alignment source (`layout.css`, `.composer` and `.composer-form`), so the two read as one
+ * surface with one left edge however wide the window is. */
+
+@layer features {
+  dl-goal-bar {
+    display: block;
+  }
+
+  .region {
+    display: flex;
+    justify-content: center;
+    padding: 0 var(--space-section) var(--space-tight);
+  }
+
+  .stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2xs);
+    max-width: var(--layout-content-width);
+    width: 100%;
+  }
+
+  /* The card arrives with the goal, a fade and a short rise that do not move the reader's page
+     under them; the motion scale is zero for a reader who asked for no motion. */
+  .card {
+    align-items: center;
+    animation: arrive var(--duration-overlay) var(--easing-standard);
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-card);
+    display: flex;
+    gap: var(--space-2xs);
+    max-width: var(--layout-content-width);
+    min-block-size: calc(var(--size-button) + var(--space-3xs) * 2);
+    min-width: 0;
+    padding: var(--space-3xs) var(--space-3xs) var(--space-3xs) var(--space-component);
+    width: 100%;
+  }
+
+  @keyframes arrive {
+    from {
+      opacity: 0;
+      transform: translateY(var(--space-3xs));
+    }
+
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  /* Editing is the one expansion: the words take the row's place and the controls become
+     Save/Cancel beneath them. */
+  .editingCard {
+    align-items: stretch;
+    flex-direction: column;
+    gap: var(--space-2xs);
+    padding-block: var(--space-2xs);
+  }
+
+  /* Status: a dot and its words in one pill. The dot carries the phase; the words name it for
+     readers who cannot see the color. It keeps its width so the objective, not the status,
+     gives way when the window narrows. */
+  .pill {
+    align-items: center;
+    border-radius: var(--radius-pill);
+    color: var(--color-text-secondary);
+    display: inline-flex;
+    flex-shrink: 0;
+    font-size: var(--font-size-caption);
+    gap: var(--space-inline);
+    line-height: var(--line-height-control);
+    padding: var(--space-3xs) var(--space-tight) var(--space-3xs) var(--space-2xs);
+    white-space: nowrap;
+  }
+
+  .pill[data-phase='active'] {
+    background: var(--color-accent-ghost);
+    color: var(--color-accent-text);
+  }
+
+  .pill[data-phase='paused'] {
+    background: var(--color-bg-elevated);
+    color: var(--color-text-muted);
+  }
+
+  .pill[data-phase='blocked'] {
+    background: var(--color-danger-surface);
+    color: var(--color-danger);
+  }
+
+  .pill[data-phase='complete'] {
+    background: var(--color-bg-elevated);
+    color: var(--color-text-secondary);
+  }
+
+  .dot {
+    background: currentcolor;
+    border-radius: var(--radius-circle);
+    block-size: 0.375rem;
+    display: inline-block;
+    flex-shrink: 0;
+    inline-size: 0.375rem;
+  }
+
+  /* The objective is the one line that gives way: it takes what the fixed parts leave and ends in
+     an ellipsis. The title carries it whole for the pointer; aria-description on the card carries
+     it with a blocked condition for a reader who cannot hover. */
+  .objective {
+    color: var(--color-text-primary);
+    flex: 1 1 auto;
+    font-size: var(--font-size-body);
+    line-height: var(--line-height-control);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .rounds {
+    color: var(--color-text-subtle);
+    flex-shrink: 0;
+    font-size: var(--font-size-caption);
+    font-variant-numeric: tabular-nums;
+    line-height: var(--line-height-control);
+    white-space: nowrap;
+  }
+
+  /* A blocked condition shares the row rather than adding one: it takes the space a long reason
+     would steal from the objective, ends in an ellipsis, and keeps the whole reason in its title. */
+  .reason {
+    color: var(--color-danger);
+    flex: 0 1 auto;
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    max-width: min(28ch, 30%);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .failure {
+    color: var(--color-danger);
+    flex: 0 1 auto;
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    max-width: 30ch;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* One line under the card for a goal that will not continue on its own: complete, or blocked
+     until a human resumes. Neutral copy, no new control: the reader's decision stays in the bar. */
+  .noticeGroup {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3xs);
+  }
+
+  .notice {
+    color: var(--color-text-subtle);
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    padding: 0 var(--space-component);
+  }
+
+  .notice[data-phase='blocked'] {
+    color: var(--color-text-muted);
+  }
+
+  .actions {
+    align-items: center;
+    color: var(--color-text-muted);
+    display: flex;
+    flex-shrink: 0;
+    gap: 0;
+  }
+
+  .actions button:hover:not(:disabled) {
+    background: var(--color-bg-elevated);
+  }
+
+  .actions .danger:hover:not(:disabled) {
+    color: var(--color-danger);
+  }
+
+  /* Editing takes the card's body and gives the words the room the controls had. The field keeps
+     the composer's border and focus ring so it reads as the same kind of surface. */
+  .edit {
+    background: var(--color-bg-base);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-control);
+    color: var(--color-text-primary);
+    font: inherit;
+    font-family: inherit;
+    font-size: var(--font-size-body);
+    line-height: var(--line-height-control);
+    margin: 0;
+    min-height: calc(var(--size-button) + var(--space-2xs));
+    padding: var(--space-2xs) var(--space-tight);
+    resize: vertical;
+    width: 100%;
+  }
+
+  .edit:focus {
+    border-color: var(--color-control-ring);
+    box-shadow: 0 0 0 2px var(--color-accent-ghost);
+    outline: none;
+  }
+
+  .editActions {
+    align-items: center;
+    display: flex;
+    gap: var(--space-2xs);
+    justify-content: flex-end;
+  }
+
+  .editActions .dl-btn {
+    min-height: var(--size-button);
+    padding-inline: var(--space-component);
+  }
+
+  .editActions .save {
+    border-color: var(--color-accent-border);
+    color: var(--color-accent-text);
+  }
+
+  .editActions .save:hover:not(:disabled) {
+    border-color: var(--color-accent-border-strong);
+  }
+
+  /* The cap prompt is the same card below the bar: the reader has just pressed Resume at the
+     cap, so the missing number sits where the bar's controls were, not in a modal over the page. */
+  .capPrompt {
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-card);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2xs);
+    padding: var(--space-2xs) var(--space-component);
+  }
+
+  .capPromptHeading {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3xs);
+  }
+
+  .capPromptTitle {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-detail);
+    font-weight: 600;
+  }
+
+  .capPromptCopy,
+  .capPromptHint {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+  }
+
+  .capPromptRow {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2xs);
+  }
+
+  .capPromptLabel {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-caption);
+  }
+
+  .capPromptInput {
+    background: var(--color-bg-base);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-control);
+    color: var(--color-text-primary);
+    font: inherit;
+    font-size: var(--font-size-detail);
+    height: var(--size-button);
+    padding: 0 var(--space-2xs);
+    width: 5.5rem;
+  }
+
+  .capPromptInput:focus {
+    border-color: var(--color-control-ring);
+    box-shadow: 0 0 0 2px var(--color-accent-ghost);
+    outline: none;
+  }
+
+  .capPromptError {
+    color: var(--color-danger);
+    font-size: var(--font-size-caption);
+    margin: 0;
+  }
+
+  .capPromptActions {
+    display: flex;
+    gap: var(--space-2xs);
+    justify-content: flex-end;
+  }
+
+  .capPromptActions .dl-btn {
+    min-height: var(--size-button);
+    padding-inline: var(--space-component);
+  }
+
+  .capSave {
+    border-color: var(--color-accent-border);
+    color: var(--color-accent-text);
+  }
+
+  .capSave:hover:not(:disabled) {
+    border-color: var(--color-accent-border-strong);
+  }
+
+  /* The round is the first thing to leave when the words need the room. */
+  @media (width <= 760px) {
+    .rounds {
+      display: none;
+    }
+
+    .reason {
+      max-width: 12ch;
+    }
+  }
+
+  @media (pointer: coarse) {
+    .card {
+      padding-block: var(--space-2xs);
+    }
+  }
+}

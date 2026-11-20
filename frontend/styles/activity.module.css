@@ -3,27 +3,50 @@
 /* One agent's activity as a timeline of steps on a rule, in a pane that scrolls (ui/activity.ts). */
 
 @layer features {
-  @keyframes pulse {
-    0%,
-    100% {
-      opacity: 1;
-      transform: scale(1);
-    }
-
-    50% {
-      opacity: 0.45;
-      transform: scale(0.8);
-    }
-  }
-
   .root {
     display: block;
   }
 
   /* The timeline scrolls in its own pane; the inline padding leaves room for a focus ring at its edges. */
+
+  /* The words a reader searched for. A reader looks for these in a message that can be a hundred
+     thousand characters long, so the mark is the product's brightest gold under dark text: a muted
+     highlight on a muted background is one a reader never finds. */
+  .pane mark {
+    background: var(--color-gold-200);
+    border-radius: var(--radius-highlight);
+    color: var(--color-stone-900);
+    padding: 0 0.1em;
+  }
+
+  /* The conclusion stays where a reader can reach it: the list can be a hundred steps long, and
+     a line at the end of it is a line nobody scrolls to. Sticky, it is the first line of the
+     pane whatever the scroll, and the work passes under it. */
+
+  /* A window of an agent's own words: the same box a result opens, in the page's type. */
+  .prose {
+    font-family: inherit;
+    font-size: var(--font-size-detail);
+    line-height: var(--line-height-message);
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+
+  li.brief {
+    background: var(--color-bg-surface);
+    inset-block-start: 0;
+    padding-block: var(--space-tight);
+    position: sticky;
+    z-index: 1;
+  }
+
   .pane {
     margin-top: var(--space-tight);
-    max-height: 24rem;
+
+    /* A fallback for a page with no scroller to measure: where there is one, the view sets this to
+       the room the page has left, so a window opened low on a page cannot push the page into a
+       scroll of its own. */
+    max-height: min(88vh, 72rem);
     overflow-y: auto;
     padding-inline: var(--space-tight);
   }
@@ -42,8 +65,10 @@
   }
 
   .step {
+    border-radius: var(--radius-control);
     padding-block: var(--space-tight);
     position: relative;
+    transition: background var(--duration-control) var(--easing-standard);
   }
 
   /* The dot sits on the rule, centered on it whatever the indent. */
@@ -60,7 +85,7 @@
   }
 
   .stepRunning::before {
-    animation: pulse 1.6s ease-in-out infinite;
+    animation: var(--duration-pulse-slow) global(dl-pulse) ease-in-out infinite;
     background: var(--color-accent-indicator);
   }
 
@@ -111,9 +136,36 @@
 
   .verb {
     color: var(--color-text-secondary);
-    display: block;
+    display: flex;
     font-size: var(--font-size-detail);
+    gap: var(--space-tight);
     line-height: var(--line-height-control);
+  }
+
+  /* The time a step took, at the far end of its own line: a reader scanning the timeline reads
+     where the row ends, not a column that moves with the verb. */
+  .duration {
+    color: var(--color-text-subtle);
+    flex: none;
+    font-size: var(--font-size-caption);
+    margin-inline-start: auto;
+  }
+
+  /* The bounded subject a Tool reported (a query, a URL, a command): the Tool's own label, not its
+     raw argument or result payload, and never a substitute for its result. It sits beside the verb
+     and the result excerpt and truncates its own overflow, so a long subject cannot push either off
+     the row. */
+  .subject {
+    color: var(--color-text-muted);
+    display: inline-block;
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    margin-inline-start: var(--space-tight);
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: bottom;
+    white-space: nowrap;
   }
 
   .excerpt {
@@ -153,6 +205,24 @@
     white-space: pre-wrap;
   }
 
+  /* The reasoning behind a step's words: a fold above them, shut by default, because the timeline is
+     about what the agent did and the thinking is how it got there. Its window is the same one a tool
+     result opens. */
+  .thinking {
+    margin-bottom: var(--space-tight);
+  }
+
+  .thinking > details > .stepSummary {
+    min-height: 0;
+    padding-block: var(--space-3xs);
+  }
+
+  /* A thinking step is the step: its fold carries the row, so it needs no spacing below itself. The
+     same fold inside a say step or a conclusion keeps that spacing above the words it explains. */
+  [data-step-kind='thinking'] > .thinking {
+    margin-bottom: 0;
+  }
+
   .told {
     color: var(--color-text-muted);
     font-size: var(--font-size-caption);
@@ -164,5 +234,29 @@
     line-height: var(--line-height-control);
     overflow-wrap: anywhere;
     white-space: pre-wrap;
+  }
+
+  .deliveryCheck {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    font-weight: 500;
+  }
+
+  .deliveryText {
+    color: var(--color-text-tertiary);
+    font-size: var(--font-size-detail);
+    line-height: var(--line-height-control);
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+
+  /* The step a finding sent the reader to: ringed where it sits, in view. The ring is a tone and a
+     rule, never a size change, so lighting a step cannot move the steps a reader is comparing. */
+  .step[data-focus='true'] {
+    background: var(--color-accent-ghost);
+    border-radius: var(--radius-control);
+    outline: 2px solid var(--focus-ring-color);
+    outline-offset: -2px;
+    scroll-margin-block: var(--space-component);
   }
 }

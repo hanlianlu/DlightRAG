@@ -12,8 +12,9 @@ from httpx import ASGITransport, AsyncClient
 from dlightrag.adapters.http.browser.routes.images import router as web_images_router
 from dlightrag.adapters.http.rest.auth import get_current_user
 from dlightrag.adapters.http.rest.routes.images import router as api_images_router
-from dlightrag.application.access import AccessAction, UserContext
-from dlightrag.application.config import DlightragConfig
+from dlightrag.application.access.control import AccessAction
+from dlightrag.application.access.principal import UserContext
+from dlightrag.application.config.sections import DlightragConfig
 from tests.support.application_double import application_double
 
 

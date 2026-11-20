@@ -6,9 +6,7 @@ PostgreSQL in tests/integration/test_metadata_scope_pg.py.
 """
 
 from dlightrag.adapters.postgres.corpus import pg_metadata_index
-from dlightrag.adapters.postgres.corpus.pg_metadata_index import _SCHEMA_MIGRATIONS
-from dlightrag.engine.rag.retrieval import MetadataFilter, MetadataScope
-from dlightrag.engine.rag.retrieval.metadata_fields import METADATA_FIELD_IDS
+from dlightrag.engine.rag.retrieval.models import MetadataFilter, MetadataScope
 
 
 def test_contains_predicate_escapes_pattern_language() -> None:
@@ -16,33 +14,6 @@ def test_contains_predicate_escapes_pattern_language() -> None:
 
     assert like_contains_pattern("Report.pdf") == "%Report.pdf%"
     assert like_contains_pattern("50%_off\\docs") == "%50\\%\\_off\\\\docs%"
-
-
-def test_migrations_are_derived_not_recorded_history() -> None:
-    """Every version maps to a metadata field or named foundation step declared today."""
-    declared = set(METADATA_FIELD_IDS)
-    allowed = (
-        {
-            "document_metadata",
-            "column_finalization_complete",
-            "partition_default_child",
-            "function_canonical_custom_metadata",
-            "column_custom_metadata_search",
-            "backfill_custom_metadata_search",
-            "index_workspace_download_locator",
-            "index_custom_metadata_search_gin",
-            "index_filename_trgm",
-            "metadata_field_stats",
-            "product_document_visibility",
-            "publish_legacy_processed_documents",
-            "source_retrieval_options",
-            "parser_input_sha256",
-        }
-        | {f"column_{field_id}" for field_id in declared}
-        | {f"index_{field_id}_canonical" for field_id in declared}
-    )
-
-    assert {migration.version for migration in _SCHEMA_MIGRATIONS} <= allowed
 
 
 async def test_empty_visibility_subset_never_queries_storage() -> None:

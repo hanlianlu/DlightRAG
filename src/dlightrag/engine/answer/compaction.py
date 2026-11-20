@@ -66,7 +66,7 @@ class CompactionOutcome:
     """What one committed compaction covered, for the operator trace.
 
     ``call`` is the summarizer call that wrote the summary, which the entry that commits the
-    projection records (ADR 0041). It is the call of this attempt alone: an earlier attempt that
+    projection records (ADR 0043). It is the call of this attempt alone: an earlier attempt that
     failed left no projection and no record.
     """
 

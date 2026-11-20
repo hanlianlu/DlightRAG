@@ -9,6 +9,7 @@ from dlightrag.engine.agent.session.entries import (
     AssistantMessageEntry,
     CompactionEntry,
     ControlMessageEntry,
+    DeliveryWarningEntry,
     ToolResultMessageEntry,
     UserMessageEntry,
 )
@@ -398,3 +399,28 @@ def test_working_projection_round_trips_signed_state_through_canonical_json() ->
 
     assert projection.messages() == state["exchanges"][0]
     assert projection.canonical_json() == state
+
+
+def test_a_delivery_warning_is_not_folded_into_the_model_transcript() -> None:
+    session_id = SessionId.new()
+    answer = AssistantMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        timestamp=_now(),
+        content="the answer",
+        stop_reason="stop",
+    )
+    warning = DeliveryWarningEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        timestamp=_now(),
+        parent_entry_id=answer.entry_id,
+        operation_id="op",
+        attempt=1,
+        findings=("not read: references/gate-audit.md (before delivery)",),
+    )
+
+    messages = fold_entries((answer, warning))
+
+    assert [message["role"] for message in messages] == ["assistant"]
+    assert messages[0]["content"] == "the answer"

@@ -21,8 +21,9 @@ from urllib.parse import quote, quote_plus
 import pytest
 from pydantic import SecretStr
 
-from dlightrag.engine.answer.agent_browser import (
+from dlightrag.engine.answer.agent_browser.accounts import (
     ACCOUNT_LABEL,
+    PASSWORD_MIN_LENGTH,
     AgentAccount,
     AgentAccountsBinding,
     RunAgentAccounts,
@@ -87,7 +88,7 @@ def test_a_site_is_read_from_the_bundled_list_with_no_socket_and_no_cache_file(
     script = f"""
 import json, sys
 sys.path[:0] = {_IMPORT_PATHS!r}
-from dlightrag.engine.answer.agent_browser import account_site
+from dlightrag.engine.answer.agent_browser.accounts import account_site
 
 sockets = []
 def refuse(event, args):
@@ -143,6 +144,16 @@ def test_a_generated_password_has_the_length_asked_and_every_class_and_never_rep
     distinct = len(set(passwords))
     assert (formed, distinct) == (200, 200)
     assert well_formed(shorter, 14) is True
+
+
+def test_a_length_the_composition_cannot_hold_is_refused_rather_than_rounded_up() -> None:
+    """Every password holds one character of each class, so a shorter ask cannot be honoured:
+    the generator refuses it instead of answering with a longer password than was asked for."""
+    with pytest.raises(ValueError, match=f"at least {PASSWORD_MIN_LENGTH} characters"):
+        generate_password(PASSWORD_MIN_LENGTH - 1)
+
+    shortest = generate_password(PASSWORD_MIN_LENGTH).get_secret_value()
+    assert well_formed(shortest, PASSWORD_MIN_LENGTH) is True
 
 
 def test_no_encoding_a_page_or_a_driver_uses_changes_a_generated_password() -> None:
@@ -239,14 +250,14 @@ def test_without_a_ring_accounts_are_unavailable() -> None:
 
 
 def test_an_owners_alias_is_stable_for_a_site_and_differs_for_every_other_owner_and_site() -> None:
-    alias = owner_alias("owner", "shop.example", "orliantra.cc")
+    alias = owner_alias("owner", "shop.example", "mail.example")
 
-    assert re.fullmatch(r"[a-z2-7]{16}@orliantra\.cc", alias)
-    assert owner_alias("owner", "shop.example", "orliantra.cc") == alias
+    assert re.fullmatch(r"[a-z2-7]{16}@mail\.example", alias)
+    assert owner_alias("owner", "shop.example", "mail.example") == alias
     distinct = {
         alias,
-        owner_alias("another", "shop.example", "orliantra.cc"),
-        owner_alias("owner", "other.example", "orliantra.cc"),
+        owner_alias("another", "shop.example", "mail.example"),
+        owner_alias("owner", "other.example", "mail.example"),
     }
     assert len(distinct) == 3
     # It names nothing of the owner or the site.
@@ -254,15 +265,15 @@ def test_an_owners_alias_is_stable_for_a_site_and_differs_for_every_other_owner_
 
 
 def test_a_childs_alias_is_random_on_the_same_domain() -> None:
-    aliases = {run_alias("orliantra.cc") for _ in range(50)}
+    aliases = {run_alias("mail.example") for _ in range(50)}
 
     assert len(aliases) == 50
-    assert all(re.fullmatch(r"[a-z2-7]{16}@orliantra\.cc", alias) for alias in aliases)
-    assert owner_alias("owner", SITE, "orliantra.cc") not in aliases
+    assert all(re.fullmatch(r"[a-z2-7]{16}@mail\.example", alias) for alias in aliases)
+    assert owner_alias("owner", SITE, "mail.example") not in aliases
 
 
 async def test_the_inbox_window_opens_at_each_sign_in_and_names_only_mailbox_aliases() -> None:
-    run = accounts(MemoryAccountStore(), mailbox=StubMailbox("orliantra.cc"))
+    run = accounts(MemoryAccountStore(), mailbox=StubMailbox("mail.example"))
     session = run.session("parent", child=False)
     alias, other = session.new_alias(SITE), session.new_alias("other.example")
     assert session.inbox_window() is None
@@ -276,7 +287,7 @@ async def test_the_inbox_window_opens_at_each_sign_in_and_names_only_mailbox_ali
     assert timedelta(0) <= window.since - before < timedelta(seconds=5)
     # A later sign-in moves the window on and keeps the aliases of the Run. An address the Agent
     # typed is no alias, though it ends in the mailbox's domain. Another Session has no window.
-    typed, _ = await register(run, "parent", site="typed.example", email="info@orliantra.cc")
+    typed, _ = await register(run, "parent", site="typed.example", email="info@mail.example")
     second, _ = await register(run, "parent", site="other.example", email=other)
     session.signed_in(typed)
     session.signed_in(second)
@@ -289,7 +300,7 @@ async def test_the_inbox_window_opens_at_each_sign_in_and_names_only_mailbox_ali
 async def test_a_deployment_with_no_mailbox_keeps_no_inbox_window() -> None:
     run = accounts(MemoryAccountStore())
     session = run.session("parent", child=False)
-    account, _ = await register(run, "parent", email="a@orliantra.cc")
+    account, _ = await register(run, "parent", email="a@mail.example")
 
     session.signed_in(account)
 

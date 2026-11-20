@@ -1,0 +1,26 @@
+# Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
+
+[project]
+name = "dlightrag-mineru"
+version = "3.0.0"
+description = "Host-side MinerU sidecar manager: install, launch, and background-service it"
+requires-python = ">=3.14"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+maintainers = [{ name = "HanlianLyu" }, { name = "hllyu" }]
+# Standard library only: a machine that needs a pip install to start its parser
+# sidecar fails on the machine that matters (ADR 0054).
+dependencies = []
+
+[project.scripts]
+dlightrag-mineru = "dlightrag_mineru.cli:main"
+
+[build-system]
+# Forward-only policy: CI verifies new backend releases; do not add an upper bound.
+requires = ["uv_build>=0.11.21"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+# The env template ships as package data; the startup shim lives inside the module.
+source-include = [".env.example"]
+source-exclude = ["**/.DS_Store"]

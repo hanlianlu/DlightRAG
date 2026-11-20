@@ -16,7 +16,7 @@ from dlightrag.adapters.postgres.core._migrations import (
 )
 from dlightrag.adapters.postgres.core._notifications import ChannelWatcher, PGNotificationHub
 from dlightrag.adapters.postgres.core._operations import ConnectionPool, PostgresOperationRunner
-from dlightrag.application.model_catalogue import (
+from dlightrag.application.model_catalogue.service import (
     ModelCatalogueSchemaError,
     StoredModelCatalogue,
 )
@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS dlightrag_model_catalogue (
 
 MODEL_CATALOGUE_MIGRATIONS = (
     Migration(
-        "model_catalogue",
+        "baseline",
         "Create the active runtime model catalogue overlay",
         (_CREATE_MODEL_CATALOGUE,),
     ),

@@ -11,14 +11,20 @@ from dlightrag.adapters.http.rest.models import (
     WorkspaceCreateResponse,
     WorkspacesResponse,
 )
-from dlightrag.application.access import AccessAction, UserContext, owner_id_from_user
-from dlightrag.application.corpus_admin import (
+from dlightrag.application.access.control import AccessAction
+from dlightrag.application.access.principal import (
+    UserContext,
+    owner_id_from_user,
+)
+from dlightrag.application.corpus_admin.service import (
+    validate_workspace_name,
+    workspace_id_for_name,
+)
+from dlightrag.application.corpus_admin.workspace_catalog import (
     WORKSPACE_CATALOG_PAGE_DEFAULT_LIMIT,
     WORKSPACE_CATALOG_PAGE_MAX_LIMIT,
     WorkspaceCatalogCursorError,
     WorkspaceCatalogPageRequest,
-    validate_workspace_name,
-    workspace_id_for_name,
 )
 
 from .deps import (

@@ -4,13 +4,13 @@
 from fastapi import HTTPException
 from starlette.responses import FileResponse, RedirectResponse
 
-from dlightrag.application.corpus_admin import (
-    CorpusAdmin,
+from dlightrag.application.corpus_admin.errors import (
     LocalDownloadTarget,
     RedirectDownloadTarget,
     SourceDownloadInvalidError,
     SourceDownloadNotFoundError,
 )
+from dlightrag.application.corpus_admin.service import CorpusAdmin
 
 
 async def source_download_response(

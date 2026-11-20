@@ -7,13 +7,16 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from dlightrag.engine.rag.retrieval import MetadataFilter, MetadataScope
 from dlightrag.engine.rag.retrieval.filtering import (
     FilteredVectorStorage,
     metadata_filter_scope,
 )
 from dlightrag.engine.rag.retrieval.metadata_fields import (
     INGEST_FINALIZATION_COMPLETE_FIELD,
+)
+from dlightrag.engine.rag.retrieval.models import (
+    MetadataFilter,
+    MetadataScope,
 )
 from dlightrag.engine.rag.retrieval.visibility import (
     bounded_visibility_candidate_limit,

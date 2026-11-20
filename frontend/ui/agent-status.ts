@@ -27,6 +27,12 @@ export function agentStateText(child: AgentChildStatus): string {
   }
 }
 
+/** Whether this row draws a time that still moves: an agent that has started and
+ *  is still running, or one waiting on a question whose countdown the page draws. */
+export function agentIsCounting(row: AgentChildStatus): boolean {
+  return row.pendingQuestions > 0 || (row.status === 'running' && row.startedAt !== null);
+}
+
 /** How long the child's current Operation has run, or took; nothing when the server gave no start. */
 export function agentElapsed(child: AgentChildStatus, now: number): string {
   const start = child.startedAt === null ? Number.NaN : Date.parse(child.startedAt);

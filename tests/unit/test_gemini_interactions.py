@@ -64,7 +64,7 @@ from tests.support.loopback import (
     reset_on_accept,
 )
 
-_MODEL = "gemini-3.8-flash"
+_MODEL = "gemini-4-hydrogen"
 _URL = "https://generativelanguage.googleapis.com/v1beta/interactions"
 _PAGE = base64.b64encode(b"\x89PNG\r\n\x1a\npage-two").decode()
 _PAGE_URL = f"data:image/png;base64,{_PAGE}"
@@ -100,6 +100,10 @@ _COUNTERS = {
     "thoughts_tokens": 297,
     "total_tokens": 530,
 }
+#: A completed interaction adds the first hop's input as its own counter: google-genai 2.34
+#: records ``initial_input_tokens`` when it merges a non-streamed interaction's hop usage,
+#: and DlightRAG surfaces every integer counter a provider reports.
+_COUNTERS_WITH_INITIAL_INPUT = {**_COUNTERS, "initial_input_tokens": 62}
 _ENTRYPOINTS = (
     "complete",
     "stream",
@@ -378,7 +382,8 @@ async def test_a_completion_is_one_stateless_interaction_with_its_thinking_contr
 
 
 @pytest.mark.parametrize(
-    ("requested", "sent"), [("low", "low"), ("medium", "medium"), ("max", "high")]
+    ("requested", "sent"),
+    [("low", "low"), ("medium", "medium"), ("xhigh", "xhigh"), ("max", "xhigh")],
 )
 async def test_a_reasoning_level_is_sent_as_the_catalogued_thinking_level(
     requested: str, sent: str
@@ -442,6 +447,45 @@ async def test_streamed_text_arrives_as_it_comes_and_the_terminal_usage_is_kept(
     assert gemini.requests[0].headers["accept"] == "text/event-stream"
 
 
+def _named_stream(model: str) -> httpx2.Response:
+    """A streamed answer whose terminal event names the model that served it."""
+    return _sse(
+        _CREATED,
+        _start(0, {"content": [{"text": "Revenue", "type": "text"}], "type": "model_output"}),
+        _stop(0),
+        {
+            "event_type": "interaction.completed",
+            "interaction": {"id": "i-1", "status": "completed", "usage": _USAGE, "model": model},
+        },
+    )
+
+
+async def test_the_model_a_stream_names_is_stated_apart_from_its_usage() -> None:
+    gemini = _Gemini(_named_stream("gemini-4-hydrogen-001"))
+    model = _completion_model(gemini)
+    usage: dict[str, Any] = {}
+    call: dict[str, Any] = {}
+    try:
+        stream = await model([_QUESTION], stream=True, usage_holder=usage, call_holder=call)
+        assert [token async for token in stream] == ["Revenue"]
+    finally:
+        await model.aclose()
+
+    assert call["call"].served_model == "gemini-4-hydrogen-001"
+    assert usage == {"usage_details": _COUNTERS}
+
+
+async def test_the_model_a_streamed_turn_names_reaches_the_turn() -> None:
+    model = _tool_model(_Gemini(_named_stream("gemini-4-hydrogen-001")))
+    try:
+        turn, _emitted = await _stream_turn(model)
+    finally:
+        await model.aclose()
+
+    assert turn.served_model == "gemini-4-hydrogen-001"
+    assert turn.call is not None and turn.call.served_model == "gemini-4-hydrogen-001"
+
+
 class _Answer(BaseModel):
     answer: str
     page: int
@@ -497,7 +541,7 @@ async def test_a_tool_turn_round_trips_through_a_session_with_its_thought_in_pla
     assert turn.reasoning == "Page 2 holds the table."
     assert turn.tool_calls == (ToolCall(id="call-1", name="view", arguments={"page": 2}),)
     assert turn.stop_reason == "tool_use"
-    assert turn.usage_details == _COUNTERS
+    assert turn.usage_details == _COUNTERS_WITH_INITIAL_INPUT
     assert replayed["provider_state"]["payload"] == {"interaction_steps": first["steps"]}
     assert answer.text == "Page 2 shows revenue by quarter."
     asked, answered = gemini.bodies
@@ -736,7 +780,7 @@ async def test_usage_counts_thinking_as_output_and_keeps_cache_hits() -> None:
 
     # Output is 171 visible plus 297 thought tokens, as Google bills it and as every other
     # provider reports reasoning; input plus output is the total again.
-    assert turn.usage_details == _COUNTERS
+    assert turn.usage_details == _COUNTERS_WITH_INITIAL_INPUT
     assert provider_input_tokens(turn.usage_details) == 62
     assert provider_cache_hit_tokens(turn.usage_details) == 40
     # Gemini counts its 40 cached tokens inside the 62 of the prompt, so `input` is
@@ -836,6 +880,7 @@ async def test_a_turn_cut_off_by_its_token_cap_keeps_its_text_and_reports_its_ca
         _text("The table shows"),
         {"type": "function_call", "id": "call-1", "name": "view", "arguments": {}},
         status="incomplete",
+        model="gemini-4-hydrogen-001",
     )
     model = _tool_model(_Gemini(cut))
     try:
@@ -843,25 +888,17 @@ async def test_a_turn_cut_off_by_its_token_cap_keeps_its_text_and_reports_its_ca
     finally:
         await model.aclose()
 
-    # The wrapper adds the call it made beside what the interaction held.
-    assert turn.call is not None
+    # The turn also states the model the interaction names and how the wrapper called it; the
+    # rest of it is what the interaction held.
+    assert turn.call is not None and turn.call.served_model == "gemini-4-hydrogen-001"
     assert dataclasses.replace(turn, call=None) == AssistantTurn(
         text="The table shows",
         reasoning="Page 2 holds the table.",
         tool_calls=(ToolCall(id="call-1", name="view", arguments={}),),
         stop_reason="length",
-        usage_details=_COUNTERS,
+        usage_details=_COUNTERS_WITH_INITIAL_INPUT,
+        served_model="gemini-4-hydrogen-001",
     )
-
-
-async def test_the_model_an_interaction_names_is_the_model_that_served_the_turn() -> None:
-    model = _tool_model(_Gemini(_interaction(_text("Hello."), model="gemini-3.8-flash-001")))
-    try:
-        turn = await model(messages=[_QUESTION], tools=[_VIEW])
-    finally:
-        await model.aclose()
-
-    assert turn.served_model == "gemini-3.8-flash-001"
 
 
 async def test_a_stream_cut_off_mid_call_keeps_its_text_and_reports_the_call() -> None:

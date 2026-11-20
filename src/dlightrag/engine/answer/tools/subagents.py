@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
@@ -21,7 +21,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from dlightrag.engine.agent.session.effects import canonical_json
 from dlightrag.engine.agent.session.ids import EntryId, IntentId, SessionId
 from dlightrag.engine.agent.tool_content import tool_content_message_fields
-from dlightrag.engine.agent.tools import AgentTool, ToolDeclaration, ToolResult, ToolRuntime
+from dlightrag.engine.agent.tools.contracts import (
+    AgentTool,
+    ToolDeclaration,
+    ToolResult,
+    ToolRuntime,
+)
 from dlightrag.engine.answer.attachment_replay import AttachmentOccurrence
 from dlightrag.engine.answer.evidence import EvidenceDelta
 from dlightrag.engine.answer.research.persistence import (
@@ -34,12 +39,15 @@ from dlightrag.engine.answer.research.persistence import (
     ListChildren,
     LoadChild,
     LoadChildGuidance,
+    LoadChildTranscript,
     PersistChild,
     ReleaseChildren,
     ReplyChildGuidance,
     SteerChild,
     WaitChildGuidance,
 )
+from dlightrag.engine.answer.tools.child_activity import render_child_activity
+from dlightrag.engine.answer.tools.memory import MEMORY_MUTATION_TOOLS
 from dlightrag.engine.runtime.coordinator import RunCancellationObserved
 
 type ChildStatus = Literal["running", "succeeded", "failed", "cancelled"]
@@ -55,6 +63,9 @@ logger = logging.getLogger(__name__)
 #: holds the two together.
 MAX_CHILDREN_PER_SPAWN = 16
 DEFAULT_CHILD_CONCURRENCY = MAX_CHILDREN_PER_SPAWN
+
+#: How many ids a refusal for an unknown child or request lists before it counts the rest.
+_LISTED_IDS = 16
 
 
 class _ParentRunCancelled(asyncio.CancelledError):
@@ -94,6 +105,15 @@ class SpawnAgentInput(BaseModel):
         max_length=MAX_CHILDREN_PER_SPAWN,
         description="Children to start together; their objectives must differ.",
     )
+    wake: Literal["all", "each"] = Field(
+        default="all",
+        description=(
+            "When you end your turn with children still running, the Run resumes you with "
+            "their results: all once every child of this call has settled, each as children "
+            "settle, with the new results and the children still running named. Use each only "
+            "if you can act on partial results, and cancel children you no longer need."
+        ),
+    )
 
     @model_validator(mode="after")
     def _unique_objectives(self) -> SpawnAgentInput:
@@ -110,6 +130,20 @@ class ChildControlInput(BaseModel):
 
 class ChildMessageInput(ChildControlInput):
     content: str = Field(min_length=1, max_length=20_000)
+
+
+class ReadSubagentInput(ChildControlInput):
+    limit: int = Field(
+        default=10, ge=1, le=30, description="How many of its newest messages to read."
+    )
+    after: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Read only what is newer than a message number you have seen: "
+            "the oldest `limit` messages after it."
+        ),
+    )
 
 
 class GuidanceReplyInput(BaseModel):
@@ -295,6 +329,7 @@ class SubagentHost:
     persist: PersistChild | None = None
     load_child: LoadChild | None = None
     list_children: ListChildren | None = None
+    load_transcript: LoadChildTranscript | None = None
     finish_child: FinishChild | None = None
     request_cancel: CancelChild | None = None
     release_children: ReleaseChildren | None = None
@@ -328,6 +363,9 @@ class SubagentHost:
     _cancel_requested: set[str] = field(default_factory=set, init=False, repr=False)
     # Settled results the parent has been handed through status, wait, cancel or an
     # accepted notification, and the results each notification not yet taken carries.
+    # They live in this process only. After a crash the parent may be sent a result
+    # again, whether a wait or an earlier notification of a spawn with wake="each"
+    # delivered it.
     _read_results: set[str] = field(default_factory=set, init=False, repr=False)
     _notified_results: dict[str, tuple[str, ...]] = field(
         default_factory=dict, init=False, repr=False
@@ -375,7 +413,9 @@ class SubagentHost:
         no recovered attempt takes the same notification twice. Notification identity
         includes each Child Operation identity, so later
         Operations in the same Child Session surface without deduplicating the
-        Session forever.
+        Session forever. A dispatch with ``wake="each"`` is complete as soon as one
+        Child has settled: its notification carries the results not yet read and names
+        the Children still running, and the next has a new identity.
         """
         if self.list_children is None:
             return ()
@@ -406,24 +446,25 @@ class SubagentHost:
                 grouped.setdefault(parent_intent_id, []).append(row)
         notifications: list[tuple[str, str]] = []
         for parent_intent_id, dispatch_rows in grouped.items():
-            if any(str(row.get("status")) == "running" for row in dispatch_rows):
-                continue
-            outcomes = tuple(
-                _adopt_outcome(
-                    self,
-                    _terminal_outcome_from_row(row, str(row.get("child_session_id") or "")),
-                    parent_call_id=str(row.get("parent_call_id") or ""),
-                )
+            running = [
+                str(row.get("child_session_id") or "")
                 for row in dispatch_rows
-            )
+                if str(row.get("status")) == "running"
+            ]
+            if running and not all(_wakes_each(row) for row in dispatch_rows):
+                continue
+            outcomes = _settled_results(self, dispatch_rows)
             identities = sorted(_result_key(outcome) for outcome in outcomes)
             digest = hashlib.sha256("\0".join(identities).encode("utf-8")).hexdigest()[:24]
             notification_id = f"child-results:{parent_intent_id}:{digest}"
-            unread = tuple(o for o in outcomes if _result_key(o) not in self._read_results)
+            unread = _unread(self, outcomes)
             if notification_id in seen or not unread:
                 continue
             self._notified_results[notification_id] = tuple(_result_key(o) for o in unread)
-            notifications.append((notification_id, _many_result(unread).text_content))
+            content = _many_result(unread).text_content
+            if running:
+                content += f"\nStill running: {', '.join(running)}."
+            notifications.append((notification_id, content))
         return tuple(notifications)
 
     def notify_parent(self) -> None:
@@ -522,11 +563,12 @@ _SPAWN_DESCRIPTION = (
     "Start child agents, each working on its own objective in its own context. A handle for "
     "each comes back at once and the children run beside you, in parallel as capacity "
     "allows. A child has your tools except those that spend the Run's authority: "
-    "controlling children, changing memory (remember, forget) and publishing "
+    f"controlling children, changing memory ({', '.join(MEMORY_MUTATION_TOOLS)}) "
+    "holding the Run's goal (create_goal, get_goal, update_goal), and publishing "
     "(attach_artifact, publish_skill, delete_skill, set_skill_enabled). What a child finds "
     "becomes citable once you read its result with wait_subagent or subagent_status; if you "
     "end your turn first, the Run stays open and sends you the results when every child of "
-    "this call has settled."
+    "this call has settled, unless wake says otherwise."
 )
 
 
@@ -556,8 +598,8 @@ def subagent_declarations(*, model_guidance: str | None = None) -> tuple[ToolDec
         ToolDeclaration(
             "wait_subagent",
             "Wait for one child. It returns when the child settles, and earlier, with the child "
-            "still running, when another child settles or a child asks a question; call it "
-            "again if it reports running.",
+            "still running, when another child settles (that result comes with it) or a child "
+            "asks a question; call it again if it reports running.",
             ChildControlInput,
             replay_policy="replayable",
             contract_version=version,
@@ -593,6 +635,17 @@ def subagent_declarations(*, model_guidance: str | None = None) -> tuple[ToolDec
             replay_policy="replayable",
             contract_version=version,
         ),
+        ToolDeclaration(
+            "read_subagent",
+            "Read what one child has done so far: its newest messages, oldest first, with its own "
+            "words, the tools it called, and short excerpts of what they returned. Use it to "
+            "decide whether to steer or cancel a child, not to poll: wait_subagent tells you when "
+            "something changes, and a child's result comes with its settlement.",
+            ReadSubagentInput,
+            replay_policy="replayable",
+            read_only=True,
+            contract_version=version,
+        ),
     )
 
 
@@ -606,7 +659,10 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
     async def status(raw: BaseModel, _runtime: ToolRuntime) -> ToolResult:
         args = cast(ChildControlInput, raw)
         await _check_cancelled(host)
-        current, parent_call_id = await _roster_status(host, args.child_session_id)
+        found = await _roster_status(host, args.child_session_id)
+        if found is None:
+            return await _unknown_child(host, args.child_session_id)
+        current, parent_call_id = found
         return _result_with_guidance(
             host,
             current,
@@ -617,7 +673,10 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
     async def wait(raw: BaseModel, _runtime: ToolRuntime) -> ToolResult:
         args = cast(ChildControlInput, raw)
         await _check_cancelled(host)
-        current, parent_call_id = await _roster_status(host, args.child_session_id)
+        found = await _roster_status(host, args.child_session_id)
+        if found is None:
+            return await _unknown_child(host, args.child_session_id)
+        current, parent_call_id = found
         if current.status != "running":
             return _result_with_guidance(
                 host,
@@ -627,20 +686,30 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
             )
         await host.restore_pending()
         pending = await _pending_guidance(host, args.child_session_id)
-        if not pending:
+        siblings = await _unread_siblings(host, args.child_session_id)
+        # A wake that brings nothing new, such as one a sibling left behind while the
+        # parent was not waiting, is not worth a return.
+        while not pending and not siblings:
             task = host.tasks.get(args.child_session_id)
-            if task is not None and not task.done():
-                await host.wait_for_activity(child_id=args.child_session_id)
-                # The wake may be a sibling's question, which nothing else shows the
-                # parent while it waits here.
-                pending = await _pending_guidance(host)
-        current, parent_call_id = await _roster_status(host, args.child_session_id)
-        return _result_with_guidance(host, current, pending, parent_call_id=parent_call_id)
+            if task is None or task.done():
+                break
+            await host.wait_for_activity(child_id=args.child_session_id)
+            # The wake may be a sibling's question, which nothing else shows the
+            # parent while it waits here.
+            pending = await _pending_guidance(host)
+            siblings = await _unread_siblings(host, args.child_session_id)
+        current, parent_call_id = await _known_status(host, args.child_session_id)
+        return _result_with_guidance(
+            host, current, pending, parent_call_id=parent_call_id, siblings=siblings
+        )
 
     async def cancel(raw: BaseModel, _runtime: ToolRuntime) -> ToolResult:
         args = cast(ChildControlInput, raw)
         await _check_cancelled(host)
-        current, parent_call_id = await _roster_status(host, args.child_session_id)
+        found = await _roster_status(host, args.child_session_id)
+        if found is None:
+            return await _unknown_child(host, args.child_session_id)
+        current, parent_call_id = found
         if current.status == "running":
             current = await _cancel_child(host, args.child_session_id)
         adopted = _adopt_outcome(host, current, parent_call_id=parent_call_id)
@@ -651,6 +720,8 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
         args = cast(ChildMessageInput, raw)
         if host.steer_child is None or host.parent_session_id is None:
             return ToolResult.text("Child steer is unavailable.", is_error=True)
+        if not await _roster_holds(host, args.child_session_id):
+            return await _unknown_child(host, args.child_session_id)
         receipt = await host.steer_child(
             owner_id=host.owner_id,
             run_id=host.run_id,
@@ -660,12 +731,16 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
             submission_key=f"parent-steer:{runtime.intent_id.value}",
             origin="parent",
         )
+        if receipt.get("outcome") == "unknown_child":
+            return await _unknown_child(host, args.child_session_id)
         return ToolResult.text(canonical_json(dict(receipt)))
 
     async def continue_child(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = cast(ChildMessageInput, raw)
         if host.continue_child is None or host.parent_session_id is None:
             return ToolResult.text("Child continuation is unavailable.", is_error=True)
+        if not await _roster_holds(host, args.child_session_id):
+            return await _unknown_child(host, args.child_session_id)
         receipt = await host.continue_child(
             owner_id=host.owner_id,
             run_id=host.run_id,
@@ -676,6 +751,8 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
             origin="parent",
             reauthorize_user_cancelled=False,
         )
+        if receipt.get("outcome") == "unknown_child":
+            return await _unknown_child(host, args.child_session_id)
         if receipt.get("outcome") == "accepted":
             await host.restore_pending()
         return ToolResult.text(canonical_json(dict(receipt)))
@@ -684,6 +761,8 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
         args = cast(GuidanceReplyInput, raw)
         if host.reply_guidance is None or host.parent_session_id is None:
             return ToolResult.text("Child guidance reply is unavailable.", is_error=True)
+        if not await _guidance_holds(host, args.request_id):
+            return await _unknown_request(host, args.request_id)
         receipt = await host.reply_guidance(
             owner_id=host.owner_id,
             run_id=host.run_id,
@@ -693,7 +772,36 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
             submission_key=f"parent-reply:{runtime.intent_id.value}",
             origin="parent",
         )
+        if receipt.get("outcome") == "unknown_request":
+            return await _unknown_request(host, args.request_id)
         return ToolResult.text(canonical_json(dict(receipt)))
+
+    async def read(raw: BaseModel, _runtime: ToolRuntime) -> ToolResult:
+        args = cast(ReadSubagentInput, raw)
+        await _check_cancelled(host)
+        if host.load_child is None or host.load_transcript is None:
+            return ToolResult.text("Child transcript is unavailable.", is_error=True)
+        row = await host.load_child(
+            owner_id=host.owner_id,
+            run_id=host.run_id,
+            child_session_id=args.child_session_id,
+        )
+        if row is None:
+            return await _unknown_child(host, args.child_session_id)
+        status = str(row.get("status") or "running")
+        # One message beyond the page says whether the page is all there is.
+        page = await host.load_transcript(
+            owner_id=host.owner_id,
+            run_id=host.run_id,
+            session_id=args.child_session_id,
+            limit=args.limit + 1,
+            since=args.after,
+        )
+        text = render_child_activity(
+            args.child_session_id, status, page, limit=args.limit, after=args.after
+        )
+        notice = _guidance_notice(await _pending_guidance(host, args.child_session_id))
+        return ToolResult.text(f"{text}\n{notice}" if notice else text)
 
     handlers = {
         "spawn_agent": spawn,
@@ -703,6 +811,7 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
         "steer_subagent": steer,
         "continue_subagent": continue_child,
         "reply_subagent": reply,
+        "read_subagent": read,
     }
     return tuple(
         declaration.bind(handlers[declaration.name])
@@ -844,7 +953,7 @@ async def _spawn(
         if host.prepare_dispatch is None:
             raise RuntimeError("spawn_agent has no durable dispatch envelope builder")
         envelopes = [
-            host.prepare_dispatch(child_id, request, context_snapshot)
+            _with_wake(host.prepare_dispatch(child_id, request, context_snapshot), args.wake)
             for child_id, request in zip(child_ids, args.children, strict=True)
         ]
         for child_id, request, envelope in zip(child_ids, args.children, envelopes, strict=True):
@@ -876,6 +985,19 @@ async def _spawn(
             for child_id in child_ids
         )
     )
+
+
+def _with_wake(envelope: Mapping[str, Any], wake: str) -> Mapping[str, Any]:
+    """Record the parent's choice in a Child's host state; the default adds nothing."""
+    if wake == "all":
+        return envelope
+    return {**envelope, "host_state": {**(envelope.get("host_state") or {}), "wake": wake}}
+
+
+def _wakes_each(row: Mapping[str, Any]) -> bool:
+    """Whether the call that dispatched this Child asked to be resumed as Children settle."""
+    host_state = row.get("host_state")
+    return isinstance(host_state, Mapping) and host_state.get("wake") == "each"
 
 
 def _start_child_task(
@@ -1129,12 +1251,23 @@ async def _load_terminal_child(host: SubagentHost, child_id: str) -> ChildOutcom
 
 
 async def _status(host: SubagentHost, child_id: str) -> ChildOutcome:
-    outcome, _parent_call_id = await _roster_status(host, child_id)
+    outcome, _parent_call_id = await _known_status(host, child_id)
     return outcome
 
 
-async def _roster_status(host: SubagentHost, child_id: str) -> tuple[ChildOutcome, str]:
-    """Return one Child's current outcome and the parent call that dispatched it."""
+async def _known_status(host: SubagentHost, child_id: str) -> tuple[ChildOutcome, str]:
+    """A Child this host already found in the roster; one that left it lost its row."""
+    found = await _roster_status(host, child_id)
+    if found is None:
+        raise RuntimeError(f"Child session {child_id} left the roster")
+    return found
+
+
+async def _roster_status(host: SubagentHost, child_id: str) -> tuple[ChildOutcome, str] | None:
+    """Return one Child's current outcome and the parent call that dispatched it.
+
+    None means the Run has no such Child, which is not the same as a Child that failed.
+    """
     if host.load_child is not None:
         row = await host.load_child(
             owner_id=host.owner_id,
@@ -1170,9 +1303,72 @@ async def _roster_status(host: SubagentHost, child_id: str) -> tuple[ChildOutcom
             )
         if child_id in host.outcomes:
             return host.outcomes[child_id], parent_call_id
-    return (
-        ChildOutcome(status="failed", summary="Unknown child session.", child_session_id=child_id),
-        "",
+    return None
+
+
+async def _roster_holds(host: SubagentHost, child_id: str) -> bool:
+    """Whether the roster has the Child; true when the host cannot look it up."""
+    if host.load_child is None:
+        return True
+    row = await host.load_child(
+        owner_id=host.owner_id, run_id=host.run_id, child_session_id=child_id
+    )
+    return row is not None
+
+
+async def _guidance_holds(host: SubagentHost, request_id: str) -> bool:
+    """Whether the Run has the request, replied to or not; true when the host cannot look it up."""
+    if host.load_guidance is None:
+        return True
+    row = await host.load_guidance(
+        owner_id=host.owner_id, run_id=host.run_id, request_id=request_id
+    )
+    return row is not None
+
+
+def _id_list(ids: tuple[str, ...]) -> str:
+    """The first few ids, with a count of the rest."""
+    shown = ", ".join(ids[:_LISTED_IDS])
+    return f"{shown} and {len(ids) - _LISTED_IDS} more" if len(ids) > _LISTED_IDS else shown
+
+
+async def _unknown_child(host: SubagentHost, child_id: str) -> ToolResult:
+    """Refuse a child id this Run never issued, naming the ids it did."""
+    if host.list_children is None:
+        known = tuple(dict.fromkeys((*host.tasks, *host.outcomes, *host.parent_call_ids)))
+    else:
+        parent = host.parent_session_id.value if host.parent_session_id is not None else None
+        rows = await host.list_children(owner_id=host.owner_id, run_id=host.run_id)
+        known = tuple(
+            child
+            for row in rows or ()
+            if isinstance(row, Mapping)
+            and (parent is None or str(row.get("parent_session_id") or "") == parent)
+            and (child := str(row.get("child_session_id") or ""))
+        )
+    refusal = f"Unknown child session {child_id}."
+    if not known:
+        return ToolResult.text(
+            f"{refusal} This Run has no children yet; spawn_agent returns a child's id.",
+            is_error=True,
+        )
+    return ToolResult.text(f"{refusal} This Run's children: {_id_list(known)}.", is_error=True)
+
+
+async def _unknown_request(host: SubagentHost, request_id: str) -> ToolResult:
+    """Refuse a guidance request id no child asked under, naming the questions waiting."""
+    waiting = tuple(
+        request
+        for question in await _pending_guidance(host)
+        if (request := str(question.get("request_id") or ""))
+    )
+    refusal = f"Unknown guidance request {request_id}."
+    if not waiting:
+        return ToolResult.text(
+            f"{refusal} No child question is waiting for a reply.", is_error=True
+        )
+    return ToolResult.text(
+        f"{refusal} Questions waiting for a reply: {_id_list(waiting)}.", is_error=True
     )
 
 
@@ -1215,6 +1411,26 @@ def _adopt_outcome(
     )
 
 
+def _settled_results(
+    host: SubagentHost, rows: Iterable[Mapping[str, Any]]
+) -> tuple[ChildOutcome, ...]:
+    """The results of the settled rows, each adopted under the call that dispatched it."""
+    return tuple(
+        _adopt_outcome(
+            host,
+            _terminal_outcome_from_row(row, str(row.get("child_session_id") or "")),
+            parent_call_id=str(row.get("parent_call_id") or ""),
+        )
+        for row in rows
+        if str(row.get("status")) != "running"
+    )
+
+
+def _unread(host: SubagentHost, outcomes: tuple[ChildOutcome, ...]) -> tuple[ChildOutcome, ...]:
+    """The results the parent has not been handed through any path."""
+    return tuple(o for o in outcomes if _result_key(o) not in host._read_results)
+
+
 def child_session_id(
     *,
     run_id: str,
@@ -1250,6 +1466,24 @@ async def _pending_guidance(
     )
 
 
+async def _unread_siblings(host: SubagentHost, child_id: str) -> tuple[ChildOutcome, ...]:
+    """The settled results of every child but ``child_id`` that the parent has not read."""
+    if host.list_children is None:
+        return ()
+    rows = await host.list_children(owner_id=host.owner_id, run_id=host.run_id)
+    return _unread(
+        host,
+        _settled_results(
+            host,
+            (
+                row
+                for row in rows or ()
+                if isinstance(row, Mapping) and str(row.get("child_session_id") or "") != child_id
+            ),
+        ),
+    )
+
+
 def _guidance_notice(questions: tuple[Mapping[str, Any], ...]) -> str:
     lines: list[str] = []
     for question in questions:
@@ -1270,10 +1504,13 @@ def _result_with_guidance(
     questions: tuple[Mapping[str, Any], ...],
     *,
     parent_call_id: str,
+    siblings: tuple[ChildOutcome, ...] = (),
 ) -> ToolResult:
-    adopted = _adopt_outcome(host, outcome, parent_call_id=parent_call_id)
-    host.note_result_read(adopted)
-    result = _single_result(adopted)
+    """The child's state, the results of ``siblings`` that came with it, and the questions."""
+    results = (_adopt_outcome(host, outcome, parent_call_id=parent_call_id), *siblings)
+    for item in results:
+        host.note_result_read(item)
+    result = _many_result(results)
     notice = _guidance_notice(questions)
     if not notice:
         return result
@@ -1321,6 +1558,7 @@ __all__ = [
     "ChildOutcome",
     "ChildRequest",
     "ChildStatus",
+    "ReadSubagentInput",
     "SpawnAgentInput",
     "SubagentHost",
     "child_guidance_tools",

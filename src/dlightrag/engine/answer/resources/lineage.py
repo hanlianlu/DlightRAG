@@ -18,16 +18,79 @@ refusal in place.
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from dlightrag.engine.agent.tools import ResourceAttachmentBytes
+from dlightrag.engine.agent.tools.contracts import (
+    DeclaredSource,
+    ResourceAttachmentBytes,
+)
 from dlightrag.engine.answer.resources.models import ResourceInput
 from dlightrag.engine.answer.resources.registry import ResourceEffectOwner, ResourceRegistry
 from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
 
 LINEAGE_ADOPTION_KIND = "lineage_adoption"
+
+#: The capability key a published product's declared sources ride under, and the attribute name
+#: its adoption record repeats them in. One name, so reopening a product reads the same fact
+#: whether the row is the publication's own or the adoption of it.
+ARTIFACT_SOURCES_KEY = "sources"
+
+
+def declared_sources(capabilities: Mapping[str, object]) -> tuple[DeclaredSource, ...]:
+    """Read what a product was built from, or nothing when it declares no sources.
+
+    A publication writes the sources as a list of objects in its Resource capabilities; an
+    adoption record repeats them as a JSON string, because a row's own attributes are strings.
+    How many there are is the writer's business — publication bounds the closure it admits — so
+    this reads what is there. A malformed value is no sources rather than a failed Run: the
+    product still opens, and only what rebuilds it is missing.
+    """
+    raw = capabilities.get(ARTIFACT_SOURCES_KEY)
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return ()
+    if not isinstance(raw, list):
+        return ()
+    sources: list[DeclaredSource] = []
+    for item in raw:
+        if not isinstance(item, Mapping):
+            return ()
+        path, resource_id = item.get("path"), item.get("resource_id")
+        if not isinstance(path, str) or not isinstance(resource_id, str):
+            return ()
+        try:
+            sources.append(DeclaredSource(path=path, resource_id=resource_id))
+        except ValueError:
+            return ()
+    return tuple(sources)
+
+
+def declared_sources_capability(
+    sources: tuple[DeclaredSource, ...],
+) -> list[dict[str, str]]:
+    """What publication writes on the product's Resource row for these sources."""
+    return [{"path": source.path, "resource_id": source.resource_id} for source in sources]
+
+
+def declared_sources_attribute(
+    sources: tuple[DeclaredSource, ...],
+) -> tuple[tuple[str, str], ...]:
+    """The row attribute that carries declared sources through an adoption, or nothing."""
+    if not sources:
+        return ()
+    return (
+        (
+            ARTIFACT_SOURCES_KEY,
+            json.dumps(declared_sources_capability(sources), ensure_ascii=False),
+        ),
+    )
+
+
 SNAPSHOT_KIND = "conversion_snapshot"
 ASSET_KIND = "conversion_asset"
 
@@ -49,6 +112,10 @@ class LineageResourceBytes:
     conversion_snapshot: bytes | None = None
     assets: Mapping[str, bytes] = field(default_factory=dict)
     source_url: str | None = None
+    #: What the earlier product was built from, as (path, resource id) pairs, when it was
+    #: published with declared sources. Adopting a deliverable adopts its provenance too, so
+    #: the Run that reopens a report or a workbook can re-run what produced it (ADR 0052).
+    sources: tuple[DeclaredSource, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.resource_id.strip():
@@ -127,6 +194,7 @@ async def adopt_lineage_resource(
                     content=loaded.content,
                     resource_kind=LINEAGE_ADOPTION_KIND,
                     aliases=(loaded.resource_id,),
+                    attributes=declared_sources_attribute(loaded.sources),
                 ),
                 *(view.effects() if view is not None else ()),
             )
@@ -142,6 +210,7 @@ async def adopt_lineage_resource(
         view=snapshot,
         record=durable,
         needs_text=needs_text,
+        sources=loaded.sources,
     )
 
 

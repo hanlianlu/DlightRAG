@@ -458,7 +458,7 @@ async def test_close_cancels_inflight_build_and_rejects_its_acquire() -> None:
         await acquire
     assert build_cancelled.is_set()
     cast(AsyncMock, runtime.aclose).assert_not_awaited()
-    assert await pool.is_loaded("research") is False
+    assert not pool._runtimes
 
 
 async def test_close_settles_eviction_waiting_on_a_cancelled_flight() -> None:
@@ -503,7 +503,7 @@ async def test_close_closes_runtime_returned_by_a_cancellation_suppressing_build
         await acquire
     cast(AsyncMock, runtime.aclose).assert_awaited_once()
     assert not pool._workspace_flights
-    assert await pool.is_loaded("research") is False
+    assert not pool._runtimes
 
 
 async def test_cancelled_close_finishes_cleanup_before_propagating() -> None:

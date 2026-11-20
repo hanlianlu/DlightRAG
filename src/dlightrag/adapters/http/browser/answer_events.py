@@ -15,7 +15,7 @@ history serves, serialized the same way (unset fields as explicit nulls), so the
 browser reads both through one schema.
 """
 
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -29,10 +29,29 @@ from dlightrag.adapters.http.browser.events import (
     AnswerProgressEvent,
 )
 from dlightrag.adapters.http.browser.presentation import build_answer_presentation
+from dlightrag.adapters.http.browser.run_resources import RUN_RESOURCE_URL_BASE
 from dlightrag.adapters.http.streaming.answer_stream import sse_frame
+from dlightrag.adapters.http.streaming.token_masking import (
+    FORGET_EVENT_TYPES,
+    STREAM_HOLD_VISIBLE_CHARS,
+    TokenFrameMasker,
+)
+from dlightrag.application.answer.provenance import (
+    TOOL_EVENT_TYPES,
+    ArtifactAttestation,
+    stamp_when_publishing,
+)
 from dlightrag.application.runs import RunEvent
+from dlightrag.engine.agent.skill_protection import ProtectedTextIndex, mask_reader_strings
 from dlightrag.engine.answer.citations.sources import SourceDownloadLinkBuilder
 from dlightrag.engine.answer.results import project_answer_result
+
+#: Resolves the Artifact attestation one finished Run's Artifacts carry, exactly the value
+#: ``run_attestation`` returns. Async because deriving it replays that Run's durable records, and
+#: injected because only the route knows the reader, the config and the owner the derivation is
+#: scoped to. ``None`` resolves no record, which leaves the frame exactly as it was before this
+#: record existed.
+type AttestationResolver = Callable[[], Awaitable[ArtifactAttestation | None]]
 
 #: Longest Tool Subject line this edge renders. The Engine owns the reported bound
 #: (``TOOL_SUBJECT_MAX_CHARS``); the edge deliberately names its own so the browser
@@ -48,8 +67,19 @@ def render_done_event(
     visual_workspaces: set[str] | None,
     run_id: str | None = None,
     image_rewrites: Mapping[str, str] | None = None,
+    attestation: ArtifactAttestation | None = None,
+    mask_reader_text: Callable[[str], str] | None = None,
 ) -> AnswerDoneEvent:
-    """Derive the finished presentation from the run's canonical result."""
+    """Derive the finished presentation from the run's canonical result.
+
+    ``attestation`` is the record the caller derived for this Run before the frame was rendered --
+    the same record reopening the conversation stamps through the same helper, so a reader who
+    watches an Answer finish and a reader who reloads it later are told one thing.
+
+    ``mask_reader_text`` is the reader's content gate. A finished answer is shown whole by the
+    ``done`` presentation, so a live reader needs exactly the gate the conversation history
+    applies; without it the stream would reveal on completion what it withheld frame by frame.
+    """
     if str(payload.get("status")) == "cancelled":
         return AnswerDoneEvent(status="cancelled")
     projected = project_answer_result(
@@ -60,7 +90,10 @@ def render_done_event(
         image_url_prefix=WEB_IMAGE_URL_BASE,
         run_id=run_id,
         artifact_url_prefix="/web/api/answer",
+        run_resource_prefix=RUN_RESOURCE_URL_BASE,
+        mask_reader_text=mask_reader_text,
     )
+    projected = stamp_when_publishing(projected, attestation=attestation)
     answer = str(projected["answer"])
     return AnswerDoneEvent(
         status="succeeded",
@@ -103,12 +136,16 @@ def _browser_payload(
     run_id: str | None,
     tool_labels: Mapping[str, str] | None = None,
     image_rewrites: Mapping[str, str] | None = None,
+    attestation: ArtifactAttestation | None = None,
+    mask_reader_text: Callable[[str], str] | None = None,
 ) -> Any:
     payload = dict(event.payload)
     match event.event_type:
         case "progress":
             return AnswerProgressEvent(phase=payload["phase"])
         case "token":
+            return str(payload.get("text") or "")
+        case "reasoning":
             return str(payload.get("text") or "")
         case "reset":
             return {}
@@ -125,8 +162,12 @@ def _browser_payload(
                 "spill_state",
                 "attachment_count",
                 "object_label",
+                "facts",
             }
             projected = {key: value for key, value in payload.items() if key in allowed}
+            facts = projected.get("facts")
+            if facts is not None and mask_reader_text is not None:
+                projected["facts"] = mask_reader_strings(facts, mask_reader_text)
             label = projected.get("object_label")
             if isinstance(label, str):
                 projected["object_label"] = label[:BROWSER_TOOL_SUBJECT_MAX_CHARS]
@@ -155,6 +196,11 @@ def _browser_payload(
                 "target_change_id",
             }
             safe = {key: value for key, value in payload.items() if key in allowed}
+            body = safe.get("body")
+            if isinstance(body, str) and mask_reader_text is not None:
+                # The settled body is free text an operator typed; a reader's pane is
+                # the wrong place for a passage that came out of a protected document.
+                safe["body"] = mask_reader_text(body)
             safe["live"] = _is_live(event, live_after)
             return safe
         case "done":
@@ -164,6 +210,8 @@ def _browser_payload(
                 visual_workspaces=visual_workspaces,
                 run_id=run_id,
                 image_rewrites=image_rewrites,
+                attestation=attestation,
+                mask_reader_text=mask_reader_text,
             )
             if done.status == "cancelled":
                 return {"status": "cancelled"}
@@ -177,7 +225,7 @@ def _browser_payload(
             )
 
 
-def browser_frame(
+async def browser_frame(
     event: RunEvent,
     *,
     downloadable_workspaces: set[str] | None = None,
@@ -186,8 +234,17 @@ def browser_frame(
     run_id: str | None = None,
     tool_labels: Mapping[str, str] | None = None,
     image_rewrites: Mapping[str, str] | None = None,
+    attestation: AttestationResolver | None = None,
+    mask_reader_text: Callable[[str], str] | None = None,
 ) -> str:
-    """Render one durable event as the frame this browser session reads."""
+    """Render one durable event as the frame this browser session reads.
+
+    Async because a finished frame carries the same Artifact attestation the stored conversation
+    does, and deriving it replays the Run's records. Nothing else here waits on anything.
+    """
+    resolved = (
+        await attestation() if attestation is not None and event.event_type == "done" else None
+    )
     return sse_frame(
         sequence=event.sequence,
         event_type=event.event_type,
@@ -199,8 +256,94 @@ def browser_frame(
             run_id=run_id,
             tool_labels=tool_labels,
             image_rewrites=image_rewrites,
+            attestation=resolved,
+            mask_reader_text=mask_reader_text,
         ),
     )
 
 
-__all__ = ["browser_frame", "render_done_event"]
+class ReaderFrameRenderer:
+    """Render one SSE subscription, releasing only text no protected run can own.
+
+    ``token`` and ``reasoning`` frames are where a reader watches text grow, so they are
+    the surfaces at which a protected document's text could cross the wire a batch at a
+    time. The safe-prefix release that makes that impossible is transport-neutral and lives
+    in :class:`~dlightrag.adapters.http.streaming.token_masking.TokenFrameMasker`; this
+    class contributes what only the browser projection knows -- the rendered ``done``
+    presentation, Tool labels, image rewrites and the terminal attestation -- and composes
+    the two.
+
+    State belongs to the subscription: the instance is created by the route that serves one
+    follower, so two readers cannot see each other's carry and reconnect replay starts from
+    the cursor's text. ``reset`` discards the draft being held, and the terminal frames
+    discard it too -- a terminal frame never carries a tail, and the browser's final view is
+    the ``done`` presentation projected through the same content gate.
+
+    ``reasoning`` frames carry a second text stream, so they read through a second masker:
+    a protected passage crossing a reasoning batch boundary must be withheld just as one
+    crossing a token batch is, and the two streams have independent carries. A ``reset``
+    (or a terminal frame) forgets both, because the reader's draft is one surface. A Tool
+    event closes the thinking block the browser folds there, so it discards the reasoning
+    carry: the block's withheld tail is completed by the trace, not released into the next
+    block. The token carry is untouched by a Tool event, because an Answer's text resumes
+    where it stopped.
+    """
+
+    def __init__(
+        self,
+        index: ProtectedTextIndex,
+        mask_reader_text: Callable[[str], str],
+        *,
+        downloadable_workspaces: set[str] | None = None,
+        visual_workspaces: set[str] | None = None,
+        live_after: int | None = None,
+        run_id: str | None = None,
+        tool_labels: Mapping[str, str] | None = None,
+        image_rewrites: Mapping[str, str] | None = None,
+        attestation: AttestationResolver | None = None,
+    ) -> None:
+        self._masker = TokenFrameMasker(index)
+        self._reasoning_masker = TokenFrameMasker(index)
+        self._mask_reader_text = mask_reader_text
+        self._downloadable_workspaces = downloadable_workspaces
+        self._visual_workspaces = visual_workspaces
+        self._live_after = live_after
+        self._run_id = run_id
+        self._tool_labels = tool_labels
+        self._image_rewrites = image_rewrites
+        self._attestation = attestation
+
+    async def __call__(self, event: RunEvent) -> str:
+        if event.event_type == "token":
+            released = self._masker.release(str(event.payload.get("text") or ""))
+            return sse_frame(sequence=event.sequence, event_type="token", payload=released)
+        if event.event_type == "reasoning":
+            released = self._reasoning_masker.release(str(event.payload.get("text") or ""))
+            return sse_frame(sequence=event.sequence, event_type="reasoning", payload=released)
+        if event.event_type in FORGET_EVENT_TYPES:
+            self._masker.reset()
+            self._reasoning_masker.reset()
+        elif event.event_type in TOOL_EVENT_TYPES:
+            # A Tool call proves the thinking block ended: discard its carry instead of
+            # releasing the withheld tail into the block that streams after the call.
+            self._reasoning_masker.reset()
+        return await browser_frame(
+            event,
+            downloadable_workspaces=self._downloadable_workspaces,
+            visual_workspaces=self._visual_workspaces,
+            live_after=self._live_after,
+            run_id=self._run_id,
+            tool_labels=self._tool_labels,
+            image_rewrites=self._image_rewrites,
+            attestation=self._attestation,
+            mask_reader_text=self._mask_reader_text,
+        )
+
+
+__all__ = [
+    "AttestationResolver",
+    "ReaderFrameRenderer",
+    "STREAM_HOLD_VISIBLE_CHARS",
+    "browser_frame",
+    "render_done_event",
+]

@@ -1,8 +1,8 @@
 /* DlightRAG Web Frontend — Immersive Chat Design
  *
- * Fluid design system: type, spacing, and layout scale with viewport width.
- * On phones (390px) → compact but readable.
- * On laptops (1440px) → slightly more relaxed without changing UI character.
+ * Type scales with the viewport width (body text is 15px at 390px and 15.5px at 1440px). Spacing is
+ * a fixed rem scale, and layout widths clamp against the viewport. A phone and a laptop share one UI
+ * character: spacing and layout hold, and only the type breathes.
  *
  * global.css — The application's body chrome, layout tokens, and shared
  * utility classes. Body text comes from the design system's reset.
@@ -28,9 +28,9 @@ body.conversation-drawer-open {
 }
 
 :root {
-    --layout-chat-sidebar-width: 260px;
-    --layout-shell-duration: 180ms;
-    --layout-shell-easing: cubic-bezier(0.2, 0, 0, 1);
+    /* The Shell publishes the rendered sidebar width here; until it does, the proportion is the stand-in
+       (ADR 0068; lib/panel-share.ts holds the shares). */
+    --layout-chat-sidebar-width: clamp(240px, 18vw, 360px);
     --conversation-top-row-height: calc(var(--size-button) + (2 * var(--space-tight)));
 }
 
@@ -64,7 +64,7 @@ body.conversation-drawer-open {
     font-weight: 600;
     justify-content: center;
     padding: var(--space-tight) var(--space-related);
-    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    transition: background var(--duration-control), border-color var(--duration-control), color var(--duration-control);
 }
 
 .primary-btn:hover {
@@ -79,7 +79,11 @@ mjx-container {
 
 /* === Toast === */
 
+/* A receipt sits at the bottom for a moment. An error sits at the top and stays until it is read, so it never
+ * covers the composer the reader retries from, and a receipt that follows it does not land on it. */
 .toast {
+    --toast-slide: 8px;
+
     align-items: center;
     background: var(--color-bg-elevated);
     border-radius: var(--radius-popover);
@@ -93,10 +97,21 @@ mjx-container {
     max-width: min(42rem, calc(100vw - 2 * var(--space-section)));
     opacity: 0;
     padding: var(--space-component) var(--space-section);
+    pointer-events: none;
     position: fixed;
-    transform: translateX(-50%) translateY(8px);
-    transition: opacity 0.2s ease-out, transform var(--duration-overlay) ease-out;
+    transform: translateX(-50%) translateY(var(--toast-slide));
+    transition: opacity var(--duration-overlay) linear, transform var(--duration-overlay) linear;
+    width: max-content;
     z-index: 200;
+}
+
+.toast[tone='error'] {
+    --toast-slide: -8px;
+
+    border: 1px solid var(--color-danger);
+    bottom: auto;
+    color: var(--color-text-primary);
+    top: var(--space-section);
 }
 
 .toast-message {
@@ -106,12 +121,25 @@ mjx-container {
     white-space: nowrap;
 }
 
-.toast-action {
+.toast[tone='error'] .toast-message {
+    overflow-wrap: anywhere;
+    white-space: normal;
+}
+
+.toast-action,
+.toast-close {
     flex: none;
+}
+
+.toast-close {
+    --control-hit-target: var(--size-button);
+
+    color: var(--color-text-tertiary);
 }
 
 .toast.visible {
     opacity: 1;
+    pointer-events: auto;
     transform: translateX(-50%) translateY(0);
 }
 

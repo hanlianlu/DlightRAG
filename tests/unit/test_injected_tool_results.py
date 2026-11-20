@@ -7,10 +7,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import BaseModel
 
-from dlightrag.engine.agent.environment import SearchToolchain
 from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
+from dlightrag.engine.agent.environment.toolchain import (
+    SearchToolchain,
+)
 from dlightrag.engine.agent.session.ids import EntryId, IntentId, SessionId
-from dlightrag.engine.agent.tools import (
+from dlightrag.engine.agent.tools.contracts import (
     AgentTool,
     EvidenceSourceFact,
     ToolEffects,
@@ -18,8 +20,8 @@ from dlightrag.engine.agent.tools import (
     ToolRuntime,
 )
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
-from dlightrag.engine.answer.orchestration import AnswerOrchestrator
-from dlightrag.engine.answer.workspace import RunWorkspace
+from dlightrag.engine.answer.agentspace import RunAgentspace
+from dlightrag.engine.answer.orchestration.orchestrator import AnswerOrchestrator
 from tests.unit.conftest import answer_model_profile
 
 
@@ -42,8 +44,8 @@ def prepared_run(
         search_toolchain=SearchToolchain(),
     )
     if workspace:
-        orchestrator.bind_workspace(
-            RunWorkspace(
+        orchestrator.bind_agentspace(
+            RunAgentspace(
                 epoch=1,
                 workspace=tmp_path,
                 spill_dir=tmp_path / "spill",

@@ -5,30 +5,37 @@
 
 import type {DlSettingsDialog} from '../ui/settings.ts';
 import '../ui/settings.ts';
-import type {DlToastRegion, ToastRequestDetail} from '../ui/toast.ts';
+import {type DlToastRegion, type ToastRequestDetail, toastRegionOf} from '../ui/toast.ts';
 import '../ui/toast.ts';
 import {defineDesignSystemElements} from '../design-system/index.ts';
 import {waitFor} from './dom.ts';
 
 defineDesignSystemElements();
 
-export interface Mounted {
+interface Mounted {
   shell: HTMLElement;
   settings: DlSettingsDialog;
-  /** The shell's own toast region: where a notice goes while Settings is closed. */
+  /** The shell's own toast regions, one for each tone: where a notice goes while Settings is closed. */
   toast: DlToastRegion;
+  errorToast: DlToastRegion;
 }
 
-/** Mount Settings beside a toast region that answers `dl-toast-request`, as the app shell does. */
+/** Mount Settings beside the shell's two toast regions, which answer `dl-toast-request` by its tone as the
+ *  app shell does: a receipt to the polite region, an error to the alert region. */
 export function mountSettings(): Mounted {
   const shell = document.createElement('div');
   const toast = document.createElement('dl-toast-region') as DlToastRegion;
   toast.className = 'toast';
-  shell.addEventListener('dl-toast-request', (event: CustomEvent<ToastRequestDetail>) => toast.show(event.detail));
+  const errorToast = document.createElement('dl-toast-region') as DlToastRegion;
+  errorToast.className = 'toast';
+  errorToast.tone = 'error';
+  shell.addEventListener('dl-toast-request', (event: CustomEvent<ToastRequestDetail>) => {
+    toastRegionOf(shell, event.detail.tone)?.show(event.detail);
+  });
   const settings = document.createElement('dl-settings-dialog') as DlSettingsDialog;
-  shell.append(toast, settings);
+  shell.append(toast, errorToast, settings);
   document.body.appendChild(shell);
-  return {shell, settings, toast};
+  return {shell, settings, toast, errorToast};
 }
 
 /** Open Settings and wait until the dialog is showing. */
@@ -49,7 +56,7 @@ export function settingsClosed(): boolean {
   return !document.querySelector('#settings-dialog[open]') && !document.body.classList.contains('settings-open');
 }
 
-export interface Wired {
+interface Wired {
   method: string;
   path: string;
   search: string;
@@ -72,6 +79,7 @@ const DEFAULT_ROUTES: Record<string, Handler> = {
   'GET /web/api/connections/mcp': () => Response.json({revision: '0', connections: [], presets: []}),
   'GET /web/api/agent-accounts': () => Response.json(agentAccountsView()),
   'GET /web/api/skills/mine': () => Response.json({skills: [], limit: 20}),
+  'GET /web/api/privacy/settings': () => privacySettings(false),
 };
 
 /** Answer fetches by `METHOD /path`; a route here replaces the default for the same key. */
@@ -104,18 +112,41 @@ export function memorySettings(enabled: boolean, activeCount: number | null = en
   return Response.json({enabled, active_count: activeCount});
 }
 
+/** Noon on a local calendar day, written as the server writes a moment: UTC, with microseconds. It is
+ *  built from the local calendar, so the day it names reads the same wherever the tests run. */
+export function wireMoment(year: number, month: number, day: number): string {
+  return new Date(year, month - 1, day, 12, 0).toISOString().replace(/\.\d{3}Z$/, '.123456Z');
+}
+
+/** The owner's Privacy setting, as the wire sends it: off, or on since a moment, by default one in an
+ *  earlier year, so it always reads with its year. A test that needs a day of its own names it. */
+export function privacySettings(
+  contribute: boolean,
+  since: string | null = contribute ? wireMoment(2025, 3, 4) : null,
+): Response {
+  return Response.json({contribute, since});
+}
+
 /** One page of stored memories, as the wire sends it. */
 export function memoryPage(
-  records: Array<{id: string; kind?: 'preference' | 'fact'; body: string}>,
+  records: Array<{
+    id: string;
+    kind?: 'preference' | 'fact' | 'experience';
+    body: string;
+  }>,
   nextCursor: string | null = null,
 ): Response {
   return Response.json({
-    memories: records.map(({id, kind, body}) => ({memory_id: id, kind: kind ?? 'preference', body})),
+    memories: records.map(({id, kind, body}) => ({
+      memory_id: id,
+      kind: kind ?? 'preference',
+      body,
+    })),
     next_cursor: nextCursor,
   });
 }
 
-export interface WireSkill {
+interface WireSkill {
   name: string;
   description: string;
   enabled: boolean;
@@ -163,4 +194,53 @@ export function wireAccount(site: string, extra: Partial<WireAccount> = {}): Wir
 /** The ISO time a number of whole days before now, at the same hour, as the wire writes it. */
 export function daysAgo(days: number): string {
   return new Date(Date.now() - days * 86_400_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+/** The reads a fully populated Settings makes: two Connections, three accounts, five memories, two Skills, Privacy on. */
+export function populated(): ReturnType<typeof wire> {
+  return wire({
+    'GET /web/api/connections/mcp': () => Response.json({
+      revision: '1',
+      presets: [],
+      connections: [
+        {connection_id: 'a', label: 'Notion', endpoint: 'https://a.example/mcp', enabled: true,
+          activation_epoch: 1, generation: 1, authentication: 'oauth', endpoint_headers: [],
+          credential_header: null, credential_prefix: null,
+          authorization_status: null, status: 'ready',
+          tool_count: 42, declaration_tokens: 54_000},
+        {connection_id: 'b', label: 'Hugging Face', endpoint: 'https://b.example/mcp', enabled: false,
+          activation_epoch: 1, generation: 1, authentication: 'none', endpoint_headers: [],
+          credential_header: null, credential_prefix: null,
+          authorization_status: null, status: 'disabled',
+          // A disabled Connection's declaration cost is hypothetical, and still projected.
+          tool_count: 8, declaration_tokens: 9_400},
+      ],
+    }),
+    'GET /web/api/agent-accounts': () => Response.json(agentAccountsView([
+      wireAccount('discourse.org'), wireAccount('huggingface.co'), wireAccount('ycombinator.com'),
+    ])),
+    'GET /web/api/memory/settings': () => memorySettings(true, 5),
+    'GET /web/api/memory': () => memoryPage([{id: 'one', body: 'Use concise answers'}]),
+    'GET /web/api/skills/mine': () => ownerSkills([wireSkill('csv-report'), wireSkill('old-style-guide', {enabled: false})]),
+    'GET /web/api/privacy/settings': () => privacySettings(true),
+  });
+}
+
+/** The navigation rows, in order, as a reader meets them. */
+export function rows(settings: DlSettingsDialog): HTMLButtonElement[] {
+  return [...settings.querySelectorAll<HTMLButtonElement>('nav .dl-nav-item')];
+}
+
+export function row(settings: DlSettingsDialog, section: string): HTMLButtonElement {
+  return settings.querySelector<HTMLButtonElement>(`nav .dl-nav-item[data-section="${section}"]`)!;
+}
+
+/** What a row is called: the text its aria-labelledby points at. */
+export function nameOf(element: Element): string {
+  const id = element.getAttribute('aria-labelledby')!;
+  return element.ownerDocument.getElementById(id)!.textContent!.trim();
+}
+
+export function pageElement(settings: DlSettingsDialog, tag: string): HTMLElement {
+  return settings.querySelector<HTMLElement>(tag)!;
 }

@@ -8,15 +8,17 @@ import asyncio
 import pytest
 from pydantic import SecretStr
 
-from dlightrag.engine.answer.agent_browser import (
+from dlightrag.engine.answer.agent_browser.contracts import (
     AgentBrowserError,
     AgentBrowserSettings,
     AgentPage,
     BrowserHolder,
     PageLimits,
-    RunAgentBrowser,
     browser_failure,
     page_failure,
+)
+from dlightrag.engine.answer.agent_browser.run import (
+    RunAgentBrowser,
 )
 from tests.support.agent_browser import FakeLease, FakeProvider, browser_settings
 

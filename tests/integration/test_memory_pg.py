@@ -3,6 +3,7 @@
 
 import asyncio
 import json
+import re
 import uuid
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
@@ -22,11 +23,17 @@ from dlightrag_memory import (
 from dlightrag_memory._storage.pg_bm25 import index_name
 from dlightrag_memory.errors import MemoryWriteRejectedError
 from dlightrag_memory.mcp_server import _forget as mcp_forget
-from dlightrag_memory.mcp_server import _recall as mcp_recall
+from dlightrag_memory.mcp_server import _lookup as mcp_lookup
 from dlightrag_memory.mcp_server import _remember as mcp_remember
 from dlightrag_memory.mcp_server import _undo as mcp_undo
+from dlightrag_memory.memory import recall_cost
 from dlightrag_memory.normalize import normalized_body
-from dlightrag_memory.policy import RECALL_CHAR_BUDGET, RECALL_TOP_K
+from dlightrag_memory.policy import (
+    MEMORY_QUOTE_LIMIT,
+    RECALL_CHAR_BUDGET,
+    RECALL_TOP_K,
+    STANDING_FETCH_LIMIT,
+)
 from dlightrag_memory.ports import BM25Languages, ChineseAndEnglish, NullEmbedder, TextEmbedder
 from dlightrag_memory.postgres import PostgresMemoryStore
 from dlightrag_memory.store import operation_change_id, operation_record_id
@@ -35,23 +42,24 @@ from dlightrag.adapters.postgres.answer.memory_settings import (
     MEMORY_SETTINGS_DDL,
     PGMemorySettingsStore,
 )
-from dlightrag.application.memory import (
-    MemoryDisabledError,
-    MemoryListPageRequest,
-    MemoryService,
-)
-from dlightrag.engine.agent.tools import ToolResult
+from dlightrag.application.memory.errors import MemoryDisabledError
+from dlightrag.application.memory.memory_list import MemoryListPageRequest
+from dlightrag.application.memory.service import MemoryService
+from dlightrag.engine.agent.tools.contracts import ToolResult
+from dlightrag.engine.answer.memory import render_auto_recall
 from dlightrag.engine.answer.tools.memory import (
     ForgetInput,
+    LookupInput,
     MemoryHost,
-    RecallInput,
     RememberInput,
+    UndoInput,
     forget_tool,
-    recall_memory_tool,
+    lookup_tool,
     remember_tool,
+    undo_tool,
 )
 from tests.support.pg import PG_CONN_KWARGS, drop_database, skip_without_postgres
-from tests.tool_helpers import recording_tool_runtime, tool_runtime
+from tests.support.tool_helpers import recording_tool_runtime, tool_runtime
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -209,20 +217,6 @@ async def test_pg_owners_are_isolated(store: PostgresMemoryStore) -> None:
     assert [row.body for row in await _store_active(store, owner_id="beta")] == ["Beta only."]
 
 
-async def test_pg_initialization_rejects_legacy_confidence_schema(
-    store: PostgresMemoryStore,
-) -> None:
-    pool = store._pool
-    assert pool is not None
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "ALTER TABLE dlightrag_memory_records "
-            "ADD COLUMN confidence DOUBLE PRECISION NOT NULL DEFAULT 1.0"
-        )
-    with pytest.raises(RuntimeError, match="removed confidence"):
-        await store.initialize()
-
-
 async def test_pg_operation_replay_duplicate_cap_and_schema(store: PostgresMemoryStore) -> None:
     memory = Memory(store)
     first = await memory.remember(
@@ -271,10 +265,6 @@ async def test_pg_operation_replay_duplicate_cap_and_schema(store: PostgresMemor
                 "SELECT COUNT(*) FROM dlightrag_memory_operations WHERE owner_id = 'alpha'"
             )
             == 2
-        )
-        assert not await conn.fetchval(
-            "SELECT 1 FROM information_schema.columns "
-            "WHERE table_name = 'dlightrag_memory_records' AND column_name = 'confidence'"
         )
 
 
@@ -356,6 +346,13 @@ async def test_pg_mutation_cap_counts_only_changed_operations(
     assert await memory.count_active(owner_id="alpha") == 2
 
 
+class _NoSessions:
+    """This suite holds no Agent Sessions, so turning memory back on has none to restart."""
+
+    async def restart_session_memory(self, *, owner_id: str) -> None:
+        return None
+
+
 async def _service(store: PostgresMemoryStore) -> MemoryService:
     """The product gate over this store, with its settings table beside it."""
     pool = store._pool
@@ -366,6 +363,7 @@ async def _service(store: PostgresMemoryStore) -> MemoryService:
     return MemoryService(
         store,
         settings_store=PGMemorySettingsStore(pool=pool),
+        sessions=_NoSessions(),
         memory_list_cursor_secret=b"memory-pg-list-test",
     )
 
@@ -636,7 +634,7 @@ async def test_pg_fact_search_finds_only_the_owner(store: PostgresMemoryStore) -
     await _remember(memory, "No email.", owner_id="beta")
     await _remember(memory, "Deploy at midnight.", owner_id="alpha")
 
-    candidates = await store.search_facts(owner_id="alpha", query="email", limit=10)
+    candidates = await store.search(owner_id="alpha", query="email", limit=10)
 
     assert {candidate.record.body for candidate in candidates} == {"No email."}
     assert all(candidate.record.owner_id == "alpha" for candidate in candidates)
@@ -658,8 +656,8 @@ async def test_pg_recall_keeps_preferences_standing_and_facts_relevant(
         owner_id="alpha", query="How should a quantitative fund size positions?"
     )
 
-    assert _bodies(result.preferences) == ["Answer in Chinese."]
-    assert _bodies(result.facts) == ["Works as a quantitative trader."]
+    assert _bodies(result.standing) == ["Answer in Chinese."]
+    assert _bodies(result.relevant) == ["Works as a quantitative trader."]
     assert result.content_chars == sum(len(record.body) for record in result.records)
 
 
@@ -671,7 +669,7 @@ async def test_pg_recall_needs_a_shared_content_word_not_a_stopword(
 
     result = await memory.recall(owner_id="alpha", query="What is the capital of Australia?")
 
-    assert result.facts == ()
+    assert result.relevant == ()
 
 
 async def test_pg_recall_needs_a_chinese_content_word_not_a_space_or_a_function_word(
@@ -685,9 +683,9 @@ async def test_pg_recall_needs_a_chinese_content_word_not_a_space_or_a_function_
     related = await memory.recall(owner_id="alpha", query="上海 天气 怎么样")
 
     # pg_jieba indexes the spaces as terms, and 在 is a function word.
-    assert unrelated.facts == ()
-    assert function_words.facts == ()
-    assert _bodies(related.facts) == ["周末 在 上海 跑步"]
+    assert unrelated.relevant == ()
+    assert function_words.relevant == ()
+    assert _bodies(related.relevant) == ["周末 在 上海 跑步"]
 
 
 async def test_pg_recall_finds_a_fact_restated_word_for_word(store: PostgresMemoryStore) -> None:
@@ -697,7 +695,7 @@ async def test_pg_recall_finds_a_fact_restated_word_for_word(store: PostgresMemo
 
     result = await memory.recall(owner_id="alpha", query="it is what it is.")
 
-    assert _bodies(result.facts) == ["It is what it is."]
+    assert _bodies(result.relevant) == ["It is what it is."]
 
 
 @pytest.mark.parametrize(("floor", "recalled"), [(0.5, ["Runs a small coffeehouse."]), (None, [])])
@@ -718,7 +716,7 @@ async def test_pg_recall_trusts_dense_similarity_only_at_the_floor(
         # No word in common with either fact: only the embedding can relate them.
         result = await memory.recall(owner_id="alpha", query="Where can I buy good coffee?")
 
-    assert _bodies(result.facts) == recalled
+    assert _bodies(result.relevant) == recalled
 
 
 class _SlowTopicEmbedder(_TopicEmbedder):
@@ -745,10 +743,10 @@ async def test_pg_recall_matches_facts_by_words_when_the_query_embedding_is_slow
 
         result = await memory.recall(owner_id="alpha", query="Milestone 3 shipped.")
 
-    assert _bodies(result.facts) == ["Milestone 3 shipped."]
+    assert _bodies(result.relevant) == ["Milestone 3 shipped."]
 
 
-async def test_pg_recall_caps_each_section_and_keeps_the_newest_preferences(
+async def test_pg_recall_caps_relevance_at_top_k_and_stands_what_the_budget_holds(
     store: PostgresMemoryStore,
 ) -> None:
     memory = Memory(store)
@@ -762,25 +760,64 @@ async def test_pg_recall_caps_each_section_and_keeps_the_newest_preferences(
 
     result = await memory.recall(owner_id="alpha", query="milestone shipped")
 
-    assert _bodies(result.preferences) == [f"Preference {index}." for index in range(5, 15)]
-    assert len(result.facts) == RECALL_TOP_K
+    # Short records: the count bounds relevance, and every preference stands.
+    assert len(result.relevant) == RECALL_TOP_K
+    assert all(record.kind == "fact" for record in result.relevant)
+    assert _bodies(result.standing) == [f"Preference {index}." for index in range(15)]
+    assert result.standing_omitted == 0
 
 
-async def test_pg_recall_gives_preferences_the_character_budget_first(
+async def test_pg_recall_fills_relevance_first_and_standing_takes_the_rest(
     store: PostgresMemoryStore,
 ) -> None:
     memory = Memory(store)
-    for index in range(9):
-        await _remember(memory, f"{index} " + "p" * 448, kind="preference")
+    for index in range(18):
+        await _remember(memory, f"{index:02d} " + "p" * 447, kind="preference")
     await _remember(memory, "Milestone shipped. " + "f" * 431)
 
     result = await memory.recall(owner_id="alpha", query="milestone")
 
-    # Eight 450-character preferences take 3,600 of the 4,000; neither the
-    # oldest preference nor the matching fact fits in what is left.
-    assert [record.body[0] for record in result.preferences] == [str(m) for m in range(1, 9)]
-    assert result.facts == ()
-    assert result.content_chars <= RECALL_CHAR_BUDGET
+    # The fact is relevant and is placed first; each line costs its 450 characters plus
+    # RECALL_LINE_OVERHEAD, so fifteen preferences fill what the 8,000 budget has left
+    # and three stand unshown.
+    assert _bodies(result.relevant) == ["Milestone shipped. " + "f" * 431]
+    assert [record.body[:2] for record in result.standing] == [f"{m:02d}" for m in range(3, 18)]
+    assert result.standing_omitted == 3
+    assert recall_cost(result.records) <= RECALL_CHAR_BUDGET
+
+
+async def test_pg_recall_finds_a_crowded_out_preference_by_relevance(
+    store: PostgresMemoryStore,
+) -> None:
+    memory = Memory(store)
+    await _remember(memory, "Prefers a dark theme in every interface.", kind="preference")
+    for index in range(STANDING_FETCH_LIMIT):
+        await _remember(memory, f"Style rule {index}.", kind="preference")
+
+    unrelated = await memory.recall(owner_id="alpha", query="What is the capital of Australia?")
+    related = await memory.recall(owner_id="alpha", query="Which theme should the interface use?")
+
+    # Newer preferences crowd the oldest out of the standing section ...
+    assert "Prefers a dark theme in every interface." not in _bodies(unrelated.standing)
+    assert unrelated.standing_omitted == 1
+    # ... and a request that bears on it brings it back, shown once.
+    assert _bodies(related.relevant) == ["Prefers a dark theme in every interface."]
+    assert "Prefers a dark theme in every interface." not in _bodies(related.standing)
+    assert related.standing_omitted == 0
+
+
+async def test_pg_recall_stands_experience_beside_preference(store: PostgresMemoryStore) -> None:
+    memory = Memory(store)
+    await _remember(memory, "Answer in Chinese.", kind="preference")
+    await _remember(
+        memory, "The corpus needs pg_jieba before Chinese search works.", kind="experience"
+    )
+    await _remember(memory, "Lives in Gothenburg.")
+
+    result = await memory.recall(owner_id="alpha", query="What is the capital of Australia?")
+
+    assert {record.kind for record in result.standing} == {"preference", "experience"}
+    assert result.relevant == ()
 
 
 @asynccontextmanager
@@ -853,9 +890,9 @@ async def test_pg_memory_runs_on_whatever_text_search_a_managed_server_has(
 
     # The role could create neither extension; recall used what the server had.
     assert installed == set(preinstalled)
-    assert _bodies(shared_word.preferences) == ["Answer in Chinese."]
-    assert _bodies(shared_word.facts) == (["Lives in Berlin."] if bm25 else [])
-    assert _bodies(restated.facts) == ["It is what it is."]
+    assert _bodies(shared_word.standing) == ["Answer in Chinese."]
+    assert _bodies(shared_word.relevant) == (["Lives in Berlin."] if bm25 else [])
+    assert _bodies(restated.relevant) == ["It is what it is."]
 
 
 async def test_pg_a_running_process_keeps_recalling_while_the_writer_rebuilds_bm25() -> None:
@@ -878,9 +915,9 @@ async def test_pg_a_running_process_keeps_recalling_while_the_writer_rebuilds_bm
 
         after = await memory.recall(owner_id="alpha", query="柏林 天气 怎么样")
 
-    assert before.facts == ()
+    assert before.relevant == ()
     assert "jiebacfg" in indexdef
-    assert _bodies(after.facts) == ["我住在柏林"]
+    assert _bodies(after.relevant) == ["我住在柏林"]
 
 
 async def test_pg_facts_are_indexed_like_corpus_chunks_in_their_own_language() -> None:
@@ -898,7 +935,7 @@ async def test_pg_facts_are_indexed_like_corpus_chunks_in_their_own_language() -
             await _remember(memory, body)
 
         async def facts(query: str) -> list[str]:
-            return _bodies((await memory.recall(owner_id="alpha", query=query)).facts)
+            return _bodies((await memory.recall(owner_id="alpha", query=query)).relevant)
 
         # German function words never count; German content words do.
         assert await facts("Was ist der Unterschied zwischen Aktien und Anleihen?") == []
@@ -1034,14 +1071,14 @@ async def test_pg_restating_a_fact_as_a_preference_makes_it_stand(
 
     assert preference.outcome == "changed"
     assert preference.supersedes_id == fact.memory_id
-    assert _bodies((await memory.recall(owner_id="alpha", query=unrelated)).preferences) == [
+    assert _bodies((await memory.recall(owner_id="alpha", query=unrelated)).standing) == [
         "answer in chinese."
     ]
 
     undone = await _undo(memory, preference.change_id, key="undo-kind")
 
     assert undone.outcome == "changed"
-    assert (await memory.recall(owner_id="alpha", query=unrelated)).preferences == ()
+    assert (await memory.recall(owner_id="alpha", query=unrelated)).standing == ()
 
 
 async def _undo(memory: Memory, change_id: str, *, key: str):
@@ -1394,7 +1431,7 @@ async def test_pg_concurrent_undo_has_one_winner(store: PostgresMemoryStore) -> 
 
 
 async def _dense_ids(store: PostgresMemoryStore, query: str) -> list[str]:
-    candidates = await store.search_facts(owner_id="alpha", query=query, limit=10)
+    candidates = await store.search(owner_id="alpha", query=query, limit=10)
     return [candidate.record.memory_id for candidate in candidates if candidate.leg == "dense"]
 
 
@@ -1661,7 +1698,7 @@ async def test_pg_list_active_page_traverses_ties_and_over_hundred_rows(
 # ---------------------------------------------------------------------------
 
 
-async def test_pg_mcp_recall_returns_the_bound_subject_records(
+async def test_pg_mcp_lookup_returns_the_bound_subject_records(
     store: PostgresMemoryStore,
 ) -> None:
     memory = Memory(store)
@@ -1674,11 +1711,15 @@ async def test_pg_mcp_recall_returns_the_bound_subject_records(
             idempotency_key="seed",
         )
 
-    result = await mcp_recall(memory, subject="pi-user", query="email")
+    result = await mcp_lookup(memory, subject="pi-user", query="email")
 
-    assert [record["body"] for record in result["preferences"]] == ["No email."]
-    assert result["preferences"][0]["memory_id"]
-    assert result["facts"] == []
+    # The query bears on the preference, so it is shown once, as relevant.
+    assert [record["body"] for record in result["relevant"]] == ["No email."]
+    assert result["relevant"][0]["memory_id"]
+    assert result["relevant"][0]["kind"] == "preference"
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:00", result["relevant"][0]["written_at_utc"])
+    assert result["standing"] == []
+    assert result["standing_omitted"] == 0
     assert result["recent"] == []
 
 
@@ -1759,13 +1800,240 @@ async def test_pg_remember_then_forget_tools_return_typed_receipts(
     assert await store.count_active(owner_id="o") == 0
 
 
-async def test_pg_forget_tool_miss_is_unchanged(store: PostgresMemoryStore) -> None:
+async def test_pg_forget_tool_names_an_id_no_memory_has(store: PostgresMemoryStore) -> None:
+    unknown = "33333333-3333-3333-3333-333333333333"
+
     result = await forget_tool(host=_host(store)).execute(
-        ForgetInput(memory_id="33333333-3333-3333-3333-333333333333"),
-        tool_runtime(),
+        ForgetInput(memory_id=unknown), tool_runtime()
     )
 
+    assert result.is_error
+    assert result.text_content == (
+        f"No Profile Memory has id {unknown}. Call memory_lookup for current ids."
+    )
     assert (result.details or {})["memory_operation"]["outcome"] == "unchanged"
+
+
+async def test_pg_forget_tool_refuses_a_body_no_active_memory_has(
+    store: PostgresMemoryStore,
+) -> None:
+    host = _host(store)
+    await remember_tool(host=host).execute(
+        RememberInput(kind="fact", body="Likes tea."), tool_runtime(call_id="call-1")
+    )
+
+    miss = await forget_tool(host=host).execute(
+        ForgetInput(body="Likes coffee."), tool_runtime(call_id="call-2")
+    )
+    hit = await forget_tool(host=host).execute(
+        ForgetInput(body="Likes tea."), tool_runtime(call_id="call-3")
+    )
+    again = await forget_tool(host=host).execute(
+        ForgetInput(body="Likes tea."), tool_runtime(call_id="call-4")
+    )
+
+    assert miss.is_error
+    assert miss.text_content.startswith("No active Profile Memory has exactly that body.")
+    assert not hit.is_error
+    # Gone is gone: a second forget of the same body finds no active memory to name.
+    assert again.is_error
+
+
+async def test_pg_forgetting_a_memory_twice_says_it_was_already_forgotten(
+    store: PostgresMemoryStore,
+) -> None:
+    host = _host(store)
+    remembered = await remember_tool(host=host).execute(
+        RememberInput(kind="fact", body="Likes tea."), tool_runtime(call_id="call-1")
+    )
+    memory_id = str((remembered.details or {})["memory_operation"]["memory_ids"][0])
+    await forget_tool(host=host).execute(
+        ForgetInput(memory_id=memory_id), tool_runtime(call_id="call-2")
+    )
+
+    again = await forget_tool(host=host).execute(
+        ForgetInput(memory_id=memory_id), tool_runtime(call_id="call-3")
+    )
+
+    assert not again.is_error
+    assert again.text_content == f"Profile Memory {memory_id} was already forgotten."
+
+
+async def test_pg_forgetting_a_replaced_memory_says_so_and_points_to_lookup(
+    store: PostgresMemoryStore,
+) -> None:
+    host = _host(store)
+    first = await remember_tool(host=host).execute(
+        RememberInput(kind="fact", body="Lives in Berlin."), tool_runtime(call_id="call-1")
+    )
+    old_id = str((first.details or {})["memory_operation"]["memory_ids"][0])
+    await remember_tool(host=host).execute(
+        RememberInput(kind="fact", body="Lives in Munich.", supersedes_id=old_id),
+        tool_runtime(call_id="call-2"),
+    )
+
+    result = await forget_tool(host=host).execute(
+        ForgetInput(memory_id=old_id), tool_runtime(call_id="call-3")
+    )
+
+    assert not result.is_error
+    assert "was already replaced by a newer memory" in result.text_content
+    assert await store.count_active(owner_id="o") == 1
+
+
+async def test_pg_replaying_a_forget_returns_its_original_receipt(
+    store: PostgresMemoryStore,
+) -> None:
+    host = _host(store)
+    remembered = await remember_tool(host=host).execute(
+        RememberInput(kind="fact", body="Likes tea."), tool_runtime(call_id="call-1")
+    )
+    memory_id = str((remembered.details or {})["memory_operation"]["memory_ids"][0])
+
+    first = await forget_tool(host=host).execute(
+        ForgetInput(memory_id=memory_id), tool_runtime(call_id="call-2")
+    )
+    # The same call again, as a recovered Run replays it: the record is forgotten by now, yet
+    # the answer is the original Forgot receipt, not a miss.
+    replay = await forget_tool(host=host).execute(
+        ForgetInput(memory_id=memory_id), tool_runtime(call_id="call-2")
+    )
+
+    assert first.text_content == f"Forgot Profile Memory {memory_id}."
+    assert replay.text_content == first.text_content
+    assert not replay.is_error
+    assert (replay.details or {})["memory_operation"] == (first.details or {})["memory_operation"]
+
+
+async def test_pg_undo_tool_names_an_id_no_memory_has(store: PostgresMemoryStore) -> None:
+    unknown = "33333333-3333-3333-3333-333333333333"
+
+    result = await undo_tool(host=_host(store)).execute(
+        UndoInput(memory_id=unknown), tool_runtime()
+    )
+
+    assert result.is_error
+    assert result.text_content == (
+        f"No Profile Memory has id {unknown}. Call memory_lookup for current ids."
+    )
+    assert (result.details or {})["memory_operation"]["outcome"] == "conflict"
+
+
+async def test_pg_undo_tool_refuses_a_body_no_active_memory_has(
+    store: PostgresMemoryStore,
+) -> None:
+    host = _host(store)
+    await remember_tool(host=host).execute(
+        RememberInput(kind="fact", body="Likes tea."), tool_runtime(call_id="call-1")
+    )
+
+    miss = await undo_tool(host=host).execute(
+        UndoInput(body="Likes coffee."), tool_runtime(call_id="call-2")
+    )
+    hit = await undo_tool(host=host).execute(
+        UndoInput(body="Likes tea."), tool_runtime(call_id="call-3")
+    )
+    again = await undo_tool(host=host).execute(
+        UndoInput(body="Likes tea."), tool_runtime(call_id="call-4")
+    )
+
+    assert miss.is_error
+    assert miss.text_content == (
+        "No active Profile Memory has exactly that body. Call memory_lookup to find its id."
+    )
+    assert not hit.is_error
+    # Gone is gone: the undo forgot it, so a second undo of the same body finds no active memory.
+    assert again.is_error
+    assert again.text_content == miss.text_content
+
+
+async def test_pg_undoing_a_forgotten_memory_says_it_is_not_active(
+    store: PostgresMemoryStore,
+) -> None:
+    host = _host(store)
+    remembered = await remember_tool(host=host).execute(
+        RememberInput(kind="fact", body="Likes tea."), tool_runtime(call_id="call-1")
+    )
+    memory_id = str((remembered.details or {})["memory_operation"]["memory_ids"][0])
+    await forget_tool(host=host).execute(
+        ForgetInput(memory_id=memory_id), tool_runtime(call_id="call-2")
+    )
+
+    result = await undo_tool(host=host).execute(
+        UndoInput(memory_id=memory_id), tool_runtime(call_id="call-3")
+    )
+
+    assert result.is_error
+    assert f"Profile Memory {memory_id} was forgotten" in result.text_content
+    assert "memory_undo names an active memory" in result.text_content
+    assert "memory_lookup" in result.text_content
+    assert await store.count_active(owner_id="o") == 0
+
+
+async def test_pg_undoing_a_replaced_memory_says_so_and_points_to_lookup(
+    store: PostgresMemoryStore,
+) -> None:
+    host = _host(store)
+    first = await remember_tool(host=host).execute(
+        RememberInput(kind="fact", body="Lives in Berlin."), tool_runtime(call_id="call-1")
+    )
+    old_id = str((first.details or {})["memory_operation"]["memory_ids"][0])
+    await remember_tool(host=host).execute(
+        RememberInput(kind="fact", body="Lives in Munich.", supersedes_id=old_id),
+        tool_runtime(call_id="call-2"),
+    )
+
+    result = await undo_tool(host=host).execute(
+        UndoInput(memory_id=old_id), tool_runtime(call_id="call-3")
+    )
+
+    assert result.is_error
+    assert f"Profile Memory {old_id} was replaced by a newer memory" in result.text_content
+    assert "memory_lookup" in result.text_content
+    assert await store.count_active(owner_id="o") == 1
+
+
+async def test_pg_replaying_an_undo_returns_its_original_receipt(
+    store: PostgresMemoryStore,
+) -> None:
+    host = _host(store)
+    remembered = await remember_tool(host=host).execute(
+        RememberInput(kind="fact", body="Likes tea."), tool_runtime(call_id="call-1")
+    )
+    memory_id = str((remembered.details or {})["memory_operation"]["memory_ids"][0])
+
+    first = await undo_tool(host=host).execute(
+        UndoInput(memory_id=memory_id), tool_runtime(call_id="call-2")
+    )
+    # The same call again, as a recovered Run replays it: the record is forgotten by now, yet the
+    # answer is the original Undid receipt, not a memory that is no longer active.
+    replay = await undo_tool(host=host).execute(
+        UndoInput(memory_id=memory_id), tool_runtime(call_id="call-2")
+    )
+
+    assert first.text_content == f"Undid Profile Memory {memory_id}."
+    assert replay.text_content == first.text_content
+    assert not replay.is_error
+    assert (replay.details or {})["memory_operation"] == (first.details or {})["memory_operation"]
+
+
+async def test_pg_replaying_an_undo_of_an_unknown_id_is_the_same_error(
+    store: PostgresMemoryStore,
+) -> None:
+    host = _host(store)
+    unknown = "33333333-3333-3333-3333-333333333333"
+
+    first = await undo_tool(host=host).execute(
+        UndoInput(memory_id=unknown), tool_runtime(call_id="call-1")
+    )
+    replay = await undo_tool(host=host).execute(
+        UndoInput(memory_id=unknown), tool_runtime(call_id="call-1")
+    )
+
+    assert first.is_error
+    assert replay.is_error
+    assert replay.text_content == first.text_content
+    assert (replay.details or {})["memory_operation"] == (first.details or {})["memory_operation"]
 
 
 async def test_pg_recall_tool_lists_the_ids_a_correction_needs(
@@ -1794,15 +2062,474 @@ async def test_pg_recall_tool_lists_the_ids_a_correction_needs(
     updates: list[ToolResult] = []
 
     # Nothing in the correction shares a word with the fact it replaces.
-    result = await recall_memory_tool(host=_host(store)).execute(
-        RecallInput(query="I moved to Munich"),
-        recording_tool_runtime(updates, tool_name="recall_memory"),
+    result = await lookup_tool(host=_host(store)).execute(
+        LookupInput(query="I moved to Munich"),
+        recording_tool_runtime(updates, tool_name="memory_lookup"),
     )
 
-    assert result.text_content.splitlines() == [
-        "Standing preferences:",
-        *(f"- {p.memory_id} Style rule {index}." for index, p in enumerate(preferences)),
-        "Other recent memories:",
-        f"- {berlin.memory_id} (fact) Lives in Berlin.",
+    # Every line carries when it was last written, to the hour in UTC.
+    when = r"\d{4}-\d{2}-\d{2} \d{2}:00"
+    expected = [
+        re.escape("Remembered about this owner (times are UTC, when each was last written):"),
+        re.escape("Standing memories:"),
+        *(
+            re.escape(f"- {p.memory_id} (preference, ") + when + re.escape(f") Style rule {index}.")
+            for index, p in enumerate(preferences)
+        ),
+        re.escape("Other recent memories:"),
+        re.escape(f"- {berlin.memory_id} (fact, ") + when + re.escape(") Lives in Berlin."),
     ]
+    lines = result.text_content.splitlines()
+    assert len(lines) == len(expected)
+    for line, pattern in zip(lines, expected, strict=True):
+        assert re.fullmatch(pattern, line), line
     assert [update.subject for update in updates] == ["I moved to Munich"]
+
+
+# Fuse, undo addressed by record, and the closed sets an older database widens
+# ---------------------------------------------------------------------------
+
+
+async def _fuse(
+    memory: Memory,
+    sources: Sequence[MemoryOperationReceipt],
+    body: str,
+    *,
+    key: str = "fuse-1",
+    kind: MemoryKind | None = None,
+) -> MemoryOperationReceipt:
+    return await memory.fuse(
+        owner_id="alpha",
+        memory_ids=[str(source.memory_id) for source in sources],
+        body=body,
+        kind=kind,
+        provenance=_provenance(),
+        idempotency_key=key,
+    )
+
+
+async def test_pg_fuse_replaces_its_sources_with_one_record_and_replays(
+    store: PostgresMemoryStore,
+) -> None:
+    memory = Memory(store)
+    chinese = await _remember(memory, "Answer in Chinese.", kind="preference")
+    tables = await _remember(memory, "Put tables before prose.", kind="preference")
+
+    fused = await _fuse(memory, (chinese, tables), "Answer in Chinese, tables before prose.")
+    replay = await _fuse(memory, (chinese, tables), "Answer in Chinese, tables before prose.")
+
+    assert fused.outcome == "changed"
+    assert fused.action == "fuse"
+    assert fused.kind == "preference"
+    assert fused.supersedes_id is None
+    assert fused.memory_ids[1:] == (chinese.memory_id, tables.memory_id)
+    assert replay == fused
+    assert _bodies(await _active(memory)) == ["Answer in Chinese, tables before prose."]
+
+
+async def test_pg_fuse_of_mixed_kinds_must_say_the_kind(store: PostgresMemoryStore) -> None:
+    memory = Memory(store)
+    preference = await _remember(memory, "Answer in Chinese.", kind="preference")
+    fact = await _remember(memory, "Lives in Shanghai.")
+
+    with pytest.raises(MemoryWriteRejectedError, match="different kinds"):
+        await _fuse(memory, (preference, fact), "Lives in Shanghai; answer in Chinese.")
+    named = await _fuse(
+        memory, (preference, fact), "Lives in Shanghai; answer in Chinese.", key="k", kind="fact"
+    )
+
+    assert named.outcome == "changed"
+    assert named.kind == "fact"
+
+
+async def test_pg_fuse_is_a_conflict_when_a_source_moved_or_the_body_is_taken(
+    store: PostgresMemoryStore,
+) -> None:
+    memory = Memory(store)
+    first = await _remember(memory, "Codes in Python.")
+    second = await _remember(memory, "Writes tests first.")
+    other = await _remember(memory, "Uses ruff.")
+    await memory.forget(
+        owner_id="alpha", memory_id=second.memory_id, provenance=_provenance(), idempotency_key="f"
+    )
+
+    moved = await _fuse(memory, (first, second), "Codes Python, test first.")
+    taken = await _fuse(memory, (first, other), "Writes tests first.", key="taken")
+
+    assert moved.outcome == "conflict"
+    assert taken.outcome == "changed"  # the forgotten record no longer holds that body
+    clash = await _remember(memory, "Prefers tabs.")
+    keeper = await _remember(memory, "Prefers spaces.")
+    collision = await _fuse(memory, (clash, taken), "Prefers spaces.", key="collide")
+    assert collision.outcome == "conflict"
+    assert keeper.memory_id in {record.memory_id for record in await _active(memory)}
+
+
+async def test_pg_undo_of_a_fuse_brings_every_source_back(store: PostgresMemoryStore) -> None:
+    memory = Memory(store)
+    chinese = await _remember(memory, "Answer in Chinese.", kind="preference")
+    tables = await _remember(memory, "Put tables before prose.", kind="preference")
+    fused = await _fuse(memory, (chinese, tables), "Answer in Chinese, tables before prose.")
+
+    undone = await memory.undo(
+        owner_id="alpha",
+        memory_id=fused.memory_id,
+        provenance=_provenance(),
+        idempotency_key="undo-fuse",
+    )
+
+    assert undone.outcome == "changed"
+    assert undone.target_change_id == fused.change_id
+    assert sorted(_bodies(await _active(memory))) == [
+        "Answer in Chinese.",
+        "Put tables before prose.",
+    ]
+
+
+async def test_pg_undo_addressed_by_record_compensates_its_last_change(
+    store: PostgresMemoryStore,
+) -> None:
+    memory = Memory(store)
+    berlin = await _remember(memory, "Lives in Berlin.")
+    munich = await memory.remember(
+        owner_id="alpha",
+        kind="fact",
+        body="Lives in Munich.",
+        provenance=_provenance(),
+        idempotency_key="moved",
+        supersedes_id=berlin.memory_id,
+    )
+
+    by_body = await memory.undo(
+        owner_id="alpha",
+        body="lives in munich.",
+        provenance=_provenance(),
+        idempotency_key="undo-body",
+    )
+    restored = await _active(memory)
+    again = await memory.undo(
+        owner_id="alpha",
+        memory_id=restored[0].memory_id,
+        provenance=_provenance(),
+        idempotency_key="undo-undo",
+    )
+    gone = await memory.undo(
+        owner_id="alpha",
+        memory_id=munich.memory_id,
+        provenance=_provenance(),
+        idempotency_key="undo-gone",
+    )
+
+    assert by_body.outcome == "changed"
+    assert by_body.target_change_id == munich.change_id
+    assert _bodies(restored) == ["Lives in Berlin."]
+    # The restored record came from an undo, and an undo cannot itself be undone.
+    assert again.outcome == "conflict"
+    # A record no longer active is a conflict, not a guess at an earlier change.
+    assert gone.outcome == "conflict"
+
+
+async def test_pg_session_records_are_what_one_origin_wrote_for_one_session(
+    store: PostgresMemoryStore,
+) -> None:
+    memory = Memory(store)
+    passed = MemoryProvenance(
+        origin_kind="session_pass", origin_id="pass-1", session_id="session-9"
+    )
+    await memory.remember(
+        owner_id="alpha",
+        kind="experience",
+        body="The corpus needs pg_jieba before Chinese search works.",
+        provenance=passed,
+        idempotency_key="pass-1:0",
+    )
+    await _remember(memory, "Lives in Gothenburg.")
+
+    records = await memory.session_records(
+        owner_id="alpha", session_id="session-9", origin_kind="session_pass"
+    )
+
+    assert _bodies(records) == ["The corpus needs pg_jieba before Chinese search works."]
+    assert records[0].provenance.origin_kind == "session_pass"
+
+
+async def test_pg_fused_sources_name_the_fuse_that_retired_them(
+    store: PostgresMemoryStore,
+) -> None:
+    memory = Memory(store)
+    first = await _remember(memory, "Answer in Chinese.", kind="preference")
+    second = await _remember(memory, "Tables before prose.", kind="preference")
+    fused = await _fuse(memory, (first, second), "Chinese, tables before prose.")
+
+    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
+        rows = await conn.fetch(
+            "SELECT memory_id::text AS id, last_change_id::text AS change "
+            "FROM dlightrag_memory_records WHERE owner_id = 'alpha'"
+        )
+
+    assert {row["id"]: row["change"] for row in rows} == {
+        str(fused.memory_id): fused.change_id,
+        str(first.memory_id): fused.change_id,
+        str(second.memory_id): fused.change_id,
+    }
+
+
+# The owner's own words behind a record
+# ---------------------------------------------------------------------------
+
+
+async def _say(
+    memory: Memory,
+    body: str,
+    quote: str | None,
+    *,
+    kind: MemoryKind = "preference",
+    key: str | None = None,
+    supersedes_id: str | None = None,
+    provenance: MemoryProvenance | None = None,
+    owner_id: str = "alpha",
+) -> MemoryOperationReceipt:
+    """One remember carrying the owner's words, as the pass writes it."""
+    return await memory.apply(
+        MemoryOperation(
+            owner_id=owner_id,
+            idempotency_key=key or f"say:{uuid.uuid5(uuid.NAMESPACE_URL, body)}",
+            action="remember",
+            provenance=provenance or _provenance(),
+            kind=kind,
+            body=body,
+            supersedes_id=supersedes_id,
+            quote=quote,
+        )
+    )
+
+
+async def test_pg_a_quote_is_stored_with_its_record_and_every_read_returns_it(
+    store: PostgresMemoryStore,
+) -> None:
+    memory = Memory(store)
+    pass_run = MemoryProvenance(
+        origin_kind="session_pass", origin_id="s:1-2", run_id="run-9", session_id="session-9"
+    )
+    said = await _say(
+        memory,
+        "The owner prefers charts in a dark theme.",
+        "以后图表都用深色主题",
+        provenance=pass_run,
+    )
+    bare = await _say(memory, "The owner wants short conclusions.", None, provenance=pass_run)
+
+    by_id = {row.memory_id: row for row in await _active(memory)}
+    assert by_id[str(said.memory_id)].quote == "以后图表都用深色主题"
+    assert by_id[str(bare.memory_id)].quote is None
+    got = await store.get(owner_id="alpha", memory_id=str(said.memory_id))
+    assert got is not None and got.quote == "以后图表都用深色主题"
+    # Every path a record is read by: the exact leg of search, the standing fetch, the lookup's
+    # listing, one Session's records and one Run's changes.
+    found = await memory.search(owner_id="alpha", query="The owner prefers charts in a dark theme.")
+    assert {r.body: r.quote for r in found}["The owner prefers charts in a dark theme."] == (
+        "以后图表都用深色主题"
+    )
+    recalled = await memory.recall(owner_id="alpha", query="unrelated question")
+    assert {r.body: r.quote for r in recalled.standing} == {
+        "The owner prefers charts in a dark theme.": "以后图表都用深色主题",
+        "The owner wants short conclusions.": None,
+    }
+    session_records = await memory.session_records(
+        owner_id="alpha", session_id="session-9", origin_kind="session_pass"
+    )
+    assert {r.body: r.quote for r in session_records} == {
+        "The owner prefers charts in a dark theme.": "以后图表都用深色主题",
+        "The owner wants short conclusions.": None,
+    }
+    changes = await memory.run_changes(owner_id="alpha", run_id="run-9")
+    assert {c.record.body: c.record.quote for c in changes} == {
+        "The owner prefers charts in a dark theme.": "以后图表都用深色主题",
+        "The owner wants short conclusions.": None,
+    }
+    looked = await memory.lookup(owner_id="alpha", query="unrelated question")
+    assert looked.standing == recalled.standing
+
+
+async def test_pg_a_quote_is_recalled_into_the_block_and_the_lookup_the_agent_reads(
+    store: PostgresMemoryStore,
+) -> None:
+    memory = Memory(store)
+    await _say(
+        memory, "The owner prefers charts in a dark theme.", "以后图表都用深色主题", owner_id="o"
+    )
+
+    recalled = await memory.recall(owner_id="o", query="how should charts look")
+    # It is found by words it shares with the question (the sparse leg), not only stood.
+    assert [r.quote for r in recalled.relevant] == ["以后图表都用深色主题"]
+    block = render_auto_recall(recalled).splitlines()
+    updates: list[ToolResult] = []
+    looked = await lookup_tool(host=_host(store)).execute(
+        LookupInput(query="how should charts look"),
+        recording_tool_runtime(updates, tool_name="memory_lookup"),
+    )
+    mcp = await mcp_lookup(memory, subject="o", query="how should charts look")
+
+    assert block[-2].startswith("- (preference, ")
+    assert block[-1] == '  owner said: "以后图表都用深色主题"'
+    # The Agent's lookup puts the second line under the first, which now carries the id.
+    lookup_lines = looked.text_content.splitlines()
+    assert lookup_lines[-1] == '  owner said: "以后图表都用深色主题"'
+    assert re.match(r"- [0-9a-f-]{36} \(preference, ", lookup_lines[-2])
+    # The MCP record carries it as a field.
+    assert [record["quote"] for record in (*mcp["relevant"], *mcp["standing"])] == [
+        "以后图表都用深色主题"
+    ]
+
+
+async def test_pg_an_update_keeps_its_own_quote_and_undoing_it_brings_back_the_old_one(
+    store: PostgresMemoryStore,
+) -> None:
+    memory = Memory(store)
+    old = await _say(memory, "Prefers short conclusions.", "结论短一点")
+    new = await _say(
+        memory,
+        "Prefers conclusions of two sentences.",
+        "最多两句话",
+        supersedes_id=old.memory_id,
+        key="update",
+    )
+    assert [(r.body, r.quote) for r in await _active(memory)] == [
+        ("Prefers conclusions of two sentences.", "最多两句话")
+    ]
+
+    await memory.undo(
+        owner_id="alpha",
+        change_id=new.change_id,
+        provenance=MemoryProvenance(origin_kind="undo", origin_id="undo-1"),
+        idempotency_key="undo-1",
+    )
+
+    # The restored record is a new row with the words the old one stood on.
+    assert [(r.body, r.quote) for r in await _active(memory)] == [
+        ("Prefers short conclusions.", "结论短一点")
+    ]
+
+
+async def test_pg_forgetting_a_record_and_undoing_it_restores_its_words(
+    store: PostgresMemoryStore,
+) -> None:
+    memory = Memory(store)
+    said = await _say(memory, "Prefers short conclusions.", "结论短一点")
+    forgotten = await memory.forget(
+        owner_id="alpha", memory_id=said.memory_id, provenance=_provenance(), idempotency_key="f"
+    )
+
+    restored = await memory.undo(
+        owner_id="alpha",
+        change_id=forgotten.change_id,
+        provenance=MemoryProvenance(origin_kind="undo", origin_id="undo-1"),
+        idempotency_key="undo-f",
+    )
+
+    assert restored.outcome == "changed"
+    assert [(r.body, r.quote) for r in await _active(memory)] == [
+        ("Prefers short conclusions.", "结论短一点")
+    ]
+
+
+async def test_pg_a_fuse_carries_the_new_writes_own_quote_and_undoing_it_restores_the_sources(
+    store: PostgresMemoryStore,
+) -> None:
+    memory = Memory(store)
+    first = await _say(memory, "Answer in Chinese.", "用中文回答我")
+    second = await _say(memory, "Put tables before prose.", "表格放前面")
+    sources = [str(first.memory_id), str(second.memory_id)]
+
+    fused = await memory.apply(
+        MemoryOperation(
+            owner_id="alpha",
+            idempotency_key="fuse-quoted",
+            action="fuse",
+            provenance=_provenance(),
+            kind="preference",
+            body="Answer in Chinese, tables before prose.",
+            source_ids=tuple(sources),
+            quote="中文，表格放前面",
+        )
+    )
+
+    # The merged record stands on the words of the write that merged it, not on its sources'.
+    assert [(r.body, r.quote) for r in await _active(memory)] == [
+        ("Answer in Chinese, tables before prose.", "中文，表格放前面")
+    ]
+    await memory.undo(
+        owner_id="alpha",
+        change_id=fused.change_id,
+        provenance=MemoryProvenance(origin_kind="undo", origin_id="undo-1"),
+        idempotency_key="undo-fuse",
+    )
+    assert {(r.body, r.quote) for r in await _active(memory)} == {
+        ("Answer in Chinese.", "用中文回答我"),
+        ("Put tables before prose.", "表格放前面"),
+    }
+    # A fuse with no words of its own has none, whatever its sources had.
+    again_first = [r for r in await _active(memory) if r.body == "Answer in Chinese."][0]
+    again_second = [r for r in await _active(memory) if r.body == "Put tables before prose."][0]
+    bare = await memory.apply(
+        MemoryOperation(
+            owner_id="alpha",
+            idempotency_key="fuse-bare",
+            action="fuse",
+            provenance=_provenance(),
+            kind="preference",
+            body="Chinese, tables first.",
+            source_ids=(again_first.memory_id, again_second.memory_id),
+        )
+    )
+    assert bare.outcome == "changed"
+    assert [(r.body, r.quote) for r in await _active(memory)] == [("Chinese, tables first.", None)]
+
+
+async def test_pg_a_key_replays_with_its_quote_and_is_refused_with_another(
+    store: PostgresMemoryStore,
+) -> None:
+    memory = Memory(store)
+    first = await _say(memory, "Prefers short conclusions.", "结论短一点", key="k")
+
+    replay = await _say(memory, "Prefers short conclusions.", "结论短一点", key="k")
+    with pytest.raises(MemoryWriteRejectedError, match="different input"):
+        await _say(memory, "Prefers short conclusions.", "别写太长", key="k")
+    with pytest.raises(MemoryWriteRejectedError, match="different input"):
+        await _say(memory, "Prefers short conclusions.", None, key="k")
+
+    assert replay == first
+    assert [r.quote for r in await _active(memory)] == ["结论短一点"]
+
+
+async def test_pg_a_quote_a_record_cannot_carry_is_refused_and_nothing_is_written(
+    store: PostgresMemoryStore,
+) -> None:
+    memory = Memory(store)
+
+    for quote in ("x" * (MEMORY_QUOTE_LIMIT + 1), "two\nlines", "see [1] here", ""):
+        with pytest.raises(MemoryWriteRejectedError):
+            await _say(memory, "Prefers short conclusions.", quote)
+
+    assert await _active(memory) == ()
+
+
+async def test_pg_recall_counts_a_quote_against_its_budget(store: PostgresMemoryStore) -> None:
+    memory = Memory(store)
+    for index in range(60):
+        body = f"{index:02d} " + "记" * 97
+        await _say(memory, body, "说" * MEMORY_QUOTE_LIMIT, key=f"quoted-{index}")
+
+    result = await memory.recall(owner_id="alpha", query="unrelated question")
+
+    # Each line costs its 100 characters and its 120 of words, each with its framing: 271, so
+    # twenty-nine of the sixty fit where a hundred-character body alone would take fifty-nine.
+    assert len(result.standing) == RECALL_CHAR_BUDGET // (100 + 34 + MEMORY_QUOTE_LIMIT + 17) == 29
+    assert result.standing_omitted == 31
+    assert recall_cost(result.records) <= RECALL_CHAR_BUDGET
+    shown = sum(
+        len(line) + 1
+        for line in render_auto_recall(result).splitlines()
+        if line.startswith(("- (", '  owner said: "'))
+    )
+    assert shown <= recall_cost(result.records)

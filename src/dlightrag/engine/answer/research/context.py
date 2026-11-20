@@ -12,13 +12,17 @@ from dlightrag.engine.ai.tokens import estimate_messages_tokens
 from dlightrag.engine.answer.continuation_handles import session_notes_message
 from dlightrag.engine.answer.errors import AnswerInputOverflowError
 from dlightrag.engine.answer.evidence import EvidenceLedger
+from dlightrag.engine.answer.execution.connection_binding import ConnectionSurface
 from dlightrag.engine.answer.memory import standing_memory_message
 from dlightrag.engine.answer.mode import resource_role
-from dlightrag.engine.answer.prompts import agent_control_prompt
+from dlightrag.engine.answer.prompts.agent import (
+    agent_control_prompt,
+    external_connection_context,
+)
 from dlightrag.engine.answer.resources.converters import conversion_format
 from dlightrag.engine.answer.resources.models import ResourceManifestEntry
 from dlightrag.engine.rag.corpus.sources.source_contract import safe_source_filename
-from dlightrag.engine.runtime.workspace import SessionNoteRecord
+from dlightrag.engine.runtime.agentspace import SessionNoteRecord
 
 
 class ContextAssembler:
@@ -59,8 +63,11 @@ class ContextAssembler:
         artifact_publication: bool = False,
         run_notes: bool = False,
         connection_tools: bool = False,
+        goal_tools: bool = False,
         session_notes: Sequence[SessionNoteRecord] = (),
         instructions: str = "",
+        connection_surface: Sequence[ConnectionSurface] = (),
+        mcp_resources: bool | None = None,
     ) -> None:
         self._model_profile = model_profile
         self._context_policy = context_policy
@@ -82,9 +89,18 @@ class ContextAssembler:
         self._memory_text = memory_text
         self._contributions = contributions
         self._profile_memory_write = profile_memory_write
+        self._goal_tools = goal_tools
         self._artifact_publication = artifact_publication
         self._run_notes = run_notes
         self._connection_tools = connection_tools
+        #: The Run's pinned external Connections: the resource-tool list and each server's
+        #: bounded instructions, rendered into the system message exactly as measured.
+        self._connection_surface = tuple(connection_surface)
+        #: Whether this request actually carries the three resource tools; a narrowed Child
+        #: may pin the surface but not the tools, and is not told about tools it lacks.
+        self._mcp_resources = (
+            bool(self._connection_surface) if mcp_resources is None else mcp_resources
+        )
         self._session_notes = tuple(session_notes)
         #: Provider-anchored estimator correction; see ``observe_provider_input``.
         self._estimated_bias_tokens = 0
@@ -102,6 +118,36 @@ class ContextAssembler:
     ) -> list[dict[str, Any]]:
         """Compose one request's messages. Tool-schema input is the caller's to add."""
         return await asyncio.to_thread(self._compose_control_turn, evidence, working)
+
+    def repair_messages(self, findings: Sequence[str]) -> list[dict[str, Any]]:
+        """The append-only envelope that carries delivery evidence into one request.
+
+        It is not a Session turn: it is never persisted, never rendered as a user message,
+        and it leaves the system prompt and every earlier message byte-identical, so the
+        provider's prefix cache still covers the transcript. The original question is
+        restated because the envelope is the last message the model sees.
+        """
+        if not findings:
+            return []
+        evidence = "\n".join(findings)
+        return [
+            {
+                "role": "user",
+                "content": (
+                    "[internal repair request — not a new user turn]\n"
+                    f"The user's request: {self._query}\n\n"
+                    "These findings are requirements, not suggestions:\n"
+                    f"{evidence}\n\n"
+                    "Do the work they name with the tools available: read the declared documents; "
+                    "produce the input the verifier checks; run the verifier. Do not substitute "
+                    "hand calculations, prose, or a caveat for that work. If the work is "
+                    "impossible or the user's request forbids it, say so in user-facing terms. "
+                    "Only after that, write the final answer for the user, starting with the "
+                    "answer itself. Do not mention this check, the Skill, its gates, its "
+                    "validator, or the repair process."
+                ),
+            }
+        ]
 
     def measure_control_input(
         self,
@@ -206,6 +252,8 @@ class ContextAssembler:
             artifact_publication=self._artifact_publication,
             run_notes=self._run_notes,
             connection_tools=self._connection_tools,
+            mcp_resources=self._mcp_resources,
+            goal_tools=self._goal_tools,
         )
         contributions = [
             ContextContribution(
@@ -283,6 +331,19 @@ class ContextAssembler:
                     source="answer.evidence_images",
                     authority="visual",
                     messages=({"role": "user", "content": visual_blocks},),
+                )
+            )
+        external = external_connection_context(
+            self._connection_surface, include_resources=self._mcp_resources
+        )
+        if external:
+            # External server text is data from outside the product, so it rides after the
+            # transcript in its own reference message with the system prompt unchanged.
+            contributions.append(
+                ContextContribution(
+                    source="answer.external_connections",
+                    authority="reference",
+                    messages=({"role": "user", "content": external},),
                 )
             )
         contributions.extend(self._contributions)

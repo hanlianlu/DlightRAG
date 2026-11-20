@@ -9,8 +9,10 @@ from typing import Any, Protocol
 
 from dlightrag.engine.ai.concurrency import bounded_gather
 from dlightrag.engine.ai.telemetry import safe_log_text
-from dlightrag.engine.rag.retrieval import RetrievalResult
 from dlightrag.engine.rag.retrieval.rerank_fallback import rerank_with_fallback
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalResult,
+)
 from dlightrag.engine.rag.retrieval.visual import PreparedVisualQuery, VisualEmbeddingDomain
 
 logger = logging.getLogger(__name__)

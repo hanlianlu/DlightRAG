@@ -15,6 +15,7 @@ export type SettingsSection =
   | 'memory'
   | 'skills'
   | 'conversations'
+  | 'privacy'
   | 'language';
 
 export type SettingsSummary =
@@ -24,6 +25,8 @@ export type SettingsSummary =
   | {section: 'memory'; enabled: boolean | null; count: number | null}
   | {section: 'skills'; enabled: number; total: number}
   | {section: 'conversations'; count: number}
+  /** Reported once the owner's setting has been read, so an unread switch is never shown as off. */
+  | {section: 'privacy'; contribute: boolean}
   | {section: 'language'; preference: LanguagePreference};
 
 /** Tell the dialog what this page's navigation row should say now. */
@@ -31,8 +34,15 @@ export function reportSettingsSummary(host: HTMLElement, summary: SettingsSummar
   raise(host, 'dl-settings-summary', summary);
 }
 
+/** What a reader who asks for Settings from outside it can say about where to open it. */
+export interface SettingsRequestDetail {
+  page: SettingsSection;
+}
+
 declare global {
   interface HTMLElementEventMap {
     'dl-settings-summary': CustomEvent<SettingsSummary>;
+    /** The reader asked for Settings: on the page they name, else on the dialog's own first view. */
+    'dl-settings-request': CustomEvent<SettingsRequestDetail | undefined>;
   }
 }

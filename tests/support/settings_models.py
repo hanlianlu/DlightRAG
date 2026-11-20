@@ -6,7 +6,7 @@ from typing import Any, get_args, get_origin
 
 from pydantic import BaseModel
 
-from dlightrag.application.config import DlightragConfig
+from dlightrag.application.config.sections import DlightragConfig
 
 
 def model_types(annotation: Any) -> list[type[BaseModel]]:

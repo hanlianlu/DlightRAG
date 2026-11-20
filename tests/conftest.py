@@ -20,9 +20,10 @@ import pytest
 from dlightrag.adapters.postgres.runtime.run_store import (
     PGRunStore,
 )
-from dlightrag.application.config import DlightragConfig, set_config
 from dlightrag.application.config import loading as config_loading
 from dlightrag.application.config import sections as config_sections
+from dlightrag.application.config.loading import set_config
+from dlightrag.application.config.sections import DlightragConfig
 from dlightrag.engine.ai.settings import (
     EmbeddingSettings,
     ModelRoleSettings,
@@ -65,6 +66,7 @@ class FingerprintingRunStore(PGRunStore):
         references: Sequence[PendingArtifactReference] = (),
         routing: RoutingAcceptance | None = None,
         connection_bindings: tuple[RunConnectionBinding, ...] = (),
+        active_run_limit: int | None = None,
     ) -> RunCreation:
         if envelope is not None:
             if run_id is None:
@@ -97,6 +99,7 @@ class FingerprintingRunStore(PGRunStore):
                 references=references,
                 routing=routing,
                 connection_bindings=connection_bindings,
+                active_run_limit=active_run_limit,
             )
         request = request or {}
         prepared: dict[str, Any] = {
@@ -113,6 +116,7 @@ class FingerprintingRunStore(PGRunStore):
             references=references,
             routing=routing,
             connection_bindings=connection_bindings,
+            active_run_limit=active_run_limit,
         )
 
     async def _create_answer_run(
@@ -126,6 +130,7 @@ class FingerprintingRunStore(PGRunStore):
         references: Sequence[PendingArtifactReference],
         routing: RoutingAcceptance | None,
         connection_bindings: tuple[RunConnectionBinding, ...],
+        active_run_limit: int | None = None,
     ) -> RunCreation:
         run_id = str(uuid7())
         return await super().accept_run(
@@ -134,6 +139,7 @@ class FingerprintingRunStore(PGRunStore):
                 prepared=prepared,
                 fingerprint=fingerprint,
                 submission_key=idempotency_key or run_id,
+                active_run_limit=active_run_limit,
             ),
             run_id=run_id,
             artifacts=artifacts,
@@ -156,6 +162,7 @@ class FingerprintingRunStore(PGRunStore):
         references: Sequence[PendingArtifactReference] = (),
         routing: RoutingAcceptance | None = None,
         connection_bindings: tuple[RunConnectionBinding, ...] = (),
+        active_run_limit: int | None = None,
     ) -> RunCreation:
         if envelope is not None:
             if run_id is None:
@@ -188,6 +195,7 @@ class FingerprintingRunStore(PGRunStore):
                 prepared=prepared,
                 fingerprint=idempotency_fingerprint or run_request_fingerprint(request),
                 submission_key=idempotency_key or run_id,
+                active_run_limit=active_run_limit,
             ),
             run_id=run_id,
             artifacts=artifacts,
@@ -198,7 +206,12 @@ class FingerprintingRunStore(PGRunStore):
 
 
 def _answer_envelope(
-    *, owner_id: str, prepared: Mapping[str, Any], fingerprint: str, submission_key: str
+    *,
+    owner_id: str,
+    prepared: Mapping[str, Any],
+    fingerprint: str,
+    submission_key: str,
+    active_run_limit: int | None = None,
 ) -> PreparedRunEnvelope:
     return PreparedRunEnvelope(
         run_kind="answer",
@@ -210,6 +223,7 @@ def _answer_envelope(
         payload=prepared,
         accepted_input=accepted_input_envelope(prepared),
         retention_seconds=DEFAULT_RUN_RETENTION_SECONDS,
+        active_run_limit=active_run_limit,
     )
 
 
@@ -287,24 +301,6 @@ def _reset_config_singleton():
     config_loading._config = None
     yield
     config_loading._config = None
-
-
-@pytest.fixture(autouse=True)
-def _pg_pool_without_leftover_patches():
-    """Drop what undoing a patch of the process pool's methods leaves on the instance.
-
-    ``monkeypatch.setattr(pg_pool, "run", ...)`` undoes by setting the original
-    bound method on the instance, which then shadows every later patch of the
-    ``PGPool`` class in the same process: a test's outcome depended on which
-    tests ran before it.
-    """
-    yield
-    pool_module = sys.modules.get("dlightrag.adapters.postgres.core._pool")
-    if pool_module is None:
-        return
-    pool = pool_module.pg_pool
-    for name in [name for name in vars(pool) if callable(getattr(type(pool), name, None))]:
-        delattr(pool, name)
 
 
 @pytest.fixture

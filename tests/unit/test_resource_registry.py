@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 from dlightrag.engine.agent.session.ids import IntentId
-from dlightrag.engine.answer.agent_browser import (
+from dlightrag.engine.answer.agent_browser.contracts import (
     AgentBrowserError,
     RenderedPage,
     browser_failure,
@@ -40,7 +40,10 @@ from dlightrag.engine.answer.resources.registry import (
     ResourceRegistry as _ResourceRegistry,
 )
 from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
-from dlightrag.engine.answer.web_sources import WebExtractResult, WebSourceUnavailable
+from dlightrag.engine.answer.web_sources.contracts import (
+    WebExtractResult,
+    WebSourceUnavailable,
+)
 from dlightrag.engine.public_http import (
     PublicHttpFetch,
     PublicHttpPolicyError,
@@ -606,7 +609,7 @@ class _CountingFallback:
         self.urls.append(url)
         if self.text is None:
             raise WebSourceUnavailable("all", "extract", "empty")
-        acquisition = "exa_extract" if self.provider == "exa" else "tavily_extract"
+        acquisition = f"{self.provider}_extract"
         return WebExtractResult(
             url=url,
             text=self.text,
@@ -814,8 +817,9 @@ async def test_direct_success_skips_url_text_fallback(serve) -> None:
     assert fallback.calls == 0
 
 
-async def test_direct_decode_failure_uses_one_extract_fallback(serve) -> None:
-    fallback = _CountingFallback("recovered text\nsecond line", provider="tavily")
+@pytest.mark.parametrize("provider", ["tavily", "deepseek"])
+async def test_direct_decode_failure_uses_one_extract_fallback(serve, provider) -> None:
+    fallback = _CountingFallback("recovered text\nsecond line", provider=provider)
     serve(_Fetch(b"\x00\x01\x02\x03binary\x00\x00"))
     registry = ResourceRegistry(extract_chain=(HostedExtract(fallback),))
     resource_id = registry.register_agent_url("https://data.example.com/report.txt")
@@ -828,7 +832,7 @@ async def test_direct_decode_failure_uses_one_extract_fallback(serve) -> None:
     assert fallback.calls == 1
     # The bytes stay what the Resource holds; the text a read cites came from Extract.
     assert registry.evidence_source(resource_id)["acquisition"] == "direct_http"
-    assert registry.evidence_source(resource_id, text=True)["acquisition"] == "tavily_extract"
+    assert registry.evidence_source(resource_id, text=True)["acquisition"] == f"{provider}_extract"
 
 
 async def test_binary_direct_snapshot_is_retained_without_hosted_substitution(serve) -> None:
@@ -1303,6 +1307,42 @@ async def test_a_rendered_read_says_whose_view_it_is_and_where_the_page_ended(se
     assert "the page ended" not in unmoved.note
     assert f"[{first.note}]" in format_resource_read(first)
     assert direct.note is None or "Rendered view" not in direct.note
+
+
+async def test_a_rendering_of_a_refusal_status_is_read_with_the_status_it_answered(serve) -> None:
+    gone = "https://gone.example.com/moved.html"
+    body = "<html><h1>Too many requests</h1><p>Slow down and try again later.</p></html>"
+    serve(_Fetch(b"direct text would have been here"))
+    renderer = RecordingRenderer({gone: RenderedPage(gone, gone, body.encode(), 429)})
+    registry = ResourceRegistry(page_renderer=renderer)
+
+    read = await registry.read(
+        registry.register_agent_url(gone), rendered=True, max_window_tokens=2000
+    )
+
+    # The body the site answered with is the read, and the status is said rather than
+    # thrown away with the page.
+    assert read.rendered is True
+    assert "Slow down and try again later." in read.content
+    assert read.note is not None and "; the page answered HTTP 429." in read.note
+    assert renderer.calls == [gone]
+
+
+async def test_a_rendering_of_a_page_that_never_settled_says_its_text_may_be_partial(serve) -> None:
+    live = "https://spa.example.com/feed"
+    serve(_Fetch(b"the shell the direct read finds"))
+    renderer = RecordingRenderer(
+        {live: RenderedPage(live, live, _QUOTES.encode(), 200, settled=False)}
+    )
+    registry = ResourceRegistry(page_renderer=renderer)
+
+    read = await registry.read(
+        registry.register_agent_url(live), rendered=True, max_window_tokens=2000
+    )
+
+    assert read.rendered is True
+    assert "Albert Einstein" in read.content
+    assert read.note is not None and "the page had not gone quiet when it was read" in read.note
 
 
 async def test_a_rendering_is_appended_to_the_direct_snapshot_and_each_cursor_names_its_own(

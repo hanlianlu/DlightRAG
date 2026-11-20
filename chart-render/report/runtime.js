@@ -1,4 +1,3 @@
-// Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /**
  * The `html-report` browser runtime. `html_report.py` inlines it as the body of one function, after
  * theme.js and core.js, with `require` serving those two and `DATA` carrying theme.json and
@@ -39,10 +38,28 @@ const colorQuery = win.matchMedia ? win.matchMedia('(prefers-color-scheme: dark)
 const motionQuery = win.matchMedia ? win.matchMedia('(prefers-reduced-motion: reduce)') : null;
 const printQuery = win.matchMedia ? win.matchMedia('print') : null;
 
+const systemMode = () => (colorQuery && colorQuery.matches ? 'dark' : 'light');
+
+/** The mode this document wears: the frame's attribute when the product set one, the system otherwise. */
+const chosenMode = () => {
+  const declared = root.getAttribute('data-color-mode');
+  return declared === 'dark' || declared === 'light' ? declared : systemMode();
+};
+
 function buildThemes() {
-  mode = colorQuery && colorQuery.matches ? 'dark' : 'light';
+  mode = chosenMode();
   themes = Core.themes(DATA.structure, DATA.palette[mode]);
   for (const [name, theme] of Object.entries(themes)) echarts.registerTheme(`report-${mode}-${name}`, theme);
+}
+
+/** Rebuild the themes and redraw every chart already on the page after the colour mode changed. */
+function repaint() {
+  if (chosenMode() === mode) return;
+  buildThemes();
+  for (const record of charts.values()) {
+    record.themeKey = null;
+    scheduleRender(record);
+  }
 }
 
 const el = (tag, attrs = {}, children = []) => {
@@ -360,6 +377,7 @@ function readCharts() {
       spec: {
         id,
         filters: block && Array.isArray(block.filters) ? block.filters : [],
+        unfiltered: block && block.unfiltered,
         aspect: block && block.aspect,
         minHeight: block && block.minHeight,
         orient: block && block.orient,
@@ -659,6 +677,11 @@ win.Report = Report;
 
 function hydrate() {
   text = STRINGS[isChinese() ? 'zh' : 'en'];
+  // The product's Artifact frame hands over the reader's colour mode as the root attribute, and keeps
+  // it current; a report opened on its own has no frame, so it follows the system instead. The
+  // stylesheet keys off the same attribute, so the page and its charts can never disagree.
+  const framed = root.hasAttribute('data-color-mode');
+  if (!framed) root.setAttribute('data-color-mode', chosenMode());
   buildThemes();
   wrapTables();
   readCharts();
@@ -669,15 +692,16 @@ function hydrate() {
   stackStickyBars();
   observeSizes();
   renderAll();
-  if (colorQuery) {
-    const onScheme = () => {
-      buildThemes();
-      for (const record of charts.values()) {
-        record.themeKey = null;
-        scheduleRender(record);
-      }
-    };
-    if (colorQuery.addEventListener) colorQuery.addEventListener('change', onScheme);
+  if (colorQuery && colorQuery.addEventListener && !framed) {
+    // The system changed and nothing embeds us: move the attribute, and the observer repaints.
+    colorQuery.addEventListener('change', () => root.setAttribute('data-color-mode', systemMode()));
+  }
+  if (win.MutationObserver) {
+    // The frame changed the mode, or the system did: rebuild the chart themes and redraw.
+    new win.MutationObserver(repaint).observe(root, {
+      attributes: true,
+      attributeFilter: ['data-color-mode'],
+    });
   }
   if (motionQuery && motionQuery.addEventListener) motionQuery.addEventListener('change', renderAll);
   if (printQuery && printQuery.addEventListener) printQuery.addEventListener('change', renderAll);

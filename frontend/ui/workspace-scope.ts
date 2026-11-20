@@ -35,7 +35,7 @@ export class DlWorkspaceScope extends LightElement {
     super();
     this.handles = productionHandles();
     /** Store reads: records, active, primary. */
-    new StoreController(this, this.handles.workspaces);
+    new StoreController(this, () => [this.handles.workspaces]);
   }
 
   protected override willUpdate(_changed: PropertyValues<this>): void {
@@ -60,7 +60,7 @@ export class DlWorkspaceScope extends LightElement {
     const multi = this.handles.workspaces.active.length > 1 || this.#allSelected;
     return html`
       <button class="workspace-selector-trigger" id="workspace-trigger" type="button"
-              aria-label=${msg('Choose search workspaces', {id: 'workspaceScope.chooseSearchWorkspaces'})}
+              aria-label=${msg(str`Choose search workspaces: ${this.#label}`, {id: 'workspaceScope.chooseSearchWorkspaces'})}
               aria-haspopup="dialog"
               aria-expanded=${this.#popup.open ? 'true' : 'false'} aria-controls="workspace-popover"
               @click=${this.#popup.toggle}>
@@ -94,9 +94,8 @@ export class DlWorkspaceScope extends LightElement {
     return active.length === 1 ? name : `${name} + ${active.length - 1}`;
   }
 
-  #check(selected: boolean): TemplateResult {
-    return html`<div class="${workspaceStyles.workspacePopoverCheck}${selected
-      ? ` ${workspaceStyles.on}` : ''}"></div>`;
+  #check(): TemplateResult {
+    return html`<span class="dl-popover-radio" aria-hidden="true"></span>`;
   }
 
   #popover(): TemplateResult {
@@ -146,7 +145,7 @@ export class DlWorkspaceScope extends LightElement {
       <button class="dl-popover-item ${workspaceStyles.workspacePopoverAll}" type="button"
               data-workspace-choice data-workspace-all="true"
               aria-pressed=${selected ? 'true' : 'false'} @click=${toggleAll}>
-        ${this.#check(selected)}${msg('All workspaces', {id: 'workspaceScope.all'})}
+        ${this.#check()}${msg('All workspaces', {id: 'workspaceScope.all'})}
       </button>
     `;
   }
@@ -161,7 +160,7 @@ export class DlWorkspaceScope extends LightElement {
       <div class=${workspaceStyles.workspacePopoverItem}>
         <button class="dl-popover-item ${workspaceStyles.workspacePopoverOption}" type="button"
                 data-workspace-choice aria-pressed=${selected ? 'true' : 'false'} @click=${toggle}>
-          ${this.#check(selected)}
+          ${this.#check()}
           <span class=${workspaceStyles.workspacePopoverName}>${record.displayName}</span>
         </button>
       </div>

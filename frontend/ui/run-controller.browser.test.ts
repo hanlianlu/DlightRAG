@@ -20,7 +20,7 @@ it('uses the browser fetch interface with its required global receiver', async (
   } as typeof fetch;
   answerEventCursorStore.trackRun(conversationId, runId);
   try {
-    const controller = new RunController({cursorStore: answerEventCursorStore});
+    const controller = new RunController({cursorStore: () => answerEventCursorStore});
     controller.beginFollow(runId, false);
     const result = await controller.follow(conversationId, runId, () => {});
 

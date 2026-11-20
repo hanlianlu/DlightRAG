@@ -6,15 +6,20 @@ from collections.abc import Sequence
 from fastapi import HTTPException, Request
 
 from dlightrag.adapters.http.application import get_application
-from dlightrag.application.access import (
+from dlightrag.application.access.control import (
     AccessDeniedError,
-    AccessGate,
     AccessSubject,
+)
+from dlightrag.application.access.workspaces import (
+    AccessGate,
     NoQueryableWorkspacesError,
     WorkspaceRecord,
     WorkspaceSelectionConflictError,
 )
-from dlightrag.application.corpus_admin import workspace_id_for_name, workspace_ids_for_names
+from dlightrag.application.corpus_admin.service import (
+    workspace_id_for_name,
+    workspace_ids_for_names,
+)
 
 
 def idempotency_key(request: Request) -> str | None:

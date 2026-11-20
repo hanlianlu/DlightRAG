@@ -66,10 +66,12 @@ neither was cut short.
 
 **Reasoning levels are thinking levels.** The catalogue's `gemini` reasoning format
 maps each DlightRAG level to a `thinking_level`, holds no `off`, and is validated to
-the four API values; `gemini-3.8-flash` takes `low`, `medium` and `high`. A configured
-level also asks for `thinking_summaries: auto`, whose text becomes the turn's
-reasoning. An uncatalogued Gemini model gets the four levels, and a higher request
-clamps to `high`.
+the API values (`minimal`, `low`, `medium`, `high`, `xhigh`). An entry maps only the
+levels Google's documentation lists for that model: `gemini-4-hydrogen` takes `low`,
+`medium`, `high` and `xhigh`. A configured level also asks for
+`thinking_summaries: auto`, whose text becomes the turn's reasoning. An uncatalogued
+Gemini model gets only the four levels every model accepts (`minimal` to `high`), and a
+higher request clamps to `high`, because an older model answers `xhigh` with a 400.
 
 **No sampling parameters.** A configured `temperature` on a Gemini model or a Gemini
 chat reranker fails settings validation. Internal defaults written for other

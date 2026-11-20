@@ -21,19 +21,32 @@ from urllib.parse import urlsplit
 
 import pytest
 
-from dlightrag.adapters.agent_browser import PooledBrowserProvider
-from dlightrag.engine.agent.environment import AccessScheduler
+from dlightrag.adapters.agent_browser.pool import (
+    PooledBrowserProvider,
+)
+from dlightrag.engine.agent.environment.access import (
+    AccessScheduler,
+)
 from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
 from dlightrag.engine.agent.tool_content import tool_content_attachments
-from dlightrag.engine.agent.tools import AgentTool, ToolResult
-from dlightrag.engine.agent.tools.contracts import CommittedOutput
+from dlightrag.engine.agent.tools.contracts import (
+    AgentTool,
+    CommittedOutput,
+    ToolResult,
+)
 from dlightrag.engine.agent.tools.files import (
     BashArgs,
     ImagePreparer,
     ResourceReader,
     ResourceReadRequest,
 )
-from dlightrag.engine.answer.agent_browser import BrowserHolder, RunAgentBrowser
+from dlightrag.engine.answer.agent_browser.contracts import (
+    BrowserHolder,
+)
+from dlightrag.engine.answer.agent_browser.run import (
+    RunAgentBrowser,
+)
+from dlightrag.engine.answer.agentspace import spill_receipt, write_spill_file
 from dlightrag.engine.answer.resources.registry import (
     FetchedResourceBytes,
     ResourceEffectOwner,
@@ -41,7 +54,6 @@ from dlightrag.engine.answer.resources.registry import (
 )
 from dlightrag.engine.answer.tools.browser import BrowserToolHost, browser_tool
 from dlightrag.engine.answer.tools.resources import make_resource_reader
-from dlightrag.engine.answer.workspace import spill_receipt, write_spill_file
 from tests.support.agent_browser import (
     FakeLeases,
     RunServer,
@@ -55,7 +67,7 @@ from tests.support.agent_browser import (
 from tests.support.dns import public_dns
 from tests.support.path_tools import path_tools
 from tests.support.resources import preparer
-from tests.tool_helpers import recording_tool_runtime
+from tests.support.tool_helpers import recording_tool_runtime
 
 pytestmark = pytest.mark.asyncio
 
@@ -225,6 +237,7 @@ async def browsing(
         leases = FakeLeases()
         provider = PooledBrowserProvider(
             endpoints=(server.endpoint,),
+            headed_endpoints=(),
             egress_proxy=proxy_url or proxy.url,
             chromium_sandbox=True,
             connect_timeout_seconds=20,
@@ -354,14 +367,24 @@ async def test_a_popup_that_opens_after_its_call_returned_is_where_the_next_call
         assert "new tab" not in back.text_content
 
 
-async def test_a_confirm_is_accepted_and_reported() -> None:
+async def test_a_confirm_nobody_answered_is_reported_and_the_page_waits() -> None:
     async with browsing() as web:
         await web.call(action="navigate", url=f"{SHOP}/results?q=lamp")
 
         deleted = await web.call(action="click", ref=await web.ref("Delete"))
 
-        assert 'The page showed a confirm dialog: "Sure?" (accepted).' in deleted.text_content
-        assert "deleted" in deleted.text_content
+        # Our code answered nothing: the page is stopped on the dialog, and the call that
+        # met it says what it waits on instead of completing what the click set in motion.
+        assert 'The page showed a confirm dialog: "Sure?"' in deleted.text_content
+        assert "waiting for an answer" in deleted.text_content
+        assert "deleted" not in deleted.text_content
+
+        # The verdict is the agent's, and the call that carries it answers the dialog and
+        # reads the page the answer left.
+        answered = await web.call(action="wait", seconds=0.5, dialog="accept")
+
+        assert 'The page showed a confirm dialog: "Sure?" (accepted).' in answered.text_content
+        assert "deleted" in answered.text_content
 
 
 async def test_a_page_that_answers_an_error_status_is_shown_with_it() -> None:
@@ -559,7 +582,7 @@ async def test_a_screenshot_spends_the_image_budget_and_is_never_evidence() -> N
         assert (stored.source_locator, stored.resource_kind) == ("shop.example/", "tool_attachment")
         assert shot.effects.evidence_sources == ()
         assert "Screenshot of the visible page" in shot.text_content
-        assert "its pixels are context, not evidence" in shot.text_content
+        assert "this screenshot is context" in shot.text_content
         # The Run's one image is spent: a second screenshot is refused, and attaches nothing.
         assert again.is_error and "remaining image budget" in again.text_content
         assert tool_content_attachments(again.parts) == ()
@@ -698,9 +721,15 @@ async def test_a_browser_launched_with_a_dead_proxy_reaches_nothing() -> None:
         failed = await web.call(action="navigate", url=f"{SHOP}/")
 
         assert failed.is_error
+        # A proxy that refuses is this deployment's boundary, named as such: the raw Chromium
+        # token would read as the site being down.
         assert failed.text_content == (
-            "The Agent Browser could not load the page (net::ERR_PROXY_CONNECTION_FAILED)."
+            "This deployment's egress proxy refused the connection, so the site was never "
+            "reached. The Agent Browser leaves through that proxy, and it admits public "
+            "destinations on ports 80 and 443 only; work from the direct read or another "
+            "source."
         )
+        assert "net::ERR" not in failed.text_content
         assert web.proxy.requests == []
 
 

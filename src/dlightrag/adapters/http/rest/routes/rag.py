@@ -8,8 +8,11 @@ from fastapi import APIRouter, Depends, Request
 from dlightrag.adapters.http.rest.auth import get_current_user
 from dlightrag.adapters.http.rest.models import RetrieveRequest, RunDescriptor
 from dlightrag.adapters.http.rest.payloads import metadata_filter_from_payload
-from dlightrag.application.access import UserContext, owner_id_from_user
-from dlightrag.application.retrieval import RetrieveRequest as ServiceRequest
+from dlightrag.application.access.principal import (
+    UserContext,
+    owner_id_from_user,
+)
+from dlightrag.application.retrieval.service import RetrieveRequest as ServiceRequest
 
 from .deps import (
     get_application,

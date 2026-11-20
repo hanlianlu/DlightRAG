@@ -1,0 +1,245 @@
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
+
+/* The notice under an answer: what the Run's writers left in Profile Memory (ui/memory-notice.ts).
+ *
+ * The element draws no box of its own. Its part takes its place at the end of the action row under the
+ * answer, and the row draws the line before it and stands it off (`data-action-part`, see the action row
+ * in design-system/primitives/primitives.css), so this file states no divider and no clearance. What is
+ * stated here is the part's own face, in the row's words: caption size, Accent ink, underlined under the
+ * pointer, like the row's other buttons. */
+
+@layer features {
+  dl-memory-notice {
+    display: contents;
+  }
+
+  /* What the reader presses is 24 CSS px on a desktop and the product's hit target where a finger is the
+     pointer, in the popover as much as on the part. */
+  .notice,
+  .popover {
+    --notice-hit: 1.5rem;
+  }
+
+  @media (width <= 640px), (pointer: coarse) {
+    .notice,
+    .popover {
+      --notice-hit: var(--control-hit-target);
+    }
+  }
+
+  .notice {
+    align-items: center;
+    display: inline-flex;
+    position: relative;
+  }
+
+  /* It comes when the pass has finished, a moment after the answer: a fade, not a movement, so the words
+     already on the row do not shift under the reader's eye, and none at all for a reader who asked for no
+     motion (the duration is zero there). */
+  .notice[data-fresh] {
+    animation: arrive var(--duration-overlay) var(--easing-standard);
+  }
+
+  @keyframes arrive {
+    from {
+      opacity: 0;
+    }
+
+    to {
+      opacity: 1;
+    }
+  }
+
+  .trigger {
+    align-items: center;
+    appearance: none;
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius-control);
+    color: var(--color-accent-text);
+    cursor: pointer;
+    display: inline-flex;
+    font: inherit;
+    font-size: var(--font-size-caption);
+    gap: var(--space-inline);
+    padding: 0;
+    position: relative;
+    transition: color var(--duration-control) var(--easing-standard);
+  }
+
+  /* The words are as tall as the row's line; the reader presses the target above, which reaches out
+     invisibly around them, as the thumbs' does. */
+  .trigger::before {
+    content: '';
+    inset-block: min(0px, calc((100% - var(--notice-hit)) / 2));
+    inset-inline: 0;
+    position: absolute;
+  }
+
+  /* Mineral Light has no gold darker than Accent text, so hover also underlines. */
+  .trigger:hover,
+  .trigger[aria-expanded='true'] {
+    color: var(--color-accent-emphasis);
+  }
+
+  .trigger:hover {
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+  }
+
+  .trigger:focus-visible {
+    outline: 2px solid var(--focus-ring-color);
+    outline-offset: 2px;
+  }
+
+  .mark {
+    align-items: center;
+    display: inline-flex;
+  }
+
+  /* ── The popover ── */
+
+  /* It starts where the part starts. The element measures the chat's box when it opens and states how wide that
+     leaves it (--notice-room) and how far to move it along the line to stay inside (--notice-shift); until it
+     has, the window is the room. */
+  .popover {
+    gap: var(--space-inline);
+    inline-size: min(22rem, var(--notice-room, calc(100vw - 2 * var(--space-layout))));
+    inset-inline-start: var(--notice-shift, 0);
+    padding: var(--space-tight);
+  }
+
+  /* Opened below the part, where the answer's own words stay in view, as a menu opens. The newest answer sits
+     at the foot of the chat with no room under it, so the element measures its room and opens upward there. */
+  @media (width > 640px) and (pointer: fine) {
+    .popover[data-placement='above'] {
+      bottom: calc(100% + var(--anchored-gap, var(--space-3xs)));
+      top: auto;
+    }
+  }
+
+  /* A phone, or a finger: a sheet from the bottom edge, as wide as the screen, rather than a small
+     floating thing the thumb has to aim at. */
+  @media (width <= 640px), (pointer: coarse) {
+    .popover {
+      border-end-end-radius: 0;
+      border-end-start-radius: 0;
+      bottom: 0;
+      inline-size: auto;
+      inset-inline: 0;
+      max-height: min(70dvh, 28rem);
+      padding-bottom: calc(var(--space-tight) + env(safe-area-inset-bottom, 0px));
+      position: fixed;
+      top: auto;
+    }
+  }
+
+  .title {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    font-weight: 500;
+    margin: 0;
+    padding: var(--space-inline) var(--space-tight);
+  }
+
+  .list {
+    display: grid;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .row {
+    align-items: start;
+    column-gap: var(--space-tight);
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    min-block-size: var(--notice-hit);
+    padding: var(--space-inline) var(--space-tight);
+  }
+
+  .row + .row {
+    border-block-start: 1px solid var(--color-divider);
+  }
+
+  /* What kind of statement it is, in a small pill: the words say it, not the colour. */
+  .kind {
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-pill);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    margin-block-start: var(--space-inline);
+    padding-inline: var(--space-tight);
+    white-space: nowrap;
+  }
+
+  .text {
+    align-self: center;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-detail);
+    line-height: var(--line-height-control);
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .undo,
+  .manage {
+    appearance: none;
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius-control);
+    color: var(--color-accent-text);
+    cursor: pointer;
+    font: inherit;
+    font-size: var(--font-size-caption);
+    min-block-size: var(--notice-hit);
+    padding-block: 0;
+    padding-inline: var(--space-tight);
+    transition:
+      background var(--duration-control) var(--easing-standard),
+      color var(--duration-control) var(--easing-standard),
+      opacity var(--duration-control) var(--easing-standard);
+  }
+
+  .undo {
+    min-inline-size: var(--notice-hit);
+  }
+
+  .manage {
+    border-block-start: 1px solid var(--color-divider);
+    border-end-end-radius: var(--radius-control);
+    border-end-start-radius: var(--radius-control);
+    border-start-end-radius: 0;
+    border-start-start-radius: 0;
+    margin-block-start: var(--space-inline);
+    text-align: start;
+  }
+
+  .undo:focus-visible,
+  .manage:focus-visible {
+    outline: 2px solid var(--focus-ring-color);
+    outline-offset: 2px;
+  }
+
+  /* While a request is out a control waits. It stays focusable, so the reader keeps their place. */
+  .undo[aria-disabled='true'] {
+    cursor: progress;
+    opacity: 0.6;
+  }
+
+  .undo:hover:not([aria-disabled='true']),
+  .manage:hover {
+    background: var(--color-accent-hover);
+    color: var(--color-accent-emphasis);
+  }
+
+  /* A change the reader took back says so in words, where its button was. */
+  .done {
+    align-self: center;
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    padding-inline: var(--space-tight);
+    white-space: nowrap;
+  }
+}

@@ -6,7 +6,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-_INHERIT = frozenset({"PATH", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"})
+_INHERIT = frozenset({"PATH", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "FONTS_DIR"})
 _SAFE_CA = frozenset({"SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"})
 _PROXY = frozenset(
     {"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy"}
@@ -47,7 +47,12 @@ _BLOCK_EXACT = frozenset(
 
 
 def build_child_environment(*, home: Path, tmp: Path) -> dict[str, str]:
-    """Return an explicit env: usable PATH, no service secrets, no full inheritance."""
+    """Return an explicit env: usable PATH, no service secrets, no full inheritance.
+
+    ``FONTS_DIR`` is carried for a Run on a machine that is not the image: the chart tests and the
+    Agent's own fpdf2 code are pointed at a font set a developer installed, and without it the
+    office-documents Skill's second font path would name a directory no child can see.
+    """
     env: dict[str, str] = {}
     for name in _INHERIT | _SAFE_CA:
         value = os.environ.get(name)

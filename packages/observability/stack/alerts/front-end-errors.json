@@ -1,0 +1,24 @@
+{
+  "name": "DlightRAG · the browser channel reported an error",
+  "displayName": "DlightRAG · front-end errors",
+  "source": "inline",
+  "interval": "5m",
+  "threshold": 1,
+  "thresholdType": "above",
+  "channel": {
+    "type": "webhook",
+    "webhookId": "${HYPERDX_WEBHOOK_ID}"
+  },
+  "message": "the browser channel reported an error; this window saw {{value}}. front-end errors reach the stack as error spans from dlightrag-web: the SDK's default `onerror` capture raises one per uncaught browser error, and a fetch that failed at the network layer raises another. the log branch stays because it is the right signal if console capture is ever turned on, and no web log record has ever been exported, so today the span branch is the one that fires. open the span for the stack trace.",
+  "tags": [
+    "dlightrag",
+    "frontend"
+  ],
+  "chartConfig": {
+    "configType": "sql",
+    "displayType": "number",
+    "connectionId": "${HYPERDX_CONNECTION_ID}",
+    "name": "front-end error records",
+    "sqlTemplate": "SELECT count() AS front_end_errors\nFROM (\n  SELECT Timestamp\n  FROM otel_logs\n  WHERE ServiceName = 'dlightrag-web'\n    AND (lower(SeverityText) IN ('error', 'fatal') OR SeverityNumber >= 17)\n    AND $__timeFilter_ms(Timestamp)\n  UNION ALL\n  SELECT Timestamp\n  FROM otel_traces\n  WHERE ServiceName = 'dlightrag-web'\n    AND StatusCode = 'Error'\n    AND $__timeFilter_ms(Timestamp)\n)\n"
+  }
+}

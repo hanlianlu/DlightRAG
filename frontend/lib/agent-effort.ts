@@ -8,9 +8,8 @@
  * with no stored choice omits the field and the deployment default applies.
  */
 
+import {AGENT_EFFORT_LEVELS, type AgentEffort} from '../api/agent-effort.ts';
 import {readStored, writeStored} from './storage.ts';
-
-export type AgentEffort = 'low' | 'high' | 'max';
 
 export interface AgentEffortOffer {
     readonly levels: readonly AgentEffort[];
@@ -26,12 +25,10 @@ export const EFFORT_LABELS: Record<AgentEffort, string> = {
 
 export const AGENT_EFFORT_STORAGE_KEY = 'dlightrag.composer.effort';
 
-const ALL_LEVELS: readonly AgentEffort[] = ['low', 'high', 'max'];
-
 export const EMPTY_AGENT_EFFORT_OFFER: AgentEffortOffer = {levels: [], default: null};
 
 export function isAgentEffort(value: unknown): value is AgentEffort {
-    return ALL_LEVELS.includes(value as AgentEffort);
+    return AGENT_EFFORT_LEVELS.includes(value as AgentEffort);
 }
 
 /** Keep only offered levels, in the deployment's own order. */

@@ -40,53 +40,12 @@ _CITED_HTML = (
 )
 
 
-def _source_presentation_domain(
-    *,
-    source_url: str | None = None,
-    image_url: str | None = None,
-) -> dict:
-    """Presentation in camelCase domain shape, injected into element properties."""
-    return {
-        "answerText": "DlightRAG cited answer [1-1].",
-        "parts": [
-            {
-                "type": "markdown",
-                "text": "DlightRAG cited answer [1-1].",
-                "html": _CITED_HTML,
-                "artifact": None,
-                "evidenceImage": None,
-                "inline": False,
-            }
-        ],
-        "sources": [
-            {
-                "id": "1",
-                "title": "report.pdf",
-                "sourceUrl": source_url,
-                "downloadUrl": "/web/api/files/raw/doc-report?workspace=default",
-                "chunks": [
-                    {
-                        "chunkIdx": 1,
-                        "pageNumber": 1,
-                        "contentHtml": "<p>Evidence text</p>",
-                        "imageUrl": image_url,
-                        "thumbnailUrl": image_url,
-                    }
-                ],
-            }
-        ],
-        "evidenceImages": [],
-        "artifacts": [],
-        "artifactOutcome": {"status": "complete", "issues": []},
-    }
-
-
 def _source_presentation_wire(
     *,
     source_url: str | None = None,
     image_url: str | None = None,
 ) -> dict:
-    """Presentation in snake_case wire shape, served by the mocked server."""
+    """A cited presentation in the wire shape the history serves."""
     return {
         "answer_text": "DlightRAG cited answer [1-1].",
         "parts": [
@@ -122,18 +81,31 @@ def _source_presentation_wire(
     }
 
 
-def _inject_answer_with_sources(page, *, image_url: str | None = None) -> None:
+def _send_answer_with_sources(page, *, image_url: str | None = None) -> None:
+    """Send a message and wait for its answer, drawn with a cited source.
+
+    The page reads the conversation's history again once a Run settles and draws that over the
+    live answer, so the cited presentation is served in the history: a property set on the
+    element by hand is lost whenever the read lands after it. The reference appears when the
+    page has drawn the history it read.
+    """
+    presentation = _source_presentation_wire(image_url=image_url)
+
+    def serve_with_sources(route) -> None:
+        response = route.fetch()
+        if not response.ok:
+            route.fulfill(response=response)
+            return
+        history = response.json()
+        for turn in history["turns"]:
+            if turn["status"] == "succeeded":
+                turn["presentation"] = presentation
+        route.fulfill(status=response.status, json=history)
+
+    page.route("**/api/conversations/*/history*", serve_with_sources)
     page.wait_for_selector("[aria-current='page']", timeout=10000)
     page.locator(".composer-input").fill("show cited source")
     page.click(".composer-send")
-    page.get_by_role("button", name="Fork").last.wait_for(timeout=10000)
-    page.locator("dl-answer-presentation").last.evaluate(
-        """(element, presentation) => {
-          element.presentation = presentation;
-          return element.updateComplete;
-        }""",
-        _source_presentation_domain(image_url=image_url),
-    )
     page.locator("[data-answer-ref]").last.wait_for()
 
 
@@ -141,7 +113,7 @@ def _inject_answer_with_sources(page, *, image_url: str | None = None) -> None:
 def test_reference_item_keyboard_opens_source_panel(page):
     """Keyboard activation on a reference item opens its expanded source."""
     _open_ready_page(page)
-    _inject_answer_with_sources(page)
+    _send_answer_with_sources(page)
 
     page.locator("[data-answer-ref]").press("Enter")
 
@@ -155,7 +127,7 @@ def test_reference_item_keyboard_opens_source_panel(page):
 def test_mobile_source_panel_is_full_bleed_and_touch_reachable(page):
     page.set_viewport_size({"width": 390, "height": 844})
     _open_ready_page(page)
-    _inject_answer_with_sources(page)
+    _send_answer_with_sources(page)
     page.locator("[data-answer-ref]").press("Enter")
 
     panel = page.locator('#panel.open[data-panel-kind="sources"]')
@@ -191,7 +163,7 @@ def test_mobile_source_panel_is_full_bleed_and_touch_reachable(page):
 @pytest.mark.e2e
 def test_conversation_route_change_closes_sources_panel(page):
     _open_ready_page(page)
-    _inject_answer_with_sources(page)
+    _send_answer_with_sources(page)
     page.locator("[data-answer-ref]").last.click()
     page.wait_for_selector('#panel.open[data-panel-kind="sources"]')
 
@@ -204,7 +176,7 @@ def test_conversation_route_change_closes_sources_panel(page):
 @pytest.mark.e2e
 def test_source_download_is_persistent_sibling_and_keyboard_reachable(page):
     _open_ready_page(page)
-    _inject_answer_with_sources(page)
+    _send_answer_with_sources(page)
     page.locator("[data-answer-ref]").press("Enter")
 
     header = page.locator('#panel-content [data-ref="1"] [data-source-header]')
@@ -261,6 +233,8 @@ def test_public_source_link_opens_new_tab_from_source_panel(page):
                             "created_at": timestamp,
                         }
                     ],
+                    "commands": [],
+                    "next_cursor": None,
                 }
             )
             return
@@ -292,7 +266,7 @@ def test_escape_closes_source_lightbox_only_and_restores_image_focus(page):
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/"
         "x8AAwMCAO+/p9sAAAAASUVORK5CYII="
     )
-    _inject_answer_with_sources(page, image_url=image_url)
+    _send_answer_with_sources(page, image_url=image_url)
     page.locator("[data-answer-ref]").press("Enter")
     page.wait_for_selector('#panel-content [data-ref="1"][data-expanded]')
 

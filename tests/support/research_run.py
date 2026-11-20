@@ -22,12 +22,12 @@ import pytest
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.settings import ModelSettings
 from dlightrag.engine.answer.capabilities import RequestModelContext
-from dlightrag.engine.answer.execution import AnswerExecutor
+from dlightrag.engine.answer.execution.executor import AnswerExecutor
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.runtime.coordinator import RunSession
 from dlightrag.engine.runtime.errors import RunExecutionError
 from dlightrag.engine.runtime.progress import StageCommit
-from tests.in_memory_session_repository import MemoryAgentSessionRepository
+from tests.support.in_memory_session_repository import MemoryAgentSessionRepository
 from tests.support.workspace_store import InMemoryWorkspaceStore
 
 
@@ -111,6 +111,7 @@ def research_rig(
     store.list_child_sessions = AsyncMock(return_value=[])
     store.load_pending_agent_controls = AsyncMock(return_value=[])
     store.list_fetched_resources = AsyncMock(return_value=[])
+    store.read_event_page = AsyncMock(return_value=[])
     capabilities = MagicMock()
     capabilities.request_model_context = MagicMock(return_value=models)
     resources = MagicMock()

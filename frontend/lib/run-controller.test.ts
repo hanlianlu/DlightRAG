@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import type {ConversationTurn} from '../api/conversations.ts';
 import {onSignedOut} from '../api/wire.ts';
-import {RunController, type AnswerRunEvent} from './run-controller.ts';
+import {RunController, statesSomething, type AnswerRunEvent} from './run-controller.ts';
 import {AnswerEventCursorStore} from '../stores/answer-event-cursor-store.ts';
 
 const answerEventCursorStore = new AnswerEventCursorStore();
@@ -33,6 +33,8 @@ function stored(status: ConversationTurn['status']): ConversationTurn {
     errorKind: null,
     errorMessage: null,
     childCount: 0,
+    answerSequence: null,
+    feedback: null,
     createdAt: '2026-01-01T00:00:00Z',
   };
 }
@@ -94,7 +96,7 @@ test('RunController resumes SSE from the last durable sequence without replaying
   ];
   answerEventCursorStore.trackRun(conversationId, runId);
   const controller = new RunController({
-    cursorStore: answerEventCursorStore,
+    cursorStore: () => answerEventCursorStore,
     reconnectDelayMs: 0,
     fetch: (async (_input, init) => {
       headers.push(new Headers(init?.headers).get('Last-Event-ID') ?? '');
@@ -119,6 +121,39 @@ test('RunController resumes SSE from the last durable sequence without replaying
   answerEventCursorStore.clear(conversationId);
 });
 
+test('RunController keeps its position in the store it is handed at each read, not the one it was built with', async () => {
+  // A Feature builds its controller before the bag it is given by property arrives, so the
+  // controller asks for the store each time it reads or records a position.
+  const conversationId = 'run-controller-swap';
+  const runId = 'run-swap';
+  const built = new AnswerEventCursorStore();
+  const handed = new AnswerEventCursorStore();
+  let current = built;
+  const requestedWith: string[] = [];
+  const controller = new RunController({
+    cursorStore: () => current,
+    reconnectDelayMs: 0,
+    fetch: (async (_input, init) => {
+      requestedWith.push(new Headers(init?.headers).get('Last-Event-ID') ?? '');
+      return eventResponse([
+        'id: 1\nevent: token\ndata: "Hello"\n\n',
+        'id: 2\nevent: done\ndata: {"status":"cancelled","presentation":null}\n\n',
+      ].join(''));
+    }) as typeof fetch,
+  });
+  current = handed;
+  handed.trackRun(conversationId, runId);
+  assert.ok(controller.beginFollow(runId, false));
+
+  const result = await controller.follow(conversationId, runId, () => undefined);
+
+  assert.equal(result.kind, 'terminal');
+  assert.equal(handed.lastSequence(conversationId, runId), 2, 'the handed store recorded the stream');
+  assert.equal(built.lastSequence(conversationId, runId), 0, 'the store it was built with heard nothing');
+  assert.deepEqual(requestedWith, ['']);
+  controller.finish(runId);
+});
+
 test('RunController frame-batches 2,000 streamed tokens without losing order or durability', async () => {
   const conversationId = 'run-controller-batching';
   const runId = 'run-batching';
@@ -135,7 +170,7 @@ test('RunController frame-batches 2,000 streamed tokens without losing order or 
   );
   answerEventCursorStore.trackRun(conversationId, runId);
   const controller = new RunController({
-    cursorStore: answerEventCursorStore,
+    cursorStore: () => answerEventCursorStore,
     scheduleFrame: frames.schedule,
     cancelFrame: frames.cancel,
     fetch: (async () => chunkedEventResponse(chunks, (index) => {
@@ -180,7 +215,7 @@ test('RunController preserves token-reset-token and progress/tool boundaries', a
   const frames = new TestFrames();
   answerEventCursorStore.trackRun(conversationId, runId);
   const controller = new RunController({
-    cursorStore: answerEventCursorStore,
+    cursorStore: () => answerEventCursorStore,
     scheduleFrame: frames.schedule,
     cancelFrame: frames.cancel,
     fetch: (async () => eventResponse([
@@ -222,7 +257,7 @@ test('RunController ignores unknown wire events after durably advancing their se
   ];
   answerEventCursorStore.trackRun(conversationId, runId);
   const controller = new RunController({
-    cursorStore: answerEventCursorStore,
+    cursorStore: () => answerEventCursorStore,
     reconnectDelayMs: 0,
     fetch: (async (_input, init) => {
       headers.push(new Headers(init?.headers).get('Last-Event-ID') ?? '');
@@ -248,7 +283,7 @@ test('RunController settles an exhausted stream from the authoritative run row',
   const runId = 'run-settle';
   answerEventCursorStore.trackRun(conversationId, runId);
   const controller = new RunController({
-    cursorStore: answerEventCursorStore,
+    cursorStore: () => answerEventCursorStore,
     maxReconnectAttempts: 0,
     reconnectDelayMs: 0,
     fetch: (async () => eventResponse('')) as typeof fetch,
@@ -271,7 +306,7 @@ test('RunController signs the page out when the event stream refuses its sign-in
   let signedOut = 0;
   const stop = onSignedOut(() => { signedOut += 1; });
   const controller = new RunController({
-    cursorStore: answerEventCursorStore,
+    cursorStore: () => answerEventCursorStore,
     fetch: (async () => Response.json(
       {detail: 'Token expired', error_type: 'auth'},
       {status: 401},
@@ -314,7 +349,7 @@ test('RunController flushes a pending frame at stream end and stream failure', a
         }), {status: 200, headers: {'Content-Type': 'text/event-stream'}});
     answerEventCursorStore.trackRun(conversationId, runId);
     const controller = new RunController({
-    cursorStore: answerEventCursorStore,
+    cursorStore: () => answerEventCursorStore,
       maxReconnectAttempts: 0,
       reconnectDelayMs: 0,
       scheduleFrame: frames.schedule,
@@ -347,7 +382,7 @@ test('RunController detach synchronously flushes accepted events and cancels its
   const encoder = new TextEncoder();
   answerEventCursorStore.trackRun(conversationId, runId);
   const controller = new RunController({
-    cursorStore: answerEventCursorStore,
+    cursorStore: () => answerEventCursorStore,
     scheduleFrame: frames.schedule,
     cancelFrame: frames.cancel,
     fetch: (async () => new Response(new ReadableStream<Uint8Array>({
@@ -377,7 +412,7 @@ test('RunController detach synchronously flushes accepted events and cancels its
 });
 
 test('RunController aborts run-owned commands when its lifecycle finishes', () => {
-  const controller = new RunController({cursorStore: answerEventCursorStore});
+  const controller = new RunController({cursorStore: () => answerEventCursorStore});
   controller.beginFollow('run-command', false);
   const signal = controller.signalFor('run-command');
 
@@ -390,7 +425,7 @@ test('RunController aborts run-owned commands when its lifecycle finishes', () =
 });
 
 test('RunController preserves a durable cancellation request when reattaching', () => {
-  const controller = new RunController({cursorStore: answerEventCursorStore});
+  const controller = new RunController({cursorStore: () => answerEventCursorStore});
 
   controller.beginFollow('run-stopping', true);
 
@@ -404,7 +439,7 @@ test('RunController distinguishes explicit cancel from detach and owns both abor
   let cancelAborted = false;
   let releaseCancel!: () => void;
   const controller = new RunController({
-    cursorStore: answerEventCursorStore,
+    cursorStore: () => answerEventCursorStore,
     cancelRun: async (_runId, signal) => {
       cancelCalls += 1;
       await new Promise<void>((resolve) => {
@@ -437,7 +472,7 @@ test('RunController keeps an earlier durable cancellation independent from a lat
     reject: (reason: Error) => void;
   }>();
   const controller = new RunController({
-    cursorStore: answerEventCursorStore,
+    cursorStore: () => answerEventCursorStore,
     cancelRun: (runId, signal) => new Promise<ConversationTurn>((_resolve, reject) => {
       assert.ok(signal);
       requests.set(runId, {signal, reject});
@@ -464,4 +499,60 @@ test('RunController keeps an earlier durable cancellation independent from a lat
   controller.disconnect();
   assert.equal(requests.get('run-b')?.signal.aborted, true);
   await cancelB;
+});
+
+test('RunController reads reasoning frames and coalesces them like tokens, in wire order', async () => {
+  const conversationId = 'run-controller-reasoning';
+  const runId = 'run-reasoning';
+  const frames = new TestFrames();
+  answerEventCursorStore.trackRun(conversationId, runId);
+  const controller = new RunController({
+    cursorStore: () => answerEventCursorStore,
+    scheduleFrame: frames.schedule,
+    cancelFrame: frames.cancel,
+    fetch: (async () => eventResponse([
+      'id: 1\nevent: reasoning\ndata: "Let me "\n\n',
+      'id: 2\nevent: reasoning\ndata: "check the filing."\n\n',
+      'id: 3\nevent: token\ndata: "The fee "\n\n',
+      'id: 4\nevent: reasoning\ndata: "One more thought."\n\n',
+      'id: 5\nevent: done\ndata: {"status":"cancelled","presentation":null}\n\n',
+    ].join(''))) as typeof fetch,
+  });
+  controller.beginFollow(runId, false);
+  const events: AnswerRunEvent[] = [];
+
+  const result = await controller.follow(conversationId, runId, (batch) => events.push(...batch));
+
+  assert.equal(result.kind, 'terminal');
+  // The frame data is a JSON string like a token's, and a run of reasoning deltas is one event.
+  // A switch between the two channels keeps the order a reader saw, and never merges across it.
+  assert.deepEqual(events, [
+    {kind: 'reasoning', text: 'Let me check the filing.'},
+    {kind: 'token', text: 'The fee '},
+    {kind: 'reasoning', text: 'One more thought.'},
+    {kind: 'done', payload: {status: 'cancelled', presentation: null}},
+  ]);
+  assert.equal(frames.callbacks.size, 0);
+  controller.finish(runId);
+  answerEventCursorStore.clear(conversationId);
+});
+
+test('only a page fact states something: streamed words and reasoning do not', () => {
+  assert.equal(statesSomething([{kind: 'token', text: 'words'}]), false);
+  assert.equal(statesSomething([{kind: 'reasoning', text: 'thought'}]), false);
+  assert.equal(
+    statesSomething([
+      {kind: 'reasoning', text: 'thought'},
+      {kind: 'token', text: 'words'},
+    ]),
+    false,
+  );
+  assert.equal(
+    statesSomething([
+      {kind: 'reasoning', text: 'thought'},
+      {kind: 'progress', payload: {phase: 'planning'}},
+    ]),
+    true,
+  );
+  assert.equal(statesSomething([{kind: 'reset'}]), true);
 });

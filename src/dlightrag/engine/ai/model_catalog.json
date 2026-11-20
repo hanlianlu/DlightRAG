@@ -2,6 +2,52 @@
   "models": [
     {
       "provider": "anthropic",
+      "model": "claude-fable-5-2",
+      "base_url": null,
+      "profile": {
+        "context_window_tokens": 1000000,
+        "max_input_tokens": null,
+        "max_output_tokens": 128000,
+        "supports_images": true,
+        "reasoning": {
+          "format": "anthropic",
+          "levels": {
+            "off": null,
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          }
+        }
+      }
+    },
+    {
+      "provider": "openai",
+      "model": "anthropic/claude-fable-5.2",
+      "base_url": "https://openrouter.ai/api/v1",
+      "profile": {
+        "context_window_tokens": 1000000,
+        "max_input_tokens": null,
+        "max_output_tokens": 128000,
+        "supports_images": true,
+        "reasoning": {
+          "format": "openrouter",
+          "levels": {
+            "off": null,
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          }
+        }
+      }
+    },
+    {
+      "provider": "anthropic",
       "model": "claude-opus-5-5",
       "base_url": null,
       "profile": {
@@ -93,6 +139,52 @@
       }
     },
     {
+      "provider": "anthropic",
+      "model": "claude-haiku-5-5",
+      "base_url": null,
+      "profile": {
+        "context_window_tokens": 1000000,
+        "max_input_tokens": null,
+        "max_output_tokens": 128000,
+        "supports_images": true,
+        "reasoning": {
+          "format": "anthropic",
+          "levels": {
+            "off": null,
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          }
+        }
+      }
+    },
+    {
+      "provider": "openai",
+      "model": "anthropic/claude-haiku-5.5",
+      "base_url": "https://openrouter.ai/api/v1",
+      "profile": {
+        "context_window_tokens": 1000000,
+        "max_input_tokens": null,
+        "max_output_tokens": 128000,
+        "supports_images": true,
+        "reasoning": {
+          "format": "openrouter",
+          "levels": {
+            "off": null,
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          }
+        }
+      }
+    },
+    {
       "provider": "openai",
       "model": "deepseek-flash",
       "base_url": "https://api.deepseek.com",
@@ -122,7 +214,7 @@
       "profile": {
         "context_window_tokens": 1048576,
         "max_input_tokens": null,
-        "max_output_tokens": 384000,
+        "max_output_tokens": 393216,
         "supports_images": true,
         "reasoning": {
           "format": "openrouter",
@@ -140,7 +232,7 @@
     },
     {
       "provider": "gemini",
-      "model": "gemini-3.8-flash",
+      "model": "gemini-4-hydrogen",
       "base_url": null,
       "profile": {
         "context_window_tokens": 1048576,
@@ -155,7 +247,7 @@
             "low": "low",
             "medium": "medium",
             "high": "high",
-            "xhigh": null,
+            "xhigh": "xhigh",
             "max": null
           }
         }
@@ -163,12 +255,12 @@
     },
     {
       "provider": "openai",
-      "model": "google/gemini-3.8-flash",
+      "model": "google/gemini-4-hydrogen",
       "base_url": "https://openrouter.ai/api/v1",
       "profile": {
         "context_window_tokens": 1048576,
         "max_input_tokens": null,
-        "max_output_tokens": 65536,
+        "max_output_tokens": 943718,
         "supports_images": true,
         "reasoning": {
           "format": "openrouter",
@@ -186,7 +278,7 @@
     },
     {
       "provider": "openai",
-      "model": "kimi-k3",
+      "model": "kimi-k3.1-pro",
       "base_url": "https://api.moonshot.ai/v1",
       "profile": {
         "context_window_tokens": 1048576,
@@ -209,7 +301,7 @@
     },
     {
       "provider": "openai",
-      "model": "moonshotai/kimi-k3",
+      "model": "moonshotai/kimi-k3.1-pro",
       "base_url": "https://openrouter.ai/api/v1",
       "profile": {
         "context_window_tokens": 1048576,
@@ -232,7 +324,7 @@
     },
     {
       "provider": "openai",
-      "model": "gpt-6.1-sol",
+      "model": "gpt-6.2-sol",
       "base_url": null,
       "profile": {
         "context_window_tokens": 1050000,
@@ -255,7 +347,7 @@
     },
     {
       "provider": "openai",
-      "model": "openai/gpt-6.1-sol",
+      "model": "openai/gpt-6.2-sol",
       "base_url": "https://openrouter.ai/api/v1",
       "profile": {
         "context_window_tokens": 1050000,
@@ -396,9 +488,9 @@
       "model": "z-ai/glm-5.3-flash",
       "base_url": "https://openrouter.ai/api/v1",
       "profile": {
-        "context_window_tokens": 1000000,
+        "context_window_tokens": 1048576,
         "max_input_tokens": null,
-        "max_output_tokens": 131072,
+        "max_output_tokens": 943717,
         "supports_images": true,
         "reasoning": {
           "format": "openrouter",

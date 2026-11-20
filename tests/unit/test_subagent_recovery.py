@@ -19,9 +19,10 @@ from dlightrag.engine.agent.session.ids import (
 )
 from dlightrag.engine.agent.session.operation import ToolBatchItem
 from dlightrag.engine.agent.session.runtime import AgentSessionRuntime
-from dlightrag.engine.agent.tools import ToolResult
+from dlightrag.engine.agent.tools.contracts import ToolResult
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
+from dlightrag.engine.answer.agentspace import RunAgentspace
 from dlightrag.engine.answer.research.runtime import (
     FetchedResourceBuffer,
     ResearchRuntimeEffects,
@@ -36,10 +37,9 @@ from dlightrag.engine.answer.tools.subagents import (
     SubagentHost,
     subagent_tools,
 )
-from dlightrag.engine.answer.workspace import RunWorkspace
 from dlightrag.engine.runtime.settlements import EffectHostUpdate
-from tests.in_memory_session_repository import MemoryAgentSessionRepository
-from tests.tool_helpers import tool_runtime
+from tests.support.in_memory_session_repository import MemoryAgentSessionRepository
+from tests.support.tool_helpers import tool_runtime
 from tests.unit.test_subagents import _child_orchestrator, _context_snapshot, _FakeSession
 
 
@@ -156,8 +156,8 @@ async def test_recovery_preserves_current_pinned_tools(tmp_path: Path):
         return AssistantTurn(text="recovered v2", tool_calls=(), stop_reason="stop")
 
     orchestrator = _child_orchestrator(model)
-    orchestrator.bind_workspace(
-        RunWorkspace(epoch=1, workspace=tmp_path, spill_dir=tmp_path, environment=MagicMock())
+    orchestrator.bind_agentspace(
+        RunAgentspace(epoch=1, workspace=tmp_path, spill_dir=tmp_path, environment=MagicMock())
     )
     assert orchestrator.subagent_host is not None
     request = ChildRequest(objective="continue pinned work")

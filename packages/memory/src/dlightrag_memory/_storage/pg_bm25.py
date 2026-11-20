@@ -38,6 +38,10 @@ _PREFIXED_INDEXES_SQL = (
     "WHERE tablename = 'dlightrag_memory_records' AND indexname LIKE $1"
 )
 _HAS_TEXT_SEARCH_SQL = "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_textsearch')"
+_TEXT_SEARCH_VERSIONS_SQL = (
+    "SELECT installed_version, default_version FROM pg_available_extensions "
+    "WHERE name = 'pg_textsearch'"
+)
 _CONFIGS_SQL = """
 SELECT n.nspname || '.' || c.cfgname AS qualified, c.cfgname AS name
 FROM pg_ts_config c
@@ -117,6 +121,49 @@ async def install_text_search(conn: Any) -> None:
         except asyncpg.PostgresError as exc:
             _logger.warning("Profile Memory could not create %s: %s", extension, exc)
             return  # pg_jieba serves nothing here without pg_textsearch
+        if extension == "pg_textsearch":
+            await _update_text_search_if_behind(conn)
+
+
+def _release_numbers(version: str) -> tuple[int, ...] | None:
+    try:
+        return tuple(int(part) for part in version.split("."))
+    except ValueError:
+        return None
+
+
+async def _update_text_search_if_behind(conn: Any) -> None:
+    """Bring an installed pg_textsearch up to the release the server carries.
+
+    ``CREATE EXTENSION IF NOT EXISTS`` never updates an extension that exists, and an
+    image that moved the library forward leaves the database's SQL objects behind. A
+    database already current, newer, or not on a numeric release is left alone, and a
+    refusal is logged: the installed objects keep working under the newer library, and
+    the operator runs ``ALTER EXTENSION pg_textsearch UPDATE`` as the extension's owner.
+    """
+    row = await conn.fetchrow(_TEXT_SEARCH_VERSIONS_SQL)
+    if row is None or row["installed_version"] is None or row["default_version"] is None:
+        return
+    installed = _release_numbers(row["installed_version"])
+    available = _release_numbers(row["default_version"])
+    if installed is None or available is None or installed >= available:
+        return
+    try:
+        async with conn.transaction():
+            await conn.execute("ALTER EXTENSION pg_textsearch UPDATE")
+    except asyncpg.PostgresError as exc:
+        _logger.warning(
+            "Profile Memory left pg_textsearch at %s while the server carries %s: %s",
+            row["installed_version"],
+            row["default_version"],
+            exc,
+        )
+        return
+    _logger.info(
+        "Profile Memory updated pg_textsearch from %s to %s",
+        row["installed_version"],
+        row["default_version"],
+    )
 
 
 async def served_indexes(
@@ -189,7 +236,7 @@ async def served_bm25_languages(conn: Any, languages: Collection[str]) -> frozen
 
 
 def build_bm25_sql(*, language: str, limit: int) -> str:
-    """Rank one owner's active facts in one language through its BM25 index.
+    """Rank one owner's active records in one language through its BM25 index.
 
     The index's top-k scan stays near constant however many facts an owner
     keeps (19 ms at 10,000 facts, where scoring every fact took 360 ms), and it
@@ -204,10 +251,10 @@ def build_bm25_sql(*, language: str, limit: int) -> str:
         "SELECT owner_id, memory_id, kind, body, normalized_body, "  # noqa: S608 - checked names
         "origin_kind, origin_id, run_id, session_id, status, supersedes_id, "
         "embedding_fingerprint, "
-        "created_at, updated_at, "
+        "created_at, updated_at, quote, "
         f"-(body <@> to_bm25query($1, '{name}')) AS score "
         "FROM dlightrag_memory_records "
-        "WHERE owner_id = $2 AND status = 'active' AND kind = 'fact' "
+        "WHERE owner_id = $2 AND status = 'active' "
         f"AND bm25_language = '{language}' "
         f"ORDER BY body <@> to_bm25query($1, '{name}') "
         f"LIMIT {limit_value}"

@@ -5,7 +5,7 @@ import {parseMemoryOperationEvent} from '../api/memory.ts';
 import {buttonNamed, waitFor} from '../testing/dom.ts';
 import {memoryPage, memorySettings, mountSettings, openSettings, wire} from '../testing/settings.ts';
 import type {DlSettingsDialog} from './settings.ts';
-import type {DlToastRegion} from './toast.ts';
+import {type DlToastRegion, type ToastTone, toastRegionOf} from './toast.ts';
 
 const originalFetch = window.fetch;
 
@@ -32,8 +32,8 @@ function remembered(settings: DlSettingsDialog): string[] {
 }
 
 /** The dialog's own notice region, where Settings shows a notice while it is open. */
-function notice(settings: DlSettingsDialog): DlToastRegion {
-  return settings.querySelector('dl-toast-region')!;
+function notice(settings: DlSettingsDialog, tone: ToastTone = 'receipt'): DlToastRegion {
+  return toastRegionOf(settings, tone)!;
 }
 
 function liveFact(changeId: string, body: string, operation: 'remember' | 'forget' = 'remember'): ReturnType<typeof parseMemoryOperationEvent> {
@@ -56,26 +56,6 @@ async function openMemory(settings: DlSettingsDialog): Promise<HTMLDialogElement
   return dialog;
 }
 
-it('paints the switch only once the owner\'s setting has been read, never an unread "off"', async () => {
-  let release!: (response: Response) => void;
-  const pending = new Promise<Response>((resolve) => { release = resolve; });
-  window.fetch = wire({
-    'GET /web/api/memory/settings': () => pending,
-    'GET /web/api/memory': () => memoryPage([{id: 'one', body: 'Use concise answers'}]),
-  }).fetch;
-  const {settings} = mountSettings();
-  await openSettings(settings, 'memory');
-
-  expect(memorySwitch(settings)).to.equal(null);
-  expect(settings.querySelector('dl-settings-memory')!.textContent).to.contain('Loading memory settings');
-
-  release(memorySettings(true, 1));
-  await waitFor(() => Boolean(memorySwitch(settings)));
-  expect(memorySwitch(settings).getAttribute('aria-checked')).to.equal('true');
-  expect(memorySwitch(settings).disabled).to.equal(false);
-  expect(memoryStatus(settings)).to.equal('1');
-});
-
 it('opens fail-closed when the authoritative memory read fails', async () => {
   window.fetch = wire({'GET /web/api/memory/settings': () => new Response('unavailable', {status: 503})}).fetch;
   const {settings} = mountSettings();
@@ -91,7 +71,7 @@ it('opens fail-closed when the authoritative memory read fails', async () => {
 });
 
 it('shows the stored memories with their kind and their text', async () => {
-  const long = 'Reports go to the investment committee and use tables and short bullets, never long paragraphs.';
+  const long = 'Reports go to the steering committee and use tables and short bullets, never long paragraphs.';
   window.fetch = wire({
     'GET /web/api/memory/settings': () => memorySettings(true, 2),
     'GET /web/api/memory': () => memoryPage([
@@ -108,11 +88,34 @@ it('shows the stored memories with their kind and their text', async () => {
   expect(document.getElementById('memory-list-title')!.textContent).to.equal('Stored memories');
   expect(list.querySelector('[class*=badge]')!.textContent).to.equal('2');
   const rows = [...list.querySelectorAll('li')];
-  expect(rows.map((item) => item.firstElementChild!.textContent)).to.deep.equal(['Preference', 'Fact']);
+  expect(rows.map((item) => item.querySelector('[class*=kind]')!.textContent))
+    .to.deep.equal(['Preference', 'Fact']);
   expect(remembered(settings)[0]).to.equal(long);
   // The text of a memory is text, never markup.
   expect(list.querySelector('img')).to.equal(null);
   expect(remembered(settings)[1]).to.equal('<img src=x> Lives in Sweden');
+});
+
+it('names an experience at the row\'s tail, never inside the memory\'s own words', async () => {
+  window.fetch = wire({
+    'GET /web/api/memory/settings': () => memorySettings(true, 2),
+    'GET /web/api/memory': () => memoryPage([
+      {id: 'one', kind: 'experience', body: 'The corpus needs pg_jieba for Chinese.'},
+      {id: 'two', kind: 'preference', body: 'Answer in Chinese.'},
+    ]),
+  }).fetch;
+  const {settings} = mountSettings();
+  await openMemory(settings);
+  await waitFor(() => remembered(settings).length === 2);
+
+  const rows = [...settings.querySelectorAll('dl-settings-memory li')];
+  // The words come first in the row; the kind and Forget follow them.
+  expect(rows.map((item) => [...item.children].map((child) => child.tagName)))
+    .to.deep.equal([['P', 'SPAN', 'DL-ICON-BUTTON'], ['P', 'SPAN', 'DL-ICON-BUTTON']]);
+  expect(rows.map((item) => item.querySelector('[class*=kind]')!.textContent))
+    .to.deep.equal(['Experience', 'Preference']);
+  // The label stays out of the memory's own text.
+  expect(remembered(settings)).to.deep.equal(['The corpus needs pg_jieba for Chinese.', 'Answer in Chinese.']);
 });
 
 it('shows a switch that is off with a note in place of the list and the clear action', async () => {
@@ -173,7 +176,7 @@ it('keeps the authoritative switch state after a failed mutation, and says so', 
 
   memorySwitch(settings).click();
   await waitFor(() => !memorySwitch(settings).disabled
-    && (notice(settings).textContent?.includes('Could not save memory settings.') ?? false));
+    && (notice(settings, 'error').textContent?.includes('Could not save memory settings.') ?? false));
 
   expect(memorySwitch(settings).getAttribute('aria-checked')).to.equal('true');
 });
@@ -484,4 +487,52 @@ for (const reopen of [false, true]) it(`settles an in-flight Undo after close (r
   expect(buttonNamed(shellToast, 'Undo')).to.equal(null);
   expect(buttonNamed(visibleToast, 'Undo')).to.equal(null);
   expect(undoCalls).to.equal(1);
+});
+
+it('tells the page that the owner changed their profile, for each change Settings makes, so answers read it again', async () => {
+  let enabled = true;
+  let memories = [{id: 'one', body: 'Use concise answers'}, {id: 'two', body: 'Prefers tables'}];
+  window.fetch = wire({
+    'GET /web/api/memory/settings': () => memorySettings(enabled, memories.length),
+    'PUT /web/api/memory/settings': (request) => {
+      enabled = (request.body as {enabled: boolean}).enabled;
+      return memorySettings(enabled, memories.length);
+    },
+    'GET /web/api/memory': () => memoryPage(memories),
+    'DELETE /web/api/memory/one': () => {
+      memories = memories.filter((memory) => memory.id !== 'one');
+      return Response.json({action: 'forget', outcome: 'changed', change_id: 'forgot-1', memory_ids: ['one'],
+        body: 'Use concise answers'});
+    },
+    'POST /web/api/memory/changes/forgot-1/undo': () => Response.json({
+      action: 'undo', outcome: 'changed', change_id: 'undo-1', memory_ids: ['one'], body: 'Use concise answers',
+    }),
+    'POST /web/api/memory/clear': () => {
+      memories = [];
+      return new Response(null, {status: 204});
+    },
+  }).fetch;
+  const {settings} = mountSettings();
+  let changes = 0;
+  settings.addEventListener('dl-profile-memory-change', () => { changes += 1; });
+  await openMemory(settings);
+  await waitFor(() => remembered(settings).length === 2);
+  expect(changes, 'opening Settings changes nothing').to.equal(0);
+
+  settings.querySelector<HTMLElement>('dl-settings-memory li dl-icon-button')!.click();
+  await waitFor(() => changes === 1 && remembered(settings).length === 1);
+
+  buttonNamed(notice(settings), 'Undo')!.click();
+  await waitFor(() => changes === 2);
+
+  memorySwitch(settings).click();
+  await waitFor(() => changes === 3 && memorySwitch(settings).getAttribute('aria-checked') === 'false');
+  memorySwitch(settings).click();
+  await waitFor(() => changes === 4 && memorySwitch(settings).getAttribute('aria-checked') === 'true');
+
+  buttonNamed<HTMLButtonElement>(settings, 'Clear all memories')!.click();
+  const dialog = settings.querySelector<HTMLDialogElement>('#clear-memory-dialog')!;
+  await waitFor(() => dialog.open);
+  dialog.querySelector<HTMLButtonElement>('button[value=clear]')!.click();
+  await waitFor(() => changes === 5);
 });

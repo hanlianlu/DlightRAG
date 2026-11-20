@@ -3,12 +3,14 @@
 import {expect} from '@esm-bundle/chai';
 import {resetMouse, sendMouse} from '@web/test-runner-commands';
 import {render} from 'lit';
+import {linkStyles} from '../../testing/dom.ts';
 import {
   DlIconButton,
   DlMenu,
   DlSplitLayout,
   defineDesignSystemElements,
   icon,
+  type IconName,
   type MenuDismissDetail,
   menuButtonFocus,
   rovingFocusKeydown,
@@ -16,14 +18,8 @@ import {
 
 defineDesignSystemElements();
 
-before(async () => new Promise<void>((resolve, reject) => {
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = new URL('../index.css', import.meta.url).href;
-  link.addEventListener('load', () => { resolve(); }, {once: true});
-  link.addEventListener('error', () => { reject(new Error('could not load design-system CSS')); }, {once: true});
-  document.head.append(link);
-}));
+// The primitives are judged on their own stylesheet, without the product's.
+before(async () => { await linkStyles([new URL('../index.css', import.meta.url).href]); });
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -31,6 +27,9 @@ afterEach(() => {
 
 it('renders semantic icons as decorative fixed-size SVG', () => {
   const sizes = {xs: '12px', sm: '16px', md: '20px', lg: '24px'} as const;
+  // The weight is 1.5 of the glyph's own 24 units; the 12px step keeps Lucide's 2-unit floor so its ink
+  // stays a CSS pixel there.
+  const weights = {xs: '2px', sm: '1.5px', md: '1.5px', lg: '1.5px'} as const;
   for (const [size, expected] of Object.entries(sizes)) {
     const host = document.createElement('div');
     document.body.append(host);
@@ -38,16 +37,135 @@ it('renders semantic icons as decorative fixed-size SVG', () => {
     const svg = host.querySelector('svg')!;
     expect(svg.getAttribute('aria-hidden')).to.equal('true');
     expect(svg.getAttribute('focusable')).to.equal('false');
-    expect(svg.getAttribute('stroke-width')).to.equal('1.75');
+    expect(svg.getAttribute('stroke-width')).to.equal('1.5');
     expect(svg.classList.contains('dl-icon--stroke')).to.equal(true);
     expect(getComputedStyle(svg).width).to.equal(expected);
-    expect(getComputedStyle(svg.querySelector('path')!).vectorEffect).to.equal('non-scaling-stroke');
+    // The weight is stated in the glyph's own 24-unit viewBox, so the engine scales it with the drawing:
+    // nothing pins the line to CSS pixels as the icon shrinks, and no shape opts out of that scale.
+    expect(getComputedStyle(svg).strokeWidth).to.equal(weights[size as keyof typeof weights]);
+    expect(getComputedStyle(svg.querySelector('path')!).vectorEffect).to.equal('none');
     expect(svg.querySelectorAll('path')).to.have.length(2);
   }
   const fillHost = document.createElement('div');
   document.body.append(fillHost);
   render(icon('stop'), fillHost);
   expect(fillHost.querySelector('svg')?.classList.contains('dl-icon--fill')).to.equal(true);
+});
+
+it('carries the paint a shape states for itself, beside the whole-glyph paint', () => {
+  // lucide draws key-round's dot as a filled circle inside an unfilled glyph, and an authored solid rules
+  // its hole even-odd so the hole does not depend on how its subpaths are wound.
+  const host = document.createElement('div');
+  document.body.append(host);
+  render(icon('agent-accounts'), host);
+  expect(host.querySelector('circle')?.getAttribute('fill')).to.equal('currentColor');
+  expect(host.querySelector('path')?.getAttribute('fill')).to.equal(null);
+
+  const solid = document.createElement('div');
+  document.body.append(solid);
+  render(icon('thumbs-up-filled'), solid);
+  expect(solid.querySelector('path')?.getAttribute('fill-rule')).to.equal('evenodd');
+});
+
+/** What one icon paints, read back from a 96 px raster of the glyph as the renderer drew it. */
+async function painted(name: IconName): Promise<{
+  box: {left: number; top: number; right: number; bottom: number};
+  alphaAt: (x: number, y: number) => number;
+}> {
+  const host = document.createElement('div');
+  document.body.append(host);
+  render(icon(name, {size: 'lg'}), host);
+  const svg = host.querySelector('svg')!;
+  // A serialized SVG is rastered as a standalone image, not as a styled element: Chromium takes its size
+  // from the inline style, but Firefox and WebKit take the intrinsic size from the width and height
+  // attributes alone and draw the viewBox into a default 300 x 150 box without them.
+  svg.setAttribute('width', '96');
+  svg.setAttribute('height', '96');
+  svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  // A serialized glyph carries no stylesheet, but its weight is stated in its own viewBox, so it rasters
+  // at the proportion the product draws: the 96px board is four times the 24px glyph, and the stroke is
+  // four times the 1.5px of ink a 24px mark carries.
+  const image = new Image();
+  image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(svg))}`;
+  await image.decode();
+  const canvas = document.createElement('canvas');
+  canvas.width = 96;
+  canvas.height = 96;
+  const context = canvas.getContext('2d')!;
+  context.drawImage(image, 0, 0);
+  const {data} = context.getImageData(0, 0, 96, 96);
+  const alphaAt = (x: number, y: number): number => data[(Math.round(y) * 96 + Math.round(x)) * 4 + 3]!;
+  let left = 96;
+  let top = 96;
+  let right = -1;
+  let bottom = -1;
+  for (let y = 0; y < 96; y += 1) {
+    for (let x = 0; x < 96; x += 1) {
+      if (alphaAt(x, y) < 24) continue;
+      left = Math.min(left, x);
+      top = Math.min(top, y);
+      right = Math.max(right, x);
+      bottom = Math.max(bottom, y);
+    }
+  }
+  return {box: {left, top, right, bottom}, alphaAt};
+}
+
+it('draws the weight with the drawing, so the stroke scales with the icon', async () => {
+  const {alphaAt} = await painted('add');
+  // The 96px raster is four times the 24px glyph, so the 1.5-unit weight inks six device pixels across the
+  // plus's upright; a weight pinned to CSS pixels would ink two there whatever the drawing did.
+  let ink = 0;
+  for (let x = 0; x < 96; x += 1) ink += alphaAt(x, 24) / 255;
+  expect(ink).to.be.above(5.5);
+  expect(ink).to.be.below(6.5);
+});
+
+it('draws a solid thumb as its outline with a hole, never as ink added outside it', async () => {
+  const viewBox = 96 / 24;
+  // Where the cuff sits in each glyph: the point at its centre, one point inside each wall around it, and
+  // points well inside the hand, where a filled silhouette is inked and an outline is not.
+  const cuffs = {
+    'thumbs-up': {
+      centre: [4.85, 16],
+      walls: [[4.85, 10.65], [4.85, 21.35], [2.65, 16], [6.9, 16]],
+      interior: [[12, 13], [14, 15]],
+    },
+    'thumbs-down': {
+      centre: [19.15, 8],
+      walls: [[19.15, 2.65], [19.15, 13.35], [17.1, 8], [21.35, 8]],
+      interior: [[12, 11], [10, 9]],
+    },
+  } as const;
+
+  for (const [outlineName, {centre, walls, interior}] of Object.entries(cuffs)) {
+    const solid = await painted(`${outlineName}-filled` as IconName);
+    const outline = await painted(outlineName as IconName);
+    // The cuff is a hole: empty where it is, inked on every side of it.
+    expect(solid.alphaAt(centre[0] * viewBox, centre[1] * viewBox), `${outlineName}: the cuff is empty`)
+      .to.be.below(24);
+    for (const [x, y] of walls) {
+      expect(solid.alphaAt(x * viewBox, y * viewBox), `${outlineName}: the cuff is inked at ${x},${y}`)
+        .to.be.above(150);
+    }
+    // The hand is filled in the solid and empty in the outline: the solid is the full silhouette, not an
+    // outline of it. A proportional weight inks much of what the fill covers, so counting ink cannot tell
+    // the two apart; a point well inside the hand can.
+    for (const [x, y] of interior) {
+      expect(solid.alphaAt(x * viewBox, y * viewBox), `${outlineName}: the hand is filled at ${x},${y}`)
+        .to.be.above(150);
+      expect(outline.alphaAt(x * viewBox, y * viewBox), `${outlineName}: the outline leaves ${x},${y} empty`)
+        .to.be.below(24);
+    }
+    // A hole subtracts ink; it does not add any, so the solid keeps the outline's silhouette. The solid is
+    // the stroke's own geometry filled, so its ink box may only reach the outline's ink box, which the
+    // outline already inflates by half a stroke; the one pixel is antialiasing, not that overhang.
+    const overhang = 1;
+    expect(solid.box.left, `${outlineName}: nothing is drawn beyond the outline`).to.be.at.least(outline.box.left - overhang);
+    expect(solid.box.top, `${outlineName}: nothing is drawn beyond the outline`).to.be.at.least(outline.box.top - overhang);
+    expect(solid.box.right, `${outlineName}: nothing is drawn beyond the outline`).to.be.at.most(outline.box.right + overhang);
+    expect(solid.box.bottom, `${outlineName}: nothing is drawn beyond the outline`).to.be.at.most(outline.box.bottom + overhang);
+  }
 });
 
 it('registers design-system elements idempotently', () => {
@@ -68,6 +186,16 @@ it('renders a decorative icon inside an accessible host button', () => {
   expect(inner.querySelector('svg')?.getAttribute('aria-hidden')).to.equal('true');
   const glyph = button.shadowRoot!.querySelector('svg')!;
   expect(glyph.classList.contains('dl-icon--sm')).to.equal(true);
+  // The element's own tree states the same viewBox-unit weight the stylesheet does, so a mark in the
+  // shadow tree and a mark in the page draw one weight.
+  expect(getComputedStyle(glyph).strokeWidth).to.equal('1.5px');
+  expect(getComputedStyle(glyph.querySelector('path')!).vectorEffect).to.equal('none');
+  // The 12px step keeps the 2-unit floor inside the shadow tree too.
+  const tiny = document.createElement('dl-icon-button') as DlIconButton;
+  tiny.name = 'close';
+  tiny.size = 'xs';
+  document.body.append(tiny);
+  expect(getComputedStyle(tiny.shadowRoot!.querySelector('svg')!).strokeWidth).to.equal('2px');
   expect(glyph.getBoundingClientRect().width).to.be.at.least(12);
   expect(glyph.getBoundingClientRect().height).to.be.at.least(12);
   expect(inner.getBoundingClientRect().width).to.be.at.least(44);
@@ -141,6 +269,23 @@ it('closes on Tab and on focus leaving without asking for focus back; only Escap
   rename.focus();
   rename.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));
   expect(dismissals).to.deep.equal([false, false, true]);
+});
+
+// Script focus rings only until the page has seen a pointer press, so this test stays ahead of the ones that press.
+it('rings a dialog checkbox row on keyboard focus', () => {
+  const host = document.createElement('div');
+  host.innerHTML = '<label class="dl-dialog-checkbox"><input type="checkbox"> Remember this</label>';
+  const probe = document.createElement('div');
+  probe.style.color = 'var(--color-control-ring)';
+  document.body.append(host, probe);
+  const input = host.querySelector('input')!;
+  input.focus();
+
+  expect(input.matches(':focus-visible')).to.equal(true);
+  const ring = getComputedStyle(host.querySelector('label')!);
+  expect(ring.outlineStyle).to.equal('solid');
+  expect(ring.outlineWidth).to.equal('2px');
+  expect(ring.outlineColor).to.equal(getComputedStyle(probe).color);
 });
 
 it('closes on a real click on its own button, whether or not the engine focuses the button', async () => {
@@ -294,6 +439,31 @@ it('gives a link the button face, never the link underline', () => {
 
   expect(face(link)).to.deep.equal(face(row.querySelector('button')!));
   expect(getComputedStyle(link).textDecorationLine).to.equal('none');
+});
+
+it('lights a dialog checkbox row under the pointer, with its tint inset past the text', async () => {
+  const host = document.createElement('div');
+  host.style.cssText = 'width:300px;padding:40px';
+  host.innerHTML = '<label class="dl-dialog-checkbox"><input type="checkbox"> Remember this</label>';
+  const probe = document.createElement('div');
+  probe.style.backgroundColor = 'var(--color-bg-hover)';
+  document.body.append(host, probe);
+  const row = host.querySelector('label')!;
+
+  expect(getComputedStyle(row).backgroundColor, 'plain at rest').to.equal('rgba(0, 0, 0, 0)');
+  // The tint reaches past the text by the row's padding, so the words stay where the form's other rows keep them.
+  const padding = Number.parseFloat(getComputedStyle(row).paddingInlineStart);
+  expect(padding).to.be.greaterThan(0);
+  expect(row.getBoundingClientRect().left + padding).to.be.closeTo(host.getBoundingClientRect().left + 40, 0.5);
+
+  const box = row.getBoundingClientRect();
+  try {
+    await sendMouse({type: 'move', position: [Math.round(box.left + box.width - 4), Math.round(box.top + box.height / 2)]});
+    await Promise.all(row.getAnimations().map((animation) => animation.finished));
+    expect(getComputedStyle(row).backgroundColor).to.equal(getComputedStyle(probe).backgroundColor);
+  } finally {
+    await resetMouse();
+  }
 });
 
 it('opens menus from their button with one key map', () => {
@@ -517,4 +687,75 @@ it('supports end-primary and nested layouts without leaking product state', () =
   inner.divider.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowRight'}));
   expect(inner.size).to.equal(130);
   expect(outer.size).to.equal(180);
+});
+
+/** One synthetic drag on the divider, the way a pointer reports it. */
+function drag(split: HTMLElement & {divider: HTMLDivElement}, from: number, to: number): void {
+  split.divider.dispatchEvent(new PointerEvent('pointerdown', {
+    bubbles: true, button: 0, clientX: from, pointerId: 11,
+  }));
+  split.divider.dispatchEvent(new PointerEvent('pointermove', {clientX: to, pointerId: 11}));
+  split.divider.dispatchEvent(new PointerEvent('pointerup', {clientX: to, pointerId: 11}));
+}
+
+function collapsible(primary: 'start' | 'end' = 'start'): HTMLElement & {
+  divider: HTMLDivElement; size: number; min: number;
+} {
+  const split = document.createElement('dl-split-layout') as HTMLElement & {
+    divider: HTMLDivElement; size: number; min: number;
+  };
+  split.setAttribute('primary', primary);
+  split.setAttribute('size', '200');
+  split.setAttribute('min', '120');
+  split.style.cssText = 'display:block;width:500px;height:160px';
+  split.innerHTML = '<div slot="start">Start</div><div slot="end">End</div>';
+  document.body.append(split);
+  return split;
+}
+
+it('snaps a panel the reader drags past the threshold all the way shut', () => {
+  const split = collapsible();
+  const change: number[] = [];
+  split.addEventListener('dl-split-change', (event) => change.push((event as CustomEvent).detail.position));
+
+  // Half of the smallest width is the threshold by default, and dragging the start pane narrower
+  // takes it below that: 200 -> -50 is past it, so the panel goes.
+  drag(split, 350, 100);
+  expect(split.size, 'the panel is shut, not left a sliver wide').to.equal(0);
+  expect(split.hasAttribute('data-collapsed'), 'and says so').to.equal(true);
+  expect(split.divider.hasAttribute('role'), 'while its divider leaves the tab order').to.equal(false);
+  expect(change).to.deep.equal([0]);
+});
+
+it('holds a panel near the threshold still, and only brings it back past it', () => {
+  const split = collapsible();
+  drag(split, 350, 100);
+  expect(split.size).to.equal(0);
+
+  // A drag that stays inside the threshold leaves it shut: that is the hysteresis.
+  drag(split, 0, 40);
+  expect(split.size, 'a nudge inside the threshold is not a decision').to.equal(0);
+
+  drag(split, 0, 80);
+  expect(split.size, 'past the threshold it comes back at its smallest width').to.equal(120);
+});
+
+it('collapses with Enter and restores the width it had, as the window splitter pattern asks', () => {
+  const split = collapsible();
+  const change: number[] = [];
+  split.addEventListener('dl-split-change', (event) => change.push((event as CustomEvent).detail.position));
+
+  split.divider.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
+  expect(split.size, 'Enter collapses it').to.equal(0);
+  split.divider.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
+  expect(split.size, 'and Enter again restores the width it had, not its smallest').to.equal(200);
+  expect(change).to.deep.equal([0, 200]);
+});
+
+it('asks its owner for the default width when the divider is double-clicked', () => {
+  const split = collapsible();
+  const resets: Event[] = [];
+  split.addEventListener('dl-split-reset', (event) => resets.push(event));
+  split.divider.dispatchEvent(new MouseEvent('dblclick', {bubbles: true}));
+  expect(resets.length, 'a reset is a request: the default width belongs to whoever owns the panel').to.equal(1);
 });

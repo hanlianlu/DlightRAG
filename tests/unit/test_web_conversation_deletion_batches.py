@@ -18,6 +18,7 @@ import pytest
 from dlightrag.adapters.postgres.web import web_conversations as pg_web
 from dlightrag.adapters.postgres.web.web_conversations import PGWebConversationStore
 from dlightrag.engine.runtime.records import RunDeletion
+from tests.support.pg_fakes import FakePool
 
 
 @dataclass
@@ -159,25 +160,6 @@ class _RecordingConnection:
         return f"DELETE {len(session_ids)}"
 
 
-class _Acquire:
-    def __init__(self, conn: _RecordingConnection) -> None:
-        self._conn = conn
-
-    async def __aenter__(self) -> _RecordingConnection:
-        return self._conn
-
-    async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
-        return None
-
-
-class _Pool:
-    def __init__(self, conn: _RecordingConnection) -> None:
-        self._conn = conn
-
-    def acquire(self) -> _Acquire:
-        return _Acquire(self._conn)
-
-
 class _DeletingRunStore:
     def __init__(
         self,
@@ -245,7 +227,7 @@ def _state(*, conversations: int, runs_per_first: int = 0) -> _DeletionState:
 
 def _store(conn: _RecordingConnection, run_store: _DeletingRunStore) -> PGWebConversationStore:
     store = PGWebConversationStore(
-        pool=cast(Any, _Pool(conn)),
+        pool=cast(Any, FakePool(conn)),
         run_store=cast(Any, run_store),
     )
     store._initialized = True  # pyright: ignore[reportPrivateUsage]

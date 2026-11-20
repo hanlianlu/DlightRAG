@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 #
-# Install the two tools the chart renderer's PNG path needs beyond node, resvg and Noto Sans SC,
-# into DIR (default .chart-tools): DIR/bin/resvg and DIR/fonts/noto-sans-sc. The versions and the
+# Install the two tools the chart renderer's PNG path needs beyond node, resvg and the font set,
+# into DIR (default .chart-tools): DIR/bin/resvg and DIR/fonts/dlightrag. The versions and the
 # font checksums are the Dockerfile's, so CI cannot test a renderer the image does not ship.
 # Linux x86_64 only: the image builds resvg from its crates.io release, and CI is the one place
-# that wants the upstream binary. Afterwards:
-#   export PATH="DIR/bin:$PATH" ECHARTS_RENDER_FONT_DIR="DIR/fonts/noto-sans-sc"
+# that wants the upstream binary. The fonts come from install-fonts.sh, which runs on any platform,
+# so a development machine that only needs them does not need this one. Afterwards:
+#   export PATH="DIR/bin:$PATH" FONTS_DIR="DIR/fonts/dlightrag"
 set -euo pipefail
 
 dir="${1:-.chart-tools}"
@@ -19,10 +20,9 @@ if [ "$(uname -s)-$(uname -m)" != "Linux-x86_64" ]; then
 fi
 
 resvg_version="$(sed -n 's/^ARG RESVG_VERSION=//p' "${dockerfile}")"
-noto_cjk="$(sed -n 's/^ARG NOTO_CJK=//p' "${dockerfile}")"
 # The checksum of the upstream linux-x86_64 archive of each resvg release the Dockerfile has pinned.
 case "${resvg_version}" in
-0.48.1) resvg_sha256="fa8c26495a187e592c501db15bf9e8a9fdc051d4b2b336b39703d5b59f912b9d" ;;
+0.50.0) resvg_sha256="5d1c9ffd43c82fb802d92cef8100055c612cd3e248d5a787c20079293a456e21" ;;
 *)
     echo "install-chart-tools: add the linux-x86_64 archive checksum of resvg ${resvg_version}" >&2
     exit 1
@@ -36,7 +36,7 @@ fetch() { # fetch URL SHA256 FILE
 
 work="$(mktemp -d)"
 trap 'rm -rf "${work}"' EXIT
-mkdir -p "${dir}/bin" "${dir}/fonts/noto-sans-sc"
+mkdir -p "${dir}/bin"
 
 fetch "https://github.com/linebender/resvg/releases/download/v${resvg_version}/resvg-linux-x86_64.tar.gz" \
     "${resvg_sha256}" "${work}/resvg.tar.gz"
@@ -47,10 +47,6 @@ if [ ! -x "${dir}/bin/resvg" ]; then
     exit 1
 fi
 
-for face in Regular Bold; do
-    sha256="$(sed -n "s|^ADD --checksum=sha256:\([0-9a-f]*\) .*/NotoSansSC-${face}.otf .*|\1|p" "${dockerfile}")"
-    fetch "${noto_cjk}/SubsetOTF/SC/NotoSansSC-${face}.otf" "${sha256}" \
-        "${dir}/fonts/noto-sans-sc/NotoSansSC-${face}.otf"
-done
+"${root}/scripts/install-fonts.sh" "${dir}/fonts/dlightrag"
 
 "${dir}/bin/resvg" --version

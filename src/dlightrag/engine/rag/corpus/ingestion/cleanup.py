@@ -41,8 +41,8 @@ async def collect_deletion_context(
     """Resolve one deletion identifier through bounded indexed reads only.
 
     Identifiers are exact source locators, stored filenames, or status
-    ``file_path`` values. Bare stems are intentionally not expanded because
-    that is ambiguous and previously required corpus-wide status scans.
+    ``file_path`` values. Bare stems are not expanded: they are ambiguous and
+    would need a corpus-wide status scan.
     """
     ctx = DeletionContext(identifier=identifier)
     normalized = str(identifier).strip()

@@ -8,7 +8,12 @@ from uuid import UUID
 from dlightrag_memory import MemoryRecord
 
 from dlightrag.application.errors import ApplicationInputError
-from dlightrag.application.opaque_cursor import OpaqueCursorEnvelope
+from dlightrag.application.opaque_cursor import (
+    OpaqueCursorEnvelope,
+    format_utc_timestamp,
+    parse_canonical_uuid,
+    parse_utc_timestamp,
+)
 
 MEMORY_LIST_PAGE_DEFAULT_LIMIT = 50
 MEMORY_LIST_PAGE_MAX_LIMIT = 100
@@ -80,32 +85,19 @@ class MemoryListCursorCodec:
         return self._envelope.encode(
             {
                 "memory_id": str(cursor.memory_id),
-                "updated_at": _canonical_timestamp(cursor.updated_at),
+                "updated_at": format_utc_timestamp(cursor.updated_at),
             }
         )
 
     def decode(self, token: str) -> MemoryListCursor:
         try:
             decoded = self._envelope.decode(token)
-            memory_id_text = decoded["memory_id"]
-            timestamp_text = decoded["updated_at"]
-            if not isinstance(memory_id_text, str) or not isinstance(timestamp_text, str):
-                raise ValueError
-            memory_id = UUID(memory_id_text)
-            if str(memory_id) != memory_id_text:
-                raise ValueError
-            updated_at = datetime.datetime.fromisoformat(timestamp_text.replace("Z", "+00:00"))
-            if _canonical_timestamp(updated_at) != timestamp_text:
-                raise ValueError
-            return MemoryListCursor(updated_at=updated_at, memory_id=memory_id)
+            return MemoryListCursor(
+                updated_at=parse_utc_timestamp(decoded["updated_at"]),
+                memory_id=parse_canonical_uuid(decoded["memory_id"]),
+            )
         except ValueError as exc:
             raise MemoryListCursorError("invalid memory-list page cursor") from exc
-
-
-def _canonical_timestamp(value: datetime.datetime) -> str:
-    if value.tzinfo is None or value.utcoffset() is None:
-        raise ValueError("memory-list cursor timestamp must include a timezone")
-    return value.astimezone(datetime.UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 __all__ = [

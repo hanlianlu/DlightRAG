@@ -1,9 +1,18 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """PostgreSQL server and pgvector capability validation."""
 
+import logging
 from typing import Any
 
+logger = logging.getLogger(__name__)
+
 _BOOTSTRAPPABLE_EXTENSIONS = frozenset({"pg_textsearch", "pg_jieba", "pg_trgm"})
+# Extensions whose shared library moves with the image while the SQL objects stay at the version
+# CREATE EXTENSION IF NOT EXISTS installed: it never updates an extension that already exists.
+_UPDATED_ON_STARTUP = frozenset({"pg_textsearch"})
+_EXTENSION_VERSIONS_SQL = (
+    "SELECT installed_version, default_version FROM pg_available_extensions WHERE name = $1"
+)
 
 # DlightRAG's PostgreSQL major is a hard runtime requirement, not a tunable:
 # pgvector halfvec, pg_textsearch, and pg_jieba are all pinned to the PG18
@@ -78,3 +87,54 @@ async def ensure_postgres_extensions(conn: Any, extensions: tuple[str, ...]) -> 
             raise RuntimeError(
                 f"PostgreSQL extension {extension!r} is unavailable ({exc})."
             ) from exc
+        if extension in _UPDATED_ON_STARTUP:
+            await update_extension_if_behind(conn, extension)
+
+
+def _release_numbers(version: str) -> tuple[int, ...] | None:
+    """The dotted numbers of an extension version, or None for one that is not numeric."""
+    try:
+        return tuple(int(part) for part in version.split("."))
+    except ValueError:
+        return None
+
+
+async def update_extension_if_behind(conn: Any, extension: str) -> None:
+    """Run ``ALTER EXTENSION ... UPDATE`` when the server carries a newer release than the one installed.
+
+    The server's own control file names the release it carries, so an image that moved
+    pg_textsearch forward brings every database up to it at the writer's next start, under the
+    startup lock. A database already at or above that release is left alone, and so is one
+    whose extension is not installed. A refusal (a managed endpoint whose role does not own the
+    extension) is logged, not raised: the installed SQL objects keep working under the newer
+    library, and the operator runs the statement as the extension's owner
+    (docs/operations.md, "Updating an installed extension").
+    """
+    if extension not in _BOOTSTRAPPABLE_EXTENSIONS:
+        raise ValueError(f"unsupported PostgreSQL extension update: {extension!r}")
+    row = await conn.fetchrow(_EXTENSION_VERSIONS_SQL, extension)
+    if row is None or row["installed_version"] is None or row["default_version"] is None:
+        return
+    installed = _release_numbers(row["installed_version"])
+    available = _release_numbers(row["default_version"])
+    if installed is None or available is None or installed >= available:
+        return
+    try:
+        await conn.execute(f"ALTER EXTENSION {extension} UPDATE")
+    except Exception as exc:
+        logger.warning(
+            "PostgreSQL extension %s stays at %s while the server carries %s (%s); "
+            "run ALTER EXTENSION %s UPDATE as its owner.",
+            extension,
+            row["installed_version"],
+            row["default_version"],
+            exc,
+            extension,
+        )
+        return
+    logger.info(
+        "PostgreSQL extension %s updated from %s to %s",
+        extension,
+        row["installed_version"],
+        row["default_version"],
+    )

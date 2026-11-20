@@ -30,7 +30,7 @@ export type CorpusRunResumeOutcome = 'accepted' | 'failed' | 'stale';
 
 type StatusRequest = (url: string, signal: AbortSignal) => Promise<WebCorpusRunStatus>;
 
-export interface CorpusRunTrackerOptions {
+interface CorpusRunTrackerOptions {
   /** The tracked Run, or whether a resume is in flight, changed. */
   onChange: () => void;
   /** The tracked Run reached a terminal status. */
@@ -43,7 +43,7 @@ export interface CorpusRunTrackerOptions {
 }
 
 /** A Run parked until an operator repairs its outcome and resumes it. */
-export function waitingForRepair(run: TrackedCorpusRun | null | undefined): boolean {
+function waitingForRepair(run: TrackedCorpusRun | null | undefined): boolean {
   return run?.phase === 'waiting_for_repair';
 }
 

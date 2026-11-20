@@ -4,10 +4,16 @@
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from dlightrag.engine.agent.environment import SearchToolchain
+import pytest
+
+from dlightrag.engine.agent.environment.toolchain import (
+    SearchToolchain,
+)
 from dlightrag.engine.agent.skills import SkillCatalog, SkillsBundle, builtin_skills_root
 from dlightrag.engine.answer.evidence import EvidenceLedger
+from dlightrag.engine.answer.tools.artifacts import AttachArtifactArgs
 from dlightrag.engine.answer.tools.composition import compose_research_tools
+from tests.support.tool_helpers import tool_runtime
 
 
 async def _retrieve(_query: str) -> object:
@@ -73,8 +79,9 @@ def test_council_catalog_presence_does_not_widen_child_tools() -> None:
     assert (
         not {
             "spawn_agent",
-            "remember",
-            "forget",
+            "memory_remember",
+            "memory_forget",
+            "memory_undo",
             "attach_artifact",
             "publish_skill",
             "delete_skill",
@@ -82,3 +89,43 @@ def test_council_catalog_presence_does_not_widen_child_tools() -> None:
         }
         & with_names
     )
+
+
+@pytest.mark.asyncio
+async def test_composition_hands_the_publication_gate_the_skills_it_must_protect(
+    tmp_path: Path,
+) -> None:
+    """The wiring itself: composition is where the gate's set comes from, so it is tested here.
+
+    Every test of the gate hands the set in by hand, so all of them would pass with this line
+    cut. This one composes the real tools and copies a shipped Skill's document out.
+    """
+    bundle = SkillsBundle(builtin_root=builtin_skills_root())
+    catalog = bundle.catalog()
+    assert catalog is not None
+    document = builtin_skills_root().joinpath("charts", "SKILL.md").read_bytes()
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "chart.md").write_bytes(document)
+    tools = {
+        tool.name: tool
+        for tool in compose_research_tools(
+            evidence=EvidenceLedger(),
+            trace={},
+            retrieve_knowledge_base=_retrieve,  # type: ignore[arg-type]
+            search_web=None,
+            injected_tools=[],
+            register_web_source=None,
+            environment=MagicMock(),
+            artifacts_root=artifacts,
+            protected_digests=catalog.protected_digests(),
+            search_toolchain=SearchToolchain(),
+        )
+    }
+
+    result = await tools["attach_artifact"].execute(
+        AttachArtifactArgs(path="chart.md"), tool_runtime(tool_name="attach_artifact")
+    )
+
+    assert result.is_error is True
+    assert "protected_content" in result.text_content

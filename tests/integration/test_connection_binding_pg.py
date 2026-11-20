@@ -6,7 +6,8 @@ from typing import Any
 import pytest
 
 from dlightrag.adapters.postgres.connections import PGConnectionsStore
-from dlightrag.application.connections import ConnectionCommand, Connections
+from dlightrag.application.connections.models import ConnectionCommand, McpDiscovery
+from dlightrag.application.connections.service import Connections
 from dlightrag.engine.credential_cipher import CredentialCipher
 from tests.integration.run_runtime_pg_harness import isolated_run_runtime
 from tests.integration.test_connections_pg import stored_catalogue
@@ -20,21 +21,46 @@ class CatalogueMcp:
 
     calls = 0
     description = "Accepted description"
+    instructions: str | None = None
 
     async def discover(self, **kwargs):
         self.calls += 1
-        return [
-            {
-                "name": "read",
-                "description": self.description,
-                "input_schema": {
-                    "type": "object",
-                    "properties": {"path": {"type": "string"}},
-                    "required": ["path"],
-                    "additionalProperties": False,
+        return McpDiscovery(
+            tools=(
+                {
+                    "name": "read",
+                    "description": self.description,
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                        "additionalProperties": False,
+                    },
                 },
-            }
-        ]
+            ),
+            instructions=self.instructions,
+        )
+
+    async def list_resources(self, **_kwargs: Any) -> Any:
+        from dlightrag.engine.agent.tools.contracts import (
+            ToolResult,
+        )
+
+        return ToolResult.text("No MCP resources.")
+
+    async def list_resource_templates(self, **_kwargs: Any) -> Any:
+        from dlightrag.engine.agent.tools.contracts import (
+            ToolResult,
+        )
+
+        return ToolResult.text("No MCP resource templates.")
+
+    async def read_resource(self, **_kwargs: Any) -> Any:
+        from dlightrag.engine.agent.tools.contracts import (
+            ToolResult,
+        )
+
+        return ToolResult.text("page body")
 
 
 async def enabled_connection(pool, owner="a", *, notifications=None):
@@ -61,6 +87,47 @@ async def enabled_connection(pool, owner="a", *, notifications=None):
 
 
 @pytest.mark.asyncio
+async def test_published_instructions_pin_with_the_generation_and_its_surface():
+    """Discovery's initialize instructions are stored once and pinned as attributed data."""
+
+    async with isolated_run_runtime("instructions") as (_, pool):
+        store = PGConnectionsStore(pool=pool)
+        await store.initialize(validate_only=False)
+        mcp = CatalogueMcp()
+        mcp.instructions = "Read the spec resource before creating pages."
+        service = Connections(store=store, mcp=mcp, resources=mcp, cipher=CredentialCipher(None))
+        view = await service.change(
+            owner_id="a",
+            expected_revision="0",
+            command=ConnectionCommand(
+                kind="create", label="Notion", endpoint="https://example.com/mcp"
+            ),
+        )
+        identity = view.connections[0].connection_id
+        for command in (
+            ConnectionCommand(kind="probe", connection_id=identity),
+            ConnectionCommand(kind="enable", connection_id=identity, consent_version=1),
+        ):
+            view = await service.change(
+                owner_id="a", expected_revision=view.revision, command=command
+            )
+
+        bound = await service.bind_research(owner_id="a")
+
+        assert bound.surface[0].token == "Notion"
+        assert bound.surface[0].instructions == "Read the spec resource before creating pages."
+        assert bound.bindings == ((await store.research_catalogues("a"))[0].binding,)
+        # A second bind reads the pinned generation; it never discovers again.
+        again = await service.bind_research(owner_id="a")
+        assert again.bindings == bound.bindings
+        assert again.surface == bound.surface
+        assert mcp.calls == 1
+        # The surface carries the instructions even without the resource transport: they
+        # describe the Connection tools a Run inherits, not only the three shared reads.
+        pinned_only = Connections(store=store, mcp=mcp, cipher=CredentialCipher(None))
+        assert (await pinned_only.bind_research(owner_id="a")).surface == bound.surface
+
+
 async def test_bind_research_is_owner_scoped_schema_exact_and_network_free():
     async with isolated_run_runtime("binding") as (_, pool):
         service, store, mcp, view = await enabled_connection(pool)
@@ -87,7 +154,7 @@ async def test_actual_accept_run_pins_restore_old_generation_and_prevent_gc():
     import asyncpg
 
     from dlightrag.engine.agent.session.ids import IntentId
-    from dlightrag.engine.agent.tools import ToolRuntime
+    from dlightrag.engine.agent.tools.contracts import ToolRuntime
     from dlightrag.engine.answer.execution.connection_binding import (
         ResearchToolClaim,
         StaleConnectionBindingError,
@@ -335,15 +402,20 @@ async def test_same_owner_binding_across_application_rest_mcp_and_web(
     from dlightrag.adapters.http.server import create_app
     from dlightrag.adapters.mcp import server as mcp_server
     from dlightrag.adapters.postgres.web.web_conversations import PGWebConversationStore
-    from dlightrag.application.access import (
-        RequestScope,
+    from dlightrag.application.access.principal import (
         UserContext,
         owner_id_from_user,
+    )
+    from dlightrag.application.access.scope import (
+        RequestScope,
         request_scope_context,
     )
-    from dlightrag.application.answer_runs import AnswerRequest
-    from dlightrag.application.config import set_config
-    from dlightrag.application.web_conversations import WebConversationService
+    from dlightrag.application.answer_runs.service import AnswerRequest
+    from dlightrag.application.config.loading import set_config
+    from dlightrag.application.web_conversations.service import (
+        WebAnswerSubmission,
+        WebConversationService,
+    )
     from dlightrag.engine.answer.execution.input import AnswerRunInput
     from tests.integration.test_answer_run_api_pg import (
         _ALICE,
@@ -373,6 +445,7 @@ async def test_same_owner_binding_across_application_rest_mcp_and_web(
             created = await application.answers.create(
                 request=AnswerRequest(query="q", workspaces=("default",), mode=mode),
                 owner_id=owner,
+                caller=user,
             )
             run_id = created.run.run_id
         elif surface == "rest":
@@ -412,7 +485,7 @@ async def test_same_owner_binding_across_application_rest_mcp_and_web(
                 workspaces=("default",),
                 mode=mode,
             )
-            assert result is not None
+            assert isinstance(result, WebAnswerSubmission)
             run_id = result.run.run_id
         record = await runs.get_run(owner_id=owner, run_id=run_id)
         assert record is not None

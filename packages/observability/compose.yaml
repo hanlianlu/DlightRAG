@@ -7,11 +7,11 @@
 # bound to loopback. `docker compose -f packages/observability/compose.yaml --env-file <env> up -d`
 # starts it; `dlightrag-observability up` renders the env file first.
 #
-# The collector of the four required services is HyperDX's own: its receivers, exporters and
-# pipelines arrive over OpAMP, and it carries no custom pipeline. Host, per-container and Postgres
-# metrics come from the optional `metrics-agent` and `postgres-exporter` services
-# (`--profile metrics`), which run the same collector image standalone on `stack/collector.yaml`
-# and `stack/collector-standalone.yaml`.
+# The collector's own metric receivers are not enabled here. Host and per-container metrics come
+# from the opt-in `metrics-agent` service below (`--profile metrics`): the same collector image run
+# standalone on `stack/collector-standalone.yaml` plus `stack/collector.yaml`. A custom config on
+# the supervised collector is refused before HyperDX's remote config arrives (see the note on
+# `otel-collector`), so a stack without the profile is exactly HyperDX's own four containers.
 name: dlightrag-observability
 
 services:
@@ -37,7 +37,7 @@ services:
       - ch_data:/var/lib/clickhouse
       - ch_logs:/var/log/clickhouse-server
     ports:
-      # Loopback only: `bootstrap` applies retention through it, and an operator queries
+      # Loopback only: `bootstrap` applies the sessions TTL through it, and an operator queries
       # through it. Nothing outside this host needs the database port.
       - '127.0.0.1:${HYPERDX_CH_HTTP_PORT:-8123}:8123'
     networks:
@@ -55,9 +55,8 @@ services:
       CLICKHOUSE_ENDPOINT: 'tcp://ch-server:9000?dial_timeout=10s'
       HYPERDX_OTEL_EXPORTER_CLICKHOUSE_DATABASE: ${HYPERDX_OTEL_EXPORTER_CLICKHOUSE_DATABASE:-default}
       HYPERDX_OTEL_EXPORTER_CREATE_LEGACY_SCHEMA: 'true'
-      # One TTL for every otel_* table; there is no per-signal variable. A table a signal creates
-      # with its first write gets the same TTL from `dlightrag-observability bootstrap` (an
-      # idempotent ALTER).
+      # One TTL for every otel_* table; there is no per-signal variable. The sessions table gets
+      # its own, shorter TTL from `dlightrag-observability bootstrap` (an idempotent ALTER).
       HYPERDX_OTEL_EXPORTER_TABLES_TTL: ${HYPERDX_OTEL_EXPORTER_TABLES_TTL:-168h}
       HYPERDX_OTEL_EXPORTER_RECONCILE_TABLE_TTL: 'true'
       # The shipped batch has no upper bound; a bounded one keeps a burst out of one giant insert.

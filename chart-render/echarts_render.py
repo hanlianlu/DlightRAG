@@ -1,4 +1,4 @@
-#!/app/.venv/bin/python
+#!/usr/bin/env python3
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Render an Apache ECharts option as a PNG, with an SVG or a self-contained HTML page on request.
 
@@ -27,8 +27,8 @@ _PALETTE = json.loads((_HERE / "palette.json").read_text(encoding="utf-8"))["lig
 # The palette names an option can ask for with "palette": categorical is the default.
 PALETTES = ("categorical", *_THEME["palettes"])
 _FONT = "Noto Sans SC"
-# The image puts the font here; a checkout can point the variable at its own copy.
-_FONT_DIR = os.environ.get("ECHARTS_RENDER_FONT_DIR", "/usr/local/share/fonts/noto-sans-sc")
+# The image puts the font set here; a checkout can point the variable at its own copy.
+_FONT_DIR = os.environ.get("FONTS_DIR", "/usr/local/share/fonts/dlightrag")
 # Every generic family is the one font the image ships: when none of an element's families exists,
 # resvg falls back to its serif family, and with no font there it drops the text and still exits 0.
 _FAMILY_FLAGS = (
@@ -189,9 +189,17 @@ def rasterize(svg: str, out: Path, scale: float) -> str:
     out.parent.mkdir(parents=True, exist_ok=True)
     # Resources resolve beside the PNG, which is what stops resvg warning that stdin has no directory.
     command = ["resvg", *flags, "--zoom", str(scale), "--resources-dir", str(out.parent), "-", "-c"]
-    png = subprocess.run(  # noqa: S603 - argv list, no shell, resvg is on the image's PATH
-        command, input=svg.encode(), capture_output=True
-    )
+    try:
+        png = subprocess.run(  # noqa: S603 - argv list, no shell, resvg is on the image's PATH
+            command, input=svg.encode(), capture_output=True
+        )
+    except FileNotFoundError as error:
+        # The rasteriser is absent rather than broken, and a caller that only wanted the SVG or the
+        # HTML should not lose it: say what is missing and how it is provided.
+        raise RenderError(
+            "resvg is not on PATH; scripts/install-chart-tools.sh installs it "
+            f"({error.filename or 'resvg'})"
+        ) from error
     warnings = png.stderr.decode(errors="replace")
     # With the font in place resvg warns of nothing, and "No match for" means text was dropped.
     if png.returncode or not png.stdout.startswith(b"\x89PNG") or "No match for" in warnings:

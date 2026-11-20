@@ -22,7 +22,10 @@ from dlightrag.adapters.http.browser.deps import (
     get_application,
     get_workspace,
 )
-from dlightrag.application.access import AccessAction, owner_id_from_user
+from dlightrag.application.access.control import AccessAction
+from dlightrag.application.access.principal import (
+    owner_id_from_user,
+)
 from dlightrag.application.skills import owner_skills_directory, skills_bundle_factory
 from dlightrag.engine.agent.skills import (
     OWNER_MAX_SKILLS,

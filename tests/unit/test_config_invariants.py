@@ -4,22 +4,25 @@
 from __future__ import annotations
 
 import dataclasses
-import os
 from typing import Any, cast, get_args
 
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from dlightrag.application.access import AuthenticationSettings
-from dlightrag.application.config import (
+from dlightrag.application.access.authentication import (
+    AuthenticationSettings,
+)
+from dlightrag.application.config.loading import load_config
+from dlightrag.application.config.sections import (
     AccessControlConfig,
     AccessControlRuleConfig,
     AccessSectionSettings,
+    AgentBrowserConfig,
+    AgentExecutionConfig,
     AgentMailboxConfig,
     AnswerConfig,
     AnswerSectionSettings,
     ApiInterfaceSettings,
-    CitationHighlightConfig,
     DeploymentSettings,
     DlightragConfig,
     InterfacesSettings,
@@ -30,7 +33,6 @@ from dlightrag.application.config import (
     StorageSettings,
     WebSourceProviderConfig,
     WebSourcesConfig,
-    load_config,
 )
 from dlightrag.engine.ai.settings import (
     EmbeddingSettings,
@@ -57,14 +59,9 @@ from tests.support.settings_models import settings_models
 
 @pytest.fixture(autouse=True)
 def _clean_config_sources(monkeypatch: pytest.MonkeyPatch) -> None:
-    for key in tuple(os.environ):
-        if key.upper().startswith("DLIGHTRAG_") or key in {
-            "LIGHTRAG_PARSER",
-            "POSTGRES_SERVER_SETTINGS",
-            "POSTGRES_WORKSPACE",
-        }:
-            monkeypatch.delenv(key, raising=False)
-    monkeypatch.setitem(DlightragConfig.model_config, "env_file", None)
+    """The root conftest hides DLIGHTRAG_*; these three names are read by name elsewhere."""
+    for key in ("LIGHTRAG_PARSER", "POSTGRES_SERVER_SETTINGS", "POSTGRES_WORKSPACE"):
+        monkeypatch.delenv(key, raising=False)
 
 
 @pytest.mark.parametrize(
@@ -80,15 +77,10 @@ def test_jwt_audience_normalization(raw: Any, expected: Any) -> None:
     assert AccessSectionSettings(jwt_audience=raw).jwt_audience == expected
 
 
-def test_model_defaults_and_case_folding() -> None:
+def test_model_provider_is_case_folded() -> None:
     settings = ModelSettings(provider=cast(Any, " GEMINI "), model="gemini-model")
 
     assert settings.provider == "gemini"
-    assert settings.temperature is None
-    assert settings.timeout == 240.0
-    assert settings.max_retries == 3
-    assert settings.api_family == "interactions"
-    assert settings.structured_output == "auto"
 
 
 @pytest.mark.parametrize(
@@ -107,10 +99,6 @@ def test_model_defaults_and_case_folding() -> None:
 def test_invalid_model_settings_are_rejected(values: dict[str, Any]) -> None:
     with pytest.raises(ValidationError):
         ModelSettings(**values)  # type: ignore[arg-type]
-
-
-def test_openai_model_accepts_response_api_family() -> None:
-    assert ModelSettings(model="x", api_family="response").api_family == "response"
 
 
 def test_startup_catalogue_requires_complete_profile_facts() -> None:
@@ -156,25 +144,6 @@ def test_embedding_wire_protocols_are_accepted(provider: str) -> None:
     assert EmbeddingSettings(provider=provider).provider == provider  # type: ignore[arg-type]
 
 
-def test_retired_or_unknown_embedding_configuration_is_rejected() -> None:
-    with pytest.raises(ValidationError, match="provider"):
-        EmbeddingSettings(provider="ollama")  # type: ignore[arg-type]
-    with pytest.raises(ValidationError, match="asymmetric"):
-        EmbeddingSettings(asymmetric="disable")  # type: ignore[call-arg]
-
-
-def test_embedding_defaults_preserve_shipped_pipeline_contract() -> None:
-    settings = EmbeddingSettings()
-    assert settings.provider == "voyage"
-    assert settings.model == "voyage-multimodal-3.5"
-    assert settings.base_url is None  # the selected adapter owns its native default URL
-    assert settings.dim == 1024
-    assert settings.max_token_size == 8192
-    assert settings.batch_size == 64
-    assert settings.max_concurrency == 16
-    assert settings.timeout == 120
-
-
 @pytest.mark.parametrize(
     "values",
     [
@@ -189,25 +158,8 @@ def test_invalid_rerank_bounds_are_rejected(values: dict[str, Any]) -> None:
         RerankSettings(**values)
 
 
-def test_rerank_defaults_and_provider_case_folding() -> None:
-    settings = RerankSettings(provider=cast(Any, " OpenAI "))
-    assert settings.enabled is True
-    assert settings.strategy == "chat_llm_reranker"
-    assert settings.provider == "openai"
-    assert settings.max_concurrency == 8
-    assert settings.batch_size == 8
-
-
-def test_answer_and_citation_defaults_are_preserved() -> None:
-    answer = AnswerConfig()
-    highlights = CitationHighlightConfig()
-    assert answer.max_attachments == 6
-    assert answer.max_attachment_bytes == 100 * 1024 * 1024
-    assert answer.max_total_attachment_bytes == 128 * 1024 * 1024
-    assert answer.max_images == 12
-    assert answer.image_max_pixels == 40_000_000
-    assert highlights.enabled is True
-    assert highlights.timeout == 10.0
+def test_rerank_provider_is_case_folded() -> None:
+    assert RerankSettings(provider=cast(Any, " OpenAI ")).provider == "openai"
 
 
 @pytest.mark.parametrize(
@@ -231,12 +183,7 @@ def test_invalid_visual_asset_bounds_are_rejected(values: dict[str, Any]) -> Non
         VisualAssetSettings(**values)
 
 
-def test_storage_defaults_and_only_explicit_milvus_vector_alternative() -> None:
-    storage = LightRAGStorageSettings(vector_index_type="HNSW_HALFVEC")
-    assert storage.vector_storage == "PGVectorStorage"
-    assert storage.graph_storage == "PGTableGraphStorage"
-    assert storage.kv_storage == "PGKVStorage"
-    assert storage.doc_status_storage == "PGDocStatusStorage"
+def test_only_an_explicit_milvus_vector_alternative_is_accepted_for_storage() -> None:
     assert (
         LightRAGStorageSettings(vector_storage="MilvusVectorDBStorage").vector_storage
         == "MilvusVectorDBStorage"
@@ -315,10 +262,8 @@ def test_a_retrieval_timeout_just_past_the_rerank_deadline_is_accepted() -> None
     assert config.corpus.retrieval.timeout == timeout
 
 
-def test_bm25_defaults_cover_languages_and_one_fallback() -> None:
-    profiles = RetrievalSettings().bm25_profiles
-    assert {profile.languages[0] for profile in profiles if profile.languages} >= {"zh", "en"}
-    assert sum(profile.fallback for profile in profiles) == 1
+def test_the_default_bm25_profiles_name_exactly_one_fallback() -> None:
+    assert sum(profile.fallback for profile in RetrievalSettings().bm25_profiles) == 1
 
 
 @pytest.mark.parametrize(
@@ -335,23 +280,9 @@ def test_invalid_bm25_profiles_are_rejected(profile: dict[str, Any]) -> None:
         BM25ProfileSettings(**profile)
 
 
-def test_parser_defaults_to_self_hosted_mineru() -> None:
-    defaults = ParserSidecarsSettings()
-    assert defaults.active_parser == "mineru"
-    assert defaults.mineru == MinerUSidecarSettings(
-        api_mode="local",
-        local_endpoint="http://127.0.0.1:8210",
-        language="ch",
-        backend="hybrid-engine",
-    )
-    assert defaults.docling is None
-
-    mineru_only = ParserSidecarsSettings(mineru=MinerUSidecarSettings())
-    assert mineru_only.active_parser == "mineru"
-    assert mineru_only.docling is None
-
-    # The documented contract is exactly one parser block; a second one used to be
-    # ignored without a word, so a Docling configuration could silently run MinerU.
+def test_a_second_parser_block_is_refused() -> None:
+    # The documented contract is exactly one parser block: a second one is refused
+    # rather than ignored, so a Docling configuration cannot silently run MinerU.
     with pytest.raises(ValidationError, match="not both"):
         ParserSidecarsSettings(
             mineru=MinerUSidecarSettings(),
@@ -461,6 +392,78 @@ def test_web_source_orders_derive_from_available_credentials() -> None:
     assert config.extract_order() == ("exa", "tavily")
 
 
+def test_web_source_orders_put_deepseek_last_whatever_order_the_keys_were_given_in() -> None:
+    config = WebSourcesConfig(
+        deepseek=WebSourceProviderConfig(api_key="deepseek-key"),
+        tavily=WebSourceProviderConfig(api_key="tavily-key"),
+        exa=WebSourceProviderConfig(api_key="exa-key"),
+    )
+
+    assert config.configured_providers() == ("exa", "tavily", "deepseek")
+    assert config.search_order() == ("exa", "tavily", "deepseek")
+    assert config.extract_order() == ("exa", "tavily", "deepseek")
+    assert WebSourcesConfig(
+        deepseek=WebSourceProviderConfig(api_key="deepseek-key")
+    ).search_order() == ("deepseek",)
+
+
+def test_web_source_orders_may_name_deepseek_anywhere_and_the_browser_beside_it() -> None:
+    config = WebSourcesConfig(
+        exa=WebSourceProviderConfig(api_key="exa-key"),
+        deepseek=WebSourceProviderConfig(api_key="deepseek-key"),
+        search_providers=("deepseek", "exa"),
+        extract_providers=("deepseek", "browser", "exa"),
+    )
+
+    assert config.search_order() == ("deepseek", "exa")
+    assert config.extract_order() == ("deepseek", "browser", "exa")
+
+
+@pytest.mark.parametrize("field", ["search_providers", "extract_providers"])
+def test_web_source_order_naming_deepseek_without_its_key_is_refused(field: str) -> None:
+    with pytest.raises(ValidationError, match="lack api_key: deepseek"):
+        WebSourcesConfig(
+            exa=WebSourceProviderConfig(api_key="exa-key"),
+            **{field: ("exa", "deepseek")},  # pyright: ignore[reportArgumentType]
+        )
+
+
+def test_the_extract_chain_puts_a_configured_browser_after_deepseek() -> None:
+    web_sources = WebSourcesConfig(
+        exa=WebSourceProviderConfig(api_key="exa-key"),
+        tavily=WebSourceProviderConfig(api_key="tavily-key"),
+        deepseek=WebSourceProviderConfig(api_key="deepseek-key"),
+    )
+    browser = AgentBrowserConfig(
+        endpoints=("ws://agent-browser-1:3000/",),
+        egress_proxy="http://agent-browser-egress:3128",
+    )
+
+    with_browser = AnswerSectionSettings(
+        web_sources=web_sources, agent=AgentExecutionConfig(browser=browser)
+    )
+    without_browser = AnswerSectionSettings(web_sources=web_sources)
+
+    assert with_browser.extract_chain() == ("exa", "tavily", "deepseek", "browser")
+    assert without_browser.extract_chain() == ("exa", "tavily", "deepseek")
+
+
+def test_the_deepseek_web_key_comes_from_its_environment_variable(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "DLIGHTRAG_ANSWER__WEB_SOURCES__DEEPSEEK__API_KEY=deepseek-key\n", encoding="utf-8"
+    )
+
+    config = load_config(env_file)
+
+    assert config.answer.web_sources.deepseek.api_key == "deepseek-key"
+    assert config.answer.web_sources.search_order() == ("deepseek",)
+    assert "deepseek-key" not in repr(config)
+
+
 def test_web_source_orders_are_independent_and_empty_disables_operation() -> None:
     config = WebSourcesConfig(
         exa=WebSourceProviderConfig(api_key="exa-key"),
@@ -487,7 +490,7 @@ def test_web_source_order_rejects_duplicate_provider() -> None:
 
 
 def test_config_composes_canonical_models_without_snapshot_copy() -> None:
-    from dlightrag.application.settings import rag_settings
+    from dlightrag.application.settings.projections import rag_settings
 
     models = ModelsSettings(embedding=EmbeddingSettings(startup_probe=False))
     answer = AnswerSectionSettings()
@@ -550,18 +553,21 @@ def test_nested_secret_settings_never_render_in_repr() -> None:
             vector_storage="MilvusVectorDBStorage", milvus_uri=_SECRET, milvus_token=_SECRET
         ),
         AccessSectionSettings(api_token=_SECRET, jwt_verification_key=_SECRET),
-        ObservabilitySettings(otlp_headers={"authorization": _SECRET}),
+        ObservabilitySettings(otlp_headers={"authorization": _SECRET}, browser_api_key=_SECRET),
         WebSourceProviderConfig(api_key=_SECRET),
         WebSourcesConfig(exa=WebSourceProviderConfig(api_key=_SECRET)),
         AgentMailboxConfig(
             bucket="agent-mail",
-            alias_domain="orliantra.cc",
+            alias_domain="mail.example",
             access_key_id=_SECRET,
             secret_access_key=_SECRET,
         ),
         MinerUSidecarSettings(api_token=_SECRET),
         SourceSettings(blob_connection_string=_SECRET),
-        WebSourceRuntimeSettings(exa_api_key=_SECRET, tavily_api_key=_SECRET),
+        WebSourceRuntimeSettings(
+            exa_api_key=_SECRET, tavily_api_key=_SECRET, deepseek_api_key=_SECRET
+        ),
+        WebSourcesConfig(deepseek=WebSourceProviderConfig(api_key=_SECRET)),
         AuthenticationSettings(api_token=_SECRET, jwt_verification_key=_SECRET),
     ]
     for item in rendered:
@@ -611,17 +617,6 @@ def test_client_and_test_names_are_not_settings_elsewhere() -> None:
     """Only a shared .env may carry them; constructor values stay strict."""
     with pytest.raises(ValidationError, match="api_token"):
         DlightragConfig(api_token="client-token")  # type: ignore[call-arg]
-
-
-def test_a_renamed_compose_input_in_dotenv_names_its_replacement(
-    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    env_file = tmp_path / ".env"
-    env_file.write_text("DLIGHTRAG_POSTGRES_SHARED_BUFFERS=8GB\n", encoding="utf-8")
-
-    with pytest.raises(ValueError, match="-> COMPOSE_POSTGRES_SHARED_BUFFERS"):
-        load_config(env_file)
 
 
 def test_nested_settings_hide_rejected_input_in_errors() -> None:

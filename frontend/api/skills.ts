@@ -27,7 +27,7 @@ export type OwnerSkill = v.InferOutput<typeof ownerSkill>;
 
 const ownerSkills = v.object({skills: v.array(ownerSkill), limit: v.number()});
 /** The owner's own Skills by name, and how many the owner may keep. */
-export type OwnerSkills = v.InferOutput<typeof ownerSkills>;
+type OwnerSkills = v.InferOutput<typeof ownerSkills>;
 
 const OWNER = '/web/api/skills/mine';
 

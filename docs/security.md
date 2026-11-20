@@ -150,8 +150,10 @@ routes also require exact same-origin `Origin` and a double-submit
 403 in the shared error envelope with `error_kind: "cross_origin_rejected"`. A
 proxy that does not forward the browser's `Host` refuses every write this way.
 With `auth_mode: none` the check covers only the Connections routes
-(`/web/api/connections/mcp`), the Agent Accounts routes (`/web/api/agent-accounts`), and the
-video-playback resolver (`/web/api/video-playback`), and no other Web route.
+(`/web/api/connections/mcp`), the Agent Accounts routes (`/web/api/agent-accounts`), the
+Profile Memory routes (`/web/api/memory`), the Conversation Contribution routes
+(`/web/api/privacy`), and the video-playback resolver (`/web/api/video-playback`), and no
+other Web route.
 
 ### Entra Example
 
@@ -194,10 +196,29 @@ access:
 - Cover `/web` with the application and leave `/static` public; it holds only the
   Web's assets.
 - Add a Bypass application for `/web/oauth/connections/mcp/client-metadata`: an
-  authorization server fetches it without an Access session.
+  authorization server fetches it without an Access session. Cloudflare's
+  [Security Insights](https://developers.cloudflare.com/security/security-insights/)
+  reports that bypass as an overprovisioned access policy that admits everyone.
+  The finding is expected — the document is public by protocol — so archive the
+  insight as accepted risk: restricting it answers that fetch with the Access
+  login page instead of the document.
 - REST and MCP clients present the same person's token as a bearer
   (`cloudflared access token -app=https://<host>/web`). The `jwt_*` settings
   verify it, so those clients act as that person too.
+
+## Unauthenticated Front Doors
+
+The paths below answer without a session, and each is deliberate: `/health` and
+`/ready` for a load balancer, `/web/oauth/connections/mcp/client-metadata` for an
+authorization server that has no cookie, and `/.well-known/security.txt`
+([RFC 9116](https://www.rfc-editor.org/rfc/rfc9116)) so a reporter can find a
+mailbox without an account. The Web cookie middleware guards `/web*` only, so the
+well-known route is outside it; the process serving it is the same one serving
+everything else, and it exposes no state. The disclosure process behind that
+route is [trust/vulnerability-disclosure.md](trust/vulnerability-disclosure.md).
+Also unauthenticated, and not front doors but framework defaults: `/web/login`
+and `/web/logout`, the `/static` mount, and FastAPI's own `/docs`, `/redoc` and
+`/openapi.json`, which a deployment exposes or closes at its ingress.
 
 ## Ingress Responsibilities
 
@@ -213,9 +234,14 @@ The application enforces semantic invariants:
 - provider concurrency and per-call timeouts.
 
 Ingress owns TLS/certificates, DDoS and volumetric protection, WAF signatures,
-IP/geo/bot policy, request quotas/rates, and connection caps. DlightRAG ships no
-in-process WAF or rate limiter. SIEM systems such as Sentinel observe/correlate;
-they are not an inline blocker.
+IP/geo/bot policy, request quotas/rates, and connection caps. That ownership
+includes the TLS floor: a deployment serves the Web hostname at TLS 1.2 or
+newer and answers it with HSTS, because the application terminates no TLS and
+can enforce neither. Both are zone settings at the edge — Minimum TLS Version
+and HSTS in Edge Certificates — and a per-hostname minimum instead needs
+Advanced Certificate Manager. DlightRAG ships no in-process WAF or rate
+limiter. SIEM systems such as Sentinel observe/correlate; they are not an
+inline blocker.
 
 Accepted Retrieval and Answer Runs queue rather than fail under local worker
 saturation, up to the deployment-wide Query-lane nonterminal admission limit.
@@ -252,6 +278,28 @@ proxy on the same host connects from. Bearer tokens verify under the `jwt_*`
 settings; an edge token whose audience differs sets `web_identity.audience`.
 Native MCP OAuth still requires the exact public MCP resource URL as audience.
 
+The live preview's frames socket is the one Web route a browser opens with no header of
+its own choosing, so it is authenticated on the two things an upgrade does carry: the
+session cookie (or the edge credential, where the deployment has one), and an `Origin`
+that is exactly this application's own. It is refused before any frame with `4401` where
+no credential verifies and `4403` where the `Origin` is missing or foreign, and it is
+read-only: a viewer sends it nothing, so there is no state change to protect with a CSRF
+token. The `control` and `input` writes beside it keep the CSRF header and
+`Idempotency-Key` discipline
+([the protocol](interfaces.md#web)).
+
+Driving is a credential of its own, and the stream never carries it. Taking the seat mints
+a 256-bit token as that one request is answered, and nothing else in the surface ever names
+it: what every reader of a Run receives — the state beside each frame — holds a display
+label such as `viewer-3f9a1c04` and no credential, so a second reader that replays the whole
+broadcast still holds nothing it could drive with and is refused as `taken_over`. Handing
+the seat back presents the token and spends it, and handing it to nobody (the idle release,
+the session's end) spends it too, so the seat taken next is a different one. A token that
+leaked from the holder's own answer would still be a bearer credential — the write routes
+conclude from a header and a cookie, not from a connection — which is why it is answered
+only to the request that asked, never logged, and never put in a stream that every reader of
+the Run can see.
+
 ## Authorization Model
 
 Authentication asks who; authorization asks which product action on which
@@ -274,43 +322,55 @@ access:
   control:
     rules:
       - claim: roles
-        value: finance.editors
+        value: finance.members
         workspaces: [finance]
-        actions: [editor]
+        actions: [common_user]
       - claim: roles
         value: legal.readers
         workspaces: [legal]
-        actions: [reader]
+        # No preset is read-only, so a read-only grant names the read Actions.
+        actions:
+          - workspace.query
+          - workspace.list_files
+          - workspace.download_source
+          - workspace.read_metadata
+          - workspace.read_visual_asset
 ```
 
 Rules require JWT auth, and any rule puts every action under rules. Without
 rules every authenticated caller holds every action, as in local development.
 Claim values may be strings or list members. Workspace patterns
 are a canonical ID or `*`. Action patterns may be exact, `*`, a prefix such as
-`workspace.*`, or a preset.
+`workspace.*`, or a preset. A pattern that names no preset and no Action is
+refused when the deployment starts, rather than loading a rule that grants
+nothing and says nothing.
 
 ### Workspace Creators
 
 Each workspace records the owner that created it. Once rules apply, its creator
-holds `editor`, `workspace.reset`, and `workspace.delete` on it beyond what rules
-grant, so a person sees and changes the workspaces they create, and others only
-where rules grant them.
+holds the `common_user` actions, `workspace.reset`, and `workspace.delete` on it
+beyond what rules grant, so a person sees and changes the workspaces they create,
+and others only where rules grant them.
 Operator facts (`workspace.storage_status`) and deployment-wide actions stay with
 rules. A workspace the deployment registers itself, such as the default, has no
 creator. Workspace ids remain deployment-wide: creating a name someone else holds
 is refused as existing.
 
-One administrator, a default everyone reads, and workspaces of their own for
-everyone else:
+One administrator, a default everyone contributes to, and workspaces of their own
+for everyone else:
 
 ```yaml
 access:
   control:
     rules:
       - {claim: email, value: admin@example.com, workspaces: ["*"], actions: [admin]}
-      - {claim: iss, value: "https://<team>.cloudflareaccess.com", workspaces: [default], actions: [reader]}
+      - {claim: iss, value: "https://<team>.cloudflareaccess.com", workspaces: [default], actions: [common_user]}
       - {claim: iss, value: "https://<team>.cloudflareaccess.com", workspaces: ["*"], actions: [workspace.create]}
 ```
+
+A read-only grant names the read Actions themselves — `workspace.query`,
+`workspace.list_files`, `workspace.download_source`, `workspace.read_metadata`,
+and `workspace.read_visual_asset` — because no preset is read-only.
 
 A Corpus Mutation Run shows to whoever submitted it. Others reach it through its
 workspace, and a workspace its creator holds shows them only the Runs that creator
@@ -336,21 +396,42 @@ changes its caller may make.
 | `workspace.delete` | Workspace Delete, including repair resume for it; unknown mutation actions fail closed to this action |
 | `workspace.storage_status` | Read storage/promotion state |
 | `model_catalogue.write` | Change deployment-wide model catalogue |
+| `runtime_policy.manage` | Read and change the deployment's Runtime Policies |
 
 | Preset | Expansion |
 |---|---|
-| `reader` | query, list/download files, read metadata/visual assets |
-| `editor` | reader + ingest and metadata/file mutation |
+| `common_user` | query, list/download files, read metadata/visual assets, ingest, update metadata, delete files |
 | `admin` | every action |
 
 Presets affect only Actions, never Workspace matching. Deployment-wide actions
 require `workspaces: ["*"]`.
 
+`common_user` holds neither `model_catalogue.write` nor `runtime_policy.manage`:
+`admin` over every workspace, or a rule that names the action over every workspace, does. A
+Runtime Policy lists the people it targets, so even reading one needs the action, and a
+workspace's creator does not hold it.
+
+Actions guard the corpus and the deployment's own settings, not what a person does with their
+own state. The judgement someone gives a message of their own answer is theirs, like their
+history, Memory, Connections, and steering, and is kept under their owner id; it asks for no
+access to the workspaces the answer searched, and the read Actions exist to keep the corpus
+from changing, not to stop anyone rating. Whether feedback is offered to them at all is a
+[Runtime Policy](interfaces.md#runtime-policies). Whether their conversations may be used to
+evaluate and train models is theirs in the same way: their Conversation Contribution
+([ADR 0041](adr/0041-a-conversation-improves-the-product-only-when-its-owner-asked.md)) is kept
+under their owner id, is off until they turn it on, and no action guards it. In `none` and
+`simple` authentication every caller is the same owner, so one switch covers the whole
+deployment, REST and MCP clients included.
+
 ### Source Of Truth And Revocation
 
 The IdP owns users/claims; deployment configuration owns claim-to-workspace
 rules. DlightRAG stores no users, custom roles, invitations, or membership ACLs;
-it records only which owner created each workspace.
+it records which owner created each workspace, and the
+[Runtime Policies](interfaces.md#runtime-policies) an administrator writes: rules that name
+people by their claims to decide what the product offers them and how much of it they may use
+(the effort their Answers run at, how many Answers they may have in progress), never which
+workspaces they may reach.
 PostgreSQL is trusted application storage without row-level security; this is
 not database-enforced tenant isolation.
 
@@ -418,7 +499,14 @@ ledger entries become citable; Profile Memory, Skills metadata, and incidental
 child summaries do not. Public Child Session observation projects attributable
 status, a bounded transcript, queued versus consumed controls, questions, and
 Evidence handles. It strips host_state, pinned plan/budget, context snapshots,
-fencing, and provider-private reasoning. Skill text is untrusted reference
+fencing, and provider-private reasoning. The owner's own trace is not that public
+surface: the Web trace an owner reads carries each assistant message's model reasoning
+on its activity page, bounded to 4000 characters and projected through the same reader
+content gate as the message's words, and a live Run's `reasoning` stream reaches the
+browser under that gate too; the Run panel states no reasoning
+([ADR 0065](adr/0065-the-models-reasoning-is-a-trace-surface-bounded-and-masked.md),
+[ADR 0085](adr/0085-the-run-panel-is-an-overview-and-steps-belong-to-the-agent-page.md)).
+Skill text is untrusted reference
 context: loading `council` or any Skill cannot widen host-permitted child tools.
 A child inherits its parent's tools except the Run's authority — roster controls,
 durable owner memory writes, and publication. A parent that wants a narrower child
@@ -432,7 +520,7 @@ Admitted bytes are content-addressed within one owner. A fetched resource is
 stored only after validation and is linked atomically before its effect settles,
 so recovery reads the same bytes. Deduplication never crosses owners.
 
-Only a settled parent-Research `attach_artifact` call authorizes a workspace
+Only a settled parent-Research `attach_artifact` call authorizes an Agentspace
 root for publication. Fast and Child Sessions do not receive that capability,
 and answer or Markdown `artifact:` links grant no authority. At the terminal
 boundary, the Host rechecks the attachment's raw digest and size, validates its
@@ -444,13 +532,13 @@ Execution modes:
 
 - `disabled`: no local execution tools;
 - `trust`: rooted file tools, and every Agent process runs under a kernel-enforced
-  allow-list — the Agent Workspace plus the runtime the toolchain needs and the
+  allow-list — the Agentspace plus the runtime the toolchain needs and the
   layers capabilities declare. The corpus tree, the deployment's configuration, the
-  project tree, and other Runs' workspaces stay outside that view
+  project tree, and other Runs' Agentspaces stay outside that view
   ([ADR 0024](adr/0024-the-agent-sees-only-its-workspace.md)). Bash keeps the service
   user's network authority, which is the deployment's to enforce with a network
   policy rather than a path list. [`materialize`](resource-reading.md#materialize) copies
-  a Resource's admitted bytes into the Agent Workspace through the application process, so
+  a Resource's admitted bytes into the Agentspace through the application process, so
   the shell gains no credential and no route to the Blob plane. The copy is untrusted
   content, like any file Bash fetches.
 
@@ -471,7 +559,7 @@ in-flight writes cancelled best-effort and never replayed
 ([contract](personal-mcp-connections.md)), and through the deployment's Agent Browser
 ([boundary](#agent-browser-boundary)). Network policy can deny access but
 cannot grant external account authority. Public Web Search exists only for
-configured Exa/Tavily provider chains, and Extract for those chains and the
+configured Exa/Tavily/DeepSeek provider chains, and Extract for those chains and the
 deployment's Agent Browser, which no owner authorizes and the Agent reaches through
 `read` and the `browser` tool; provider failures may fail over, while successful empty
 results do not.
@@ -535,10 +623,10 @@ hands over and accepts back.
   outcome, and the directory is removed when the copy ends. What a call admits, and the
   caps on a download's size, time, and number, are in
   [Resource reading](resource-reading.md#browser-captures-and-downloads).
-- **Upload.** `upload` exists only where the Run has an Agent Workspace (`trust`). It reads
-  regular files the workspace tools could read, through the same path rules and the same
+- **Upload.** `upload` exists only where the Run has an Agentspace (`trust`). It reads
+  regular files the Agentspace tools could read, through the same path rules and the same
   integrity latch, checked again once it holds the file, and hands them to a file input, at
-  most 50 MiB in a call, measured before any file is read: it sends workspace files to
+  most 50 MiB in a call, measured before any file is read: it sends Agentspace files to
   whatever page asks for them, so it is as much authority as the page can borrow from the
   model's judgment. A Child holds it as its parent does.
 - **Chromium's sandbox.** The container runs as the unprivileged `pwuser` under
@@ -565,9 +653,12 @@ hands over and accepts back.
 - **Verification walls.** A CAPTCHA or any other human-verification check surfaces as an
   HTTP error or as page text. The `browser` tool's description tells the model to stop that
   path and report it, and a sign-up behind one is no exception. DlightRAG never solves,
-  bypasses, or outsources one and holds no solver integration; this is a rule the model
-  follows, not a mechanism, because nothing detects a CAPTCHA, and a vision model could read
-  one from a screenshot.
+  bypasses, or outsources one and holds no solver integration, and it holds no stealth
+  patch: a page that refuses an automated browser is detected and named — `blocked`, or
+  `verification_required` for a check the page is running — with the marker that named it,
+  and a headed browser is a browser with a display rather than a spoofed identity. What is
+  left to the model is what a screenshot can show it: a vision model could read a check
+  from one.
 
 Residual risks, recorded rather than solved:
 
@@ -602,11 +693,17 @@ could read, and that the owner and the deployment decide whether it is offered `
   of the owner enters a form, and the tool's description says so. A mailbox alias is 16
   characters of an unkeyed hash of the owner and the site and carries nothing of the owner.
   The browser holds no credential of the owner either.
-- **DlightRAG makes the password and never shows it.** It generates 20 characters with
-  `secrets`, shorter only to fit a field's `maxlength` and never below 12, from letters,
+- **DlightRAG makes the password and never shows it.** It generates with `secrets` exactly
+  the number of characters `register` asked for, 20 when the call asks for none, from letters,
   digits, and `-._`, which HTML, JSON, form, and percent-encoding leave as they are, and it
   begins and ends with a letter or a digit, because Chromium trims a dot from either end of a
-  downloaded file's name. So a password has exactly one spelling to look for. The model
+  downloaded file's name. The length is the agent's to choose for the site it meets — the
+  platform's own number could not keep up with the fields it would be asked to fill — and
+  nothing else about the password is: the randomness, the alphabet, and the sealing stay here.
+  A site whose field takes fewer characters than the call asked for is refused rather than
+  fitted, and the refusal names the field's limit and the length asked for, so no password is
+  ever shortened to fit. So a password has exactly one spelling to
+  look for. The model
   names fields by ref and never types or sees a password. No tool argument, result, Session
   Entry, event, trace, log, or error carries one.
 - **Sealed under the key ring.** A parent's account is stored per owner, sealed under the
@@ -695,14 +792,22 @@ Residual risks, recorded rather than solved:
 ## Answer Artifact Browser Boundary
 
 Artifact descriptors expose validated media and owner-scoped URLs, never raw
-blob bytes or Agent Workspace paths. Authenticated data/Markdown uses
+blob bytes or Agentspace paths. Authenticated data/Markdown uses
 `Cache-Control: private, no-store`; active/unknown formats download with
 `nosniff`.
 
 Published SVG is sanitized of scripts, handlers, animation, external loads, and
 nested SVG data URLs, then served under CSP sandbox. A Run's stored SVG Resource,
 such as a file a page downloaded, is served inline only under the same sandbox
-policy. PDF preview is sandboxed without same-origin capability.
+policy.
+
+PDF preview is not sandboxed, because Chromium refuses to instantiate its PDF
+viewer in a sandboxed frame — `sandbox=""` and every flag alike — and a sandboxed
+PDF frame therefore renders nothing at all. What holds that frame is the route:
+same-origin, `inline`, and `nosniff`, so it can only ever be read as a PDF and
+never as HTML, and Chromium renders it in its own extension origin and process.
+Isolating the document by origin, which is what an untrusted PDF wants, needs a
+second origin this single-origin deployment does not have.
 
 HTML never executes as a same-origin document. After explicit consent, the
 browser inserts authenticated inert bytes into one `srcdoc` iframe with
@@ -710,7 +815,12 @@ browser inserts authenticated inert bytes into one `srcdoc` iframe with
 frames, workers, storage, device permissions, or application bridge. A prepended
 CSP blocks normal fetch/subresource paths. The wrapper's only parent signal is a
 private one-way Escape-close token removed before Artifact code executes. Close
-or switch destroys the iframe.
+or switch destroys the iframe; the Canvas keeps the bytes it drew for the one
+Artifact it last loaded, so reopening that Artifact redraws them instead of
+reading the route again, and either replaces the other. That is a page-lifetime
+hold in the reader's own tab, not a shared or persistent cache: the route's
+`no-store` and this hold agree that no other reader and no later page sees those
+bytes, and a publication with a new digest is read afresh.
 
 This isolates DlightRAG cookies, storage, and authenticated DOM. It provides no
 CPU/memory quota, executes no server code, and is not an absolute browser-egress

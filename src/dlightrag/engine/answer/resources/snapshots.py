@@ -8,7 +8,9 @@ import json
 from dataclasses import dataclass
 
 from dlightrag.engine.agent.tool_content import VisualSource
-from dlightrag.engine.agent.tools import ResourceAttachmentBytes
+from dlightrag.engine.agent.tools.contracts import (
+    ResourceAttachmentBytes,
+)
 from dlightrag.engine.answer.resources.converters import ExtractedVisual
 
 

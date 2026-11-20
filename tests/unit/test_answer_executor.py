@@ -17,7 +17,7 @@ import pytest
 from opentelemetry.trace import StatusCode
 from PIL import Image
 
-from dlightrag.application.config import (
+from dlightrag.application.config.sections import (
     AgentBrowserConfig,
     AgentExecutionConfig,
     AnswerSectionSettings,
@@ -25,10 +25,11 @@ from dlightrag.application.config import (
     WebSourcesConfig,
 )
 from dlightrag.application.errors import CorpusUnavailableError
-from dlightrag.application.settings import answer_model_runtime_settings
-from dlightrag.engine.agent.environment import SearchToolchain
+from dlightrag.application.settings.projections import answer_model_runtime_settings
 from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
-from dlightrag.engine.agent.session.entries import AssistantMessageEntry
+from dlightrag.engine.agent.environment.toolchain import (
+    SearchToolchain,
+)
 from dlightrag.engine.agent.session.ids import EntryId, LaneId, ProjectionId, SessionId
 from dlightrag.engine.agent.session.plan import AgentRunPlan
 from dlightrag.engine.agent.session.registers import (
@@ -47,7 +48,7 @@ from dlightrag.engine.ai.reasoning import best_effort_reasoning_profile
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelSettings
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
-from dlightrag.engine.answer.agent_browser import (
+from dlightrag.engine.answer.agent_browser.contracts import (
     AgentBrowserBinding,
     RenderedPage,
     browser_failure,
@@ -60,17 +61,12 @@ from dlightrag.engine.answer.errors import (
     AnswerInputOverflowError,
     CurrentImagePayloadError,
 )
-from dlightrag.engine.answer.execution import (
+from dlightrag.engine.answer.execution.executor import (
     AnswerExecutor,
     AnswerExecutorSettings,
-    AnswerResourceResolver,
-    AnswerResourceSettings,
-)
-from dlightrag.engine.answer.execution.executor import (
     _close_execution_resources,
     _memory_recall_allowed,
     _publication_plan,
-    _require_current_child_lifecycle,
     _stage_publications,
 )
 from dlightrag.engine.answer.execution.input import (
@@ -82,16 +78,23 @@ from dlightrag.engine.answer.execution.input import (
     in_memory_attachment_loader,
     new_resource_identity,
 )
-from dlightrag.engine.answer.fast import FastSessionHost, ensure_session_lane
+from dlightrag.engine.answer.execution.resources import (
+    AnswerResourceResolver,
+    AnswerResourceSettings,
+)
+from dlightrag.engine.answer.fast.session_host import FastSessionHost, ensure_session_lane
 from dlightrag.engine.answer.highlights import SemanticHighlightSettings
 from dlightrag.engine.answer.image_capability import AnswerImageCapability
 from dlightrag.engine.answer.publication import (
     PublicationLimits,
     prepare_artifact_attachment,
 )
-from dlightrag.engine.answer.resources import ResourceInput
-from dlightrag.engine.answer.resources.models import ResourceCursorError
-from dlightrag.engine.dependencies import DependencyRetriesExhausted, ProviderUnavailableError
+from dlightrag.engine.answer.resources.models import ResourceCursorError, ResourceInput
+from dlightrag.engine.dependencies import (
+    MAX_DEPENDENCY_DEFERRALS,
+    DependencyRetriesExhausted,
+    ProviderUnavailableError,
+)
 from dlightrag.engine.runtime.coordinator import RunCancellationObserved, RunSession
 from dlightrag.engine.runtime.errors import RunExecutionError
 from dlightrag.engine.runtime.records import (
@@ -100,10 +103,9 @@ from dlightrag.engine.runtime.records import (
     Succeeded,
     artifact_digest,
 )
-from tests.in_memory_session_repository import MemoryAgentSessionRepository
-from tests.support import model_provider as mp
 from tests.support.agent_browser import FakeProvider, browser_settings, idle_accounts_binding
 from tests.support.dns import public_dns
+from tests.support.in_memory_session_repository import MemoryAgentSessionRepository
 from tests.unit.conftest import OtlpExport, answer_image_policy
 
 
@@ -492,7 +494,9 @@ def test_research_declarations_include_every_configured_surface_without_binding(
 ) -> None:
     from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
     from dlightrag.engine.agent.skills import SkillsBundle, SkillsBundleFactory
-    from dlightrag.engine.agent.tools import ToolDeclaration
+    from dlightrag.engine.agent.tools.contracts import (
+        ToolDeclaration,
+    )
 
     executor = AnswerExecutor(
         store=MagicMock(),
@@ -539,19 +543,22 @@ def test_research_declarations_include_every_configured_surface_without_binding(
         "spawn_agent",
         "subagent_status",
         "wait_subagent",
+        "read_subagent",
         "cancel_subagent",
         "steer_subagent",
         "continue_subagent",
         "reply_subagent",
-        "remember",
-        "forget",
-        "recall_memory",
+        "memory_remember",
+        "memory_forget",
+        "memory_undo",
+        "memory_lookup",
         "load_skill",
     } <= names
     without_memory = executor.research_tool_declarations(
         web_search=False, memory=False, agent_may_register=True, model_guidance="", injected=()
     )
-    assert not {"remember", "forget", "recall_memory"} & {tool.name for tool in without_memory}
+    memory_tools = {"memory_remember", "memory_forget", "memory_undo", "memory_lookup"}
+    assert not memory_tools & {tool.name for tool in without_memory}
 
 
 def test_a_deployment_offers_a_rendered_read_exactly_when_it_configures_an_agent_browser(
@@ -596,7 +603,7 @@ def test_a_deployment_with_a_browser_offers_login_and_the_inbox_it_can_read_and_
     test_config: Any, allowed: bool, pinned: bool, mailbox: bool
 ) -> None:
     from dlightrag._compose import _compose
-    from dlightrag.application.config import AgentMailboxConfig
+    from dlightrag.application.config.sections import AgentMailboxConfig
 
     pool = AgentBrowserConfig(
         endpoints=("ws://agent-browser-1:3000/",),
@@ -605,7 +612,7 @@ def test_a_deployment_with_a_browser_offers_login_and_the_inbox_it_can_read_and_
     )
     inbox = AgentMailboxConfig(
         bucket="agent-mail",
-        alias_domain="orliantra.cc",
+        alias_domain="mail.example",
         access_key_id="fixture-key-id",
         secret_access_key="fixture-secret-key",
     )
@@ -683,11 +690,17 @@ async def test_a_deployment_allows_registration_only_with_an_agent_browser_and_t
 async def test_a_research_runs_browser_tool_drives_the_browser_it_was_given(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.engine.answer.agent_browser import BrowserHolder, RunAgentBrowser, RunBrowsing
+    from dlightrag.engine.answer.agent_browser.contracts import (
+        BrowserHolder,
+    )
+    from dlightrag.engine.answer.agent_browser.run import (
+        RunAgentBrowser,
+        RunBrowsing,
+    )
     from dlightrag.engine.answer.resources.registry import ResourceRegistry
     from tests.support.agent_browser import idle_accounts
     from tests.support.dns import public_dns
-    from tests.tool_helpers import tool_runtime
+    from tests.support.tool_helpers import tool_runtime
     from tests.unit.test_child_model_roles import _prepared_executor
 
     monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
@@ -716,10 +729,16 @@ async def test_a_research_runs_browser_tool_drives_the_browser_it_was_given(
 async def test_a_research_runs_browser_tool_acts_on_the_agent_accounts_it_was_given(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.engine.answer.agent_browser import BrowserHolder, RunAgentBrowser, RunBrowsing
+    from dlightrag.engine.answer.agent_browser.contracts import (
+        BrowserHolder,
+    )
+    from dlightrag.engine.answer.agent_browser.run import (
+        RunAgentBrowser,
+        RunBrowsing,
+    )
     from dlightrag.engine.answer.resources.registry import ResourceRegistry
     from tests.support.agent_browser import idle_accounts
-    from tests.tool_helpers import tool_runtime
+    from tests.support.tool_helpers import tool_runtime
     from tests.unit.test_child_model_roles import _prepared_executor
 
     holder = BrowserHolder("owner", "11111111-1111-1111-1111-111111111111", "worker", 1)
@@ -744,10 +763,10 @@ async def test_a_research_runs_materialize_tool_copies_from_the_registry_it_was_
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
+    from dlightrag.engine.answer.agentspace import RunAgentspace
     from dlightrag.engine.answer.resources.models import ResourceInput
     from dlightrag.engine.answer.resources.registry import ResourceRegistry
-    from dlightrag.engine.answer.workspace import RunWorkspace
-    from tests.tool_helpers import tool_runtime
+    from tests.support.tool_helpers import tool_runtime
     from tests.unit.test_child_model_roles import _prepared_executor
 
     async with ResourceRegistry() as registry:
@@ -755,8 +774,8 @@ async def test_a_research_runs_materialize_tool_copies_from_the_registry_it_was_
             ResourceInput(filename="data.csv", declared_mime="text/csv", content=b"a,b\r\n1,2\r\n")
         )
         _, orchestrator, *_ = await _prepared_executor(monkeypatch, registry=registry)
-        orchestrator.bind_workspace(
-            RunWorkspace(
+        orchestrator.bind_agentspace(
+            RunAgentspace(
                 epoch=1,
                 workspace=tmp_path,
                 spill_dir=tmp_path / "spill",
@@ -811,45 +830,6 @@ async def test_closing_the_executor_closes_the_browser_pool() -> None:
     await executor.aclose()
 
     assert provider.closed is True
-
-
-def test_pinned_child_lifecycle_requires_current_contract() -> None:
-    from pydantic import BaseModel
-
-    from dlightrag.engine.agent.tools import AgentTool, ToolResult
-    from dlightrag.engine.answer.tools.subagents import SubagentHost, subagent_tools
-    from dlightrag.engine.runtime.errors import IncompatibleActiveRunError
-
-    async def execute(_args: BaseModel, _runtime: object) -> ToolResult:
-        return ToolResult.text("unused")
-
-    def _plan(*tools: AgentTool) -> AgentRunPlan:
-        return AgentRunPlan.from_tools(
-            tools, model_role="query", context_policy_revision="policy-1"
-        )
-
-    tools = subagent_tools(host=SubagentHost())
-    supported = next(tool for tool in tools if tool.name == "spawn_agent")
-    unsupported = AgentTool(
-        supported.name,
-        supported.description,
-        supported.input_model,
-        execute=execute,
-        replay_policy=supported.replay_policy,
-        contract_version=9,
-    )
-    from dataclasses import replace
-
-    for version in (2, 3, 4):
-        with pytest.raises(IncompatibleActiveRunError):
-            _require_current_child_lifecycle(_plan(replace(supported, contract_version=version)))
-    with pytest.raises(IncompatibleActiveRunError):
-        _require_current_child_lifecycle(_plan(unsupported))
-    with pytest.raises(IncompatibleActiveRunError, match="missing its accepted Agent Plan"):
-        _require_current_child_lifecycle(None)
-    # The current contract, and a plan that offers no Children at all, both run.
-    _require_current_child_lifecycle(_plan(*tools))
-    _require_current_child_lifecycle(_plan())
 
 
 def test_acceptance_plan_matches_runtime_tool_composition(tmp_path: Path) -> None:
@@ -920,7 +900,10 @@ def test_acceptance_plan_matches_runtime_tool_composition(tmp_path: Path) -> Non
 def test_execution_rejects_tools_that_differ_from_the_accepted_agent_plan() -> None:
     from pydantic import BaseModel
 
-    from dlightrag.engine.agent.tools import AgentTool, ToolResult
+    from dlightrag.engine.agent.tools.contracts import (
+        AgentTool,
+        ToolResult,
+    )
     from dlightrag.engine.runtime.errors import IncompatibleActiveRunError
 
     class Args(BaseModel):
@@ -1100,7 +1083,9 @@ def test_a_resume_under_rotated_database_credentials_mints_the_same_handles(
 @pytest.mark.parametrize(
     ("extract_providers", "renderer", "asked"),
     [
-        pytest.param(None, True, ["exa+tavily", "browser"], id="derived-order-ends-in-browser"),
+        pytest.param(
+            None, True, ["exa+tavily+deepseek", "browser"], id="derived-order-ends-in-browser"
+        ),
         pytest.param(("exa",), True, ["exa", "browser"], id="explicit-list-ends-in-browser"),
         pytest.param((), True, ["browser"], id="no-hosted-provider"),
         pytest.param(
@@ -1108,6 +1093,13 @@ def test_a_resume_under_rotated_database_credentials_mints_the_same_handles(
         ),
         pytest.param(("browser", "exa"), True, ["browser", "exa"], id="first"),
         pytest.param(("exa", "browser", "tavily"), False, ["exa+tavily"], id="no-renderer"),
+        pytest.param(("exa", "deepseek"), True, ["exa+deepseek", "browser"], id="deepseek-last"),
+        pytest.param(
+            ("deepseek", "browser", "exa"),
+            True,
+            ["deepseek", "browser", "exa"],
+            id="deepseek-first",
+        ),
     ],
 )
 async def test_a_run_tries_hosted_providers_and_its_browser_in_the_configured_order(
@@ -1142,6 +1134,7 @@ async def test_a_run_tries_hosted_providers_and_its_browser_in_the_configured_or
         web_sources=WebSourcesConfig(
             exa=WebSourceProviderConfig(api_key="exa-key"),
             tavily=WebSourceProviderConfig(api_key="tavily-key"),
+            deepseek=WebSourceProviderConfig(api_key="deepseek-key"),
             extract_providers=extract_providers,  # pyright: ignore[reportArgumentType]
         ),
         agent=AgentExecutionConfig(
@@ -1363,14 +1356,14 @@ async def test_a_recovery_copy_the_volume_fails_defers_and_the_next_claim_copies
     The file it names is ``schema.sql``, text that would veto a deferral had it reached
     classification. Nothing recorded changed, so the next fencing copies the whole tree.
     """
-    from dlightrag.engine.answer.workspace import bind_run_workspace, epoch_paths, run_root
+    from dlightrag.engine.answer.agentspace import bind_run_agentspace, epoch_paths, run_root
     from tests.support.workspace_store import InMemoryWorkspaceStore
 
     run_id = "01930000-0000-7000-8000-0000000000e1"
     workspace_root = tmp_path / "ws"
     workspace_root.mkdir()
     store = InMemoryWorkspaceStore()
-    first = await bind_run_workspace(
+    first = await bind_run_agentspace(
         workspace_root=workspace_root,
         owner_id="owner",
         run_id=run_id,
@@ -1385,7 +1378,9 @@ async def test_a_recovery_copy_the_volume_fails_defers_and_the_next_claim_copies
     executor._working_dir = str(tmp_path / "corpus")
 
     async def claim(session: RunSession, _run_trace: object) -> Succeeded:
-        await executor._claim_run_workspace(session=session, workspace_store=store, session_id=None)
+        await executor._claim_run_agentspace(
+            session=session, workspace_store=store, session_id=None
+        )
         return Succeeded({})
 
     executor._execute = claim  # type: ignore[method-assign]
@@ -1506,6 +1501,77 @@ async def test_a_cancelled_run_is_recorded_as_a_cancelled_outcome(
     (span,) = otlp_export.spans()
     assert span.status.status_code is StatusCode.UNSET
     assert otlp_export.payload(span, "dlightrag.output") == {"outcome": "cancelled"}
+
+
+@pytest.mark.parametrize(
+    ("failure", "kind"),
+    [
+        pytest.param(
+            RunExecutionError("workspace_integrity_error", "The Agent Workspace is corrupt."),
+            "workspace_integrity_error",
+            id="an-executors-classified-failure",
+        ),
+    ],
+)
+async def test_a_failed_run_trace_names_the_kind_its_settlement_will_carry(
+    otlp_export: OtlpExport, failure: Exception, kind: str
+) -> None:
+    """The alert reads the attribute rather than the message the exception happened to carry."""
+    executor = _executor()
+    executor._telemetry = otlp_export.telemetry
+    executor._execute = AsyncMock(side_effect=failure)  # type: ignore[method-assign]
+    session = MagicMock(owner_id="owner", run_id="run-1", prepared_input={"query": "q"})
+
+    with pytest.raises(type(failure)):
+        await executor.execute(cast(RunSession, session))
+
+    (span,) = otlp_export.spans()
+    assert span.status.status_code is StatusCode.ERROR
+    assert otlp_export.attributes(span)["dlightrag.error.kind"] == kind
+
+
+async def test_a_run_that_spent_its_deferrals_names_the_dependency_kind(
+    otlp_export: OtlpExport,
+) -> None:
+    """An outage that outlasted the Run's deferrals is the classification the coordinator settles."""
+    executor = _executor()
+    executor._telemetry = otlp_export.telemetry
+    executor._now = lambda: datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
+    executor._execute = AsyncMock(side_effect=ConnectionError("provider down"))  # type: ignore[method-assign]
+    session = MagicMock(
+        owner_id="owner",
+        run_id="run-1",
+        checkpoint={"dependency_deferrals": MAX_DEPENDENCY_DEFERRALS},
+        prepared_input={"query": "q"},
+    )
+    session.check_cancelled = AsyncMock()
+    session.reset_output = AsyncMock()
+
+    with pytest.raises(DependencyRetriesExhausted):
+        await executor.execute(cast(RunSession, session))
+
+    (span,) = otlp_export.spans()
+    assert span.status.status_code is StatusCode.ERROR
+    assert otlp_export.attributes(span)["dlightrag.error.kind"] == "dependency_unavailable"
+
+
+async def test_a_lost_agent_lane_is_a_retryable_session_busy(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from dlightrag.engine.agent.session.runtime import OperationConflictError
+
+    executor = _executor()
+    executor._execute = AsyncMock(  # type: ignore[method-assign]
+        side_effect=OperationConflictError("Lane already owns an active Host turn")
+    )
+    session = MagicMock(owner_id="owner", run_id="run-lane")
+
+    with pytest.raises(RunExecutionError) as raised:
+        await executor.execute(cast(RunSession, session))
+
+    assert raised.value.kind == "session_busy"
+    assert raised.value.public_message.startswith("Another answer in this conversation")
+    assert "lost the agent lane (OperationConflictError)" in caplog.text
 
 
 async def test_unknown_errors_map_to_generic_public_message(
@@ -1985,6 +2051,92 @@ async def test_recovery_refuses_a_browser_resource_the_agent_could_not_have_admi
             await executor._restore_registry_fetches(registry, owner_id="owner", run_id="run")
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "acquisition", ["direct_http", "exa_extract", "tavily_extract", "deepseek_extract"]
+)
+async def test_recovery_restores_a_web_resource_under_every_hosted_acquisition(
+    acquisition: str,
+) -> None:
+    """A Run that read a page through DeepSeek's Fetch resumes with the page it read."""
+    import hashlib
+
+    from dlightrag.engine.answer.resources.registry import ResourceRegistry
+    from dlightrag.engine.runtime.records import RunFetchedResource
+
+    page = b"Extracted page text."
+    executor = _executor()
+    executor._store.list_fetched_resources = AsyncMock(
+        return_value=(
+            RunFetchedResource(
+                resource_id="res-web",
+                ordinal=0,
+                digest=hashlib.sha256(page).hexdigest(),
+                filename="page.md",
+                mime_type="text/markdown; charset=utf-8",
+                source_locator=b"https://example.com/page",
+                capabilities={
+                    "resource_kind": "web",
+                    "admission_origin": "agent",
+                    "acquisition": acquisition,
+                },
+            ),
+        )
+    )
+
+    async def stream(*, owner_id: str, digest: str, **kwargs: object):
+        del owner_id, digest, kwargs
+        yield page
+
+    executor._blob_store.stream = stream
+
+    async with ResourceRegistry() as registry:
+        await executor._restore_registry_fetches(registry, owner_id="owner", run_id="run")
+
+        assert registry.evidence_source("res-web")["acquisition"] == acquisition
+        read = await registry.read("res-web", max_window_tokens=1000)
+        assert "Extracted page text." in read.content
+
+
+@pytest.mark.asyncio
+async def test_recovery_refuses_a_web_resource_under_an_acquisition_no_provider_has() -> None:
+    import hashlib
+
+    from dlightrag.engine.answer.resources.registry import ResourceRegistry
+    from dlightrag.engine.runtime.errors import RunExecutionError
+    from dlightrag.engine.runtime.records import RunFetchedResource
+
+    page = b"Extracted page text."
+    executor = _executor()
+    executor._store.list_fetched_resources = AsyncMock(
+        return_value=(
+            RunFetchedResource(
+                resource_id="res-web",
+                ordinal=0,
+                digest=hashlib.sha256(page).hexdigest(),
+                filename="page.md",
+                mime_type="text/markdown; charset=utf-8",
+                source_locator=b"https://example.com/page",
+                capabilities={
+                    "resource_kind": "web",
+                    "admission_origin": "agent",
+                    "acquisition": "bing_extract",
+                },
+            ),
+        )
+    )
+
+    async def stream(*, owner_id: str, digest: str, **kwargs: object):
+        del owner_id, digest, kwargs
+        yield page
+
+    executor._blob_store.stream = stream
+
+    async with ResourceRegistry() as registry:
+        with pytest.raises(RunExecutionError, match="catalog entry is invalid"):
+            await executor._restore_registry_fetches(registry, owner_id="owner", run_id="run")
+
+
 async def test_a_settled_run_records_the_state_it_ended_at() -> None:
     """A Fork branches from a recorded Fork Point, so the settlement has to write one.
 
@@ -2135,7 +2287,9 @@ async def test_the_recorded_point_is_the_runs_lane_not_the_sessions_selected_one
     hook that read the selected Lane would record the wrong pair and pass every
     other test in this file.
     """
-    from dlightrag.engine.answer.fast import ensure_session_lane as _ensure_session_lane
+    from dlightrag.engine.answer.fast.session_host import (
+        ensure_session_lane as _ensure_session_lane,
+    )
     from dlightrag.engine.answer.runs.routing import RoutingRecord
 
     executor = _executor()
@@ -2245,7 +2399,7 @@ async def test_an_unreadable_plane_costs_the_run_its_notes_and_states_why(tmp_pa
         prepared_input={"agent_session_id": session_id},
     )
 
-    bound, binding, _plane = await executor._claim_run_workspace(
+    bound, binding, _plane, _head = await executor._claim_run_agentspace(
         session=cast(RunSession, session),
         workspace_store=store,
         session_id=session_id,
@@ -2264,14 +2418,14 @@ async def test_a_recovered_attempt_states_the_notes_its_own_epoch_holds(tmp_path
     plane's current set would name a note this Run cannot read, and a change the Run
     made before it crashed would be reverted instead of promoted.
     """
-    from dlightrag.engine.answer.workspace import bind_run_workspace, run_root
+    from dlightrag.engine.answer.agentspace import bind_run_agentspace, run_root
     from tests.support.workspace_store import InMemoryWorkspaceStore
 
     session_id = "01930000-0000-7000-8000-0000000000c1"
     run_id = "01930000-0000-7000-8000-0000000000c2"
     workspace_root = tmp_path / "ws"
     workspace_root.mkdir()
-    existing = await bind_run_workspace(
+    existing = await bind_run_agentspace(
         workspace_root=workspace_root,
         owner_id="owner",
         run_id=run_id,
@@ -2295,7 +2449,7 @@ async def test_a_recovered_attempt_states_the_notes_its_own_epoch_holds(tmp_path
     executor._workspace_root_setting = str(workspace_root)
     executor._working_dir = str(tmp_path / "corpus")
 
-    bound, binding, plane = await executor._claim_run_workspace(
+    bound, binding, plane, _head = await executor._claim_run_agentspace(
         session=cast(RunSession, session),
         workspace_store=session.execution.workspace_store,
         session_id=session_id,
@@ -2307,6 +2461,41 @@ async def test_a_recovered_attempt_states_the_notes_its_own_epoch_holds(tmp_path
     assert binding.degraded_reason is None
     assert plane is not None
     assert (run_root(workspace_root, "owner", run_id) / "epochs" / "1").is_dir()
+
+
+@pytest.mark.asyncio
+async def test_a_runs_tool_events_are_read_in_pages_until_the_log_ends() -> None:
+    from dlightrag.engine.answer.execution.executor import _run_tool_events
+    from dlightrag.engine.runtime.records import RunEvent
+
+    def event(sequence: int, event_type: str, payload: dict[str, Any]) -> RunEvent:
+        return RunEvent(
+            sequence=sequence,
+            event_type=event_type,  # type: ignore[arg-type]
+            payload=payload,
+            created_at=datetime.datetime.now(datetime.UTC),
+        )
+
+    log = [
+        event(1, "token", {"text": "..."}),
+        event(2, "tool_start", {"call_id": "c1", "tool_name": "load_skill"}),
+        event(3, "tool_end", {"call_id": "c1", "outcome": "succeeded"}),
+    ]
+    reads: list[int] = []
+
+    async def read_event_page(*, owner_id: str, run_id: str, after_sequence: int = 0):
+        reads.append(after_sequence)
+        return tuple(e for e in log if e.sequence > after_sequence)[:2]
+
+    store = MagicMock(read_event_page=read_event_page)
+
+    events = await _run_tool_events(store, owner_id="owner", run_id="run")
+
+    assert [(kind, payload["call_id"]) for kind, payload in events] == [
+        ("tool_start", "c1"),
+        ("tool_end", "c1"),
+    ]
+    assert reads == [0, 2, 3]
 
 
 def _pinned_models() -> tuple[Any, ...]:
@@ -2357,7 +2546,6 @@ async def _drive_fast_execute(
     memory_capability_current: Any = None,
     contexts: Mapping[str, Any] | None = None,
     answer: str | None = None,
-    model_func: Any = None,
 ) -> tuple[Any, Any, list[dict[str, Any]]]:
     """Execute one Fast Run and return the requests its answer model received.
 
@@ -2370,7 +2558,7 @@ async def _drive_fast_execute(
 
     from dlightrag.engine.agent.session.fold import PriorTurns
     from dlightrag.engine.answer.execution.executor import OrchestratorRun
-    from dlightrag.engine.answer.orchestration import AnswerOrchestrator
+    from dlightrag.engine.answer.orchestration.orchestrator import AnswerOrchestrator
     from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
     from dlightrag.engine.runtime.progress import StageCommit, StageTerminalCommit
     from tests.support.workspace_store import InMemoryWorkspaceStore
@@ -2398,7 +2586,7 @@ async def _drive_fast_execute(
         synthesizer=AnswerSynthesizer(
             image_policy=answer_image_policy(),
             model_profile=ModelProfile(context_window_tokens=1_000_000),
-            model_func=model_func or answer_model,
+            model_func=answer_model,
         ),
         retrieve_knowledge_base=AsyncMock(
             return_value=MagicMock(
@@ -2496,7 +2684,7 @@ async def test_fast_sends_recalled_profile_memory_and_no_tools(tmp_path: Path) -
 
     class _Memory:
         async def recall(self, **_kwargs: Any) -> RecallResult:
-            return RecallResult(facts=(record,))
+            return RecallResult(relevant=(record,))
 
     executor, session, sent = await _drive_fast_execute(tmp_path=tmp_path, memory=_Memory())
     with pytest.raises(RunExecutionError):
@@ -2508,8 +2696,14 @@ async def test_fast_sends_recalled_profile_memory_and_no_tools(tmp_path: Path) -
     # The recalled block rides last, after the request it must not outrank.
     assert request["messages"][-1] == {
         "role": "user",
-        "content": render_auto_recall(RecallResult(facts=(record,))),
+        "content": render_auto_recall(RecallResult(relevant=(record,))),
     }
+    # It rides only in the request, never into the Session: a Session Memory Pass
+    # reads the Session's entries, and must not read its own output back (ADR 0045).
+    repository = session.execution.session_repository
+    snapshot = await repository.load(SessionId(session.prepared_input["agent_session_id"]))  # type: ignore[index]
+    assert snapshot.entries
+    assert not any("Remembered about this owner" in str(entry) for entry in snapshot.entries)
 
 
 @pytest.mark.asyncio
@@ -2587,27 +2781,6 @@ async def test_a_fast_answer_resolves_its_citations_to_the_documents_it_was_show
     assert [
         (source["id"], source["title"], source["cited_chunk_ids"]) for source in stored["sources"]
     ] == [("1", "report.pdf", ["a1"]), ("2", "other.pdf", ["b2"])]
-
-
-@pytest.mark.asyncio
-async def test_a_fast_answer_states_the_call_that_wrote_it(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    provider = mp.RecordingProvider(text="Revenue grew.")
-    settings = ModelSettings(provider="openai", model="answer-model", temperature=0.3)
-    model = mp.completion_model_over(monkeypatch, provider, settings)
-    executor, session, _ = await _drive_fast_execute(tmp_path=tmp_path, model_func=model)
-
-    await executor.execute(cast(RunSession, session))
-
-    repository = session.execution.session_repository
-    snapshot = await repository.load(SessionId(session.prepared_input["agent_session_id"]))
-    [answer] = [entry for entry in snapshot.entries if isinstance(entry, AssistantMessageEntry)]
-    (sent,) = provider.requests
-    # Fast answers on the query role, over no tools, and states no Plan.
-    assert mp.untimed(answer.call) == mp.expected_call(
-        sent, role="query", endpoint=None, plan_digest=None, reasoning=None
-    )
 
 
 @pytest.mark.parametrize(
@@ -2814,3 +2987,190 @@ async def test_answer_run_attachments_must_match_their_accepted_digest(
 
     stored["bytes"] = accepted
     assert await load_attachment() == accepted
+
+
+def _stored_resource(resource_id: str, mime_type: str, kind: str) -> Any:
+    from dlightrag.engine.runtime.records import RunFetchedResource
+
+    return RunFetchedResource(
+        resource_id=resource_id,
+        ordinal=0,
+        digest="digest",
+        filename=resource_id,
+        mime_type=mime_type,
+        source_locator=resource_id.encode(),
+        capabilities={"resource_kind": kind},
+    )
+
+
+async def test_the_images_a_run_holds_are_its_attached_image_rows() -> None:
+    """What an Answer may place is what a tool attached as an image, whichever session attached it.
+
+    The rows are the ones the run-resource route reads, so a viewed picture, a screenshot and a
+    Child's attachment all count; a fetched page's image, a document and a conversion do not.
+    """
+    executor = _executor()
+    executor._store.list_fetched_resources = AsyncMock(
+        return_value=(
+            _stored_resource("res-view-1", "image/png", "tool_attachment"),
+            _stored_resource("res-shot-1", "image/jpeg", "tool_attachment"),
+            _stored_resource("att_model_1", "IMAGE/WEBP", "tool_attachment"),
+            _stored_resource("res-pdf", "application/pdf", "tool_attachment"),
+            _stored_resource("res-web-image", "image/png", "web"),
+            _stored_resource("res-asset", "image/png", "conversion_asset"),
+        )
+    )
+    session = cast(RunSession, SimpleNamespace(owner_id="owner", run_id="run"))
+
+    held = await executor._held_image_ids(session, "![a](evidence:res-view-1)")
+
+    assert held == {"res-view-1", "res-shot-1", "att_model_1"}
+    executor._store.list_fetched_resources.assert_awaited_once_with(owner_id="owner", run_id="run")
+
+
+async def test_an_answer_that_places_no_evidence_reads_no_rows() -> None:
+    executor = _executor()
+    executor._store.list_fetched_resources = AsyncMock()
+    session = cast(RunSession, SimpleNamespace(owner_id="owner", run_id="run"))
+
+    assert (
+        await executor._held_image_ids(session, "A plain answer with a [link](https://x.test).")
+        == frozenset()
+    )
+
+    executor._store.list_fetched_resources.assert_not_awaited()
+
+
+async def test_a_successful_run_stages_its_session_workspace_head(tmp_path: Any) -> None:
+    from types import SimpleNamespace
+
+    from dlightrag.engine.answer.agentspace import AgentspaceHeadTarget, RunAgentspace
+
+    executor = _executor()
+    workspace = tmp_path / "epochs" / "1" / "workspace"
+    (workspace / "artifacts").mkdir(parents=True)
+    (workspace / "artifacts" / "report.html").write_text("<html></html>")
+    (workspace / "notes").mkdir()
+    (workspace / "notes" / "plan.md").write_text("note")
+    bound = RunAgentspace(
+        epoch=1,
+        workspace=workspace,
+        spill_dir=tmp_path / "spill",
+        environment=MagicMock(),
+    )
+    session = SimpleNamespace(run_id="run-head", pending_workspace_head=None)
+    target = AgentspaceHeadTarget(
+        heads_root=tmp_path / "heads",
+        session_id="00000000-0000-7000-8000-000000000001",
+        expected_head_run_id="run-parent",
+    )
+
+    await executor._stage_session_head(
+        session=cast(RunSession, session), bound=bound, target=target
+    )
+
+    head = session.pending_workspace_head
+    assert head is not None
+    assert head.head_run_id == "run-head"
+    assert head.expected_head_run_id == "run-parent"
+    staged = tmp_path / "heads" / "run-head" / "workspace"
+    assert (staged / "artifacts" / "report.html").read_text() == "<html></html>"
+    assert not (staged / "notes").exists()
+
+
+async def test_an_unchanged_workspace_commits_no_head(tmp_path: Any) -> None:
+    from types import SimpleNamespace
+
+    from dlightrag.engine.answer.agentspace import (
+        AgentspaceHeadTarget,
+        RunAgentspace,
+        carried_manifest_digest,
+    )
+
+    workspace = tmp_path / "epochs" / "1" / "workspace"
+    workspace.mkdir(parents=True)
+    (workspace / "model.py").write_bytes(b"model")
+    target = AgentspaceHeadTarget(
+        heads_root=tmp_path / "heads",
+        session_id="00000000-0000-7000-8000-000000000001",
+        expected_head_run_id="run-parent",
+        seeded_manifest_digest=carried_manifest_digest(workspace),
+    )
+    session = SimpleNamespace(run_id="run-head", pending_workspace_head=None)
+
+    await _executor()._stage_session_head(
+        session=cast(RunSession, session),
+        bound=RunAgentspace(
+            epoch=1, workspace=workspace, spill_dir=tmp_path / "spill", environment=MagicMock()
+        ),
+        target=target,
+    )
+
+    assert session.pending_workspace_head is None
+    assert not (tmp_path / "heads").exists()
+
+
+async def test_a_completed_goal_archives_its_workspace_as_a_resource(
+    tmp_path: Any,
+) -> None:
+    from types import SimpleNamespace
+
+    from dlightrag.engine.answer.agentspace import RunAgentspace
+    from dlightrag.engine.answer.goal import GoalPhase
+
+    async def get(*, owner_id: str, session_id: str) -> Any:
+        del owner_id, session_id
+        return SimpleNamespace(phase=GoalPhase.COMPLETE)
+
+    executor = _executor()
+    executor._goal_service = SimpleNamespace(get=get)  # type: ignore[assignment]
+    workspace = tmp_path / "workspace"
+    (workspace / "artifacts").mkdir(parents=True)
+    (workspace / "artifacts" / "report.html").write_text("<html></html>")
+    (workspace / "tmp").mkdir()
+    (workspace / "tmp" / "scratch.txt").write_text("scratch")
+    session = SimpleNamespace(run_id="run-goal", owner_id="owner", pending_publications=[])
+    bound = RunAgentspace(
+        epoch=1, workspace=workspace, spill_dir=tmp_path / "spill", environment=MagicMock()
+    )
+
+    await executor._archive_completed_goal(
+        session=cast(RunSession, session), bound=bound, session_id="session-1"
+    )
+
+    (publication,) = session.pending_publications
+    assert publication.filename == "workspace-snapshot.tar.gz"
+    assert publication.mime_type == "application/gzip"
+    assert publication.presentation == "download"
+    assert publication.session_id == "session-1"
+    assert publication.reference_kind == "published_artifact"
+    assert publication.content[:2] == b"\x1f\x8b"
+    assert len(publication.resource_id) > 0
+
+
+async def test_an_active_goal_archives_nothing(tmp_path: Any) -> None:
+    from types import SimpleNamespace
+
+    from dlightrag.engine.answer.agentspace import RunAgentspace
+    from dlightrag.engine.answer.goal import GoalPhase
+
+    async def get(*, owner_id: str, session_id: str) -> Any:
+        del owner_id, session_id
+        return SimpleNamespace(phase=GoalPhase.ACTIVE)
+
+    executor = _executor()
+    executor._goal_service = SimpleNamespace(get=get)  # type: ignore[assignment]
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "model.py").write_text("model")
+    session = SimpleNamespace(run_id="run-goal", owner_id="owner", pending_publications=[])
+
+    await executor._archive_completed_goal(
+        session=cast(RunSession, session),
+        bound=RunAgentspace(
+            epoch=1, workspace=workspace, spill_dir=tmp_path / "spill", environment=MagicMock()
+        ),
+        session_id="session-1",
+    )
+
+    assert session.pending_publications == []

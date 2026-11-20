@@ -4,7 +4,7 @@
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from dlightrag.application.config import DlightragConfig
+    from dlightrag.application.config.sections import DlightragConfig
 
 
 def setting_text(value: str | int | float | bool | None) -> str | None:

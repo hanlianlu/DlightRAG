@@ -39,6 +39,16 @@ from dlightrag.engine.ai.telemetry import (
 logger = logging.getLogger(__name__)
 
 
+def _optional(key: str, value: Any) -> dict[str, Any]:
+    """One update keyword, present only when the wire actually stated it.
+
+    A missing counter and a counter of zero are different facts, and an update
+    payload that says ``None`` invites a reader to treat an unstated value as a
+    measured one. The seam already ignores an absent key.
+    """
+    return {key: value} if value is not None else {}
+
+
 _JSON_OBJECT_HINT = "Respond with JSON."
 _JSON_OBJECT_FORMAT = {"type": "json_object"}
 
@@ -166,7 +176,7 @@ class CompletionModel:
             },
         }
         return {
-            "input": telemetry_messages(messages),
+            "input": (telemetry_messages(messages)),
             "metadata": metadata or None,
             "model": self.fingerprint.model,
             "provider": self.fingerprint.provider,
@@ -474,8 +484,13 @@ class CompletionModel:
                     )
                 observation.update(
                     output=output,
-                    usage_details=provider_holder.get("usage_details"),
-                    cost_details=provider_holder.get("cost_details"),
+                    **_optional("usage_details", provider_holder.get("usage_details")),
+                    **_optional("cost_details", provider_holder.get("cost_details")),
+                    # What the server said answered, when the wire stated it. The
+                    # non-streaming leg keeps the same fact on the AssistantTurn it
+                    # builds; a stream has only the holder to carry it, and a wire
+                    # that states nothing says nothing here.
+                    **_optional("response_model", provider_holder.get("served_model")),
                 )
 
     async def aclose(self) -> None:

@@ -226,6 +226,42 @@
         },
         "sqlTemplate": "SELECT $__timeInterval(Timestamp) AS ts,\n  sum(toUInt64OrZero(SpanAttributes['gen_ai.usage.input_tokens']))\n    - sum(toUInt64OrZero(SpanAttributes['gen_ai.usage.cache_read.input_tokens'])) AS fresh_tokens,\n  sum(toUInt64OrZero(SpanAttributes['gen_ai.usage.cache_read.input_tokens'])) AS cached_tokens\nFROM $__sourceTable\nWHERE startsWith(ServiceName, 'dlightrag')\n  AND SpanName != 'embed-text'\n  AND $__timeFilter_ms(Timestamp)\n  AND $__filters\nGROUP BY ts\nHAVING fresh_tokens > 0 OR cached_tokens > 0\nORDER BY ts\nLIMIT 1000"
       }
+    },
+    {
+      "name": "web search calls by provider",
+      "x": 0,
+      "y": 25,
+      "w": 12,
+      "h": 5,
+      "config": {
+        "configType": "sql",
+        "displayType": "stacked_bar",
+        "connectionId": "${HYPERDX_CONNECTION_ID}",
+        "sourceId": "${HYPERDX_SOURCE_TRACES}",
+        "numberFormat": {
+          "output": "number",
+          "thousandSeparated": true
+        },
+        "sqlTemplate": "SELECT $__timeInterval(Timestamp) AS ts,\n  coalesce(nullIf(JSONExtractString(SpanAttributes['dlightrag.output'], 'web_search_provider'), ''), 'none') AS provider,\n  countIf(JSONExtractBool(SpanAttributes['dlightrag.output'], 'web_search_degraded')) AS failed_over,\n  count() AS calls\nFROM $__sourceTable\nWHERE startsWith(ServiceName, 'dlightrag')\n  AND SpanName = 'execute-agent-tool'\n  AND JSONHas(SpanAttributes['dlightrag.output'], 'web_search_provider')\n  AND $__timeFilter_ms(Timestamp)\n  AND $__filters\nGROUP BY ts, provider\nORDER BY ts\nLIMIT 1000"
+      }
+    },
+    {
+      "name": "web search cost and passages",
+      "x": 12,
+      "y": 25,
+      "w": 12,
+      "h": 5,
+      "config": {
+        "configType": "sql",
+        "displayType": "line",
+        "connectionId": "${HYPERDX_CONNECTION_ID}",
+        "sourceId": "${HYPERDX_SOURCE_TRACES}",
+        "numberFormat": {
+          "output": "number",
+          "thousandSeparated": true
+        },
+        "sqlTemplate": "SELECT $__timeInterval(Timestamp) AS ts,\n  sum(JSONExtractFloat(SpanAttributes['dlightrag.output'], 'web_search_cost_dollars')) AS cost_dollars,\n  sum(JSONExtractUInt(SpanAttributes['dlightrag.output'], 'web_search_hits')) AS passages\nFROM $__sourceTable\nWHERE startsWith(ServiceName, 'dlightrag')\n  AND SpanName = 'execute-agent-tool'\n  AND JSONHas(SpanAttributes['dlightrag.output'], 'web_search_provider')\n  AND $__timeFilter_ms(Timestamp)\n  AND $__filters\nGROUP BY ts\nHAVING cost_dollars > 0 OR passages > 0\nORDER BY ts\nLIMIT 1000"
+      }
     }
   ]
 }

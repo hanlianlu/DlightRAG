@@ -5,20 +5,22 @@ import asyncio
 import base64
 import dataclasses
 import io
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from PIL import Image
 
-from dlightrag.application.config import DlightragConfig
-from dlightrag.application.settings import (
+from dlightrag.application.config.sections import DlightragConfig
+from dlightrag.application.settings.projections import (
     answer_capability_settings,
     answer_resource_settings,
     model_profile_for_role,
     model_settings_for_role,
     rerank_scoring_model_settings,
 )
+from dlightrag.engine.ai import vision
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import (
@@ -37,12 +39,12 @@ from dlightrag.engine.answer.capabilities import (
     AnswerCapabilityCoordinator,
     AnswerCapabilityView,
 )
-from dlightrag.engine.answer.execution import AnswerResourceResolver
+from dlightrag.engine.answer.execution.resources import AnswerResourceResolver
 from dlightrag.engine.answer.image_capability import (
     AnswerImageCapability,
     derive_effective_max_images,
 )
-from tests.config_helpers import mutate_config, replace_config
+from tests.support.config_helpers import mutate_config, replace_config
 
 
 @pytest.mark.parametrize(
@@ -544,19 +546,19 @@ async def test_a_slow_probe_does_not_spend_its_own_cooldown(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An unreachable model must not be re-probed the moment its timeout returns."""
-    import asyncio
-
+    now = [1_000.0]
+    monkeypatch.setattr(vision, "time", SimpleNamespace(monotonic=lambda: now[0]))
     probed: list[str] = []
 
     async def slow_probe(_provider, *, model, model_kwargs=None):
         probed.append(model)
-        await asyncio.sleep(0.05)
+        now[0] += 60.0  # the probe alone outlasts the cooldown
         return ImageProbeOutcome(status="unknown", failure_kind="TimeoutError")
 
     _install_probe(monkeypatch, slow_probe)
     capabilities = ModelImageCapabilities(
         scheduler=ModelScheduler(max_concurrency=1),
-        reprobe_cooldown_seconds=0.04,
+        reprobe_cooldown_seconds=30.0,
     )
     cfg = ModelSettings(provider="openai", model="unreachable", api_key="k")
 

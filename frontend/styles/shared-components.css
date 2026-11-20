@@ -9,7 +9,7 @@
     margin-left: auto;
     padding: var(--space-inline) var(--space-tight);
     border-radius: var(--radius-control);
-    transition: background 0.15s, color 0.15s;
+    transition: background var(--duration-control), color var(--duration-control);
 }
 
 dl-icon-button.panel-close {
@@ -35,7 +35,7 @@ button[data-load-older][aria-disabled='true'] {
     color: var(--color-text-secondary);
     cursor: pointer;
     padding-block: var(--space-tight);
-    transition: color 150ms;
+    transition: color var(--duration-control);
     width: fit-content;
 }
 

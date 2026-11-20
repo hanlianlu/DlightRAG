@@ -5,12 +5,12 @@ from typing import Any
 
 from dlightrag.adapters.postgres.core._operations import PostgresOperationRunner
 from dlightrag.adapters.postgres.corpus.pg_metadata_index import metadata_match_conditions
-from dlightrag.application.corpus_admin import (
+from dlightrag.application.corpus_admin.metadata_search import (
     MetadataMatchRowPage,
     MetadataSearchFilenameMode,
     MetadataSearchPageRequest,
 )
-from dlightrag.engine.rag.retrieval import MetadataFilter
+from dlightrag.engine.rag.retrieval.models import MetadataFilter
 
 
 def _paged_sql(

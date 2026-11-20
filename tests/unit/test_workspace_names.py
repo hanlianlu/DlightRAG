@@ -8,8 +8,8 @@ from dlightrag.adapters.http.rest.models import WorkspaceCreateRequest
 from dlightrag.adapters.http.rest.routes.workspaces import _normalize_create_body
 from dlightrag.adapters.mcp.contracts import CreateWorkspaceInput
 from dlightrag.adapters.mcp.server import _normalize_workspace_argument
-from dlightrag.application.corpus_admin import (
-    WorkspaceNameError,
+from dlightrag.application.corpus_admin.errors import WorkspaceNameError
+from dlightrag.application.corpus_admin.service import (
     workspace_id_for_name,
     workspace_ids_for_names,
 )
@@ -42,7 +42,7 @@ def test_a_list_of_names_keeps_order_drops_repeats_and_refuses_a_blank() -> None
 
 
 def test_rest_create_refuses_a_name_whose_id_would_be_too_long() -> None:
-    """Formerly a 500: the name validated, but its id did not."""
+    """Refused as a client error: the name validates but its id does not."""
     with pytest.raises(HTTPException) as refused:
         _normalize_create_body(WorkspaceCreateRequest(workspace=_TOO_LONG_ONCE_PREFIXED))
 

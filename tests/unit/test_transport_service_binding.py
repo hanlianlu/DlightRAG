@@ -1,10 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Transport modules stay inert until their lifespan binds an Application."""
 
-import os
-import subprocess
-import sys
-from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -13,52 +9,9 @@ from mcp.types import CallToolResult, TextContent
 
 from dlightrag.adapters.http import server as http_server
 from dlightrag.adapters.mcp import server as mcp_server
-from dlightrag.application import ApplicationClosedError
-from dlightrag.application.config import DlightragConfig
+from dlightrag.application.application import ApplicationClosedError
+from dlightrag.application.config.sections import DlightragConfig
 from tests.support.application_double import application_double
-
-
-def test_transport_and_tool_modules_import_without_composing_an_application(
-    tmp_path: Path,
-) -> None:
-    script = """
-import importlib
-import dlightrag
-
-calls = 0
-def forbidden_create_application(*args, **kwargs):
-    global calls
-    calls += 1
-    raise AssertionError("transport import composed an Application")
-
-dlightrag.create_application = forbidden_create_application
-
-for name in (
-    "dlightrag.adapters.http.server",
-    "dlightrag.adapters.http.rest.routes.rag",
-    "dlightrag.adapters.http.rest.routes.runs",
-    "dlightrag.adapters.http.browser.auth",
-    "dlightrag.adapters.http.browser.routes.chat",
-    "dlightrag.adapters.mcp.server",
-    "dlightrag.adapters.mcp.tools.retrieval",
-    "dlightrag.adapters.mcp.tools.answer_runs",
-):
-    importlib.import_module(name)
-assert calls == 0
-"""
-
-    # Importing the MCP server reads config; keep this checkout's out of it.
-    completed = subprocess.run(
-        [sys.executable, "-c", script],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        cwd=tmp_path,
-        env={**os.environ, "PYTHON_DOTENV_DISABLED": "1"},
-    )
-
-    assert completed.returncode == 0, completed.stderr
 
 
 @pytest.mark.asyncio

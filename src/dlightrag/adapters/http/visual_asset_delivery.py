@@ -4,7 +4,10 @@
 from fastapi import HTTPException
 from fastapi.responses import Response
 
-from dlightrag.application.corpus_admin import CorpusAdmin, VisualAssetSize
+from dlightrag.application.corpus_admin.service import CorpusAdmin
+from dlightrag.engine.rag.corpus.contracts import (
+    VisualAssetSize,
+)
 
 
 async def visual_asset_response(

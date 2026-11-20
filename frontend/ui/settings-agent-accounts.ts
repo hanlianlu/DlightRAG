@@ -26,7 +26,7 @@ import {LightElement, NarrowController} from '../lib/lit-host.ts';
 import shared from '../styles/settings-page.module.css';
 import styles from '../styles/settings-agent-accounts.module.css';
 import {modalResult} from './modal.ts';
-import {switchCard} from './settings-parts.ts';
+import {commitSwitch, loadState, switchCard} from './settings-parts.ts';
 import {reportSettingsSummary} from './settings-summary.ts';
 import {requestToast} from './toast-request.ts';
 
@@ -58,7 +58,7 @@ function identityOf(account: AgentAccount): {primary: string | null; secondary: 
   return {primary: account.email ?? account.username, secondary: null};
 }
 
-export class DlSettingsAgentAccounts extends LightElement {
+class DlSettingsAgentAccounts extends LightElement {
   static properties = {
     view: {state: true},
     error: {state: true},
@@ -133,35 +133,22 @@ export class DlSettingsAgentAccounts extends LightElement {
     this.#timer = setTimeout(() => { void this.#load(); }, POLL_MILLISECONDS);
   }
 
-  #retry = (): void => {
+  #retry = async (): Promise<void> => {
     this.error = false;
-    void this.#load();
+    await this.#load();
   };
 
   #toggleRegistration = async (event: Event): Promise<void> => {
-    const signal = this.lifetime;
     const view = this.view;
-    const toggle = event.currentTarget as HTMLElement;
-    if (signal.aborted || !view || this.pending) return;
-    const focused = document.activeElement === toggle;
-    this.#supersede();
-    this.pending = true;
-    try {
-      const fresh = await setAgentAccountRegistration(!view.registration.enabled, signal);
-      if (!signal.aborted) this.view = fresh;
-    } catch {
-      if (!signal.aborted) {
-        requestToast(this, {message: msg('Could not save the sign-up setting.', {id: 'agentAccounts.saveFailed'})});
-      }
-    } finally {
-      if (!signal.aborted) {
-        this.pending = false;
-        this.#schedule();
-        await this.updateComplete;
-        // A switch that was disabled for the request drops focus in some engines; give it back.
-        if (focused) toggle.focus();
-      }
-    }
+    if (!view) return;
+    await commitSwitch(this, event, {
+      signal: this.lifetime,
+      send: (signal) => setAgentAccountRegistration(!view.registration.enabled, signal),
+      accept: (fresh) => { this.view = fresh; },
+      failure: msg('Could not save the sign-up setting.', {id: 'agentAccounts.saveFailed'}),
+      begin: () => { this.#supersede(); },
+      settled: () => { this.#schedule(); },
+    });
   };
 
   async #remove(account: AgentAccount, trigger: HTMLElement): Promise<void> {
@@ -182,7 +169,12 @@ export class DlSettingsAgentAccounts extends LightElement {
       if (signal.aborted) return;
       // The account is already gone, here or in another tab: the fresh view says so.
       if (error instanceof ApiError && error.status === 404) await this.#load();
-      else requestToast(this, {message: msg('Could not remove the account.', {id: 'agentAccounts.removeFailed'})});
+      else {
+        requestToast(this, {
+          tone: 'error',
+          message: msg('Could not remove the account.', {id: 'agentAccounts.removeFailed'}),
+        });
+      }
     } finally {
       if (!signal.aborted) {
         this.pending = false;
@@ -326,12 +318,14 @@ export class DlSettingsAgentAccounts extends LightElement {
 
   protected override render(): TemplateResult {
     return html`
-      ${this.view ? this.#page(this.view) : this.error ? html`
-        <div class=${shared.failed}>
-          <p class=${shared.note} role="alert">${msg('Could not load agent accounts.', {id: 'agentAccounts.loadFailed'})}</p>
-          <button type="button" class="dl-btn" @click=${this.#retry}>${msg('Retry', {id: 'agentAccounts.retry'})}</button>
-        </div>` : html`<p class=${shared.hint} role="status">${
-          msg('Loading agent accounts…', {id: 'agentAccounts.loading'})}</p>`}
+      ${this.view ? this.#page(this.view) : loadState({
+        host: this,
+        failed: this.error,
+        loading: msg('Loading agent accounts…', {id: 'agentAccounts.loading'}),
+        failure: msg('Could not load agent accounts.', {id: 'agentAccounts.loadFailed'}),
+        retry: msg('Retry', {id: 'agentAccounts.retry'}),
+        onRetry: this.#retry,
+      })}
       <dialog id="agent-accounts-remove" class="confirm-dialog" aria-labelledby="agent-accounts-remove-title">
         <form method="dialog" novalidate>
           <h2 id="agent-accounts-remove-title">${this.removing

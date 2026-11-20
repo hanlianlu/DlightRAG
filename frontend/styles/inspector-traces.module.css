@@ -1,9 +1,11 @@
 /* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
 
-/* The Child agents dock: a toolbar over the roster tree (the main agent, its children indented beneath it)
- * and the agent on show. The dock owns the whole panel (panels.css lifts the generic content padding and
- * scroll), so the list and the agent scroll apart and a child's composer stays docked
- * (ui/inspector-traces.ts). */
+/* The Run traces dock: the Run's dossier as an index (left, wide; a summary line, narrow) and the
+ * selected agent's read-only page beside it under a one-line switcher. The dock owns the whole panel
+ * (panels.css lifts the generic content padding and scroll), so both columns own their scrolling.
+ * The left column is the Run overview: a 44px band stating the Run's state, duration, agents, steps
+ * and tokens, then the dossier the Run-overview component draws. A reader's search replaces that
+ * panel with the Run's matching steps, one row per match. */
 
 @layer features {
   .root {
@@ -11,12 +13,11 @@
     flex-direction: column;
     height: 100%;
     min-height: 0;
+    min-width: 0;
   }
 
   .quiet {
-    color: var(--color-text-muted);
-    font-size: var(--font-size-detail);
-    padding: var(--space-component) var(--space-section);
+    padding: var(--space-component) var(--space-related);
   }
 
   .toolbar {
@@ -27,54 +28,59 @@
     font-size: var(--font-size-caption);
     gap: var(--space-tight);
     min-height: var(--size-button);
-    padding-inline: var(--space-section);
+    padding-inline: var(--space-related);
   }
 
   .live {
     color: var(--color-accent-text);
   }
 
-  .back {
-    align-items: center;
-    background: transparent;
-    border: 0;
-    border-radius: var(--radius-control);
-    color: var(--color-text-muted);
-    cursor: pointer;
-    display: inline-flex;
-    font: inherit;
-    font-size: var(--font-size-detail);
-    gap: var(--space-inline);
-    margin-inline-start: calc(-1 * var(--space-tight));
-    min-height: var(--size-button);
-    padding-inline: var(--space-tight);
-  }
+  /* ── The two columns, and the narrow fallback ── */
 
-  .back:hover {
-    background: var(--color-bg-hover);
-    color: var(--color-text-primary);
-  }
-
-  .back:focus-visible {
-    outline: 2px solid var(--focus-ring-color);
-    outline-offset: 2px;
-  }
-
-  /* ── List and child ── */
-
-  .body {
+  .widePane {
     display: flex;
     flex: 1;
     min-height: 0;
+    min-width: 0;
   }
 
-  .listPane {
+  .overviewColumn {
+    border-inline-end: 1px solid var(--color-divider);
+    display: flex;
+    flex: 0 0 40%;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+    overflow-y: auto;
+  }
+
+  .agentColumn {
     display: flex;
     flex: 1;
     flex-direction: column;
+    min-height: 0;
     min-width: 0;
-    overflow-y: auto;
-    padding: var(--space-inline) var(--space-component) var(--space-related);
+    padding-inline: var(--space-related);
+  }
+
+  .narrowPane {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+    padding-inline: var(--space-related);
+  }
+
+  /* The left column's narrow form: the folded dossier or the search results, above the page. */
+  .narrowPanel {
+    flex: none;
+    min-inline-size: 0;
+  }
+
+  .switcher {
+    display: block;
+    flex: none;
   }
 
   .detail {
@@ -85,137 +91,237 @@
     min-width: 0;
   }
 
+  .agentPane {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+  }
+
   /* An author display would otherwise outrank the hidden attribute. */
-  .listPane[hidden],
   .detail[hidden] {
     display: none;
   }
 
-  .wide .listPane {
-    border-inline-end: 1px solid var(--color-divider);
-    flex: 0 0 17rem;
-  }
+  /* ── The Run panel's 44px band ── */
 
-  .list {
+  .overview {
     display: flex;
-    flex-direction: column;
-    list-style: none;
-  }
-
-  /* The children hang off the main agent on a guide line, under the middle of its mark. */
-  .tree {
-    border-inline-start: 1px solid var(--color-divider);
-    display: flex;
-    flex-direction: column;
-    list-style: none;
-    margin-inline-start: calc(var(--space-component) + 0.5rem);
-  }
-
-  .row {
-    align-items: flex-start;
-    background: transparent;
-    border: 0;
-    border-radius: var(--radius-control);
-    color: inherit;
-    cursor: pointer;
-    display: flex;
-    font: inherit;
-    gap: var(--space-component);
-    min-height: var(--control-hit-target);
-    padding: var(--space-component);
-    text-align: start;
-    transition: background var(--duration-control) var(--easing-standard);
-    width: 100%;
-  }
-
-  .row:hover {
-    background: var(--color-bg-hover);
-  }
-
-  .row[aria-current='true'] {
-    background: var(--color-selected-row);
-  }
-
-  /* The ring sits inside the row: the list pane clips what a ring outside it would draw. */
-  .row:focus-visible {
-    outline: 2px solid var(--focus-ring-color);
-    outline-offset: -2px;
-  }
-
-  .text {
-    display: grid;
     flex: 1;
-    gap: var(--space-inline);
+    flex-direction: column;
+    min-height: 0;
     min-width: 0;
   }
 
-  .objective {
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    color: var(--color-text-secondary);
-    display: -webkit-box;
-    font-size: var(--font-size-detail);
-    line-height: var(--line-height-control);
-    overflow: hidden;
-    overflow-wrap: anywhere;
-  }
-
-  .leadRow .objective {
-    color: var(--color-text-primary);
-    font-weight: 500;
-  }
-
-  .row[aria-current='true'] .objective {
-    color: var(--color-text-primary);
-  }
-
-  .meta {
+  .overviewHeader {
     align-items: center;
-    color: var(--color-text-muted);
+    border-block-end: 1px solid var(--color-border-subtle);
+    box-sizing: border-box;
     display: flex;
-    font-size: var(--font-size-caption);
+    flex: none;
     gap: var(--space-tight);
+    block-size: var(--control-hit-target);
+    overflow: hidden;
+    padding-inline: var(--space-related);
+  }
+
+  .overviewTitle {
+    color: var(--color-text-secondary);
+    flex: none;
+    font-size: var(--font-size-caption);
+    font-weight: 600;
     line-height: var(--line-height-control);
+    white-space: nowrap;
   }
 
-  .pill {
-    background: var(--color-accent-surface);
-    border-radius: var(--radius-pill);
-    color: var(--color-accent-text);
-    padding-inline: var(--space-tight);
+  .overviewSummary {
+    composes: subject from './step-row.module.css';
   }
 
-  .summary {
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 1;
+  .overviewBody {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+    overflow-y: auto;
+  }
+
+  /* The narrow dossier: the same band as one summary line, opening above the switcher and page. */
+  .overviewFold {
+    border-block-end: 1px solid var(--color-border-subtle);
+    display: flex;
+    flex-direction: column;
+    flex: none;
+    min-inline-size: 0;
+  }
+
+  .overviewSummaryLine {
+    composes: focusRing from './step-row.module.css';
+    align-items: center;
+    cursor: pointer;
+    display: flex;
+    gap: var(--space-tight);
+    list-style: none;
+    min-block-size: var(--control-hit-target);
+    min-inline-size: 0;
+    padding: 0;
+  }
+
+  .overviewSummaryLine::-webkit-details-marker {
+    display: none;
+  }
+
+  .overviewChevron {
     color: var(--color-text-muted);
-    display: -webkit-box;
+    flex: none;
+  }
+
+  .overviewFold[open] > .overviewSummaryLine .overviewChevron {
+    rotate: 90deg;
+  }
+
+  .overviewFoldBody {
+    display: flex;
+    flex-direction: column;
+    max-block-size: min(32rem, 55vh);
+    min-inline-size: 0;
+    overflow-y: auto;
+  }
+
+  /* ── Step search results, the Run panel's only step list ── */
+
+  .searchPanel {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+  }
+
+  .searchRows {
+    flex: 1;
+    list-style: none;
+    margin: 0;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0;
+  }
+
+  .narrowPanel .searchRows {
+    max-block-size: min(32rem, 50vh);
+  }
+
+  .searchStep {
+    border-block-start: 1px solid var(--color-border-subtle);
+    color: var(--color-text-secondary);
+    transition: background var(--duration-control) var(--easing-standard);
+  }
+
+  .searchRow {
+    composes: hoverTint from './step-row.module.css';
+    composes: focusRing from './step-row.module.css';
+    background: none;
+    border: 0;
+    color: inherit;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    font: inherit;
+    gap: var(--space-3xs);
+    inline-size: 100%;
+    padding: var(--space-tight) var(--space-related);
+    text-align: start;
+  }
+
+  .searchStep:first-child {
+    border-block-start: 0;
+  }
+
+  /* What the step did on one line, how long it took at its end; who stated it and the start of the
+     words that came back on the next. Both truncate, so a Run's search scans as rows. */
+  .searchHead {
+    composes: head from './step-row.module.css';
+  }
+
+  .searchTitle {
+    composes: title from './step-row.module.css';
+  }
+
+  .searchVerb {
+    composes: verb from './step-row.module.css';
+  }
+
+  .searchSubject {
+    composes: subject from './step-row.module.css';
+  }
+
+  .searchDuration {
+    composes: figure from './step-row.module.css';
+  }
+
+  .searchMeta {
+    composes: meta from './step-row.module.css';
+  }
+
+  .searchAgent {
+    composes: agent from './step-row.module.css';
+  }
+
+  .searchTime {
+    composes: figure from './step-row.module.css';
+  }
+
+  .searchExcerpt {
+    color: var(--color-text-secondary);
+    flex: 1;
     font-size: var(--font-size-caption);
     line-height: var(--line-height-control);
+    min-inline-size: 0;
     overflow: hidden;
-    overflow-wrap: anywhere;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  .older {
-    display: flex;
-    justify-content: center;
-    padding: var(--space-tight) var(--space-component);
+  .searchOlder {
+    composes: hoverTint from './step-row.module.css';
+    composes: focusRing from './step-row.module.css';
+    background: none;
+    border: 0;
+    border-block-start: 1px solid var(--color-border-subtle);
+    color: var(--color-accent-text);
+    cursor: pointer;
+    flex: none;
+    font: inherit;
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    min-height: var(--control-hit-target);
+    padding: var(--space-tight) var(--space-related);
+    text-align: start;
+    width: 100%;
+  }
+
+  .searchOlder[aria-disabled='true'] {
+    color: var(--color-text-muted);
+    cursor: progress;
   }
 
   /* ── The roster could not be read ── */
 
   .empty {
-    display: grid;
-    gap: var(--space-inline);
-    padding: var(--space-layout) var(--space-section);
-    place-items: center;
+    align-items: center;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-component);
+    padding: var(--space-section) var(--space-related);
     text-align: center;
   }
 
   .emptyTitle {
     color: var(--color-text-secondary);
     font-size: var(--font-size-detail);
-    font-weight: 500;
     line-height: var(--line-height-control);
+    margin: 0;
   }
 }

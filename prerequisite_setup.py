@@ -38,7 +38,7 @@ ENV_PATH = REPO_ROOT / ".env"
 ENV_EXAMPLE_PATH = REPO_ROOT / ".env.example"
 MODEL_CATALOG_PATH = REPO_ROOT / "src" / "dlightrag" / "engine" / "ai" / "model_catalog.json"
 MINERU_ENV_PATH = REPO_ROOT / ".env.mineru"
-MINERU_ENV_EXAMPLE_PATH = REPO_ROOT / ".env.mineru.example"
+MINERU_ENV_EXAMPLE_PATH = REPO_ROOT / "packages" / "mineru" / ".env.example"
 API_READY_URL = "http://localhost:8100/ready"
 WEB_URL = "http://localhost:8100/web/"
 
@@ -73,13 +73,13 @@ class ProviderSpec:
 # LLM roles: openai-compatible => provider "openai" + base_url; else native.
 # Azure and "Other" get no default model: the name is the caller's own deployment.
 PROVIDERS_LLM: dict[str, ProviderSpec] = {
-    "OpenAI": ProviderSpec("openai", "https://api.openai.com/v1", default_model="gpt-6.1-sol"),
+    "OpenAI": ProviderSpec("openai", "https://api.openai.com/v1", default_model="gpt-6.2-sol"),
     "DeepSeek": ProviderSpec("openai", "https://api.deepseek.com", default_model="deepseek-flash"),
     "OpenRouter": ProviderSpec(
-        "openai", "https://openrouter.ai/api/v1", default_model="google/gemini-3.8-flash"
+        "openai", "https://openrouter.ai/api/v1", default_model="google/gemini-4-hydrogen"
     ),
     "Anthropic": ProviderSpec("anthropic", None, default_model="claude-sonnet-5"),
-    "Gemini": ProviderSpec("gemini", None, default_model="gemini-3.8-flash"),
+    "Gemini": ProviderSpec("gemini", None, default_model="gemini-4-hydrogen"),
     "Azure OpenAI": ProviderSpec("openai", None, requires_url=True),
     "Other (OpenAI-compatible)": ProviderSpec(
         "openai", None, requires_url=True, requires_key=False
@@ -169,6 +169,8 @@ RERANK_CHOICES: dict[str, tuple[str, bool, str]] = {
     "Cohere": ("cohere_reranker", True, ""),
     "Azure Cohere": ("azure_cohere", True, ""),
 }
+
+DEEPSEEK_API_HOST = "api.deepseek.com"
 
 LLM_ROLE_ENV_KEYS: dict[str, str] = {
     "extract": "DLIGHTRAG_MODELS__CHAT__ROLES__EXTRACT__API_KEY",
@@ -317,22 +319,6 @@ def write_config_yaml(
 ) -> None:
     yaml = _yaml()
     data = _load_yaml12(yaml, path)
-    canonical_sections = {
-        "deployment",
-        "storage",
-        "models",
-        "corpus",
-        "answer",
-        "access",
-        "interfaces",
-        "observability",
-    }
-    unknown = set(data) - canonical_sections
-    if unknown:
-        raise ValueError(
-            "Legacy or unknown DlightRAG config fields were found; replace them with the "
-            f"3.0 nine-section schema before running setup (unknown: {sorted(unknown)})"
-        )
     answer = data.setdefault("answer", {})
     agent = answer.setdefault("agent", {})
     agent.setdefault("execution_environment", "trust")
@@ -341,7 +327,6 @@ def write_config_yaml(
         node = answer.setdefault("web_sources", {})
         node.clear()
         node.update(web_sources)
-        answer.pop("web_search", None)
     models = data.setdefault("models", {})
     chat = models.setdefault("chat", {})
     if llm_default is not None:
@@ -355,7 +340,6 @@ def write_config_yaml(
             for role, block in llm_roles.items():
                 roles.setdefault(role, {})
                 _apply_model_block(roles[role], block)
-    models.pop("capacity_overrides", None)
     if embedding is not None:
         _apply_model_block(models.setdefault("embedding", {}), embedding)
     if rerank is not None:
@@ -437,7 +421,7 @@ def _load_effective_config(config_path: Path, env_path: Path):
     """Load one explicit repository config with normal env-over-dotenv precedence."""
     if config_path.name != "config.yaml":
         raise ValueError("canonical configuration file must be named config.yaml")
-    from dlightrag.application.config import load_config
+    from dlightrag.application.config.loading import load_config
 
     previous = Path.cwd()
     try:
@@ -914,69 +898,31 @@ def _dotenv_value(path: Path, key: str) -> str | None:
     return None
 
 
-def legacy_web_settings_present(
-    *,
-    config_path: Path = CONFIG_PATH,
-    env_path: Path = ENV_PATH,
-) -> bool:
-    """Return whether setup can offer the explicit one-time Web migration."""
-    if _dotenv_value(env_path, "DLIGHTRAG_ANSWER__WEB_SEARCH__API_KEY") is not None:
-        return True
-    if not config_path.exists():
-        return False
-    yaml = _yaml()
-    data = _load_yaml12(yaml, config_path) or {}
-    answer = data.get("answer") or {}
-    return isinstance(answer, dict) and "web_search" in answer
+def _deepseek_model_key() -> str | None:
+    """The key of a chat model that runs on DeepSeek's own endpoint, when ``.env`` holds one.
 
-
-def migrate_legacy_web_settings(
-    *,
-    config_path: Path = CONFIG_PATH,
-    env_path: Path = ENV_PATH,
-) -> bool:
-    """Transactionally migrate the legacy Exa setting and keep secrets in ``.env``."""
-    old_env = "DLIGHTRAG_ANSWER__WEB_SEARCH__API_KEY"
-    new_env = "DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEY"
-    old_value = _dotenv_value(env_path, old_env)
-    yaml = _yaml()
-    data = _load_yaml12(yaml, config_path) if config_path.exists() else {}
-    data = data or {}
-    answer = data.get("answer") or {}
-    had_legacy = isinstance(answer, dict) and "web_search" in answer
-    legacy = answer.pop("web_search", None) if had_legacy else None
-    if old_value is None and not had_legacy:
-        return False
-
-    inline_value = legacy.get("api_key") if isinstance(legacy, dict) else None
-    migrated_value = old_value
-    if migrated_value is None and isinstance(inline_value, str) and inline_value.strip():
-        migrated_value = inline_value.strip()
-    env_values = (
-        {new_env: migrated_value}
-        if migrated_value is not None and _dotenv_value(env_path, new_env) is None
-        else {}
-    )
-    if had_legacy:
-        web = answer.setdefault("web_sources", {})
-        exa = web.setdefault("exa", {})
-        exa["api_key"] = None
-
-    config_existed = config_path.exists()
-    env_existed = env_path.exists()
-    config_backup = backup_file(config_path) if config_existed else None
-    env_backup = backup_file(env_path) if env_existed else None
+    A role whose key is blank falls back to the default model, so only a model with a key of its
+    own counts. The lookup is a convenience: a config it cannot read only means asking for a key.
+    """
     try:
-        if old_value is not None or env_values:
-            upsert_env(env_path, env_values, remove_keys=(old_env,))
-        if had_legacy:
-            yaml.dump(data, config_path)
-        _load_effective_config(config_path, env_path)
-    except BaseException:
-        _restore_file(config_path, config_existed, config_backup)
-        _restore_file(env_path, env_existed, env_backup)
-        raise
-    return True
+        data = _load_yaml12(_yaml(), CONFIG_PATH) if CONFIG_PATH.exists() else None
+    except Exception:
+        return None
+    chat = ((data or {}).get("models") or {}).get("chat") or {}
+    blocks = {"DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY": chat.get("default")}
+    for role, block in (chat.get("roles") or {}).items():
+        if role in LLM_ROLE_ENV_KEYS:
+            blocks[LLM_ROLE_ENV_KEYS[role]] = block
+    for env_key, block in blocks.items():
+        base_url = block.get("base_url") if isinstance(block, Mapping) else None
+        try:
+            host = urlsplit(base_url).hostname if isinstance(base_url, str) else None
+        except ValueError:
+            continue
+        value = (_dotenv_value(ENV_PATH, env_key) or "").strip().strip("\"'").strip()
+        if host == DEEPSEEK_API_HOST and value:
+            return value
+    return None
 
 
 def run_web_research_step(
@@ -1027,11 +973,22 @@ def run_web_research_step(
                 WEB_TAVILY.lower() if extract_first == WEB_EXA else WEB_EXA.lower(),
             ]
 
+    deepseek_env = "DLIGHTRAG_ANSWER__WEB_SOURCES__DEEPSEEK__API_KEY"
+    if choice != WEB_DISABLE and prompter.confirm(
+        "Add DeepSeek as the last Web search/extract fallback? · "
+        "加入 DeepSeek 作为网络搜索/提取的最后一层？",
+        default=False,
+    ):
+        providers.append("deepseek")
+        search_order.append("deepseek")
+        extract_order.append("deepseek")
+
     env_values: dict[str, str] = {}
     remove = [
         "DLIGHTRAG_ANSWER__WEB_SEARCH__API_KEY",
         "DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEY",
         "DLIGHTRAG_ANSWER__WEB_SOURCES__TAVILY__API_KEY",
+        deepseek_env,
     ]
     if "exa" in providers:
         env_values["DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEY"] = _ask_required(
@@ -1041,6 +998,16 @@ def run_web_research_step(
         env_values["DLIGHTRAG_ANSWER__WEB_SOURCES__TAVILY__API_KEY"] = _ask_required(
             lambda: prompter.password("Tavily API key (required)")
         )
+    if "deepseek" in providers:
+        model_key = _deepseek_model_key()
+        if model_key is not None and prompter.confirm(
+            "Reuse the DeepSeek model key? · 复用模型的 DeepSeek key？", default=True
+        ):
+            env_values[deepseek_env] = model_key
+        else:
+            env_values[deepseek_env] = _ask_required(
+                lambda: prompter.password("DeepSeek API key (required)")
+            )
     env_existed = ENV_PATH.exists()
     config_existed = CONFIG_PATH.exists()
     env_backup = backup_file(ENV_PATH) if env_existed else None
@@ -1060,6 +1027,7 @@ def run_web_research_step(
                 "extract_providers": extract_order,
                 "exa": {"api_key": None},
                 "tavily": {"api_key": None},
+                "deepseek": {"api_key": None},
             },
         )
         validate_config()
@@ -1303,6 +1271,7 @@ def read_config_summary(config_path: Path, env_path: Path) -> dict:
             "Rerank": bool(rerank.api_key),
             "Exa": bool(config.answer.web_sources.exa.api_key),
             "Tavily": bool(config.answer.web_sources.tavily.api_key),
+            "DeepSeek": bool(config.answer.web_sources.deepseek.api_key),
         },
     }
 
@@ -1603,14 +1572,6 @@ def main(prompter: Prompter | None = None) -> int:
     prompter = prompter or _questionary_prompter()
     info = detect_platform()
     try:
-        if legacy_web_settings_present():
-            if not prompter.confirm(
-                "Migrate the legacy Exa Web setting now? · 迁移旧版 Exa 网络设置？",
-                default=True,
-            ):
-                raise SetupCancelled
-            if migrate_legacy_web_settings():
-                console.print("[green]Migrated legacy Exa Web setting.[/green]")
         if is_configured():
             return run_home(console, prompter, info)
         rc = run_first_time_setup(console, prompter, info)

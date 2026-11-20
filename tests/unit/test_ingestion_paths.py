@@ -5,10 +5,8 @@ from lightrag.constants import PARSED_DIR_NAME
 
 from dlightrag.engine.rag.corpus.ingestion.paths import (
     LOCAL_SOURCES_DIR_NAME,
-    REMOTE_INGEST_DIR_NAME,
     REMOTE_SOURCES_DIR_NAME,
     RUN_STAGES_DIR_NAME,
-    UPLOADS_DIR_NAME,
     discard_parser_input,
     document_name,
     local_source_path,
@@ -30,8 +28,6 @@ from dlightrag.engine.rag.corpus.ingestion.paths import (
         RUN_STAGES_DIR_NAME,
         PARSED_DIR_NAME,
         LOCAL_SOURCES_DIR_NAME,
-        UPLOADS_DIR_NAME,
-        REMOTE_INGEST_DIR_NAME,
         REMOTE_SOURCES_DIR_NAME,
     ],
 )

@@ -1,0 +1,498 @@
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
+
+/* The Agentspace Inspector panel (ui/inspector-agentspace.ts): one Run timeline of the copies the
+ * conversation's Session kept, a Run's files opened in place under the line that names it, and one
+ * file's versions as a second grain that replaces the timeline until the reader goes back.
+ *
+ * The panel owns one 16px gutter, like the Run traces dock beside it, so a hovered row's wash and
+ * the copy's file rows reach the panel edge while every line of type starts on the same measure. */
+
+@layer features {
+  .panel {
+    --agentspace-rail: 3.4rem;
+
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-related);
+    padding: var(--space-related);
+  }
+
+  .lede {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-detail);
+    line-height: var(--line-height-control);
+    margin: 0;
+  }
+
+  /* === Branches — only when the Session has more than the main line === */
+
+  .branches {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3xs);
+  }
+
+  .branchesTitle {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-caption);
+    font-weight: 600;
+    letter-spacing: 0;
+    margin: 0;
+  }
+
+  .branchList {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3xs);
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .branch {
+    align-items: baseline;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-pill);
+    display: inline-flex;
+    gap: var(--space-3xs);
+    padding: 0 var(--space-2xs);
+  }
+
+  .branchName {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-caption);
+    font-weight: 600;
+  }
+
+  /* === The Run timeline === */
+
+  .days {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-related);
+  }
+
+  .day {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3xs);
+    min-width: 0;
+  }
+
+  .day + .day {
+    border-block-start: 1px solid var(--color-border-subtle);
+    padding-block-start: var(--space-related);
+  }
+
+  .dayLabel {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    font-weight: 600;
+    letter-spacing: 0;
+    margin: 0;
+    padding-inline: var(--space-inline);
+  }
+
+  .timeline {
+    display: flex;
+    flex-direction: column;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .entry {
+    border-block-start: 1px solid var(--color-border-subtle);
+    min-width: 0;
+  }
+
+  .entry:first-child {
+    border-block-start: 0;
+  }
+
+  /* A row is a narrow rail of when, then what the Run left and what it changed, in one line each.
+   * The rail keeps the columns aligned while the words truncate, so an eye can run down the
+   * timeline instead of reading it. */
+  .runButton {
+    align-items: start;
+    background: none;
+    border: 0;
+    border-radius: var(--radius-control);
+    color: inherit;
+    cursor: pointer;
+    display: grid;
+    font: inherit;
+    gap: var(--space-tight);
+    grid-template-columns: var(--agentspace-rail) minmax(0, 1fr) auto;
+    min-block-size: var(--control-hit-target);
+    padding: var(--space-tight) var(--space-inline);
+    text-align: start;
+    width: 100%;
+  }
+
+  .runButton:hover {
+    background: var(--color-bg-hover);
+  }
+
+  .runButton:focus-visible {
+    outline: 2px solid var(--focus-ring-color);
+    outline-offset: -2px;
+  }
+
+  .rail {
+    display: flex;
+    flex-direction: column;
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    min-width: 0;
+  }
+
+  .when {
+    color: var(--color-text-tertiary);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .clock {
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .summary {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    min-width: 0;
+  }
+
+  .rowTop {
+    align-items: baseline;
+    display: flex;
+    gap: var(--space-tight);
+    min-width: 0;
+  }
+
+  .runLabel {
+    color: var(--color-text-primary);
+    flex: none;
+    font-size: var(--font-size-caption);
+    font-weight: 600;
+    line-height: var(--line-height-control);
+    white-space: nowrap;
+  }
+
+  .rowFoot {
+    align-items: baseline;
+    display: flex;
+    gap: var(--space-tight);
+    min-width: 0;
+  }
+
+  .meta {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    font-variant-numeric: tabular-nums;
+    line-height: var(--line-height-control);
+    white-space: nowrap;
+  }
+
+  /* What the copy changed, in the signs a diff already speaks: + added, ~ changed, − removed.
+   * The words live beside the signs for assistive technology only; sighted readers read the marks. */
+  .changes {
+    display: inline-flex;
+    flex: none;
+    gap: var(--space-2xs);
+    margin-inline-start: auto;
+  }
+
+  .change {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    font-variant-numeric: tabular-nums;
+    line-height: var(--line-height-control);
+    white-space: nowrap;
+  }
+
+  .change[data-change='added'] {
+    color: var(--color-success);
+  }
+
+  .change[data-change='changed'] {
+    color: var(--color-accent-text);
+  }
+
+  .change[data-change='removed'] {
+    color: var(--color-danger);
+  }
+
+  .disclosure {
+    color: var(--color-text-subtle);
+    flex: none;
+    margin-block-start: 0.125rem;
+    transition: rotate var(--duration-control) var(--easing-standard);
+  }
+
+  .runButton[aria-expanded='true'] .disclosure {
+    rotate: 90deg;
+  }
+
+  /* === One Run's files, opened where the Run stands === */
+
+  .files {
+    background: var(--color-bg-elevated);
+    border-radius: var(--radius-control);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-tight);
+    margin: 0 var(--space-inline) var(--space-tight) calc(var(--agentspace-rail) + var(--space-tight));
+    padding: var(--space-tight) var(--space-component);
+  }
+
+  .filesHeading {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-caption);
+    font-weight: 600;
+    letter-spacing: 0;
+    margin: 0;
+  }
+
+  .fileList {
+    display: flex;
+    flex-direction: column;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  /* One file row: a state mark, the path, and the bytes. The row is the control that opens the
+   * file's versions, so it keeps the whole width and the control's hit target. */
+  .fileRow {
+    align-items: center;
+    background: none;
+    border: 0;
+    border-radius: var(--radius-control);
+    color: inherit;
+    cursor: pointer;
+    display: grid;
+    font: inherit;
+    gap: var(--space-tight);
+    grid-template-columns: 0.375rem minmax(0, 1fr) auto;
+    margin-inline: calc(-1 * var(--space-inline));
+    min-block-size: var(--control-hit-target);
+    padding: 0 var(--space-inline);
+    text-align: start;
+    width: calc(100% + var(--space-tight));
+  }
+
+  .fileRow:hover {
+    background: var(--color-bg-hover);
+  }
+
+  .fileRow:focus-visible {
+    outline: 2px solid var(--focus-ring-color);
+    outline-offset: -2px;
+  }
+
+  .marker {
+    background: var(--color-text-subtle);
+    block-size: 0.375rem;
+    border-radius: var(--radius-circle);
+    inline-size: 0.375rem;
+  }
+
+  .fileRow[data-change='added'] .marker {
+    background: var(--color-success);
+  }
+
+  .fileRow[data-change='changed'] .marker {
+    background: var(--color-accent-text);
+  }
+
+  .path {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .size {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    font-variant-numeric: tabular-nums;
+    line-height: var(--line-height-control);
+    white-space: nowrap;
+  }
+
+  .fileRow[data-change='unchanged'] .path {
+    color: var(--color-text-muted);
+  }
+
+  .removedNote {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    margin: 0;
+  }
+
+  /* The files a Run carried unchanged are one quiet disclosure, closed until asked for. */
+  .carried {
+    margin-block-start: var(--space-3xs);
+  }
+
+  .carriedToggle {
+    align-items: center;
+    background: none;
+    border: 0;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    display: flex;
+    font: inherit;
+    font-size: var(--font-size-caption);
+    gap: var(--space-3xs);
+    line-height: var(--line-height-control);
+    list-style: none;
+    padding: 0;
+  }
+
+  .carriedToggle::-webkit-details-marker {
+    display: none;
+  }
+
+  .carriedToggle:hover {
+    color: var(--color-text-secondary);
+  }
+
+  .carriedToggle:focus-visible {
+    outline: 2px solid var(--focus-ring-color);
+    outline-offset: 2px;
+  }
+
+  .carriedMark {
+    color: var(--color-text-subtle);
+    transition: rotate var(--duration-control) var(--easing-standard);
+  }
+
+  .carried[open] .carriedMark {
+    rotate: 90deg;
+  }
+
+  .copyActions {
+    display: flex;
+    padding-block-start: var(--space-3xs);
+  }
+
+  /* === One file's versions — a second grain under a back row === */
+
+  .grainHeader {
+    align-items: baseline;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2xs);
+    min-width: 0;
+  }
+
+  .grainPath {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-detail);
+    font-weight: 600;
+    line-height: var(--line-height-control);
+    overflow-wrap: anywhere;
+  }
+
+  .historyList {
+    display: flex;
+    flex-direction: column;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .version {
+    border-block-start: 1px solid var(--color-border-subtle);
+    display: grid;
+    gap: var(--space-tight);
+    grid-template-columns: 4.6rem minmax(0, 1fr);
+    min-block-size: var(--control-hit-target);
+    padding: var(--space-tight) var(--space-inline);
+  }
+
+  .version:first-child {
+    border-block-start: 0;
+  }
+
+  .versionBody {
+    align-items: baseline;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2xs);
+    min-width: 0;
+  }
+
+  .badge {
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-pill);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    padding: 0 var(--space-3xs);
+    white-space: nowrap;
+  }
+
+  .badge[data-change='changed'] {
+    color: var(--color-text-secondary);
+  }
+
+  .badge[data-change='unchanged'] {
+    opacity: 0.6;
+  }
+
+  /* === Reset — a quiet action with its own confirmation, never a call to action === */
+
+  .reset {
+    border-block-start: 1px solid var(--color-border-subtle);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-tight);
+    padding-block-start: var(--space-tight);
+  }
+
+  .resetAction {
+    color: var(--color-text-muted);
+  }
+
+  .resetAction:hover:not(:disabled) {
+    color: var(--color-danger);
+  }
+
+  .resetNote {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    margin: 0;
+  }
+
+  .resetActions {
+    align-items: center;
+    display: flex;
+    gap: var(--space-component);
+  }
+
+  .confirmReset {
+    color: var(--color-danger);
+  }
+
+  .failed {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-detail);
+    line-height: var(--line-height-control);
+    margin: 0;
+  }
+
+  .quiet {
+    margin: 0;
+  }
+}

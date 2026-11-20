@@ -48,9 +48,9 @@ TOOL_DISPOSITION_OUTCOME: dict[SyntheticToolDisposition, SyntheticToolResultOutc
 }
 
 #: Most read-only calls one Tool Batch runs at once. A web-heavy turn issues four
-#: to eight searches, so eight runs such a turn in one round while still bounding
+#: to eight searches, so sixteen runs such a turn in one round while still bounding
 #: what one batch asks of a search provider or the corpus at a time.
-MAX_CONCURRENT_TOOL_CALLS = 8
+MAX_CONCURRENT_TOOL_CALLS = 16
 
 
 @dataclass(frozen=True, slots=True)

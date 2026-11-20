@@ -1,34 +1,41 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 692" width="980" height="692" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 872" width="1000" height="872" lang="en" role="img" aria-labelledby="title" aria-describedby="desc">
   <title id="title">DlightRAG code layers</title>
-  <desc id="desc">Inbound HTTP and MCP adapters call Application, which holds Access and the use cases. Application calls Engine, where Answer drives the Run runtime, the Agent, and RAG, and the Agent and RAG reach models through AI. Application and Answer use the separately distributed dlightrag-memory package. Outbound adapters implement the ports Application and Engine own, and the composition root wires every layer.</desc>
+  <desc id="desc">Inbound HTTP (REST and Web), an MCP server, and the in-process create_application facade call Application. Application owns Access (identity and rules), twelve capability tiles (Answer Runs, Retrieval, Corpus Admin, Run Service, Web Conversations, Connections, Profile Memory, Model Catalogue, Agent Accounts, Live Browser, Runtime Policies, Privacy (Conversation Contribution)) and the configuration, lifecycle, health, and service projections the band tag names. Application calls Engine, where Answer drives the Run runtime, the Agent, and RAG. Answer depends on Runtime, Agent, RAG, and AI; Runtime depends on Agent; Agent and RAG reach model providers through AI. Outbound adapters implement narrow ports owned by Application and Engine: the PostgreSQL stores, the Personal Connections MCP and OAuth clients, the Agent Browser pool, and the Agent Mailbox. The composition root constructs one Application, injects the concrete adapters and operation executors, and imports the dlightrag-memory and dlightrag-observability packages; a wire from its base runs along the bottom margin into dlightrag-observability. Two PostgreSQL adapter modules (rebuild_vdb and owner_data) import it too; no wire is drawn for them. Application and Answer use the separately distributed dlightrag-memory package, whose importers also include the HTTP adapter, the PostgreSQL adapter, and the composition root. The host-side dlightrag-mineru package is a development-group tool: the engine imports exactly one of its helpers (engine/rag/corpus/mineru_title_aided.py imports its title_aided module), so no runtime wire is drawn to the package. The Web frontend's own six-layer matrix is described in the Web Frontend Ownership section; this drawing covers the Python runtime layers.</desc>
   <style>
     text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; text-anchor: middle; }
     .title { font-size: 13px; font-weight: 600; fill: #1c1917; }
     .name { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px; font-weight: 600; fill: #1c1917; }
-    .sub { font-size: 11.5px; font-weight: 400; fill: #57534e; }
+    .sub { font-size: 11.5px; fill: #57534e; }
     .tag { font-size: 11px; fill: #78716c; text-anchor: start; }
-    .layer { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; fill: #78716c; text-anchor: start; }
-    .layer.core { fill: #7e6c37; }
+    .note { font-size: 11px; fill: #78716c; text-anchor: start; }
+    .layer { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; fill: #7e6c37; text-anchor: start; }
+    .spine { font-size: 12.5px; font-weight: 600; letter-spacing: 0.08em; fill: #7e6c37; text-anchor: middle; }
+    .bg { fill: #ffffff; }
     .band { fill: #fafaf9; stroke: #e7e5e4; }
     .band.core { fill: #fdfbf6; stroke: #d9c894; }
     .node { fill: #ffffff; stroke: #c8c2bc; }
     .node.core { fill: #fbf7ec; stroke: #b39b52; }
     .node.package { fill: #f5f5f4; stroke: #a8a29e; stroke-dasharray: 4 3; }
+    .node.legend { fill: #fafaf9; stroke: #e7e5e4; }
     .root { fill: #f5f5f4; stroke: #d6d3d1; }
     .wire { fill: none; stroke: #8a837d; stroke-width: 1.5; }
     .dashed { stroke-dasharray: 4 3; }
     .head { fill: #8a837d; }
     @media (prefers-color-scheme: dark) {
+      .bg { fill: #0c0a09; }
       .title, .name { fill: #e7e5e4; }
-      .sub { fill: #a8a29e; }
-      .tag, .layer { fill: #8a837d; }
-      .layer.core { fill: #d2b661; }
-      .band { fill: #141210; stroke: #2e2a27; }
-      .band.core { fill: #17140e; stroke: #5c4f2b; }
-      .node { fill: #1c1917; stroke: #57534e; }
-      .node.core { fill: #2a2415; stroke: #b39b52; }
-      .node.package { fill: #231f1d; stroke: #78716c; }
-      .root { fill: #1c1917; stroke: #44403c; }
+      .sub { fill: #b8b1a9; }
+      .tag, .note { fill: #a8a29e; }
+      .layer, .spine { fill: #d2b661; }
+      .band { fill: #141210; stroke: #4a443e; }
+      .band.core { fill: #17140e; stroke: #6b5a33; }
+      .node { fill: #1c1917; stroke: #6f6862; }
+      .node.core { fill: #2a2415; stroke: #c2a85c; }
+      .node.package { fill: #231f1d; stroke: #9a9189; }
+      .node.legend { fill: #141210; stroke: #4a443e; }
+      .root { fill: #1c1917; stroke: #6f6862; }
+      .wire { stroke: #a8a29e; }
+      .head { fill: #a8a29e; }
     }
   </style>
   <defs>
@@ -37,85 +44,142 @@
     </marker>
   </defs>
 
-  <!-- Composition root: wires every layer -->
-  <rect class="root" x="24" y="24" width="32" height="644" rx="8"/>
-  <text class="layer" x="0" y="0" text-anchor="middle" transform="translate(44 346) rotate(-90)">COMPOSITION ROOT</text>
+  <rect class="bg" x="0" y="0" width="1000" height="872"/>
 
-  <!-- Inbound adapters -->
-  <rect class="band" x="72" y="24" width="684" height="96" rx="12"/>
-  <text class="layer" x="88" y="46">INBOUND ADAPTERS</text>
-  <rect class="node" x="234" y="58" width="168" height="48" rx="8"/>
-  <text class="title" x="318" y="79">HTTP</text>
-  <text class="sub" x="318" y="96">REST · Web</text>
-  <rect class="node" x="426" y="58" width="168" height="48" rx="8"/>
-  <text class="title" x="510" y="87">MCP server</text>
+  <!-- Composition root. It constructs one Application, injects the concrete
+       adapters and operation executors, and imports the memory and observability
+       packages. It does not build the inbound servers: they call
+       create_application themselves. -->
+  <rect class="root" x="8" y="40" width="24" height="800" rx="8"/>
+  <text class="spine" x="0" y="0" transform="translate(24.5 440) rotate(-90)">COMPOSITION ROOT</text>
+  <path class="wire" d="M32,252 H102" marker-end="url(#arrow)"/>
+  <text class="tag" x="34" y="240">constructs</text>
+  <path class="wire" d="M32,760 H102" marker-end="url(#arrow)"/>
+  <text class="tag" x="34" y="748">injects</text>
 
-  <path class="wire" d="M414,120 V146" marker-end="url(#arrow)"/>
+  <!-- Legend -->
+  <rect class="node legend" x="756" y="40" width="212" height="128" rx="12"/>
+  <text class="layer" x="772" y="62">LEGEND</text>
+  <path class="wire" d="M772,88 H802" marker-end="url(#arrow)"/>
+  <text class="tag" x="812" y="92">calls / depends on</text>
+  <rect class="node package" x="772" y="102" width="32" height="18" rx="4"/>
+  <text class="tag" x="812" y="115">separate distribution</text>
+  <path class="wire dashed" d="M772,140 H802" marker-end="url(#arrow)"/>
+  <text class="tag" x="812" y="144">implements a port</text>
+
+  <!-- Inbound -->
+  <rect class="band" x="104" y="40" width="640" height="96" rx="12"/>
+  <text class="layer" x="120" y="62">INBOUND</text>
+  <rect class="node" x="145" y="76" width="170" height="48" rx="8"/>
+  <text class="title" x="230" y="97">HTTP</text>
+  <text class="sub" x="230" y="114">REST · Web</text>
+  <rect class="node" x="339" y="76" width="170" height="48" rx="8"/>
+  <text class="title" x="424" y="105">MCP server</text>
+  <rect class="node" x="533" y="76" width="170" height="48" rx="8"/>
+  <text class="title" x="618" y="97">In-process facade</text>
+  <text class="sub" x="618" y="114">create_application</text>
+  <path class="wire" d="M230,124 V130"/>
+  <path class="wire" d="M424,124 V130"/>
+  <path class="wire" d="M618,124 V130"/>
+  <path class="wire" d="M230,130 H618"/>
+  <path class="wire" d="M424,130 V158" marker-end="url(#arrow)"/>
 
   <!-- Application -->
-  <rect class="band core" x="72" y="148" width="684" height="124" rx="12"/>
-  <text class="layer core" x="88" y="170">APPLICATION</text>
-  <rect class="node core" x="88" y="182" width="108" height="74" rx="8"/>
-  <text class="title" x="142" y="215">Access</text>
-  <text class="sub" x="142" y="232">identity · rules</text>
-  <rect class="node core" x="212" y="182" width="123" height="32" rx="8"/>
-  <text class="title" x="273.5" y="203">Answer Runs</text>
-  <rect class="node core" x="347" y="182" width="123" height="32" rx="8"/>
-  <text class="title" x="408.5" y="203">Retrieval</text>
-  <rect class="node core" x="482" y="182" width="123" height="32" rx="8"/>
-  <text class="title" x="543.5" y="203">Corpus Admin</text>
-  <rect class="node core" x="617" y="182" width="123" height="32" rx="8"/>
-  <text class="title" x="678.5" y="203">Runs</text>
-  <rect class="node core" x="212" y="224" width="123" height="32" rx="8"/>
-  <text class="title" x="273.5" y="245">Connections</text>
-  <rect class="node core" x="347" y="224" width="123" height="32" rx="8"/>
-  <text class="title" x="408.5" y="245">Profile Memory</text>
-  <rect class="node core" x="482" y="224" width="123" height="32" rx="8"/>
-  <text class="title" x="543.5" y="245">Conversations</text>
-  <rect class="node core" x="617" y="224" width="123" height="32" rx="8"/>
-  <text class="title" x="678.5" y="245">Model Catalogue</text>
-
-  <path class="wire" d="M414,272 V298" marker-end="url(#arrow)"/>
+  <rect class="band core" x="104" y="160" width="640" height="184" rx="12"/>
+  <text class="layer" x="120" y="182">APPLICATION</text>
+  <rect class="node core" x="120" y="196" width="100" height="112" rx="8"/>
+  <text class="title" x="170" y="248">Access</text>
+  <text class="sub" x="170" y="265">identity · rules</text>
+  <rect class="node core" x="232" y="196" width="138" height="32" rx="8"/>
+  <text class="title" x="301" y="217">Answer Runs</text>
+  <rect class="node core" x="375" y="196" width="97" height="32" rx="8"/>
+  <text class="title" x="423.5" y="217">Retrieval</text>
+  <rect class="node core" x="477" y="196" width="118" height="32" rx="8"/>
+  <text class="title" x="536" y="217">Corpus Admin</text>
+  <rect class="node core" x="600" y="196" width="128" height="32" rx="8"/>
+  <text class="title" x="664" y="217">Run Service</text>
+  <rect class="node core" x="232" y="236" width="138" height="32" rx="8"/>
+  <text class="title" x="301" y="257">Web Conversations</text>
+  <rect class="node core" x="375" y="236" width="97" height="32" rx="8"/>
+  <text class="title" x="423.5" y="257">Connections</text>
+  <rect class="node core" x="477" y="236" width="118" height="32" rx="8"/>
+  <text class="title" x="536" y="257">Profile Memory</text>
+  <rect class="node core" x="600" y="236" width="128" height="32" rx="8"/>
+  <text class="title" x="664" y="257">Model Catalogue</text>
+  <rect class="node core" x="232" y="276" width="138" height="32" rx="8"/>
+  <text class="title" x="301" y="297">Agent Accounts</text>
+  <rect class="node core" x="375" y="276" width="97" height="32" rx="8"/>
+  <text class="title" x="423.5" y="297">Live Browser</text>
+  <rect class="node core" x="477" y="276" width="118" height="32" rx="8"/>
+  <text class="title" x="536" y="297">Runtime Policies</text>
+  <rect class="node core" x="600" y="276" width="128" height="32" rx="8"/>
+  <text class="title" x="664" y="297">Privacy</text>
+  <text class="note" x="120" y="328">configuration · lifecycle · health · service projections</text>
+  <path class="wire" d="M424,344 V362" marker-end="url(#arrow)"/>
 
   <!-- Engine -->
-  <rect class="band core" x="72" y="300" width="684" height="244" rx="12"/>
-  <text class="layer core" x="88" y="322">ENGINE</text>
-  <rect class="node core" x="314" y="336" width="200" height="48" rx="8"/>
-  <text class="title" x="414" y="357">Answer</text>
-  <text class="sub" x="414" y="374">Fast · Research</text>
-  <path class="wire" d="M414,384 V414" marker-end="url(#arrow)"/>
-  <path class="wire" d="M414,398 H218 Q210,398 210,406 V414" marker-end="url(#arrow)"/>
-  <path class="wire" d="M414,398 H610 Q618,398 618,406 V414" marker-end="url(#arrow)"/>
-  <rect class="node core" x="126" y="416" width="168" height="48" rx="8"/>
-  <text class="title" x="210" y="445">Run runtime</text>
-  <rect class="node core" x="330" y="416" width="168" height="48" rx="8"/>
-  <text class="title" x="414" y="445">Agent</text>
-  <rect class="node core" x="534" y="416" width="168" height="48" rx="8"/>
-  <text class="title" x="618" y="437">RAG</text>
-  <text class="sub" x="618" y="454">LightRAG workspaces</text>
-  <path class="wire" d="M414,464 V486" marker-end="url(#arrow)"/>
-  <path class="wire" d="M618,464 V486" marker-end="url(#arrow)"/>
-  <rect class="node core" x="330" y="488" width="372" height="40" rx="8"/>
-  <text class="title" x="516" y="512">AI <tspan class="sub" dx="4">model providers</tspan></text>
+  <rect class="band core" x="104" y="364" width="640" height="286" rx="12"/>
+  <text class="layer" x="120" y="386">ENGINE</text>
+  <rect class="node core" x="339" y="400" width="170" height="48" rx="8"/>
+  <text class="title" x="424" y="421">Answer</text>
+  <text class="sub" x="424" y="438">Fast · Research</text>
+  <path class="wire" d="M424,450 V470"/>
+  <path class="wire" d="M424,470 H220 V492" marker-end="url(#arrow)"/>
+  <path class="wire" d="M424,470 H628 V492" marker-end="url(#arrow)"/>
+  <path class="wire" d="M424,470 V492" marker-end="url(#arrow)"/>
+  <rect class="node core" x="140" y="494" width="160" height="48" rx="8"/>
+  <text class="title" x="220" y="523">Run runtime</text>
+  <rect class="node core" x="344" y="494" width="160" height="48" rx="8"/>
+  <text class="title" x="424" y="523">Agent</text>
+  <rect class="node core" x="548" y="494" width="160" height="48" rx="8"/>
+  <text class="title" x="628" y="515">RAG</text>
+  <text class="sub" x="628" y="532">LightRAG workspaces</text>
+  <path class="wire" d="M302,518 H342" marker-end="url(#arrow)"/>
+  <path class="wire" d="M424,544 V584" marker-end="url(#arrow)"/>
+  <path class="wire" d="M628,544 V584" marker-end="url(#arrow)"/>
+  <rect class="node core" x="214" y="586" width="420" height="48" rx="8"/>
+  <text class="title" x="424" y="607">AI</text>
+  <text class="sub" x="424" y="624">model providers</text>
+  <!-- Answer also reaches AI directly, and imports the memory package. -->
+  <path class="wire" d="M509,432 H722 V610 H636" marker-end="url(#arrow)"/>
+  <path class="wire" d="M509,410 H750 V248 H754" marker-end="url(#arrow)"/>
 
-  <!-- dlightrag-memory: a separate distribution -->
-  <rect class="node package" x="780" y="324" width="176" height="72" rx="8"/>
-  <text class="name" x="868" y="350">dlightrag-memory</text>
-  <text class="sub" x="868" y="367">separate distribution</text>
-  <text class="sub" x="868" y="383">own schema · stdio MCP</text>
-  <path class="wire" d="M514,360 H778" marker-end="url(#arrow)"/>
-  <path class="wire" d="M756,210 H860 Q868,210 868,218 V322" marker-end="url(#arrow)"/>
+  <!-- Outbound adapters -->
+  <rect class="band" x="104" y="680" width="640" height="160" rx="12"/>
+  <text class="layer" x="120" y="702">OUTBOUND ADAPTERS</text>
+  <rect class="node" x="132" y="716" width="280" height="48" rx="8"/>
+  <text class="title" x="272" y="737">PostgreSQL stores</text>
+  <text class="sub" x="272" y="754">LISTEN · NOTIFY</text>
+  <rect class="node" x="436" y="716" width="280" height="48" rx="8"/>
+  <text class="title" x="576" y="737">Personal Connections</text>
+  <text class="sub" x="576" y="754">MCP · OAuth clients</text>
+  <rect class="node" x="132" y="776" width="280" height="48" rx="8"/>
+  <text class="title" x="272" y="797">Agent Browser</text>
+  <text class="sub" x="272" y="814">pool leases · Playwright</text>
+  <rect class="node" x="436" y="776" width="280" height="48" rx="8"/>
+  <text class="title" x="576" y="805">Agent Mailbox</text>
 
-  <!-- Outbound adapters implement the ports the core owns -->
-  <path class="wire dashed" d="M414,572 V546" marker-end="url(#arrow)"/>
-  <text class="tag" x="424" y="562">implement ports</text>
-  <rect class="band" x="72" y="572" width="684" height="96" rx="12"/>
-  <text class="layer" x="88" y="594">OUTBOUND ADAPTERS</text>
-  <rect class="node" x="92" y="606" width="200" height="48" rx="8"/>
-  <text class="title" x="192" y="627">PostgreSQL stores</text>
-  <text class="sub" x="192" y="644">LISTEN · NOTIFY</text>
-  <rect class="node" x="312" y="606" width="236" height="48" rx="8"/>
-  <text class="title" x="430" y="635">Owners’ MCP and OAuth clients</text>
-  <rect class="node" x="568" y="606" width="168" height="48" rx="8"/>
-  <text class="title" x="652" y="635">Observability</text>
+  <!-- Outbound implementations implement ports owned by Application and Engine. -->
+  <path class="wire dashed" d="M424,680 V650" marker-end="url(#arrow)"/>
+  <text class="tag" x="432" y="670">implements ports</text>
+
+  <!-- Separately distributed packages. The host-side dlightrag-mineru package is
+       a development-group tool: the engine imports exactly one of its helpers
+       (engine/rag/corpus/mineru_title_aided.py imports dlightrag_mineru.title_aided,
+       whitelisted by the mineru-is-a-host-tool import contract), so no runtime wire
+       is drawn to it. -->
+  <rect class="node package" x="756" y="184" width="212" height="80" rx="8"/>
+  <text class="name" x="862" y="212">dlightrag-memory</text>
+  <text class="sub" x="862" y="231">own schema · recall</text>
+  <text class="sub" x="862" y="246">stdio MCP</text>
+  <path class="wire" d="M744,200 H754" marker-end="url(#arrow)"/>
+
+  <rect class="node package" x="756" y="452" width="212" height="64" rx="8"/>
+  <text class="name" x="862" y="478">dlightrag-observability</text>
+  <text class="sub" x="862" y="497">OTLP export · the stack's CLI</text>
+  <path class="wire" d="M20,840 V856 H982 V484 H970" marker-end="url(#arrow)"/>
+
+  <rect class="node package" x="756" y="560" width="212" height="64" rx="8"/>
+  <text class="name" x="862" y="586">dlightrag-mineru</text>
+  <text class="sub" x="862" y="605">host tool · dev group only</text>
 </svg>

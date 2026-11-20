@@ -47,7 +47,7 @@ from dlightrag.adapters.postgres.corpus.workspace_write_gate import (
     workspace_write_gate as _workspace_write_gate,
 )
 from dlightrag.adapters.postgres.corpus.workspaces import PGWorkspaceRegistry
-from dlightrag.application.config import DlightragConfig
+from dlightrag.application.config.sections import DlightragConfig
 from dlightrag.engine.rag.retrieval.bm25 import profile_languages, profiles_from_config
 from dlightrag.engine.rag.workspace.ports import (
     CorpusRuntimeModels,
@@ -74,6 +74,10 @@ ORDER BY tablename
 _HAS_WORKSPACE_COLUMN = """SELECT 1 FROM information_schema.columns
 WHERE table_schema = 'public' AND table_name = $1 AND column_name = 'workspace'
 """
+# LightRAG 1.5.8's configuration container. Its ``workspace`` column holds one fixed
+# partition constant for every row, so the workspace a row describes (a baseline) is
+# the one in its payload; the container's identity and server rows name none.
+_CONFIGURATION_TABLE = "lightrag_config"
 _CHUNKS_REQUIRED_COLUMNS = ("id", "workspace", "full_doc_id", "content", "file_path")
 _VECTOR_REQUIRED_COLUMNS = (
     "id",
@@ -405,8 +409,9 @@ class PGCorpusMaintenanceStore:
                     if await conn.fetchrow(_HAS_WORKSPACE_COLUMN, table) is None:
                         continue
                     quoted = await conn.fetchval("SELECT quote_ident($1)", table)
+                    owner = "value->>'workspace'" if table == _CONFIGURATION_TABLE else "workspace"
                     tag = await conn.execute(
-                        f"DELETE FROM public.{quoted} WHERE workspace = $1",  # noqa: S608
+                        f"DELETE FROM public.{quoted} WHERE {owner} = $1",  # noqa: S608
                         workspace,
                     )
                     if not str(tag).endswith(" 0"):

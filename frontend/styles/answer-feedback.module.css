@@ -1,0 +1,253 @@
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
+
+/* The thumbs under one answered message and the reasons a thumb down is given (ui/answer-feedback.ts).
+ *
+ * The element draws no box of its own: its thumbs and its editor are items of the wrapping flex row that
+ * holds it, the action row under an answer or the status row of a child. The thumbs take their place in the
+ * row. The editor takes a line of its own under it, after everything else in the row, so opening it moves
+ * nothing that comes before it. */
+
+@layer features {
+  dl-answer-feedback {
+    display: contents;
+  }
+
+  /* What the reader presses is 24 CSS px on a desktop, the product's hit target where a finger is the
+     pointer, and in a child's status row what its other controls are. */
+  .thumbs,
+  .editor {
+    --feedback-hit: 1.5rem;
+  }
+
+  .thumbs[data-layout='block'],
+  .editor[data-layout='block'] {
+    --feedback-hit: var(--size-button);
+  }
+
+  @media (width <= 640px), (pointer: coarse) {
+    .thumbs[data-layout],
+    .editor[data-layout] {
+      --feedback-hit: var(--control-hit-target);
+    }
+  }
+
+  /* ── The thumbs ── */
+
+  .thumbs {
+    align-items: center;
+    display: inline-flex;
+    gap: var(--space-inline);
+  }
+
+  /* In the action row the thumbs are one more part of the row, and the row's primitive parts them: the
+     element around them is no box, so the pair declares itself a part of that row (`data-action-part`,
+     set where this pair is drawn) and `.dl-action-row` draws its line, sets it off by the row's measure
+     and takes its height from the row's line. The one thing left to state here is how far apart the two
+     thumbs stand — the row's own measure, since what they draw is the mark itself. */
+  .thumbs[data-layout='row'] {
+    gap: var(--space-tight);
+  }
+
+  /* On a child's status row they are the right-hand end. */
+  .thumbs[data-layout='block'] {
+    margin-inline-start: auto;
+  }
+
+  /* The thumb is the shared icon button — `.dl-icon-button` in primitives/icons.css — rebinding the one
+     token a thumb disagrees about: the control ladder's 44 CSS px becomes the 24 a pointer presses in the
+     action row. Its face, its ring and the reading of that token stay the primitive's. The class rather
+     than the `dl-icon-button` element, because a waiting thumb stays focusable through `aria-disabled`,
+     which the element forwards to nothing. */
+  .thumb {
+    --control-hit-target: var(--feedback-hit);
+
+    color: var(--color-accent-text);
+    transition:
+      background var(--duration-control) var(--easing-standard),
+      color var(--duration-control) var(--easing-standard),
+      opacity var(--duration-control) var(--easing-standard);
+  }
+
+  /* In the action row it is drawn at the row's own scale: a 12px mark — the size of the dot and the glyph
+     the row already draws — in a box of that same size, so the ink stands where the box does. The box is
+     not enlarged to give the tint or the ring room: the row's measures are measures between boxes, and a
+     box wider than its mark would leave the ink standing further from the row's dividers than the words
+     beside it stand from theirs. Room comes from the pair's gap instead. The reader presses the 24 CSS px
+     above; `.dl-icon-button--dense` is the primitive's answer for a control inside a line of words, and
+     the extension that keeps the target is the switch's. A child's status row draws the thumb at its
+     neighbours' size instead, so only the row states this size. */
+  .thumbs[data-layout='row'] .thumb {
+    --dl-icon-button-size: var(--dl-icon-size-xs);
+  }
+
+  /* While a request is out a control waits. It stays focusable, so the reader keeps their place. */
+  .thumb[aria-disabled='true'] {
+    cursor: progress;
+    opacity: 0.6;
+  }
+
+  /* Mineral Light has no gold darker than Accent text, so hover is a tint and not a darker gold. */
+  .thumb:hover:not([aria-disabled='true']) {
+    background: var(--color-accent-hover);
+    color: var(--color-accent-emphasis);
+  }
+
+  /* ── The reasons ── */
+
+  .editor {
+    display: grid;
+    flex: 1 0 100%;
+    gap: var(--space-tight);
+    min-width: 0;
+    order: 1;
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-tight);
+  }
+
+  /* A chosen reason is told from the others by the check it holds as well as by its colours, which sit
+     close to the resting pill's: colour alone would not say it. */
+  .chip {
+    align-items: center;
+    background: transparent;
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-pill);
+    color: var(--color-text-muted);
+    cursor: pointer;
+    display: inline-flex;
+    font: inherit;
+    font-size: var(--font-size-caption);
+    gap: var(--space-inline);
+    justify-content: center;
+    line-height: var(--line-height-control);
+    min-block-size: var(--feedback-hit);
+    padding-block: 0;
+    padding-inline: var(--space-component);
+    transition:
+      background var(--duration-control) var(--easing-standard),
+      border-color var(--duration-control) var(--easing-standard),
+      color var(--duration-control) var(--easing-standard),
+      opacity var(--duration-control) var(--easing-standard);
+  }
+
+  .chip:focus-visible {
+    outline: 2px solid var(--focus-ring-color);
+    outline-offset: 2px;
+  }
+
+  .chip[aria-disabled='true'] {
+    cursor: progress;
+    opacity: 0.6;
+  }
+
+  .chip[aria-pressed='true'] {
+    background: var(--color-accent-surface);
+    border-color: var(--color-accent-border);
+    color: var(--color-accent-text);
+  }
+
+  /* A reason not chosen answers the pointer with the tint every other control has, and borrows nothing of the
+     chosen palette, so hovering one never reads as having chosen it. */
+  .chip[aria-pressed='false']:hover:not([aria-disabled='true']) {
+    background: var(--color-bg-hover);
+    color: var(--color-text-primary);
+  }
+
+  .chip[aria-pressed='true']:hover:not([aria-disabled='true']) {
+    background: var(--color-accent-hover-strong);
+    border-color: var(--color-accent-border);
+  }
+
+  /* The note is a field with its own Send at its corner, as the composers are. The room for Send is always
+     the field's padding, shown or not, so the button appears over nothing and moves no text. There is no
+     resize grip: the corner is Send's, and a grip beneath it would send what a reader meant to drag. */
+  .noteField {
+    inline-size: 100%;
+    max-inline-size: 36rem;
+    position: relative;
+  }
+
+  .note {
+    background: var(--color-bg-subtle);
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-control);
+    box-sizing: border-box;
+    color: var(--color-text-primary);
+    display: block;
+    font: inherit;
+    font-size: var(--font-size-detail);
+    inline-size: 100%;
+    line-height: var(--line-height-control);
+    min-block-size: var(--feedback-hit);
+    padding: var(--space-tight) var(--space-component);
+    padding-inline-end: calc(var(--feedback-hit) + 2 * var(--space-inline));
+    resize: none;
+  }
+
+  .note::placeholder {
+    color: var(--color-text-muted);
+  }
+
+  .note:focus-visible {
+    outline: 2px solid var(--focus-ring-color);
+    outline-offset: 2px;
+  }
+
+  .send {
+    align-items: center;
+    background: var(--color-action-bg);
+    block-size: var(--feedback-hit);
+    border: 0;
+    border-radius: var(--radius-circle);
+    color: var(--color-on-action);
+    cursor: pointer;
+    display: inline-flex;
+    inline-size: var(--feedback-hit);
+    inset-block-end: var(--space-inline);
+    inset-inline-end: var(--space-inline);
+    justify-content: center;
+    padding: 0;
+    position: absolute;
+    transition:
+      background var(--duration-control) var(--easing-standard),
+      opacity var(--duration-control) var(--easing-standard),
+      transform var(--duration-instant);
+  }
+
+  .send:focus-visible {
+    outline: 2px solid var(--focus-ring-color);
+    outline-offset: 2px;
+  }
+
+  /* While a request is out Send waits, dimmed, with its plane swapped for a dot, and stays focusable. */
+  .send[aria-disabled='true'] {
+    cursor: progress;
+    opacity: 0.6;
+  }
+
+  .send:hover:not([aria-disabled='true']) {
+    background: var(--color-action-bg-hover);
+  }
+
+  .send:active:not([aria-disabled='true']) {
+    transform: scale(0.92);
+  }
+
+  @media (forced-colors: active) {
+    /* Forced colors drop the tints, so a chosen reason says so with the system highlight. */
+    .chip[aria-pressed='true'],
+    .chip[aria-pressed='true']:hover:not([aria-disabled='true']) {
+      background: Highlight;
+      border-color: Highlight;
+      color: HighlightText;
+    }
+
+    /* And they drop Send's fill, which leaves its glyph without a shape to sit in. */
+    .send {
+      border: 1px solid ButtonText;
+    }
+  }
+}

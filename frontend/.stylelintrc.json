@@ -4,19 +4,43 @@
   ],
   "rules": {
     "selector-class-pattern": "^[a-z][a-zA-Z0-9]*(?:-[a-zA-Z0-9]+)*(?:--[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*)?$",
-    "declaration-property-value-disallowed-list": {
-      "/^font-size$/": [
-        "/^\\d+px/"
-      ],
-      "/^(padding|margin|gap)$/": [
-        "/^\\d+px/"
-      ],
-      "/^border-radius$/": [
-        "/^\\d+px/"
-      ],
-      "/^line-height$/": [
-        "/^(?!var\\()/"
-      ]
-    }
-  }
+    "declaration-property-value-disallowed-list": [
+      {
+        "/^font-size$/": [
+          "/(^|[\\s(,])[-+]?(\\d*\\.)?\\d+(px|r?em)\\b/"
+        ],
+        "/^(padding|margin|gap)$/": [
+          "/^\\d+px/"
+        ],
+        "/^border-radius$/": [
+          "/^\\d+px/"
+        ],
+        "/^line-height$/": [
+          "/^(?!var\\()/"
+        ],
+        "/^(transition|animation)(-duration|-delay|-property)?$/": [
+          "/(^|[\\s,(])(?![-+]?0(\\.0+)?m?s\\b)[-+]?(\\d*\\.)?\\d+m?s\\b/",
+          "/(^|[\\s,])all\\b/"
+        ]
+      },
+      {
+        "message": "Use the design-system token: var(--font-size-*), var(--space-*), var(--radius-*), var(--line-height-*), or var(--duration-*) for a time; name the properties a transition changes instead of 'all'."
+      }
+    ],
+    "property-no-unknown": [true, {"ignoreProperties": ["composes"]}],
+    "value-keyword-case": ["lower", {"ignoreProperties": ["composes"]}],
+    "no-unknown-custom-properties": true,
+    "declaration-property-value-no-unknown": [
+      true,
+      {
+        "ignoreProperties": {
+          "animation": ["/global\\(/"]
+        }
+      }
+    ]
+  },
+  "referenceFiles": [
+    "design-system/foundations/*.css",
+    "styles/global.css"
+  ]
 }

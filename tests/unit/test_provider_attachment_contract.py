@@ -17,7 +17,9 @@ import pytest
 from anthropic import AsyncAnthropic
 from openai import APIStatusError, AsyncOpenAI
 
-from dlightrag.engine.agent.environment import AccessScheduler
+from dlightrag.engine.agent.environment.access import (
+    AccessScheduler,
+)
 from dlightrag.engine.agent.tool_content import (
     tool_content_attachments,
     tool_content_message_fields,

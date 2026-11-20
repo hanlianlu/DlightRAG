@@ -3,7 +3,9 @@
 
 from dataclasses import fields
 
-from dlightrag.engine.rag.retrieval import RetrievalResult
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalResult,
+)
 
 
 def test_rag_result_carries_no_answer_projection_fields() -> None:

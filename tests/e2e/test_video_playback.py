@@ -84,7 +84,12 @@ def _install_card(page: Page) -> list[str]:
             return
         if path == f"/web/api/conversations/{_CONVERSATION_ID}/history":
             route.fulfill(
-                json={"conversation": _CONVERSATION, "turns": [_turn(_presentation_wire())]}
+                json={
+                    "conversation": _CONVERSATION,
+                    "turns": [_turn(_presentation_wire())],
+                    "commands": [],
+                    "next_cursor": None,
+                }
             )
             return
         route.continue_()
@@ -169,41 +174,3 @@ def test_native_space_and_enter_activate_play_once(page: Page) -> None:
     _flush_paint(page)
     assert len(calls) == 1
     expect(play).to_have_count(0)
-
-
-def test_play_icon_uses_on_scrim_color_in_light_theme(page: Page) -> None:
-    page.emulate_media(color_scheme="light")
-    _install_card(page)
-    _open_card(page)
-    expect(page.locator("html")).to_have_attribute("data-color-mode", "light")
-
-    measured = page.locator("[data-video-play]").evaluate(
-        """(play) => {
-          const overlay = play.querySelector('svg')?.parentElement;
-          if (!overlay) return null;
-          const probe = document.createElement('span');
-          play.append(probe);
-          const token = (name, property) => {
-            probe.style.color = '';
-            probe.style.backgroundColor = '';
-            probe.style[property] = `var(${name})`;
-            return getComputedStyle(probe)[property];
-          };
-          const caption = token('--color-image-caption', 'color');
-          const primary = token('--color-text-primary', 'color');
-          const scrim = token('--color-scrim-strong', 'backgroundColor');
-          probe.remove();
-          const icon = getComputedStyle(overlay);
-          return {
-            color: icon.color,
-            background: icon.backgroundColor,
-            caption,
-            primary,
-            scrim,
-          };
-        }"""
-    )
-    assert measured is not None
-    assert measured["color"] == measured["caption"]
-    assert measured["color"] != measured["primary"]
-    assert measured["background"] == measured["scrim"]

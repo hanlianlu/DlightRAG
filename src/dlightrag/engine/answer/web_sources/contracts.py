@@ -12,10 +12,20 @@ type WebEffort = Literal["fast", "balanced"]
 class WebSourceUnavailable(Exception):
     """One provider operation failed with a stable, model-safe reason."""
 
-    def __init__(self, provider: str, operation: str, reason: str) -> None:
+    def __init__(
+        self,
+        provider: str,
+        operation: str,
+        reason: str,
+        *,
+        status: int | None = None,
+    ) -> None:
         self.provider = provider
         self.operation = operation
         self.reason = reason
+        #: The HTTP status when the provider answered with one. It rides the operator's log and
+        #: never the model's text: ``reason`` already says what it means.
+        self.status = status
         super().__init__(f"{provider} {operation} unavailable: {reason}")
 
 
@@ -41,7 +51,7 @@ class WebSearchHit:
     text: str
     published_date: str | None = None
     image_url: str | None = None
-    acquisition: Literal["exa_search", "tavily_search"] = "exa_search"
+    acquisition: Literal["exa_search", "tavily_search", "deepseek_search"] = "exa_search"
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,7 +73,7 @@ class WebExtractResult:
     text: str
     title: str | None = None
     provider: str = ""
-    acquisition: Literal["exa_extract", "tavily_extract"] = "exa_extract"
+    acquisition: Literal["exa_extract", "tavily_extract", "deepseek_extract"] = "exa_extract"
     dropped_results: int = 0
     degradation: str | None = None
 

@@ -7,20 +7,24 @@ from datetime import UTC, datetime, timedelta
 
 from pydantic import SecretStr
 
-from dlightrag.engine.agent.environment import AccessScheduler
-from dlightrag.engine.agent.tools import ToolResult
-from dlightrag.engine.answer.agent_browser import (
-    AgentMailboxError,
-    MailListing,
-    MailObject,
+from dlightrag.engine.agent.environment.access import (
+    AccessScheduler,
+)
+from dlightrag.engine.agent.tools.contracts import ToolResult
+from dlightrag.engine.answer.agent_browser.accounts import (
     StoredAgentAccount,
     owner_alias,
 )
+from dlightrag.engine.answer.agent_browser.mailbox import (
+    AgentMailboxError,
+    MailListing,
+    MailObject,
+)
 from dlightrag.engine.answer.tools.browser import browser_tool
 from tests.support.agent_browser import inert_browser_host
-from tests.tool_helpers import recording_tool_runtime
+from tests.support.tool_helpers import recording_tool_runtime
 
-DOMAIN = "orliantra.cc"
+DOMAIN = "mail.example"
 OWNER = "owner"
 NOW = datetime(2026, 10, 4, 12, 0, tzinfo=UTC)
 

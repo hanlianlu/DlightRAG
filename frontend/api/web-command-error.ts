@@ -8,7 +8,7 @@
  * never invents user-visible copy.
  */
 
-import {noteRefusal} from './wire.ts';
+import {noteRefusal, refusalBody, refusalEnvelope} from './wire.ts';
 
 const WEB_COMMAND_ERROR_KINDS = [
   'invalid_request',
@@ -19,7 +19,7 @@ const WEB_COMMAND_ERROR_KINDS = [
   'service_unavailable',
 ] as const;
 
-export type WebCommandErrorKind = (typeof WEB_COMMAND_ERROR_KINDS)[number];
+type WebCommandErrorKind = (typeof WEB_COMMAND_ERROR_KINDS)[number];
 
 export class AnswerSubmissionError extends Error {
   readonly status: number;
@@ -44,15 +44,7 @@ export class AnswerSubmissionError extends Error {
 /** Parse one failed command response; an empty message leaves the UI's fallback. */
 export async function webCommandError(response: Response): Promise<AnswerSubmissionError> {
   noteRefusal(response.status);
-  let value: unknown;
-  try {
-    value = await response.json();
-  } catch {
-    value = null;
-  }
-  const body = value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
+  const body = refusalEnvelope(await refusalBody(response));
   const kind = WEB_COMMAND_ERROR_KINDS.includes(body.kind as WebCommandErrorKind)
     ? body.kind as WebCommandErrorKind
     : 'ambiguous';

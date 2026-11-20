@@ -142,8 +142,9 @@ async def writer_corpus() -> AsyncIterator[WriterCorpus]:
     """One fresh writer attach over the dedicated test database."""
     from dlightrag.adapters.postgres.core._pool import pg_pool
     from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
-    from dlightrag.application.config import DlightragConfig, set_config
-    from dlightrag.application.settings import rag_settings
+    from dlightrag.application.config.loading import set_config
+    from dlightrag.application.config.sections import DlightragConfig
+    from dlightrag.application.settings.projections import rag_settings
     from dlightrag.engine.ai.settings import (
         EmbeddingSettings,
         ModelRoleSettings,
@@ -312,7 +313,11 @@ async def test_fresh_writer_init_builds_partitioned_foundation(writer_corpus: Wr
 
     conn = await asyncpg.connect(**_kwargs(_TEST_DB))
     try:
-        for table in ("dlightrag_doc_metadata", "lightrag_doc_chunks", writer_corpus.vector_table):
+        for table in (
+            "dlightrag_doc_metadata",
+            "lightrag_doc_chunks",
+            writer_corpus.vector_table,
+        ):
             state = await _table_state(conn, table)
             assert state["relkind"] == "p", f"{table} is not a partitioned parent"
             assert state["is_partition"] is False

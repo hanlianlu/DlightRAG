@@ -16,6 +16,9 @@ permissions:
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
+    # Code scanning needs GitHub Advanced Security on a private repository, and its
+    # upload fails without it; a public mirror runs this workflow unchanged.
+    if: ${{ !github.event.repository.private }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

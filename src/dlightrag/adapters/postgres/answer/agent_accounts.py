@@ -10,7 +10,9 @@ from typing import Any
 from dlightrag.adapters.postgres.core._migrations import TableRequirement
 from dlightrag.adapters.postgres.core._operations import ConnectionPool, PostgresOperationRunner
 from dlightrag.application.agent_accounts import AgentAccountSummary
-from dlightrag.engine.answer.agent_browser import StoredAgentAccount
+from dlightrag.engine.answer.agent_browser.accounts import (
+    StoredAgentAccount,
+)
 
 # ``updated_at`` is the last time the owner's credentials changed, ``created_at`` the first
 # registration, which a reset keeps, and ``last_used_at`` the last login that filled its password.
@@ -45,15 +47,6 @@ CREATE TABLE IF NOT EXISTS dlightrag_agent_account_settings (
 
 AGENT_ACCOUNTS_DDL = (_CREATE_AGENT_ACCOUNTS,)
 AGENT_ACCOUNT_SETTINGS_DDL = (_CREATE_AGENT_ACCOUNT_SETTINGS,)
-
-# What advances a database whose accounts table was made before it kept these times, and which
-# has no switch for the owner's sign-ups.
-AGENT_ACCOUNT_ACTIVITY_AND_SIGN_UPS_DDL = (
-    "ALTER TABLE dlightrag_agent_accounts "
-    "ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
-    "ALTER TABLE dlightrag_agent_accounts ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMPTZ",
-    *AGENT_ACCOUNT_SETTINGS_DDL,
-)
 
 AGENT_ACCOUNTS_SCHEMA_TABLE = TableRequirement(
     name="dlightrag_agent_accounts",
@@ -272,7 +265,6 @@ class PGAgentAccountSettingsStore(PostgresOperationRunner):
 __all__ = [
     "AGENT_ACCOUNTS_DDL",
     "AGENT_ACCOUNTS_SCHEMA_TABLE",
-    "AGENT_ACCOUNT_ACTIVITY_AND_SIGN_UPS_DDL",
     "AGENT_ACCOUNT_SETTINGS_DDL",
     "AGENT_ACCOUNT_SETTINGS_SCHEMA_TABLE",
     "PGAgentAccountSettingsStore",

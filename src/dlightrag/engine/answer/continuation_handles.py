@@ -21,12 +21,12 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from dlightrag.engine.answer.publication import artifact_read_call
-from dlightrag.engine.runtime.settlements import InventoryPathRecord
-from dlightrag.engine.runtime.workspace import (
+from dlightrag.engine.runtime.agentspace import (
     CommittedSpillRecord,
     RunArtifactRecord,
     SessionNoteRecord,
 )
+from dlightrag.engine.runtime.settlements import InventoryPathRecord
 
 #: How many committed spills one summary may name. The share is reserved, not
 #: first-come: the omitted handle is the expensive failure, and Evidence, which

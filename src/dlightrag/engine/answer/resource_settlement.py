@@ -11,7 +11,9 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from dlightrag.engine.agent.tools import ResourceAttachmentBytes
+from dlightrag.engine.agent.tools.contracts import (
+    ResourceAttachmentBytes,
+)
 from dlightrag.engine.runtime.blob_chunks import blob_digest, plan_blob
 from dlightrag.engine.runtime.settlements import (
     CompleteBlobDescriptor,

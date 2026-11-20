@@ -3,9 +3,12 @@
 
 from mcp.server.auth.provider import AccessToken
 
-from dlightrag.application.access import AuthenticationError, authenticate_bearer_token
-from dlightrag.application.config import DlightragConfig
-from dlightrag.application.settings import authentication_settings
+from dlightrag.application.access.authentication import (
+    AuthenticationError,
+    authenticate_bearer_token,
+)
+from dlightrag.application.config.sections import DlightragConfig
+from dlightrag.application.settings.projections import authentication_settings
 
 
 def _token_scopes(claims: dict[str, object]) -> list[str]:

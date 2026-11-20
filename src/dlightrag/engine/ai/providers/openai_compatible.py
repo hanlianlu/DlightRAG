@@ -322,6 +322,7 @@ class OpenAICompatibleProvider(CompletionProvider):
         *,
         tools: list[ToolDefinition],
         emit_text: Callable[[str], Awaitable[None]],
+        emit_reasoning: Callable[[str], Awaitable[None]] | None = None,
         tool_choice: ToolChoice = "auto",
         temperature: float | None = None,
         max_tokens: int | None = None,
@@ -334,6 +335,7 @@ class OpenAICompatibleProvider(CompletionProvider):
                 model,
                 tools=tools,
                 emit_text=emit_text,
+                emit_reasoning=emit_reasoning,
                 tool_choice=tool_choice,
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -379,6 +381,8 @@ class OpenAICompatibleProvider(CompletionProvider):
                 reasoning = extras.get("reasoning_content")
                 if isinstance(reasoning, str) and reasoning:
                     reasoning_parts.append(reasoning)
+                    if emit_reasoning is not None:
+                        await emit_reasoning(reasoning)
                 details = extras.get("reasoning_details")
                 if isinstance(details, list):
                     reasoning_details.extend(details)

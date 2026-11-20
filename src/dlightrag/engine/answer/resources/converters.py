@@ -2,7 +2,7 @@
 """Deterministic binary resource conversion with OOXML preflight.
 
 Only HTML, CSV, PDF, DOCX, PPTX, and XLSX are admitted. PDF, DOCX and XLSX text
-use firecrawl-anydoc 0.2.4 with local OCR rejection. MarkItDown runs with
+use firecrawl-anydoc 0.2.5 with local OCR rejection. MarkItDown runs with
 plugins disabled and never fetches the network: DlightRAG hands it admitted bytes
 and explicit :class:`StreamInfo`. A fresh converter is built per call so no
 mutable state is shared between concurrent conversions. OOXML archives pass a
@@ -50,7 +50,7 @@ _MAX_OOXML_EXPANSION_RATIO = 100
 #: One conversion's budget, shared across preflight, candidate and (at most one)
 #: fallback. It is an adoption/start-work deadline, not a native thread kill.
 MAX_CONVERSION_SECONDS = 120.0
-_ANYDOC_VERSION = "0.2.4"
+_ANYDOC_VERSION = "0.2.5"
 
 _DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 _PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
@@ -248,7 +248,7 @@ def _load_anydoc() -> ModuleType:
     except PackageNotFoundError as exc:
         raise RuntimeError("required firecrawl-anydoc distribution is missing") from exc
     if installed != _ANYDOC_VERSION:
-        raise RuntimeError("qualified firecrawl-anydoc 0.2.4 is required")
+        raise RuntimeError("qualified firecrawl-anydoc 0.2.5 is required")
     import anydoc
 
     return anydoc

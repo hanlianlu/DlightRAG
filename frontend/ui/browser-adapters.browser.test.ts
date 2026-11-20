@@ -28,7 +28,6 @@ describe('cold browser adapter initialization', () => {
     }) as typeof window.requestIdleCallback;
     document.documentElement.style.setProperty('--panel-width', '420px');
     document.documentElement.style.setProperty('--artifact-canvas-width', '420px');
-    document.body.classList.add('artifact-canvas-open');
     document.body.innerHTML = `
       <dl-split-layout id="panel-split" primary="end" size="0"
         style="display:block;width:1400px;height:500px">
@@ -46,9 +45,12 @@ describe('cold browser adapter initialization', () => {
     const artifact = document.querySelector<DlSplitLayout>('#artifact-canvas-split')!;
     await new Promise((resolve) => requestAnimationFrame(resolve));
 
-    expect(files.size).to.equal(420);
-    expect(artifact.size).to.equal(420);
-    expect(files.max).to.be.within(458, 460);
+    // Both panels open together in the cold column: the Inspector asks for 38% of its split and the
+    // Canvas for 42% of the column it finds, and the two shares together meet the chat's reserve.
+    // The Inspector therefore opens as narrow as it may, and the Canvas takes the room left over.
+    expect(files.size).to.equal(320);
+    expect(artifact.size).to.equal(558);
+    expect(files.max).to.equal(320);
 
     files.size = 320;
     files.dispatchEvent(new CustomEvent('dl-split-input', {

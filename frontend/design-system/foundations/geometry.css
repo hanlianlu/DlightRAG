@@ -3,10 +3,11 @@
 /* Layout, radius, sizing, and drawing geometry foundations. */
 
 :root {
-  --panel-width: 420px;
-  --artifact-canvas-width: 420px;
+  /* The width the Shell publishes for a dock; before it lays out, these are proportional stand-ins
+     for the Inspector and the Canvas (ADR 0068 — the per-grain defaults live in lib/panel-share.ts). */
+  --panel-width: clamp(320px, 38vw, 560px);
+  --artifact-canvas-width: clamp(320px, 42vw, 720px);
   --layout-content-width: clamp(340px, 55vw, 880px);
-  --layout-panel-min: 320px;
   --radius-control: 0.625rem;
   --radius-card: 1rem;
   --radius-popover: 1.125rem;
@@ -20,11 +21,15 @@
   --radius-circle: 50%;
   --radius-highlight: 0.125rem;
   --size-button: clamp(28px, 2.8vw, 34px);
+
+  /* WCAG 2.2 Target Size (Minimum): the least a control may measure each way when it has no room around it. */
+  --size-target-min: 1.5rem;
   --size-icon-sm: var(--space-xs);
   --size-icon-md: var(--space-s);
 
-  /* The radio marker shared by the workspace pickers (slicer popover and Files panel pill).
-   * One token for both is what keeps the two lists looking like the same control. */
+  /* The radio marker's size, worn by the design system's `.dl-popover-radio`: the search scope
+   * and the Files panel's ingest target draw that one ring, which is what keeps the two lists
+   * looking like the same control. */
   --size-radio: 10px;
 
   /* Switch track and thumb. The two derived invariants are what the primitive and its
@@ -50,8 +55,12 @@
   --dl-icon-size-sm: 16px;
   --dl-icon-size-md: 20px;
   --dl-icon-size-lg: 24px;
-  --dl-icon-stroke: 1.75;
+
+  /* The stroke weight of every icon, stated in the glyph's own 24-unit viewBox rather than in CSS pixels:
+   * the drawing scales it, so the 16/20/24px marks carry 1.00/1.25/1.50px of ink. Lucide draws its set at
+   * 2; this product draws a quarter lighter, 1.5 of 24 (a 6.25% ratio), and the 12px step keeps a 2-unit
+   * floor so its ink stays one CSS pixel. */
+  --dl-icon-weight: 1.5;
   --size-lightbox-nav-width: clamp(44px, 6vw, 72px);
   --inset-lightbox-nav-block: max(var(--space-layout), 12vh);
-  --stroke-composer-plus-icon: 1.25;
 }

@@ -53,31 +53,6 @@ async def test_registry_control_plane_fields_are_durable_and_constrained(pool: A
 
     registry = PGWorkspaceRegistry(pool=pool)
     await registry.initialize()
-    # Simulate the pre-foundation registry upgrade path: columns may exist
-    # while the new checks do not. Replaying the final migration must make
-    # the writer-created schema pass the same catalog contract readers use.
-    from dlightrag.adapters.postgres.corpus import workspaces
-
-    constraint_names = [name for name, _expression in workspaces._WORKSPACE_CHECK_EXPRESSIONS]
-    async with pool.acquire() as conn:
-        for name in constraint_names:
-            await conn.execute(f"ALTER TABLE dlightrag_workspace_meta DROP CONSTRAINT {name}")
-        await conn.execute(
-            "DELETE FROM dlightrag_schema_migrations "
-            "WHERE scope = 'workspace_registry' "
-            "AND version = 'workspace_meta_promotion_constraints'"
-        )
-    await registry.initialize()
-    async with pool.acquire() as conn:
-        installed = {
-            str(row["conname"])
-            for row in await conn.fetch(
-                "SELECT conname FROM pg_catalog.pg_constraint "
-                "WHERE conrelid = 'dlightrag_workspace_meta'::regclass"
-            )
-        }
-    assert set(constraint_names) <= installed
-
     await registry.upsert(
         workspace=_WORKSPACE,
         display_name="Promotion Workspace",

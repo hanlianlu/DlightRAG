@@ -34,19 +34,21 @@ from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.settings import ModelRole
 from dlightrag.engine.ai.telemetry import Telemetry
 from dlightrag.engine.dependencies import TransientDependencyError
-from dlightrag.engine.rag.retrieval import (
-    MetadataFilter,
-    RetrievalContexts,
-    RetrievalOptions,
-    RetrievalResult,
-)
 from dlightrag.engine.rag.retrieval.federation import (
     FederatedReranker,
     FederationMergePolicy,
     WorkspaceRetriever,
     federated_retrieve,
 )
+from dlightrag.engine.rag.retrieval.models import (
+    MetadataFilter,
+    RetrievalOptions,
+)
 from dlightrag.engine.rag.retrieval.planner import RetrievalPlan, RetrievalPlanner
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalContexts,
+    RetrievalResult,
+)
 from dlightrag.engine.rag.retrieval.visual import PreparedVisualQuery, VisualEmbeddingDomain
 from dlightrag.engine.rag.workspace.lifecycle import await_shared_cleanup
 from dlightrag.engine.rag.workspace.pool import WorkspacePool

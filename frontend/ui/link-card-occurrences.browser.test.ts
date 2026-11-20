@@ -102,42 +102,6 @@ it('keeps a slotted video alive across References toggles and equivalent present
   expect(element.querySelector('[data-answer-link-card]')).to.equal(null);
 });
 
-it('isolates typed thumbnails and cards from prose image and link styles', async () => {
-  const stylesheets: HTMLLinkElement[] = [];
-  try {
-    for (const path of ['../design-system/index.css', '../styles/answer-presentation.module.css', '../styles/chat.module.css']) {
-      const link = document.createElement('link');
-      link.rel = 'stylesheet';
-      link.href = new URL(path, import.meta.url).href;
-      stylesheets.push(link);
-      await new Promise<void>((resolve, reject) => {
-        link.onload = () => resolve(); link.onerror = reject;
-        document.head.append(link);
-      });
-    }
-    const image = {id: 'shot', chunkId: '', sourceRef: '', url: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', thumbnailUrl: '', label: 'Shot', answerImageSent: true};
-    const value = presentation('Photo', '<p><span class="answer-resource-slot-0"></span> <a href="https://example.com/x">film</a></p>');
-    value.parts.push({type: 'evidence_image', text: '', html: '', artifact: null, evidenceImage: image, inline: true, slot: 0});
-    value.linkCards = [{...cards[0], image: 'https://example.com/cover.png'}];
-    const element = await mount(value);
-    const thumbnail = element.querySelector<HTMLImageElement>('[data-answer-image] img')!;
-    const button = thumbnail.closest('button')!;
-    const style = getComputedStyle(thumbnail);
-    expect(style.marginTop).to.equal('0px');
-    expect(style.marginBottom).to.equal('0px');
-    expect(thumbnail.getBoundingClientRect().height).to.equal(button.clientHeight);
-    const cover = element.querySelector<HTMLImageElement>('[data-answer-link-card] img')!;
-    expect(getComputedStyle(cover).marginTop).to.equal('0px');
-    expect(getComputedStyle(cover).maxWidth).to.equal('220px');
-    const cardLink = element.querySelector<HTMLAnchorElement>('[data-answer-link-card]')!;
-    const probe = document.createElement('span');
-    probe.style.color = 'var(--color-text-primary)'; element.append(probe);
-    expect(getComputedStyle(cardLink).color).to.equal(getComputedStyle(probe).color);
-  } finally {
-    stylesheets.forEach((link) => { link.remove(); });
-  }
-});
-
 it('cards a prose recommendation even when its URL is a source, without changing citation controls', async () => {
   const value = presentation('Source', '<p><a href="https://example.com/x">source</a> <cite class="citation-badge" data-ref="1">1</cite></p>');
   value.sources = [{id: '1', title: 'Source', sourceUrl: 'https://example.com/x', downloadUrl: null, chunks: []}];

@@ -15,6 +15,7 @@ import re
 from pathlib import Path
 
 from dlightrag.engine.ai.telemetry import SPAN_TYPES, NoopTelemetry
+from tests.support.source_tree import python_files, syntax_tree
 
 
 def test_no_log_call_names_a_log_record_attribute_in_extra() -> None:
@@ -26,8 +27,8 @@ def test_no_log_call_names_a_log_record_attribute_in_extra() -> None:
     source = Path(__file__).resolve().parents[2] / "src" / "dlightrag"
     offenders = [
         f"{path.relative_to(source)}:{key.lineno} {key.value!r}"
-        for path in sorted(source.rglob("*.py"))
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        for path in python_files(source)
+        for node in ast.walk(syntax_tree(path))
         if isinstance(node, ast.Call)
         for keyword in node.keywords
         if keyword.arg == "extra" and isinstance(keyword.value, ast.Dict)
@@ -45,7 +46,7 @@ async def test_noop_telemetry_accepts_updates_without_product_dependencies() -> 
 
 def test_answer_trace_output_states_the_answer() -> None:
     """One shaper, one shape: the answer a reviewer reads is always there."""
-    from dlightrag.engine.answer.execution import answer_trace_output
+    from dlightrag.engine.answer.execution.executor import answer_trace_output
 
     output = answer_trace_output("the answer", [], {})
     assert output["answer"] == "the answer"
@@ -56,7 +57,7 @@ def test_every_numeric_secret_named_setting_is_a_token_count() -> None:
     """The settings dump shows these numbers, so each must be a count, not a credential."""
     from pydantic import BaseModel
 
-    from dlightrag.application.config import DlightragConfig
+    from dlightrag.application.config.sections import DlightragConfig
     from dlightrag.engine.ai.telemetry import hides_secret_value, is_secret_key
 
     def numeric_secret_fields(model: type[BaseModel], seen: set[type]) -> list[str]:
@@ -118,13 +119,13 @@ _RUN_ROOTS: dict[str, tuple[str, set[str]]] = {
 
 
 def _source_files() -> list[Path]:
-    return sorted(_SPAN_VOCABULARY_SOURCE.rglob("*.py"))
+    return list(python_files(_SPAN_VOCABULARY_SOURCE))
 
 
 def _observe_calls() -> list[tuple[Path, ast.Call]]:
     calls: list[tuple[Path, ast.Call]] = []
     for path in _source_files():
-        for node in ast.walk(ast.parse(path.read_text("utf-8"))):
+        for node in ast.walk(syntax_tree(path)):
             if (
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
@@ -172,7 +173,7 @@ def test_observe_is_never_called_through_an_alias_or_a_shadowed_name() -> None:
     offenders = [
         f"{path.relative_to(_SPAN_VOCABULARY_SOURCE)}:{node.lineno}"
         for path in _source_files()
-        for node in ast.walk(ast.parse(path.read_text("utf-8")))
+        for node in ast.walk(syntax_tree(path))
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
         and node.func.id == "observe"
@@ -203,7 +204,7 @@ def test_the_registry_is_the_only_place_a_span_name_maps_to_a_kind() -> None:
     for path in _source_files():
         if path == _REGISTRY:
             continue
-        for node in ast.walk(ast.parse(path.read_text("utf-8"))):
+        for node in ast.walk(syntax_tree(path)):
             if isinstance(node, ast.Dict):
                 keys = {
                     key.value
@@ -226,7 +227,7 @@ def test_every_run_root_opens_inside_a_trace_attribution_scope() -> None:
     """A root without attribution is a session-less trace nobody can follow later."""
     for root, (relative, keywords) in _RUN_ROOTS.items():
         path = _SPAN_VOCABULARY_SOURCE / relative
-        tree = ast.parse(path.read_text("utf-8"))
+        tree = syntax_tree(path)
         root_calls = [
             node
             for node in ast.walk(tree)

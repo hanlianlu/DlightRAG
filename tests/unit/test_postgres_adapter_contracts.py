@@ -1,14 +1,18 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Ownership contracts for the root PostgreSQL adapters."""
+"""Ownership contracts for the root PostgreSQL adapters.
+
+Which modules may import asyncpg or the PostgreSQL adapter are import-linter contracts in
+pyproject.toml; what is left here reads the shape of the source those contracts cannot.
+"""
 
 import ast
 import re
 from pathlib import Path
 
-_ROOT = Path(__file__).resolve().parents[2]
+from tests.support.source_tree import REPO_ROOT, python_files, source_text, syntax_tree
+
+_ROOT = REPO_ROOT
 _SOURCE_ROOTS = (_ROOT / "src", _ROOT / "packages")
-_POSTGRES_ADAPTER = _ROOT / "src/dlightrag/adapters/postgres"
-_MEMORY_PG_ADAPTER = _ROOT / "packages/memory/src/dlightrag_memory/_storage"
 _RAG_CORE = _ROOT / "src/dlightrag/engine/rag"
 _RAW_SQL_RE = re.compile(
     r"\b(?:SELECT\b.{0,500}\bFROM|INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM|"
@@ -21,6 +25,7 @@ _POSTGRES_IDENTIFIERS = (
     "dlightrag_ingest_jobs",
     "dlightrag_bm25_language",
 )
+_WEB_MODELS_MODULE = "dlightrag.adapters.http.browser.conversation_models"
 _WEB_RECORD_NAMES = {
     "AnswerTurnCreation",
     "ConversationHead",
@@ -31,62 +36,11 @@ _WEB_RECORD_NAMES = {
 }
 
 
-def _python_files() -> list[Path]:
-    return [path for root in _SOURCE_ROOTS for path in root.rglob("*.py")]
-
-
-def test_asyncpg_is_private_to_the_postgres_adapter() -> None:
-    offenders: list[Path] = []
-    for path in _python_files():
-        if path.is_relative_to(_POSTGRES_ADAPTER) or path.is_relative_to(_MEMORY_PG_ADAPTER):
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        if any(
-            (isinstance(node, ast.Import) and any(alias.name == "asyncpg" for alias in node.names))
-            or (isinstance(node, ast.ImportFrom) and node.module == "asyncpg")
-            for node in ast.walk(tree)
-        ):
-            offenders.append(path.relative_to(_ROOT))
-
-    assert offenders == []
-
-
-def test_owner_modules_do_not_import_the_postgres_adapter() -> None:
-    owner_roots = (
-        _ROOT / "src/dlightrag/application",
-        _ROOT / "src/dlightrag/engine/runtime",
-        _RAG_CORE,
-    )
-    owner_files = [path for root in owner_roots for path in root.rglob("*.py")]
-    owner_files.append(_ROOT / "src/dlightrag/adapters/http/rest/routes/status.py")
-
-    offenders: list[Path] = []
-    for path in owner_files:
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        if any(
-            (
-                isinstance(node, ast.ImportFrom)
-                and node.module is not None
-                and node.module.startswith("dlightrag.adapters.postgres")
-            )
-            or (
-                isinstance(node, ast.Import)
-                and any(
-                    alias.name.startswith("dlightrag.adapters.postgres") for alias in node.names
-                )
-            )
-            for node in ast.walk(tree)
-        ):
-            offenders.append(path.relative_to(_ROOT))
-
-    assert offenders == []
-
-
 def test_rag_core_contains_no_postgres_schema_or_raw_sql() -> None:
     offenders: list[Path] = []
     assert _RAG_CORE.is_dir()
-    for path in _RAG_CORE.rglob("*.py"):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for path in python_files(_RAG_CORE):
+        tree = syntax_tree(path)
         docstrings: set[int] = set()
         for node in ast.walk(tree):
             body = getattr(node, "body", None)
@@ -118,13 +72,11 @@ def test_rag_core_contains_no_postgres_schema_or_raw_sql() -> None:
 
 def test_callers_take_web_records_from_the_application_owner() -> None:
     offenders: list[tuple[Path, str]] = []
-    for path in _python_files() + list((_ROOT / "tests").rglob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if not (
-                isinstance(node, ast.ImportFrom)
-                and node.module == "dlightrag.adapters.http.browser.conversation_models"
-            ):
+    for path in python_files(*_SOURCE_ROOTS, _ROOT / "tests"):
+        if _WEB_MODELS_MODULE not in source_text(path):
+            continue
+        for node in ast.walk(syntax_tree(path)):
+            if not (isinstance(node, ast.ImportFrom) and node.module == _WEB_MODELS_MODULE):
                 continue
             offenders.extend(
                 (path.relative_to(_ROOT), alias.name)

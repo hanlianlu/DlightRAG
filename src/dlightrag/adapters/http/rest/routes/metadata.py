@@ -13,8 +13,9 @@ from dlightrag.adapters.http.rest.models import (
     MetadataUpdateResponse,
     SearchMetadataResponse,
 )
-from dlightrag.application.access import AccessAction, UserContext
-from dlightrag.application.corpus_admin import (
+from dlightrag.application.access.control import AccessAction
+from dlightrag.application.access.principal import UserContext
+from dlightrag.application.corpus_admin.metadata_search import (
     METADATA_SEARCH_PAGE_DEFAULT_LIMIT,
     METADATA_SEARCH_PAGE_MAX_LIMIT,
     MetadataSearchCursorError,
@@ -41,7 +42,7 @@ async def search_metadata(
     """Return one bounded page of document IDs matching 'filters'."""
     from pydantic import ValidationError
 
-    from dlightrag.application.retrieval import MetadataFilter
+    from dlightrag.engine.rag.retrieval.models import MetadataFilter
 
     application = get_application(request)
     ws = resolve_workspace(workspace, request)

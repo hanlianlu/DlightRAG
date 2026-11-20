@@ -16,8 +16,10 @@ from jwt.algorithms import RSAAlgorithm
 
 from dlightrag.adapters.http.browser.auth import WebAuthMiddleware
 from dlightrag.adapters.http.browser.edge_identity import EdgeIdentityError, authenticate_edge
-from dlightrag.application.access import AuthenticationSettings
-from dlightrag.application.config import DlightragConfig
+from dlightrag.application.access.authentication import (
+    AuthenticationSettings,
+)
+from dlightrag.application.config.sections import DlightragConfig
 
 AUDIENCE = "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0"
 _KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)

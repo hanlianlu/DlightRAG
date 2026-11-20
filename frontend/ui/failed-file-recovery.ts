@@ -11,10 +11,13 @@ import {
   type WebFailedFilesPage,
 } from '../api/files.ts';
 import {ApiError} from '../api/wire.ts';
+import {getLocale} from '../i18n/locale.ts';
+import {dateTime} from '../lib/date-format.ts';
 import {CorpusRunTracker, type TrackedCorpusRun} from '../lib/corpus-run-tracker.ts';
 import {raise} from '../lib/dom.ts';
 import {isAbortError} from '../lib/errors.ts';
 import {LightElement} from '../lib/lit-host.ts';
+import {catalogText, localizedText, type LocalizedText} from '../lib/localized-text.ts';
 import {KeysetPager} from '../lib/paged.ts';
 import {corpusRepairNotice, resumeRepairLabel, resumeRepairResult} from './corpus-repair.ts';
 import {loadOlderControl} from './load-older.ts';
@@ -23,33 +26,25 @@ import {modalResult} from './modal.ts';
 import recoveryStyles from '../styles/failed-file-recovery.module.css';
 import {FailedFileRecoverySession} from './failed-file-recovery-session.ts';
 
-function failureTime(value: string): string {
-  if (!value) return '';
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.valueOf())) return '';
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(parsed);
-}
-
 /** HTTP status of a Files or Corpus Run refusal; null for any other failure. */
 function refusalStatus(error: unknown): number | null {
   return error instanceof ApiError ? error.status : null;
 }
 
-function recoveryRequestError(error: unknown, fallback: string): string {
+function recoveryRequestError(error: unknown, fallback: LocalizedText): LocalizedText {
   const status = refusalStatus(error);
   if (status === null) return fallback;
   if (status === 403) {
-    return msg('You do not have permission to recover documents in this workspace.', {
-      id: 'inspectorFiles.recovery.forbidden',
-    });
+    return catalogText(
+      'You do not have permission to recover documents in this workspace.',
+      'inspectorFiles.recovery.forbidden',
+    );
   }
   if (status === 409) {
-    return msg('This workspace is no longer available.', {
-      id: 'inspectorFiles.recovery.workspaceGone',
-    });
+    return catalogText(
+      'This workspace is no longer available.',
+      'inspectorFiles.recovery.workspaceGone',
+    );
   }
   return fallback;
 }
@@ -68,7 +63,7 @@ export class DlFailedFileRecovery extends LightElement {
   declare active: boolean;
   declare page: WebFailedFilesPage | null;
   declare loading: boolean;
-  declare error: string | null;
+  declare error: LocalizedText | null;
   declare recoveryPending: boolean;
 
   readonly #session = new FailedFileRecoverySession();
@@ -84,9 +79,10 @@ export class DlFailedFileRecovery extends LightElement {
       this.page = null;
       this.error = recoveryRequestError(
         error,
-        msg('Document recovery status is no longer available.', {
-          id: 'inspectorFiles.recovery.statusUnavailable',
-        }),
+        catalogText(
+          'Document recovery status is no longer available.',
+          'inspectorFiles.recovery.statusUnavailable',
+        ),
       );
     },
   });
@@ -123,9 +119,7 @@ export class DlFailedFileRecovery extends LightElement {
       this.page = null;
       this.error = null;
     }
-  }
-
-  protected override updated(changed: PropertyValues<this>): void {
+    // Loading starts here, with the state it implies, so the render that follows already shows it.
     if (changed.has('workspace') || changed.has('active')) {
       if (this.active && this.workspace) void this.refresh();
       else this.pause();
@@ -143,9 +137,10 @@ export class DlFailedFileRecovery extends LightElement {
       this.page = null;
       this.error = recoveryRequestError(
         error,
-        msg('Document status is temporarily unavailable.', {
-          id: 'inspectorFiles.recovery.loadFailed',
-        }),
+        catalogText(
+          'Document status is temporarily unavailable.',
+          'inspectorFiles.recovery.loadFailed',
+        ),
       );
       this.#listSettled();
     });
@@ -175,7 +170,7 @@ export class DlFailedFileRecovery extends LightElement {
     if (this.error && this.page === null) {
       return html`
         <div class=${recoveryStyles['failed-files-unavailable']} role="alert">
-          <span>${this.error}</span>
+          <span>${localizedText(this.error)}</span>
           <button class=${recoveryStyles['failed-files-retry-load']} type="button"
                   @click=${() => { void this.refresh(); }}> 
             ${msg('Try again', {id: 'inspectorFiles.recovery.tryAgain'})}
@@ -236,7 +231,7 @@ export class DlFailedFileRecovery extends LightElement {
                             id: 'inspectorFiles.recovery.processingFailed',
                           })}</span>
                         </span>
-                        <time datetime=${item.updatedAt}>${failureTime(item.updatedAt)}</time>
+                        <time datetime=${item.updatedAt}>${dateTime(item.updatedAt, getLocale())}</time>
                       </summary>
                       <div class=${recoveryStyles['failed-file-technical']}>
                         <span>${msg('Technical details', {
@@ -318,9 +313,10 @@ export class DlFailedFileRecovery extends LightElement {
       this.page = null;
       this.error = recoveryRequestError(
         error,
-        msg('Document status is temporarily unavailable.', {
-          id: 'inspectorFiles.recovery.loadFailed',
-        }),
+        catalogText(
+          'Document status is temporarily unavailable.',
+          'inspectorFiles.recovery.loadFailed',
+        ),
       );
     });
   };
@@ -334,14 +330,14 @@ export class DlFailedFileRecovery extends LightElement {
     const dialog = this.querySelector<HTMLDialogElement>('#retry-failed-files-dialog');
     if (!dialog || this.recoveryPending || this.#tracker.active) return;
     this.#retryTrigger = trigger;
-    const controller = this.#session.startModal();
+    const signal = this.#session.startModal();
     const result = await modalResult(
       this,
       dialog,
       () => this.#restoreRetryFocus(),
-      controller.signal,
+      signal,
     );
-    this.#session.finishModal(controller);
+    this.#session.finishModal(signal);
     if (result !== 'retry') return;
     await this.#startRetry();
   };
@@ -349,11 +345,11 @@ export class DlFailedFileRecovery extends LightElement {
   async #startRetry(): Promise<void> {
     const workspace = this.workspace;
     if (!workspace || this.recoveryPending || this.#tracker.active) return;
-    const controller = this.#session.startMutation();
+    const signal = this.#session.startMutation();
     this.recoveryPending = true;
     try {
-      const run = await startFailedFileRetry(workspace, controller.signal);
-      if (!this.#session.isMutationCurrent(controller, workspace, this.workspace, this.active)) return;
+      const run = await startFailedFileRetry(workspace, signal);
+      if (!this.#session.isMutationCurrent(signal, workspace, this.workspace, this.active)) return;
       this.#tracker.follow(run);
       if (corpusRunActive(run)) {
         requestToast(this, {
@@ -361,24 +357,29 @@ export class DlFailedFileRecovery extends LightElement {
         });
       }
     } catch (error) {
-      if (isAbortError(error) || !this.#session.isMutationCurrent(controller, workspace, this.workspace, this.active)) return;
+      if (isAbortError(error) || !this.#session.isMutationCurrent(signal, workspace, this.workspace, this.active)) return;
       requestToast(this, {
-        message: recoveryRequestError(
+        tone: 'error',
+        message: localizedText(recoveryRequestError(
           error,
-          msg('Document recovery could not be started.', {
-            id: 'inspectorFiles.recovery.startFailed',
-          }),
-        ),
+          catalogText(
+            'Document recovery could not be started.',
+            'inspectorFiles.recovery.startFailed',
+          ),
+        )),
       });
     } finally {
-      if (this.#session.finishMutation(controller)) this.recoveryPending = false;
+      if (this.#session.finishMutation(signal)) this.recoveryPending = false;
     }
   }
 
   async #resumeRepair(): Promise<void> {
     const outcome = await this.#tracker.resume();
     if (outcome === 'stale') return;
-    requestToast(this, {message: resumeRepairResult(outcome)});
+    requestToast(this, {
+      tone: outcome === 'failed' ? 'error' : 'receipt',
+      message: localizedText(resumeRepairResult(outcome)),
+    });
   }
 
   async #settleRecovery(run: TrackedCorpusRun): Promise<void> {
@@ -392,8 +393,10 @@ export class DlFailedFileRecovery extends LightElement {
       || !this.isConnected
     ) return;
     raise(this, 'dl-failed-file-recovery-complete');
+    const succeeded = run.status === 'succeeded';
     requestToast(this, {
-      message: run.status === 'succeeded'
+      tone: succeeded ? 'receipt' : 'error',
+      message: succeeded
         ? msg('Document recovery finished.', {id: 'inspectorFiles.recovery.finished'})
         : msg('Document recovery failed.', {id: 'inspectorFiles.recovery.failed'}),
     });

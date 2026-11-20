@@ -4,16 +4,17 @@
 from __future__ import annotations
 
 import ast
-from pathlib import Path
 
-SOURCE = Path(__file__).resolve().parents[2] / "src" / "dlightrag"
+from tests.support.source_tree import REPO_ROOT, python_files, syntax_tree
+
+SOURCE = REPO_ROOT / "src" / "dlightrag"
 
 
 def _uses(name: str) -> list[tuple[str, int]]:
     """Where the product source calls or names ``name`` as code, never in a docstring or comment."""
     found = []
-    for path in sorted(SOURCE.rglob("*.py")):
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+    for path in python_files(SOURCE):
+        for node in ast.walk(syntax_tree(path)):
             if (isinstance(node, ast.Attribute) and node.attr == name) or (
                 isinstance(node, ast.keyword) and node.arg == name
             ):

@@ -9,7 +9,13 @@ from typing import Literal
 import pytest
 
 from dlightrag.adapters.agent_browser.pool import PooledBrowserProvider
-from dlightrag.engine.answer.agent_browser import AgentBrowserError, BrowserHolder, RunAgentBrowser
+from dlightrag.engine.answer.agent_browser.contracts import (
+    AgentBrowserError,
+    BrowserHolder,
+)
+from dlightrag.engine.answer.agent_browser.run import (
+    RunAgentBrowser,
+)
 from dlightrag.engine.answer.resources.registry import AgentBrowserRender, ResourceRegistry
 from tests.support.agent_browser import FakeLeases, browser_settings, launch_recorder
 from tests.support.dns import public_dns
@@ -21,10 +27,14 @@ PAGE = "https://spa.example.com/app.html"
 
 
 def pool(
-    leases: FakeLeases, *endpoints: str, chromium_sandbox: bool = True
+    leases: FakeLeases,
+    *endpoints: str,
+    chromium_sandbox: bool = True,
+    headed: tuple[str, ...] = (),
 ) -> PooledBrowserProvider:
     return PooledBrowserProvider(
         endpoints=endpoints or ("ws://pool-1/", "ws://pool-2/"),
+        headed_endpoints=headed,
         egress_proxy="http://egress:3128",
         chromium_sandbox=chromium_sandbox,
         connect_timeout_seconds=1.0,
@@ -122,4 +132,82 @@ async def test_a_read_goes_on_without_the_lease_store_and_says_the_browser_was_u
     assert "extraction_status=unavailable" in result.text_content
     assert "Agent Browser: The Agent Browser is unreachable" in result.text_content
     await browser.aclose()
+    await provider.aclose()
+
+
+class _ConnectedBrowser:
+    """A browser connection the pool can hold and close, with no Playwright behind it."""
+
+    def __init__(self) -> None:
+        self.closed = 0
+
+    async def close(self) -> None:
+        self.closed += 1
+
+    def is_connected(self) -> bool:
+        return True
+
+
+def _connected(
+    monkeypatch: pytest.MonkeyPatch, provider: PooledBrowserProvider
+) -> _ConnectedBrowser:
+    """Give a pool a connection it can make, so a lease can be taken and given back."""
+    browser = _ConnectedBrowser()
+
+    async def connect(endpoint: str, *, headed: bool) -> _ConnectedBrowser:
+        return browser
+
+    monkeypatch.setattr(provider, "_connect", connect)
+    return browser
+
+
+async def test_a_retired_lease_tells_its_listeners_before_the_endpoint_goes_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    leases = FakeLeases()
+    provider = pool(leases, "ws://pool-1/")
+    browser = _connected(monkeypatch, provider)
+    told: list[BrowserHolder] = []
+    released_when_told: list[list[str]] = []
+
+    async def retired(holder: BrowserHolder) -> None:
+        # A listener ends the live session that sat on this lease, and that session may
+        # still record into the lease row, so the row is not given back until it is done.
+        released_when_told.append(list(leases.released))
+        told.append(holder)
+
+    provider.on_retire(retired)
+    leased = await provider.lease(HOLDER, wait_seconds=5)
+    assert provider.page_for(HOLDER) is not None
+
+    await leased.aclose()
+
+    assert told == [HOLDER]
+    assert released_when_told == [[]]
+    assert provider.page_for(HOLDER) is None
+    assert leases.released == ["ws://pool-1/"]
+    assert browser.closed == 1
+    await provider.aclose()
+
+
+async def test_a_listener_that_fails_is_logged_and_does_not_hold_the_endpoint(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    leases = FakeLeases()
+    provider = pool(leases, "ws://pool-1/")
+    _connected(monkeypatch, provider)
+
+    async def failing(holder: BrowserHolder) -> None:
+        raise ConnectionError("the live session's store is down")
+
+    provider.on_retire(failing)
+    leased = await provider.lease(HOLDER, wait_seconds=5)
+
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        await leased.aclose()
+
+    assert leases.released == ["ws://pool-1/"]
+    assert [(record.levelno, record.getMessage()) for record in caplog.records] == [
+        (logging.WARNING, "A live browser retirement listener failed")
+    ]
     await provider.aclose()

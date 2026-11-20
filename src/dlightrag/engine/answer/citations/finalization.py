@@ -4,7 +4,10 @@
 from dataclasses import dataclass, field
 
 from dlightrag.engine.answer.citations.contracts import SourceReference
-from dlightrag.engine.rag.retrieval import ContextRow, RetrievalContexts
+from dlightrag.engine.rag.retrieval.models import ContextRow
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalContexts,
+)
 
 from .indexer import build_citation_index
 from .processor import CitationProcessor

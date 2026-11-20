@@ -42,7 +42,7 @@
   /* stylelint-disable-next-line declaration-property-value-disallowed-list */
   line-height: 1;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition: background var(--duration-control), color var(--duration-control);
   z-index: 1001;
 }
 

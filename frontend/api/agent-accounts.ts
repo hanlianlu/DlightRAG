@@ -10,9 +10,7 @@
 
 import * as v from 'valibot';
 import {csrfHeaders} from './csrf.ts';
-import {parseWire} from './wire.ts';
-
-const timestamp = v.pipe(v.string(), v.isoTimestamp(), v.transform((value) => new Date(value)));
+import {parseWire, timestamp} from './wire.ts';
 
 const account = v.pipe(
   v.strictObject({

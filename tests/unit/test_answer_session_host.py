@@ -56,13 +56,21 @@ from dlightrag.engine.answer.execution.executor import (
     _project_fast_history_before_current_user,
     _reserve_agent_session_boundary,
 )
-from dlightrag.engine.answer.fast import FastSessionHost, ensure_session_lane
-from dlightrag.engine.answer.fast.session_host import projection_from_compaction_at
+from dlightrag.engine.answer.fast.session_host import (
+    FastSessionHost,
+    ensure_session_lane,
+    projection_from_compaction_at,
+)
 from dlightrag.engine.answer.history import HistoryProjectionTarget
 from dlightrag.engine.runtime.errors import RunExecutionError
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
-from tests.in_memory_session_repository import MemoryAgentSessionRepository
-from tests.support.model_provider import RecordingProvider, expected_call, tool_model_over, untimed
+from tests.support.in_memory_session_repository import MemoryAgentSessionRepository
+from tests.support.model_provider import (
+    RecordingProvider,
+    expected_call,
+    tool_model_over,
+    untimed,
+)
 from tests.support.workspace_store import InMemoryWorkspaceStore
 
 
@@ -1154,9 +1162,7 @@ async def test_fast_replay_reinstalls_reservation_on_durable_compaction_checkpoi
 
 
 @pytest.mark.asyncio
-async def test_fast_compaction_satisfies_smaller_extract_and_larger_query_profiles(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_fast_compaction_satisfies_smaller_extract_and_larger_query_profiles() -> None:
     store = _CountingFastRepository()
     session_id = SessionId.new()
     host = await _fast_host(store, session_id)
@@ -1192,16 +1198,15 @@ async def test_fast_compaction_satisfies_smaller_extract_and_larger_query_profil
         del messages, projected_summary
         return 100
 
-    # The real wrapper over a recording provider, so the summary's `call` is the real one.
-    provider = RecordingProvider(text="## Goal\nPreserve the prior turn.")
-    tool_model = tool_model_over(
-        monkeypatch, provider, ModelSettings(provider="openai", model="query-model")
-    )
+    class _ToolModel:
+        @staticmethod
+        async def stream_text(**_kwargs):
+            yield "## Goal\nPreserve the prior turn."
 
     class _Models:
         @staticmethod
         def query_tool_model():
-            return tool_model
+            return _ToolModel()
 
     executor = object.__new__(AnswerExecutor)
     executor._models = cast(Any, _Models())
@@ -1240,16 +1245,109 @@ async def test_fast_compaction_satisfies_smaller_extract_and_larger_query_profil
     assert generation_trace["input_tokens_before"] <= generation_trace["input_limit_tokens"]
     assert all(message.get("content") != "current question" for message in compacted.messages)
     snapshot = await host.snapshot(session_id)
-    checkpoint = snapshot.tree.ancestry()[-1]
-    assert isinstance(checkpoint, CompactionEntry)
+    assert isinstance(snapshot.tree.ancestry()[-1], CompactionEntry)
     assert snapshot.active_projection is not None
     assert store.load_calls == 1
     assert store.decoded_rows == 0
-    # Fast summarizes on the query role, and the checkpoint states the call that wrote it.
-    (summarizer,) = provider.requests
-    assert untimed(checkpoint.call) == expected_call(
-        summarizer, role="query", endpoint=None, plan_digest=None, reasoning=None
+
+
+@pytest.mark.asyncio
+async def test_a_fast_compaction_entry_states_the_summarizer_call_that_wrote_its_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Fast Host commits the entry with the call of the attempt that wrote the summary."""
+    store = MemoryAgentSessionRepository[None]()
+    session_id = SessionId.new()
+    host = await _fast_host(store, session_id)
+    await host.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="old",
+        idempotency_key="old-key",
+        content="question " * 4_000,
     )
+    await host.complete(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="old",
+        content="answer " * 4_000,
+    )
+    current = await host.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="current",
+        idempotency_key="current-key",
+        content="current question",
+    )
+    provider = RecordingProvider(
+        text="## Goal\nPreserve the prior turn.", served_model="summarizer-2", delay=0.05
+    )
+    model = tool_model_over(
+        monkeypatch,
+        provider,
+        ModelSettings(
+            provider="openai",
+            model="query-model",
+            api_key="test-key",
+            base_url="https://gateway.example/v1",
+            temperature=0.2,
+        ),
+    )
+
+    class _Models:
+        @staticmethod
+        def query_tool_model():
+            return model
+
+    executor = object.__new__(AnswerExecutor)
+    executor._models = cast(Any, _Models())
+    query_profile = ModelProfile(context_window_tokens=1_000_000)
+    # A smaller model plans over the same history, so it no longer fits that model's window.
+    small_profile = ModelProfile(context_window_tokens=100_000)
+
+    def measure(messages, projected_summary=""):
+        return len(projected_summary) + sum(
+            len(str(item.get("content") or "")) for item in messages
+        )
+
+    _compacted, _trace, committed = await executor._compact_fast_history_if_needed(
+        host=host,
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="current",
+        accepted_user_entry_id=current.user_entry_id,
+        targets=(
+            HistoryProjectionTarget(
+                "fast_planner",
+                small_profile,
+                measure,
+                proactive_compaction=True,
+                require_full_dynamic_reserve=True,
+            ),
+        ),
+        compaction_model_profile=query_profile,
+    )
+
+    assert committed is True
+    [compaction] = [
+        entry
+        for entry in (await host.snapshot(session_id)).entries
+        if isinstance(entry, CompactionEntry)
+    ]
+    [summarizer] = provider.requests
+    # Fast summarizes on the query role as it answers on it; it runs no Plan, and the request
+    # it summarized with states no tools.
+    assert untimed(compaction.call) == expected_call(
+        summarizer,
+        role="query",
+        endpoint="https://gateway.example/v1",
+        plan_digest=None,
+        reasoning=None,
+        served_model="summarizer-2",
+    )
+    # The summarizer's request took the 50 ms the provider took over it.
+    assert compaction.call is not None
+    assert compaction.call["duration_ms"] >= 45
 
 
 @pytest.mark.asyncio

@@ -7,6 +7,16 @@ import './app.ts';
 
 defineDesignSystemElements();
 
+import type {ChildObservation} from '../api/conversations.ts';
+import type {AnswerJudgement} from '../api/feedback.ts';
+import {noteRefusal} from '../api/wire.ts';
+import {conversationRoute, createBrowserRouter, newChatRoute} from '../lib/router.ts';
+import {createAppHandles, productionHandles} from '../stores/app-handles.ts';
+import {judgementKey} from '../stores/kept-judgements.ts';
+import type {TracesSource} from '../stores/traces-source.ts';
+import {buttonNamed, waitFor} from '../testing/dom.ts';
+import {bootstrap, bootstrapResponse} from '../testing/app.ts';
+import {DEFAULT_CHANGES} from '../testing/workspaces.ts';
 import type {
   AnswerPresentationElement,
   AnswerSourceOpenDetail,
@@ -15,38 +25,10 @@ import type {DlApp} from './app.ts';
 import type {DlChatFeature} from './chat-feature.ts';
 import type {DlConversationSidebar} from './conversation-sidebar.ts';
 import type {ImageOpenDetail} from './image-lightbox.ts';
+import {webRouter} from './router.ts';
 import type {DlContinuationDialog} from './run-dialogs.ts';
 import type {DlSettingsDialog} from './settings.ts';
-import type {DlToastRegion, ToastRequestDetail} from './toast.ts';
-import {conversationRoute, newChatRoute} from '../lib/router.ts';
-import {webRouter} from './router.ts';
-import {productionHandles} from '../stores/app-handles.ts';
-import {answerSubmissionRegistry} from '../stores/answer-submission-registry.ts';
-import {buttonNamed, waitFor} from '../testing/dom.ts';
-import {DEFAULT_CHANGES} from '../testing/workspaces.ts';
-
-const bootstrap = {
-  contract_version: 5,
-  workspaces: [
-    {workspace: 'default', display_name: 'Default', embedding_model: 'embed-test', changes: [...DEFAULT_CHANGES]},
-  ],
-  workspaces_next_cursor: null,
-  primary_workspace: 'default',
-  active_workspaces: ['default'],
-  known_workspaces: ['default'],
-  default_workspace: 'default',
-  answer_attachments: {
-    count_limit: 6,
-    image_max_bytes: 1024,
-    document_max_bytes: 2048,
-    extensions: ['md', 'pdf'],
-    image_capability: 'supported',
-    image_limit: 3,
-    accept: 'image/*,.md,.pdf',
-  },
-  active_html_preview_enabled: true,
-  agent_effort: {levels: ['low', 'high', 'max'], default: 'high'},
-} as const;
+import {type DlToastRegion, type ToastRequestDetail, toastRegionOf} from './toast.ts';
 
 const SAFE_PNG =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
@@ -94,10 +76,19 @@ function response(body: unknown, status = 200): Response {
   });
 }
 
-function bootstrapResponse(input: RequestInfo | URL): Response {
-  return String(input) === '/web/api/conversations'
-    ? response({items: [], next_cursor: null})
-    : response(bootstrap);
+/** The reads Settings makes while it opens on Connections after a provider authorization. */
+function connectionsReturnFetch(writes: string[] = []): typeof window.fetch {
+  return async (input, init) => {
+    if (init?.method && init.method !== 'GET') writes.push(String(input));
+    if (String(input) === '/web/api/connections/mcp') {
+      return response({revision: '0', connections: [], presets: []});
+    }
+    if (String(input) === '/web/api/agent-accounts') {
+      return response({available: true, registration: {allowed: true, enabled: true}, accounts: []});
+    }
+    if (String(input) === '/web/api/memory/settings') return response({enabled: false, active_count: null});
+    return bootstrapResponse(input);
+  };
 }
 
 function dialogNamed(root: ParentNode, name: string): HTMLDialogElement | null {
@@ -139,7 +130,7 @@ it('renders the application shell from the typed bootstrap before resolving read
   const loaded = await app.ready;
 
   expect(loaded).to.deep.equal({
-    contractVersion: 5,
+    contractVersion: 6,
     workspaces: [{workspace: 'default', displayName: 'Default', embeddingModel: 'embed-test', changes: DEFAULT_CHANGES}],
     workspacesNextCursor: null,
     primaryWorkspace: 'default',
@@ -157,6 +148,9 @@ it('renders the application shell from the typed bootstrap before resolving read
     },
     activeHtmlPreviewEnabled: true,
     agentEffort: {levels: ['low', 'high', 'max'], default: 'high'},
+    answerFeedbackEnabled: true,
+    // This deployment offers no browser channel, so the page starts no SDK.
+    observability: null,
   });
   const shell = app.querySelector<HTMLElement>('#app');
   expect(shell?.inert).to.equal(false);
@@ -167,11 +161,144 @@ it('renders the application shell from the typed bootstrap before resolving read
   expect(chat?.attachmentAccept).to.equal('image/*,.md,.pdf');
   expect(chat?.querySelector('dl-chat-message-list')).not.to.equal(null);
   expect(chat?.querySelector('dl-chat-composer')).not.to.equal(null);
+  // Whether the reader is offered the thumbs reaches the chat and the Inspector, which hands it to the dock.
+  expect(chat?.answerFeedbackEnabled).to.equal(true);
+  expect(app.querySelector('dl-inspector')?.answerFeedbackEnabled).to.equal(true);
   // The offer reaches the composer, which is what draws the effort picker.
   expect(chat?.agentEffortOffer).to.deep.equal({levels: ['low', 'high', 'max'], default: 'high'});
   const composer = app.querySelector('dl-chat-composer');
   await composer?.updateComplete;
   expect(composer?.querySelector('.composer-effort-label')?.textContent).to.equal('High');
+});
+
+it('names the page for the conversation it shows, with one heading 1 that says the same', async () => {
+  window.matchMedia = desktopMedia;
+  let titledName = 'Quarterly revenue';
+  const wire = (id: string) => ({
+    conversation_id: id,
+    title: id === 'titled' ? titledName : null,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-02T00:00:00Z',
+  });
+  window.fetch = async (input, init) => {
+    const url = String(input);
+    if (url === '/web/api/conversations') {
+      return response({items: [wire('titled'), wire('untitled')], next_cursor: null});
+    }
+    if (url === '/web/api/conversations/titled' && init?.method === 'PATCH') {
+      titledName = 'Revenue, renamed';
+      return response(wire('titled'));
+    }
+    if (url === '/web/api/conversations/gone/history') return response({detail: 'Conversation not found'}, 404);
+    const history = /^\/web\/api\/conversations\/(titled|untitled)\/history$/.exec(url);
+    if (history) return response({conversation: wire(history[1]!), turns: [], commands: [], next_cursor: null});
+    return bootstrapResponse(input);
+  };
+  document.title = 'Before the app';
+  const app = document.createElement('dl-app') as DlApp;
+  document.body.appendChild(app);
+  await app.ready;
+  await waitFor(() => productionHandles().conversations.listState === 'ready');
+  const headings = (): string[] => [...app.querySelectorAll('h1')].map((heading) => heading.textContent?.trim() ?? '');
+
+  // A new chat is the product's own name.
+  await waitFor(() => document.title === 'DlightRAG');
+  expect(headings()).to.deep.equal(['DlightRAG']);
+  expect(app.querySelector('h1')?.classList.contains('dl-sr-only'), 'and it is not drawn').to.equal(true);
+
+  await webRouter.navigate(conversationRoute('titled'));
+  await waitFor(() => document.title === 'Quarterly revenue · DlightRAG');
+  expect(headings()).to.deep.equal(['Quarterly revenue']);
+
+  // The title follows a rename, with no new route.
+  await productionHandles().conversations.rename('titled', 'Revenue, renamed');
+  await waitFor(() => document.title === 'Revenue, renamed · DlightRAG');
+  expect(headings()).to.deep.equal(['Revenue, renamed']);
+
+  // A conversation with no title yet, and one that is gone, name the page as a new chat does.
+  await webRouter.navigate(conversationRoute('untitled'));
+  await waitFor(() => productionHandles().conversations.activeConversationId === 'untitled');
+  await waitFor(() => document.title === 'DlightRAG');
+  expect(headings()).to.deep.equal(['DlightRAG']);
+  await webRouter.navigate(conversationRoute('gone'));
+  await waitFor(() => productionHandles().conversations.viewState === 'unavailable');
+  expect(document.title).to.equal('DlightRAG');
+
+  await webRouter.navigate(conversationRoute('titled'));
+  await waitFor(() => document.title === 'Revenue, renamed · DlightRAG');
+  await webRouter.navigate(newChatRoute());
+  await waitFor(() => document.title === 'DlightRAG');
+
+  // A page without the app is not named for a conversation it no longer shows.
+  await webRouter.navigate(conversationRoute('titled'));
+  await waitFor(() => document.title === 'Revenue, renamed · DlightRAG');
+  app.remove();
+  expect(document.title).to.equal('Before the app');
+});
+
+it('keeps one class on body for each panel that is open, and takes every one away when the Shell leaves', async () => {
+  window.matchMedia = desktopMedia;
+  window.fetch = async (input) => bootstrapResponse(input);
+  const app = document.createElement('dl-app') as DlApp;
+  document.body.appendChild(app);
+  await app.ready;
+  const classes = (): string[] => [...document.body.classList].sort();
+
+  // The conversation list is open on a desktop.
+  await waitFor(() => document.body.classList.contains('conversation-sidebar-open'));
+  expect(classes()).to.deep.equal(['conversation-sidebar-open']);
+
+  await app.querySelector('dl-inspector')!.openFiles();
+  await waitFor(() => document.body.classList.contains('files-panel-open'));
+  const canvas = app.querySelector('dl-artifact-canvas')!;
+  await canvas.open({
+    resourceId: 'chart-1', mediaType: 'image/png', label: 'Chart', filename: 'chart.png', byteSize: 20,
+    digest: 'c'.repeat(64), presentation: 'image', status: 'available',
+    uri: 'dlightrag://answer/run-1/artifacts/chart-1', width: 100, height: 100,
+    dataUrl: '/web/api/answer/run-1/artifacts/chart-1',
+    downloadUrl: '/web/api/answer/run-1/artifacts/chart-1?download=1',
+    presentationUrl: null, issue: null, attestation: null,
+  }, app.querySelector('#files-btn'));
+  await waitFor(() => document.body.classList.contains('artifact-canvas-open'));
+  // Only what a stylesheet reads is written: the Canvas being wide or over the screen is not a class.
+  expect(canvas.layout).to.equal('wide');
+  expect(classes()).to.deep.equal(['artifact-canvas-open', 'conversation-sidebar-open', 'files-panel-open']);
+
+  app.remove();
+  expect(classes(), 'what the Shell wrote stayed behind').to.deep.equal([]);
+});
+
+it('forgets what its own bag kept when the reader signs out, and leaves another bag alone', async () => {
+  window.fetch = async (input) => bootstrapResponse(input);
+  const bag = createAppHandles();
+  const page = productionHandles();
+  const key = judgementKey('run-9', 'main', 1);
+  const given: AnswerJudgement = {value: 'up', reasons: [], note: null};
+  bag.judgements.keep(key, given);
+  page.judgements.keep(key, given);
+  let built = 0;
+  const source = (): TracesSource => { built += 1; return appCountingSource({child: 0}); };
+  bag.traces.sourceFor('run-9', source);
+  bag.submissions.start({
+    submissionId: 'held', conversationId: null, query: 'Held', workspaces: [], mode: null,
+  }, bag.attachments.leaseAll(), {
+    submit: () => new Promise(() => undefined),
+    lookup: async () => null,
+  });
+  const app = document.createElement('dl-app') as DlApp;
+  app.handles = bag;
+  document.body.appendChild(app);
+  await app.ready;
+
+  noteRefusal(401);
+  await waitFor(() => app.signedOut);
+
+  expect(bag.judgements.current(key, null), 'a rating outlived the sign-out').to.equal(null);
+  expect(bag.submissions.list(), 'a submission outlived it').to.have.length(0);
+  bag.traces.sourceFor('run-9', source);
+  expect(built, 'the pages its last reader read were kept').to.equal(2);
+  expect(page.judgements.current(key, null), 'the page\'s own bag was forgotten instead').to.deep.equal(given);
+  page.judgements.forget();
 });
 
 it('keeps the composed compact conversation modal interactive and inerts sibling Shell UI', async () => {
@@ -276,7 +403,6 @@ it('keeps Undo available across Settings and a sibling native modal', async () =
   await waitFor(() => settingsDialog.open);
 
   let undone = false;
-  pageTimersRunFast();
   settings.dispatchEvent(new CustomEvent<ToastRequestDetail>('dl-toast-request', {
     detail: {
       message: 'Undo available',
@@ -288,23 +414,27 @@ it('keeps Undo available across Settings and a sibling native modal', async () =
     bubbles: true,
     composed: true,
   }));
+  // Raised from outside the dialog, the notice shows in the dialog's own region: the shell's lies under the scrim.
   const toast = app.querySelector<DlToastRegion>('dl-toast-region')!;
-  await app.updateComplete;
-  await toast.updateComplete;
-  expect(toast.inert).to.equal(true);
-
-  await new Promise((resolve) => originalSetTimeout(resolve, 60));
-  expect(toast.querySelector<HTMLButtonElement>('button')?.textContent).to.equal('Undo');
+  const own = toastRegionOf(settingsDialog)!;
+  await own.updateComplete;
+  expect(own.querySelector<HTMLButtonElement>('button')?.textContent).to.equal('Undo');
+  expect(toast.visible).to.equal(false);
 
   const continuation = app.querySelector<DlContinuationDialog>('dl-continuation-dialog')!;
   continuation.open();
   const continuationDialog = dialogNamed(continuation, 'Fork this answer')!;
   await waitFor(() => continuationDialog.open);
   settingsDialog.close();
-  await waitFor(() => !settingsDialog.open);
+  // Settings goes with its region and hands over what still awaits the reader, to a shell another modal holds.
+  await waitFor(() => toast.visible);
   await app.updateComplete;
   await toast.updateComplete;
   expect(toast.inert).to.equal(true);
+
+  pageTimersRunFast();
+  await new Promise((resolve) => originalSetTimeout(resolve, 60));
+  expect(toast.querySelector<HTMLButtonElement>('button')?.textContent).to.equal('Undo');
 
   continuationDialog.close();
   await waitFor(() => !continuationDialog.open && !toast.inert);
@@ -312,6 +442,86 @@ it('keeps Undo available across Settings and a sibling native modal', async () =
   toast.querySelector<HTMLButtonElement>('button')?.click();
   await waitFor(() => undone && toast.textContent?.includes('Change undone.') === true);
   expect(toast.textContent).to.contain('Change undone.');
+});
+
+it('shows in the open Settings dialog what the sidebar reports of a delete-all that failed, and keeps it after', async () => {
+  window.fetch = async (input, init) => (
+    String(input) === '/web/api/conversations' && init?.method === 'DELETE'
+      ? new Response(null, {status: 500})
+      : bootstrapResponse(input)
+  );
+  const app = document.createElement('dl-app') as DlApp;
+  document.body.appendChild(app);
+  await app.ready;
+  const settings = app.querySelector<DlSettingsDialog>('dl-settings-dialog')!;
+  await settings.open(null, 'conversations');
+  const settingsDialog = dialogNamed(settings, 'Settings')!;
+  await waitFor(() => settingsDialog.open);
+
+  buttonNamed(settings, 'Delete all conversations')!.click();
+  const confirm = app.querySelector<HTMLDialogElement>('#delete-all-conversations-dialog')!;
+  await waitFor(() => confirm.open);
+  buttonNamed(confirm, 'Delete all')!.click();
+
+  // The sidebar raised the error from outside the dialog, which holds the top layer: it shows in the
+  // dialog's error region, in reach, and not in the shell's under the scrim.
+  const own = toastRegionOf(settingsDialog, 'error')!;
+  const shell = toastRegionOf(app, 'error')!;
+  expect(own, 'the dialog has an error region of its own').not.to.equal(shell);
+  await waitFor(() => own.visible);
+  expect(own.textContent).to.contain('Could not delete conversations.');
+  expect(own.closest('[inert]') === null, 'in reach, in the accessibility tree').to.equal(true);
+  expect(shell.visible).to.equal(false);
+
+  // The reader had not dismissed it when the dialog closed, so the shell goes on showing it.
+  settingsDialog.close();
+  await waitFor(() => shell.visible);
+  expect(shell.textContent).to.contain('Could not delete conversations.');
+});
+
+it('keeps an error within reach while a compact conversation drawer holds the shell, and its clock stopped', async () => {
+  window.matchMedia = compactMedia;
+  window.fetch = async (input) => bootstrapResponse(input);
+  const app = document.createElement('dl-app') as DlApp;
+  document.body.appendChild(app);
+  await app.ready;
+  const error = toastRegionOf(app, 'error')!;
+  const receipt = toastRegionOf(app)!;
+
+  const open = app.querySelector<HTMLButtonElement>('[aria-label="Open conversations"]')!;
+  open.click();
+  await waitFor(() => document.body.classList.contains('conversation-drawer-open'));
+  await app.updateComplete;
+  pageTimersRunFast();
+  error.show({message: 'Could not save.'});
+  receipt.show({message: 'Saved.', action: {actionLabel: 'Undo', onAction: async () => {}}});
+  await app.updateComplete;
+  await Promise.all([error.updateComplete, receipt.updateComplete]);
+
+  expect(receipt.inert, 'a receipt is out of reach under the drawer').to.equal(true);
+  expect(error.closest('[inert]') === null, 'an error is not: it stays in the accessibility tree').to.equal(true);
+  const dismiss = buttonNamed(error, 'Dismiss')!;
+  dismiss.focus();
+  expect(document.activeElement === dismiss, 'and its Dismiss takes focus').to.equal(true);
+  await new Promise((resolve) => originalSetTimeout(resolve, 150));
+  expect(error.visible, 'it outlasts its eight seconds, which run no faster than the reader can act').to.equal(true);
+});
+
+it('puts focus in the Chat\'s box when an error dismissed from the keyboard has nowhere to give it back', async () => {
+  window.fetch = async (input) => bootstrapResponse(input);
+  const app = document.createElement('dl-app') as DlApp;
+  document.body.appendChild(app);
+  await app.ready;
+  const error = toastRegionOf(app, 'error')!;
+  error.show({message: 'Could not save.'});
+  await error.updateComplete;
+  const composer = app.querySelector<HTMLTextAreaElement>('[aria-label="Message"]')!;
+  expect(document.activeElement === composer).to.equal(false);
+
+  // The toast asks when the place the reader came from cannot take focus back.
+  error.dispatchEvent(new CustomEvent('dl-toast-focus-lost', {bubbles: true, composed: true}));
+
+  await waitFor(() => document.activeElement === composer);
 });
 
 it('routes typed toast intent through Shell composition to the public Toast command', async () => {
@@ -338,9 +548,19 @@ it('routes typed toast intent through Shell composition to the public Toast comm
   expect(toast.querySelector('button')?.textContent).to.equal('Undo');
 });
 
-it('closes conversation-scoped Inspector content on a typed route reset', async () => {
+it('closes conversation-scoped Inspector content when the page moves to another conversation', async () => {
   window.matchMedia = desktopMedia;
-  window.fetch = async (input) => bootstrapResponse(input);
+  window.fetch = async (input) => String(input) === '/web/api/conversations/moved/history'
+    ? response({
+      conversation: {
+        conversation_id: 'moved', title: 'Moved',
+        created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
+      },
+      turns: [],
+      commands: [],
+      next_cursor: null,
+    })
+    : bootstrapResponse(input);
   const app = document.createElement('dl-app') as DlApp;
   document.body.appendChild(app);
   await app.ready;
@@ -350,14 +570,8 @@ it('closes conversation-scoped Inspector content on a typed route reset', async 
     answerText: '', parts: [], sources: [], evidenceImages: [], linkCards: [], artifacts: [],
     artifactOutcome: {status: 'complete', issues: []},
   });
-  app.querySelector('dl-conversation-sidebar')?.dispatchEvent(new CustomEvent(
-    'dl-conversation-route-change',
-    {
-      bubbles: true,
-      composed: true,
-      detail: {previousConversationId: null, nextConversationId: null},
-    },
-  ));
+  expect(inspector.open).to.equal(true);
+  await webRouter.navigate(conversationRoute('moved'));
   await inspector.updateComplete;
 
   expect(inspector.open).to.equal(false);
@@ -375,7 +589,7 @@ it('owns Shell message layout while preserving the welcome for an empty conversa
   await chat.updateComplete;
   await chat.querySelector('dl-chat-message-list')?.updateComplete;
   expect(app.querySelector('.app')?.classList.contains('has-messages')).to.equal(false);
-  expect(chat.querySelector('.welcome')?.textContent).to.contain('Ask anything');
+  expect(chat.querySelector('.welcome')?.textContent).to.contain('Deep work, delegated.');
 
   const answer: AnswerPresentation = {
     answerText: 'Stored answer.',
@@ -392,7 +606,7 @@ it('owns Shell message layout while preserving the welcome for an empty conversa
       turnId: 'turn-1', turnNumber: 1, answerRunId: 'run-1', submissionId: 'submission-1',
       status: 'succeeded', cancelRequested: false, userText: 'Question', assistantText: 'Stored answer.',
       userAttachments: [], steeringMessages: [], presentation: answer, usage: {}, errorKind: null,
-      errorMessage: null, childCount: 0, createdAt: '2026-01-01T00:00:00Z',
+      errorMessage: null, childCount: 0, answerSequence: null, feedback: null, createdAt: '2026-01-01T00:00:00Z',
     }],
   };
   await chat.updateComplete;
@@ -443,12 +657,13 @@ async function appWithChildren(roster: {requests: number}, media = desktopMedia)
           created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
         },
         turns: [settledTurnWire],
+        commands: [],
         next_cursor: null,
       });
     }
     if (url === '/web/api/answer/run-1/children') {
       roster.requests += 1;
-      return response({run_id: 'run-1', children: [childRow('a'), childRow('b')], next_cursor: null});
+      return response({run_id: 'run-1', children: [childRow('a'), childRow('b')], next_cursor: null, run_status: 'running', run_started_at: null, run_finished_at: null});
     }
     if (url.startsWith('/web/api/answer/run-1/transcript')) {
       return response({messages: [], next_before: null, running: false});
@@ -485,9 +700,10 @@ it('opens a settled turn\'s Child agents beside the chat, follows its Run, and l
   expect(inspector.querySelector('#panel-title')?.textContent).to.equal('Agent traces');
   expect(document.body.classList.contains('traces-panel-open')).to.equal(true);
 
-  // The chat reports the Run's activity, and the open dock fetches its roster again.
+  // The Run states a tool step, and the open dock fetches its roster again for it.
   app.querySelector('dl-chat-feature')!.dispatchEvent(new CustomEvent('dl-run-activity', {
-    bubbles: true, composed: true, detail: {runId: 'run-1'},
+    bubbles: true, composed: true,
+    detail: {runId: 'run-1', events: [{kind: 'tool', eventType: 'tool_start', payload: {}}]},
   }));
   await waitFor(() => roster.requests === 2);
 
@@ -497,13 +713,68 @@ it('opens a settled turn\'s Child agents beside the chat, follows its Run, and l
   expect(inspector.open).to.equal(true);
   expect(inspector.kind).to.equal('traces');
 
-  // The children belong to their conversation, which the Shell leaving takes them with.
-  app.querySelector('dl-conversation-sidebar')?.dispatchEvent(new CustomEvent('dl-conversation-route-change', {
-    bubbles: true, composed: true, detail: {previousConversationId: null, nextConversationId: null},
-  }));
+  // The children belong to their conversation, which the page leaving takes them with.
+  await webRouter.navigate(newChatRoute());
   await inspector.updateComplete;
   expect(inspector.open).to.equal(false);
   expect(document.body.classList.contains('traces-panel-open')).to.equal(false);
+});
+
+it('stops offering the thumbs in the chat and the Inspector once the server refuses a rating because feedback is off', async () => {
+  window.matchMedia = desktopMedia;
+  const settledChild = {...childRow('a'), status: 'succeeded', result_sequence: 12};
+  window.fetch = async (input, init) => {
+    const url = String(input);
+    if (url === '/web/api/answer/run-1/feedback' && init?.method === 'PUT') {
+      return response({detail: 'Answer feedback is turned off for you', error_type: 'auth'}, 403);
+    }
+    if (url === '/web/api/conversations/rated/history') {
+      return response({
+        conversation: {
+          conversation_id: 'rated', title: 'Rated',
+          created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
+        },
+        turns: [{...settledTurnWire, answer_sequence: 7, feedback: null}],
+        commands: [],
+        next_cursor: null,
+      });
+    }
+    if (url === '/web/api/answer/run-1/children') {
+      return response({run_id: 'run-1', children: [settledChild], next_cursor: null, run_status: 'running', run_started_at: null, run_finished_at: null});
+    }
+    if (url.startsWith('/web/api/answer/run-1/transcript')) {
+      return response({messages: [], next_before: null, running: false});
+    }
+    if (url.startsWith('/web/api/answer/run-1/children/')) {
+      return response({run_id: 'run-1', child: settledChild, controls: [], questions: [], result: null});
+    }
+    return bootstrapResponse(input);
+  };
+  const app = document.createElement('dl-app') as DlApp;
+  document.body.appendChild(app);
+  await app.ready;
+  await webRouter.navigate(conversationRoute('rated'));
+  await waitFor(() => tracesButton(app) !== undefined);
+  const chat = app.querySelector<DlChatFeature>('dl-chat-feature')!;
+  const inspector = app.querySelector('dl-inspector')!;
+  tracesButton(app)!.click();
+  await waitFor(() => inspector.querySelectorAll('[data-agent-session]').length === 2);
+  inspector.querySelector<HTMLButtonElement>('[data-agent-session="a"]')!.click();
+  const thumbs = (root: ParentNode) => root.querySelectorAll<HTMLButtonElement>('[data-thumb]');
+  await waitFor(() => thumbs(inspector).length === 2);
+  expect(thumbs(chat)).to.have.length(2);
+
+  thumbs(inspector)[0]!.focus();
+  thumbs(inspector)[0]!.click();
+  await waitFor(() => thumbs(inspector).length === 0 && thumbs(chat).length === 0);
+  const toast = app.querySelector<DlToastRegion>('dl-toast-region[tone="error"]')!;
+  await toast.updateComplete;
+
+  expect(toast.textContent).to.contain('Feedback is turned off for you.');
+  // The thumb the reader was on went with the rest, and they are on the child's title and not on the page.
+  expect(document.activeElement).to.equal(inspector.querySelector('dl-agent-session [data-title]'));
+  expect(chat.answerFeedbackEnabled).to.equal(false);
+  expect(inspector.answerFeedbackEnabled).to.equal(false);
 });
 
 it('closes Child agents on a click in the chat when the Inspector is a modal drawer over it', async () => {
@@ -532,6 +803,7 @@ it('closes the Artifact Canvas when Child agents open, and a click in the chat c
     dataUrl: '/web/api/answer/run-1/artifacts/chart-1',
     downloadUrl: '/web/api/answer/run-1/artifacts/chart-1?download=1',
     presentationUrl: null, issue: null,
+    attestation: null,
   };
   await canvas.open(artifact, app.querySelector('#files-btn'));
   // A Canvas beside the chat leaves the chat's own controls reachable.
@@ -594,6 +866,7 @@ it('opens Sources as the only compact modal when intent originates in Canvas', a
     dataUrl: '/web/api/answer/run-1/artifacts/report-1',
     downloadUrl: '/web/api/answer/run-1/artifacts/report-1?download=1',
     presentationUrl: '/web/api/answer/run-1/artifacts/report-1/presentation', issue: null,
+    attestation: null,
   };
   const canvas = app.querySelector('dl-artifact-canvas')!;
   await canvas.open(artifact, returnFocus);
@@ -666,6 +939,7 @@ it('preserves a wide desktop Canvas when Sources opens and restores its citation
     dataUrl: '/web/api/answer/run-1/artifacts/report-desktop',
     downloadUrl: '/web/api/answer/run-1/artifacts/report-desktop?download=1',
     presentationUrl: '/web/api/answer/run-1/artifacts/report-desktop/presentation', issue: null,
+    attestation: null,
   };
   const canvas = app.querySelector('dl-artifact-canvas')!;
   await canvas.open(artifact, app.querySelector('#files-btn'));
@@ -713,6 +987,7 @@ it('dismisses a lone desktop Artifact Canvas from the conversation area', async 
     dataUrl: '/web/api/answer/run-1/artifacts/chart-1',
     downloadUrl: '/web/api/answer/run-1/artifacts/chart-1?download=1',
     presentationUrl: null, issue: null,
+    attestation: null,
   };
   await canvas.open(artifact, app.querySelector('#files-btn'));
   await canvas.updateComplete;
@@ -731,7 +1006,6 @@ it('dismisses a lone desktop Artifact Canvas from the conversation area', async 
 
   expect(canvas.classList.contains('open')).to.equal(false);
   expect(document.body.classList.contains('artifact-canvas-open')).to.equal(false);
-  expect(document.body.classList.contains('artifact-canvas-wide')).to.equal(false);
   await app.updateComplete;
   await chat.updateComplete;
   await chat.querySelector('dl-chat-message-list')?.updateComplete;
@@ -758,12 +1032,51 @@ it('dismisses a lone desktop Artifact Canvas from the conversation area', async 
   expect(document.activeElement).to.equal(inspectorReturn);
 });
 
+it('wakes the Run activity store when a submission starts running, and only then', async () => {
+  let activityReads = 0;
+  window.fetch = async (input) => {
+    const url = String(input);
+    if (url.startsWith('/web/api/run-activity')) {
+      activityReads += 1;
+      return response({items: []});
+    }
+    return bootstrapResponse(input);
+  };
+  const app = document.createElement('dl-app') as DlApp;
+  document.body.appendChild(app);
+  await app.ready;
+  // The shell reads the activity once on opening, then sleeps on an idle page. A wake while that
+  // read is still in flight would share it instead of making another, so the test waits for the
+  // read to finish, not for a frame to pass: how long a read takes is the machine's.
+  await waitFor(() => activityReads === 1);
+  await waitFor(() => app.handles.runActivity.loaded && !app.handles.runActivity.watching);
+  const settle = (): Promise<void> => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  await settle();
+  expect(activityReads, 'an idle page asks for nothing more').to.equal(1);
+
+  const chat = app.querySelector('dl-chat-feature')!;
+  chat.dispatchEvent(new CustomEvent('dl-chat-running-change', {
+    bubbles: true, composed: true, detail: {active: true},
+  }));
+  await waitFor(() => activityReads === 2);
+  expect(app.chatRunning, 'a running submission is the page\'s reason to look').to.equal(true);
+
+  chat.dispatchEvent(new CustomEvent('dl-chat-running-change', {
+    bubbles: true, composed: true, detail: {active: false},
+  }));
+  await settle();
+  expect(activityReads, 'the Run settling gets no wake of its own').to.equal(2);
+});
+
 it('fails closed and resolves the same ready promise after an explicit retry', async () => {
   let attempts = 0;
   window.fetch = async (input) => {
-    if (String(input) === '/web/api/conversations') {
+    const url = String(input);
+    if (url === '/web/api/conversations') {
       return response({items: [], next_cursor: null});
     }
+    // The shell also reads the reader's Run activity once it is ready; that read is not a bootstrap.
+    if (url.startsWith('/web/api/run-activity')) return response({items: []});
     attempts += 1;
     return attempts === 1 ? response({detail: 'down'}, 503) : response(bootstrap);
   };
@@ -779,6 +1092,24 @@ it('fails closed and resolves the same ready promise after an explicit retry', a
   await app.ready;
   expect(attempts).to.equal(2);
   expect(app.bootState).to.equal('ready');
+});
+
+it('brings an unsent message back when the shell is loaded again', async () => {
+  // The page a provider returns to is a fresh load, and the reader's half-typed question is
+  // still theirs: the composer keeps it outside the page's memory.
+  localStorage.setItem('dlightrag.composerDraft', 'Typed before the provider sent me back');
+  window.fetch = async (input) => bootstrapResponse(input);
+  try {
+    const app = document.createElement('dl-app') as DlApp;
+    document.body.append(app);
+    await app.ready;
+    await waitFor(() => Boolean(app.querySelector('.composer-input')));
+
+    expect(app.querySelector<HTMLTextAreaElement>('.composer-input')!.value)
+      .to.equal('Typed before the provider sent me back');
+  } finally {
+    localStorage.removeItem('dlightrag.composerDraft');
+  }
 });
 
 it('answers an expired sign-in with the way back to this page, not a load failure', async () => {
@@ -834,24 +1165,40 @@ it('signs out the whole page when a Feature request meets a 401, with no failure
     expect(app.querySelector('dl-chat-feature')).to.equal(null);
     expect(app.querySelector('.submission-failure')).to.equal(null);
     expect(app.textContent).not.to.contain('could not be submitted');
+    // The sign-out took the submission the refusal belonged to, so none waits for the next reader.
+    expect(productionHandles().submissions.list()).to.have.length(0);
   } finally {
-    answerSubmissionRegistry.dispose();
+    productionHandles().submissions.dispose();
   }
+});
+
+it('keeps the OAuth return marker through the router a page load builds before the shell reads it', async () => {
+  // A real return is a fresh page load: ui/router.ts builds the one browser router while
+  // ./app.ts is still being imported, so its canonicalization runs before the shell reads the
+  // address it landed on. Reproduce that order, not the address alone.
+  const previous = window.location.href;
+  window.history.replaceState(null, '', '/web/?settings=connections&authorization=restart');
+  createBrowserRouter(window);
+  window.fetch = connectionsReturnFetch();
+  try {
+    const app = document.createElement('dl-app') as DlApp;
+    document.body.append(app);
+    await app.ready;
+    await waitFor(() => Boolean(app.querySelector('dl-settings-connections')));
+    const settings = app.querySelector<DlSettingsDialog>('dl-settings-dialog')!;
+    await waitFor(() => settings.querySelector<HTMLDialogElement>('#settings-dialog')?.open === true);
+
+    const current = [...settings.querySelectorAll<HTMLElement>('nav [aria-current="page"]')];
+    expect(current.map((item) => item.dataset.section)).to.deep.equal(['connections']);
+    expect(settings.querySelector<HTMLElement>('dl-settings-connections')!.hidden).to.equal(false);
+  } finally {window.history.replaceState(null, '', previous);}
 });
 
 it('opens Settings on its Connections page after the fixed OAuth return, without starting authorization', async () => {
   const previous = window.location.href;
   const writes: string[] = [];
   window.history.replaceState(null, '', '?settings=connections&authorization=restart');
-  window.fetch = async (input, init) => {
-    if (init?.method && init.method !== 'GET') writes.push(String(input));
-    if (String(input) === '/web/api/connections/mcp') return response({revision: '0', connections: [], presets: []});
-    if (String(input) === '/web/api/agent-accounts') {
-      return response({available: true, registration: {allowed: true, enabled: true}, accounts: []});
-    }
-    if (String(input) === '/web/api/memory/settings') return response({enabled: false, active_count: null});
-    return bootstrapResponse(input);
-  };
+  window.fetch = connectionsReturnFetch(writes);
   try {
     const app = document.createElement('dl-app') as DlApp;
     document.body.append(app);
@@ -870,4 +1217,142 @@ it('opens Settings on its Connections page after the fixed OAuth return, without
     expect(window.location.search).not.to.contain('settings=');
     expect(window.location.search).not.to.contain('authorization=');
   } finally {window.history.replaceState(null, '', previous);}
+});
+
+async function appCountingChildReads(
+  reads: {children: number; transcript: number; child: number},
+  runId = 'run-1',
+): Promise<DlApp> {
+  window.matchMedia = desktopMedia;
+  window.fetch = async (input) => {
+    const url = String(input);
+    if (url === '/web/api/conversations/with-children/history') {
+      return response({
+        conversation: {conversation_id: 'with-children', title: 'Children',
+          created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z'},
+        turns: [{...settledTurnWire, answer_run_id: runId}], commands: [], next_cursor: null,
+      });
+    }
+    if (url === `/web/api/answer/${runId}/children`) {
+      reads.children += 1;
+      return response({run_id: runId, children: [childRow('a'), childRow('b')], next_cursor: null, run_status: 'running', run_started_at: null, run_finished_at: null});
+    }
+    if (url.startsWith(`/web/api/answer/${runId}/transcript`)) {
+      reads.transcript += 1;
+      return response({messages: [], next_before: null, running: false});
+    }
+    if (url.startsWith(`/web/api/answer/${runId}/children/`)) {
+      reads.child += 1;
+      // A child that has settled: its page cannot change, which is what makes keeping it safe.
+      return response({
+        run_id: runId,
+        child: {...childRow('a'), status: 'succeeded', operation_status: 'succeeded'},
+        controls: [], questions: [], result: null,
+      });
+    }
+    return bootstrapResponse(input);
+  };
+  const app = document.createElement('dl-app') as DlApp;
+  document.body.appendChild(app);
+  await app.ready;
+  await webRouter.navigate(conversationRoute('with-children'));
+  await waitFor(() => tracesButton(app) !== undefined);
+  return app;
+}
+
+/** A TracesSource shaped like the one the shell hands its dock, counting the child reads. */
+function appCountingSource(reads: {child: number}): TracesSource {
+  return {
+    runId: 'run-3',
+    mainAgent: () => ({childSessionId: 'main'}),
+    presentation: () => null,
+    page: async () => ({children: [], next_cursor: null}),
+    observe: async () => {
+      reads.child += 1;
+      return {
+        runId: 'run-3',
+        child: {...childRow('a'), status: 'succeeded', operation_status: 'succeeded'},
+        controls: [], questions: [], result: null,
+      } as unknown as ChildObservation;
+    },
+    activity: async () => ({messages: [], next_before: null, running: false}),
+    control: async () => ({}) as never,
+    reply: async () => ({}) as never,
+  } as unknown as TracesSource;
+}
+
+function childRows(app: DlApp): HTMLButtonElement[] {
+  return [...app.querySelectorAll<HTMLButtonElement>(
+    'dl-inspector-traces [data-agent-session]:not([data-agent-session="main"])',
+  )];
+}
+
+it('reading a child once: walking to the next and back does not read the first again', async () => {
+  pageTimersRunFast();
+  const reads = {children: 0, transcript: 0, child: 0};
+  const app = await appCountingChildReads(reads);
+  tracesButton(app)!.click();
+  await waitFor(() => childRows(app).length === 2);
+
+  childRows(app)[0]!.click();
+  await waitFor(() => reads.child === 1);
+  childRows(app)[1]!.click();
+  await waitFor(() => reads.child === 2);
+  const withBothRead = reads.child;
+
+  childRows(app)[0]!.click();
+  await new Promise((resolve) => setTimeout(resolve, 40));
+
+  expect(reads.child, 'the child already read was read again').to.equal(withBothRead);
+});
+
+it('warming a child: the pointer on its row reads it before any click', async () => {
+  pageTimersRunFast();
+  const reads = {children: 0, transcript: 0, child: 0};
+  const app = await appCountingChildReads(reads, 'run-2');
+  tracesButton(app)!.click();
+  await waitFor(() => childRows(app).length === 2);
+
+  childRows(app)[1]!.dispatchEvent(new MouseEvent('mouseenter'));
+  await waitFor(() => reads.child === 1);
+
+  childRows(app)[1]!.click();
+  await new Promise((resolve) => setTimeout(resolve, 40));
+
+  expect(reads.child, 'the click read a child the warm already read').to.equal(1);
+});
+
+it('signing out leaves no kept page behind for the next reader of this page', async () => {
+  pageTimersRunFast();
+  const reads = {children: 0, transcript: 0, child: 0};
+  const app = await appCountingChildReads(reads, 'run-3');
+  tracesButton(app)!.click();
+  await waitFor(() => childRows(app).length === 2);
+
+  childRows(app)[0]!.click();
+  await waitFor(() => reads.child === 1);
+
+  // Asking for that Run's source must hand back the one the dock already read through.
+  const built = {forKept: false, afterSignOut: false};
+  const runSource = (probe: keyof typeof built) => {
+    const source = appCountingSource(reads);
+    built[probe] = true;
+    return source;
+  };
+
+  const { judgements, traces } = productionHandles();
+  await traces.sourceFor('run-3', () => runSource('forKept')).observe('a', new AbortController().signal);
+  expect(built.forKept, 'the Run had to be built although its dock had already read').to.equal(false);
+  expect(reads.child, 'the dock read the child more than once').to.equal(1);
+
+  // A judgement the reader gave is the page's to remember, and not the next reader's.
+  const rated = judgementKey('run-3', 'main', 7);
+  judgements.keep(rated, {value: 'up', reasons: [], note: null});
+
+  noteRefusal(401); // the one refusal every route funnels through
+  await waitFor(() => app.signedOut === true);
+
+  await traces.sourceFor('run-3', () => runSource('afterSignOut')).observe('a', new AbortController().signal);
+  expect(built.afterSignOut, 'the Run still held the page its last reader read').to.equal(true);
+  expect(judgements.current(rated, null), 'the judgement outlived the reader who gave it').to.equal(null);
 });

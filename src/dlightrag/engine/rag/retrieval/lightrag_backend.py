@@ -7,8 +7,11 @@ from typing import Any
 from lightrag import QueryParam
 from lightrag.constants import DEFAULT_CHUNK_TOP_K, DEFAULT_TOP_K
 
-from dlightrag.engine.rag.retrieval import ContextRow, RetrievalResult
+from dlightrag.engine.rag.retrieval.models import ContextRow
 from dlightrag.engine.rag.retrieval.references import canonicalize_reference_ids
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalResult,
+)
 
 logger = logging.getLogger(__name__)
 

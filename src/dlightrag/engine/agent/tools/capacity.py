@@ -13,6 +13,7 @@ from dataclasses import replace
 
 from dlightrag.engine.agent.tool_content import ToolTextPart, tool_content_attachments
 from dlightrag.engine.agent.tools.contracts import (
+    OBSERVED_TRUNCATED_DETAIL,
     ToolResult,
     ToolResultCapacityError,
 )
@@ -22,7 +23,12 @@ _TRUNCATION_MARKER = "[tool result truncated to the shared model residual]"
 
 
 def fit_tool_result(result: ToolResult, *, max_tokens: int) -> ToolResult:
-    """Fit result text while preserving typed attachments and continuation."""
+    """Fit result text while preserving typed attachments and continuation.
+
+    A cut is recorded rather than only described: the fitted result carries
+    ``observed_truncated`` in its details, so a reader can tell a whole result from a prefix
+    without parsing the marker out of the text.
+    """
     text = result.text_content
     if estimate_tokens(text) <= max_tokens:
         return result
@@ -53,6 +59,7 @@ def fit_tool_result(result: ToolResult, *, max_tokens: int) -> ToolResult:
     return replace(
         result,
         parts=(ToolTextPart(fitted_text), *attachments),
+        details={**(result.details or {}), OBSERVED_TRUNCATED_DETAIL: True},
     )
 
 

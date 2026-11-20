@@ -21,7 +21,7 @@ from dlightrag.adapters.postgres.corpus.pg_metadata_index import (
     METADATA_TABLE,
     metadata_match_conditions,
 )
-from dlightrag.engine.rag.retrieval import MetadataFilter
+from dlightrag.engine.rag.retrieval.models import MetadataFilter
 
 
 def build_bounded_scope_probe(

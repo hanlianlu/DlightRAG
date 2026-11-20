@@ -4,38 +4,11 @@
  *  feature component reduces a batch through this module; nothing here
  *  touches the DOM or dispatches events. */
 
-import {msg} from '@lit/localize';
-
 import {parseAnswerPresentation} from '../api/conversations.ts';
 import type {AnswerRunEvent} from './run-controller.ts';
-import {localizedRunErrorPayload} from './run-errors.ts';
-import type {ChatTurnView} from './chat-views.ts';
-import {
-  applyToolEvent,
-  toolStatusText,
-  type ToolEventPayload,
-} from './tool-events.ts';
-
-const CHILD_TOOL_NAMES = new Set([
-  'spawn_agent',
-  'wait_subagent',
-  'steer_subagent',
-  'continue_subagent',
-  'cancel_subagent',
-  'reply_subagent',
-  'subagent_status',
-]);
-
-/**
- * A child-agent management call: the event that shows a run has children.
- * Once it has, children report through the parent's own event stream, so
- * their tool events arrive without a child id; see sawChildren.
- */
-export function isChildToolEvent(event: AnswerRunEvent): boolean {
-  if (event.kind !== 'tool') return false;
-  const name = (event.payload as {tool_name?: unknown} | null)?.tool_name;
-  return typeof name === 'string' && CHILD_TOOL_NAMES.has(name);
-}
+import {runErrorText, SERVICE_ERROR_TEXT} from './run-errors.ts';
+import {MAX_PROCESS_ENTRIES, type ChatTurnView, type ProcessEntry} from './chat-views.ts';
+import {applyToolEvent, type ToolEventPayload, type ToolRow} from './tool-events.ts';
 
 type AnswerPhase = 'routing' | 'planning' | 'searching' | 'researching' | 'generating';
 
@@ -64,9 +37,60 @@ function isDonePayload(payload: unknown): payload is DonePayload {
   return candidate.status === 'succeeded' || candidate.status === 'cancelled';
 }
 
-function phaseText(phase: string): string | null {
-  const label = answerPhaseLabel(phase);
-  return label === null ? null : msg(label, {id: `chatFeature.phase.${phase}`});
+/** The key one Tool row is held by in the merged trace: the call id the wire stated, or else the
+ *  ordinal the trace's own state machine gave it (a row a caller built by hand carries neither). */
+function toolEntryKey(row: ToolRow): string {
+  return row.callId === '' ? `ordinal:${row.ordinal ?? ''}` : `call:${row.callId}`;
+}
+
+/** Keep only the newest entries the live trace's history holds: the block scrolls what remains, and
+ *  a run longer than that keeps its record in the Inspector rather than in the page's DOM. */
+function cappedProcess(entries: ProcessEntry[]): ProcessEntry[] {
+  return entries.length > MAX_PROCESS_ENTRIES ? entries.slice(-MAX_PROCESS_ENTRIES) : entries;
+}
+
+/** Fold one reasoning delta onto the merged trace: the fold still being written grows, and a delta
+ *  that starts a new block opens one after whatever the model did before it. */
+function withReasoning(entries: readonly ProcessEntry[], text: string): ProcessEntry[] {
+  const last = entries.at(-1);
+  if (last?.kind === 'thinking' && last.open) {
+    return [...entries.slice(0, -1), {kind: 'thinking', text: last.text + text, open: true}];
+  }
+  return cappedProcess([...entries, {kind: 'thinking', text, open: true}]);
+}
+
+/** Fold the Tool rows the state machine now holds into the merged trace. A call shuts the reasoning
+ *  fold that was still open; an entry already in the trace takes the row's newest state; and a call
+ *  the trace has not seen yet appends after the entries that came before it. Entries whose row the
+ *  Tool window dropped go with it, so both arms stay one list. */
+function withToolRows(entries: readonly ProcessEntry[], toolRows: readonly ToolRow[]): ProcessEntry[] {
+  const unplaced = new Map(toolRows.map((row) => [toolEntryKey(row), row]));
+  const merged: ProcessEntry[] = [];
+  for (const entry of entries) {
+    if (entry.kind === 'thinking') {
+      merged.push(entry.open ? {...entry, open: false} : entry);
+      continue;
+    }
+    const key = toolEntryKey(entry.row);
+    const row = unplaced.get(key);
+    if (row === undefined) continue;
+    unplaced.delete(key);
+    merged.push({kind: 'tool', row});
+  }
+  for (const row of toolRows) {
+    if (unplaced.delete(toolEntryKey(row))) merged.push({kind: 'tool', row});
+  }
+  return cappedProcess(merged);
+}
+
+/** A turn that is no longer writing draws none of its live text: the streamed answer and the process
+ *  trace it showed are cleared, and the patch states how the turn ended. One helper, so every arm
+ *  that settles a turn silences the same reading surface. */
+function settled(
+  turn: ChatTurnView,
+  patch: Partial<ChatTurnView> & Pick<ChatTurnView, 'state'>,
+): ChatTurnView {
+  return {...turn, ...patch, processEntries: []};
 }
 
 /**
@@ -87,65 +111,61 @@ export function applyAnswerEvent(
         ...turn,
         state: 'streaming',
         streamText: turn.streamText + event.text,
-        progress: turn.streamText ? turn.progress : '',
-        error: '',
+        activity: turn.streamText ? turn.activity : null,
+        error: null,
+      };
+    case 'reasoning':
+      return {
+        ...turn,
+        state: turn.state === 'pending' ? 'streaming' : turn.state,
+        processEntries: withReasoning(turn.processEntries, event.text),
       };
     case 'reset':
-      return {...turn, state: 'pending', streamText: '', progress: '', error: ''};
+      return settled(turn, {state: 'pending', streamText: '', activity: null, error: null});
     case 'progress': {
-      const payload = event.payload as {phase?: string};
-      const text = phaseText(String(payload?.phase || ''));
-      if (text === null) return turn;
-      return {...turn, progress: text, liveStatus: text, error: ''};
+      const phase = String((event.payload as {phase?: string})?.phase || '');
+      if (answerPhaseLabel(phase) === null) return turn;
+      return {...turn, activity: {kind: 'phase', phase}, error: null};
     }
     case 'tool': {
       const info = event.payload as ToolEventPayload;
       if (!info || typeof info.tool_name !== 'string') return turn;
       const toolRows = applyToolEvent(turn.toolRows, event.eventType, info, now);
-      const text = toolStatusText(toolRows);
+      // A Tool call ends the reasoning that chose it: its fold shuts, and the call's own entry joins
+      // the same rolling trace.
       return {
         ...turn,
         toolRows,
-        progress: text,
-        liveStatus: text,
-        sawChildren: turn.sawChildren || isChildToolEvent(event),
-        error: '',
+        processEntries: withToolRows(turn.processEntries, toolRows),
+        activity: {kind: 'tool'},
+        error: null,
       };
     }
-    case 'error': {
-      const message = localizedRunErrorPayload(event.payload);
-      return {...turn, state: 'failed', error: message, progress: '', liveStatus: message};
-    }
+    case 'error':
+      return settled(turn, {
+        state: 'failed', error: runErrorText(event.payload), activity: null,
+      });
     case 'done': {
       const payload = event.payload;
       if (!isDonePayload(payload)) {
-        const message = msg('Service error. Please try again.', {id: 'chatFeature.serviceError'});
-        return {...turn, state: 'failed', error: message, progress: '', liveStatus: message};
+        return settled(turn, {state: 'failed', error: SERVICE_ERROR_TEXT, activity: null});
       }
       if (payload.status === 'cancelled') {
-        return {
-          ...turn,
-          state: 'cancelled',
-          progress: '',
-          liveStatus: msg('Answer stopped', {id: 'chatFeature.answerStopped'}),
-        };
+        return settled(turn, {state: 'cancelled', activity: null});
       }
       // The frame's presentation is the one the history serves, so the schema that
       // owns the type reads it; a missing or malformed one is a service error.
       const presentation = parseAnswerPresentation(payload.presentation);
       if (presentation === null) {
-        const message = msg('Service error. Please try again.', {id: 'chatFeature.serviceError'});
-        return {...turn, state: 'failed', error: message, progress: '', liveStatus: message};
+        return settled(turn, {state: 'failed', error: SERVICE_ERROR_TEXT, activity: null});
       }
-      return {
-        ...turn,
+      return settled(turn, {
         state: 'succeeded',
         presentation,
         streamText: presentation.answerText,
         usage: payload.usage ?? {},
-        progress: '',
-        liveStatus: msg('Answer ready', {id: 'chatFeature.answerReady'}),
-      };
+        activity: null,
+      });
     }
   }
 }

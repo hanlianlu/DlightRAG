@@ -157,18 +157,13 @@ async def test_the_cost_a_provider_reported_rides_on_the_span(otlp_export: OtlpE
 async def test_an_exception_that_escapes_names_the_failure(
     otlp_export: OtlpExport,
 ) -> None:
-    """`error.type` is Conditionally Required "if the operation ended in an error"."""
     with pytest.raises(RuntimeError):
-        async with otlp_export.telemetry.observe("generate-completion"):
+        async with otlp_export.telemetry.observe("run-answer"):
             raise RuntimeError("the provider said no")
 
     (span,) = otlp_export.spans()
-    attributes = otlp_export.attributes(span)
     assert span.status.status_code is StatusCode.ERROR
     assert span.status.description == "the provider said no"
-    assert attributes["error.type"] == "RuntimeError"
-    # The kind is what a call site classified, never a guess at what the message meant.
-    assert "dlightrag.error.kind" not in attributes
 
 
 async def test_a_reported_outcome_is_not_relabelled_by_an_exception(
@@ -320,6 +315,19 @@ async def test_the_model_that_answered_is_a_different_attribute_from_the_one_ask
     assert attributes["gen_ai.response.model"] == "deepseek-v3.2-exp"
 
 
+async def test_an_error_span_names_the_exception_that_caused_it(
+    otlp_export: OtlpExport,
+) -> None:
+    """`error.type` is Conditionally Required "if the operation ended in an error"."""
+    with pytest.raises(RuntimeError):
+        async with otlp_export.telemetry.observe("generate-completion"):
+            raise RuntimeError("the provider said no")
+
+    (span,) = otlp_export.spans()
+    assert span.status.status_code is StatusCode.ERROR
+    assert otlp_export.attributes(span)["error.type"] == "RuntimeError"
+
+
 async def test_a_classified_failure_prefers_its_kind_over_the_exception_name(
     otlp_export: OtlpExport,
 ) -> None:
@@ -346,6 +354,16 @@ async def test_a_call_site_can_name_the_exception_it_caught(otlp_export: OtlpExp
 
     (span,) = otlp_export.spans()
     assert otlp_export.attributes(span)["error.type"] == "BadRequestError"
+
+
+async def test_a_failure_that_names_no_kind_carries_no_kind(otlp_export: OtlpExport) -> None:
+    """The attribute is what a call site knows, never a guess at what it meant."""
+    with pytest.raises(RuntimeError):
+        async with otlp_export.telemetry.observe("run-answer"):
+            raise RuntimeError("the provider said no")
+
+    (span,) = otlp_export.spans()
+    assert "dlightrag.error.kind" not in otlp_export.attributes(span)
 
 
 async def test_a_cancellation_is_not_an_error(otlp_export: OtlpExport) -> None:

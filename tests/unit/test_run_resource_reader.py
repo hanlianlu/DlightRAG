@@ -3,7 +3,7 @@
 
 import pytest
 
-from dlightrag.application.answer_runs import AnswerService
+from dlightrag.application.answer_runs.service import AnswerService
 from tests.unit.test_answer_service import (
     _OWNER,
     _fetched_resource,

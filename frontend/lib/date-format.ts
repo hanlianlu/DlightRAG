@@ -26,6 +26,30 @@ export function shortDate(date: Date, now: Date, locale: string): string {
   }).format(date);
 }
 
+/** The instant a wire value states, or null when it states none or does not parse. */
+function instantOf(value: string | number | null): Date | null {
+  if (value === null || value === '') return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/** The time of day a moment fell on, in the reader's time zone: "14:05", or "2:05:09 PM" with `seconds`
+ * for a row that tells apart steps within a minute. Nothing when the wire states no moment.
+ */
+export function timeOfDay(value: string | number | null, locale: string, seconds = false): string {
+  const date = instantOf(value);
+  if (date === null) return '';
+  return new Intl.DateTimeFormat(locale, seconds
+    ? {hour: 'numeric', minute: 'numeric', second: 'numeric'}
+    : {hour: '2-digit', minute: '2-digit'}).format(date);
+}
+
+/** A moment as its date and time, "Nov 20, 2026, 2:05 PM"; nothing when the wire states no moment. */
+export function dateTime(value: string | null, locale: string): string {
+  const date = instantOf(value);
+  return date === null ? '' : new Intl.DateTimeFormat(locale, {dateStyle: 'medium', timeStyle: 'short'}).format(date);
+}
+
 /** "today", "yesterday", or "3 days ago" for the last week; null once the date is older.
  *
  * The phrase is lower case, as it reads inside a sentence; `capitalized` raises it for a column.
@@ -56,4 +80,19 @@ export function elapsed(milliseconds: number, locale: string): string {
 /** Raise the first letter of a phrase for use on its own. */
 export function capitalized(text: string, locale: string): string {
   return text.charAt(0).toLocaleUpperCase(locale) + text.slice(1);
+}
+
+/** A running call states nothing until it has run this long: the clock that redraws one runs once a
+ * second, so a smaller number would be replaced before a reader could read it. */
+const RUNNING_TIME_MIN_MS = 1000;
+
+/** How long a Tool call reads as taking, as every surface that times one shows it: whole
+ * milliseconds under a second, else seconds to one decimal ("850ms", "1.2s"). Nothing while a
+ * running call is still inside its first second, and nothing for a time nobody measured, so a number
+ * a reader sees is never a guess. */
+export function toolTime(milliseconds: number | null, running = false): string {
+  if (milliseconds === null || (running && milliseconds < RUNNING_TIME_MIN_MS)) return '';
+  return milliseconds < RUNNING_TIME_MIN_MS
+    ? `${Math.round(milliseconds)}ms`
+    : `${(milliseconds / 1000).toFixed(1)}s`;
 }

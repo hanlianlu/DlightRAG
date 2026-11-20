@@ -28,15 +28,21 @@ from dlightrag.engine.credential_cipher import CredentialCipher, UnreadableEnvel
 
 #: An account's envelope is sealed under this label, so it never opens as a Connection Grant.
 ACCOUNT_LABEL = "dlightrag-agent-account-v1"
+#: The length of a password a call does not ask one for (ADR 0034). A call that asks for one
+#: gets exactly that many characters: the length is the agent's to choose for the site it is
+#: registering on, and the platform's to keep random.
 PASSWORD_LENGTH = 20
-#: A site that caps a password's length gets a shorter one, never shorter than this.
-MIN_PASSWORD_LENGTH = 12
 #: The punctuation of a password: with the letters and digits, the characters no encoding
 #: changes (HTML, JSON and form escaping, and RFC 3986's percent-encoding, leave them as they
 #: are), so a password has one spelling in every text a page and a driver print.
 _SYMBOLS = "-._"
 _ALNUM = string.ascii_letters + string.digits
 _ALPHABET = _ALNUM + _SYMBOLS
+#: One character from each of these is in every generated password, so the composition rules
+#: sites usually state pass whatever the length.
+_CLASSES = (string.ascii_lowercase, string.ascii_uppercase, string.digits, _SYMBOLS)
+#: The fewest characters that can hold one of each class and a letter or a digit at either end.
+PASSWORD_MIN_LENGTH = len(_CLASSES) + 2
 
 
 #: The Public Suffix List snapshot the package bundles, private section included. It is read
@@ -66,19 +72,23 @@ def account_site(url: str) -> str | None:
 
 
 def generate_password(length: int = PASSWORD_LENGTH) -> SecretStr:
-    """``length`` characters drawn with ``secrets`` from ``[A-Za-z0-9._-]``, holding at least one
-    lowercase letter, one uppercase letter, one digit and one of ``-._``, so the usual composition
-    rules pass.
+    """Exactly ``length`` characters drawn with ``secrets`` from ``[A-Za-z0-9._-]``, holding at
+    least one lowercase letter, one uppercase letter, one digit and one of ``-._``, so the usual
+    composition rules pass.
 
     It begins and ends with a letter or a digit: Chromium trims a dot from either end of a
-    downloaded file's name, and a trimmed password is a spelling nothing redacts.
+    downloaded file's name, and a trimmed password is a spelling nothing redacts. A ``length``
+    below ``PASSWORD_MIN_LENGTH`` is refused rather than silently rounded up to it: that is the
+    fewest characters the composition leaves room for, so a shorter ask cannot be honoured.
     """
+    if length < PASSWORD_MIN_LENGTH:
+        raise ValueError(
+            f"a generated password holds a character of every class, so it has at least "
+            f"{PASSWORD_MIN_LENGTH} characters; {length} was asked for"
+        )
     inner = [
-        secrets.choice(string.ascii_lowercase),
-        secrets.choice(string.ascii_uppercase),
-        secrets.choice(string.digits),
-        secrets.choice(_SYMBOLS),
-        *(secrets.choice(_ALPHABET) for _ in range(length - 6)),
+        *(secrets.choice(characters) for characters in _CLASSES),
+        *(secrets.choice(_ALPHABET) for _ in range(length - PASSWORD_MIN_LENGTH)),
     ]
     secrets.SystemRandom().shuffle(inner)
     return SecretStr(f"{secrets.choice(_ALNUM)}{''.join(inner)}{secrets.choice(_ALNUM)}")
@@ -404,8 +414,8 @@ async def reseal_agent_accounts(
 __all__ = [
     "ACCOUNT_LABEL",
     "MAY_REGISTER_PIN",
-    "MIN_PASSWORD_LENGTH",
     "PASSWORD_LENGTH",
+    "PASSWORD_MIN_LENGTH",
     "AgentAccount",
     "AgentAccountStore",
     "AgentAccountsBinding",

@@ -1,20 +1,12 @@
 {
   "dlightrag": {
     "license": "Apache-2.0",
-    "url": "https://github.com/hanlianlyu/DlightRAG"
-  },
-  "iconoir": {
-    "license": "MIT",
-    "url": "https://iconoir.com/"
+    "url": "https://github.com/hanlianlu/DlightRAG"
   },
   "lucide": {
     "license": "ISC",
     "package": "lucide-static",
-    "version": "1.70.0",
+    "version": "1.76.0",
     "url": "https://lucide.dev/"
-  },
-  "phosphor": {
-    "license": "MIT",
-    "url": "https://phosphoricons.com/"
   }
 }

@@ -6,8 +6,8 @@
 import {msg, str} from '@lit/localize';
 import {html, type TemplateResult} from 'lit';
 import type {AnswerPresentation} from '../api/conversations.ts';
-import {icon} from '../design-system/index.ts';
 import {raise} from '../lib/dom.ts';
+import {foldView} from './fold.ts';
 import styles from '../styles/agent-session.module.css';
 
 export function evidenceFold(
@@ -18,26 +18,24 @@ export function evidenceFold(
   const known = new Set(presentation?.sources.map((source) => source.id));
   const open = (event: Event): void => {
     const trigger = event.currentTarget as HTMLElement;
-    raise(host, 'dl-answer-source-open', {
-      presentation: presentation!,
-      referenceId: trigger.dataset.evidenceRef!,
-      returnFocus: trigger,
-    });
+    const referenceId = trigger.dataset.evidenceRef;
+    // A line is a button only when the answer's Sources hold its number, so both are there.
+    if (presentation === null || referenceId === undefined) return;
+    raise(host, 'dl-answer-source-open', {presentation, referenceId, returnFocus: trigger});
   };
   const title = msg(str`Evidence · ${handles.length}`, {id: 'evidence.title'});
-  return html`
-    <details class=${styles.fold}>
-      <summary class=${styles.summary}>${icon('disclosure', {size: 'xs', className: styles.chevron})}
-        ${title}</summary>
-      <ul class=${styles.mono} tabindex="0" aria-label=${title}>
-        ${handles.map((handle) => {
-          const reference = /^\[([^\]]+)\]/.exec(handle)?.[1];
-          return reference !== undefined && known.has(reference)
-            ? html`<li><button type="button" class=${styles.evidence} data-evidence-ref=${reference}
-                               @click=${open}>${handle}</button></li>`
-            : html`<li>${handle}</li>`;
-        })}
-      </ul>
-    </details>
-  `;
+  return foldView({
+    label: title,
+    wordless: true,
+    as: 'div',
+    body: html`<ul class=${styles.mono} tabindex="0" aria-label=${title}>
+      ${handles.map((handle) => {
+        const reference = /^\[([^\]]+)\]/.exec(handle)?.[1];
+        return reference !== undefined && known.has(reference)
+          ? html`<li><button type="button" class=${styles.evidence} data-evidence-ref=${reference}
+                             @click=${open}>${handle}</button></li>`
+          : html`<li>${handle}</li>`;
+      })}
+    </ul>`,
+  });
 }

@@ -1,0 +1,128 @@
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
+
+/* The queue strip above the composer (ui/queue-strip.ts).
+ *
+ * Thinner than the goal bar by construction: one caption line when collapsed, and only the
+ * reader's own held words when opened. It sits on the composer's surface (elevated background,
+ * hairline border, the composer's own content width) rather than introducing a second card
+ * language. The list is bounded so a long queue scrolls inside the strip instead of moving the
+ * composer off the page. */
+
+@layer features {
+  .region {
+    display: flex;
+    justify-content: center;
+    padding: 0 var(--space-section) var(--space-3xs);
+  }
+
+  .strip {
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-control);
+    max-width: var(--layout-content-width);
+    overflow: hidden;
+    width: 100%;
+  }
+
+  .summary {
+    align-items: center;
+    background: transparent;
+    border: none;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    display: flex;
+    font: inherit;
+    gap: var(--space-3xs);
+    inline-size: 100%;
+    padding: 0 var(--space-2xs);
+    text-align: start;
+  }
+
+  .summary:hover {
+    background: var(--color-bg-hover);
+    color: var(--color-text-primary);
+  }
+
+  .summary:focus-visible {
+    outline: 2px solid var(--color-control-ring);
+    outline-offset: -2px;
+  }
+
+  .summary svg {
+    flex-shrink: 0;
+    transition: transform var(--duration-control) var(--easing-standard);
+  }
+
+  .summary[aria-expanded='true'] svg {
+    transform: rotate(90deg);
+  }
+
+  .count {
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .list {
+    border-top: 1px solid var(--color-border-subtle);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3xs);
+    list-style: none;
+    margin: 0;
+    max-block-size: 10rem;
+    overflow-y: auto;
+    padding: var(--space-3xs) var(--space-2xs);
+  }
+
+  .row {
+    align-items: center;
+    display: flex;
+    gap: var(--space-3xs);
+    min-width: 0;
+  }
+
+  .content {
+    color: var(--color-text-primary);
+    flex: 1;
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .input {
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-control);
+    color: var(--color-text-primary);
+    flex: 1;
+    font: inherit;
+    font-size: var(--font-size-caption);
+    min-width: 0;
+    padding: 0 var(--space-2xs);
+  }
+
+  .input:focus-visible {
+    outline: 2px solid var(--color-control-ring);
+    outline-offset: -1px;
+  }
+
+  .danger {
+    color: var(--color-text-secondary);
+  }
+
+  .danger:hover {
+    color: var(--color-danger);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .summary svg {
+      transition: none;
+    }
+  }
+}

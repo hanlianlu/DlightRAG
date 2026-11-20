@@ -128,6 +128,49 @@ def test_the_browser_in_the_extract_chain_is_bound_per_run_and_builds_no_hosted_
     assert _runtime(web_sources=only_browser).web_sources() is None
 
 
+async def test_every_configured_provider_joins_the_chains_in_their_configured_order() -> None:
+    settings = WebSourceRuntimeSettings(
+        exa_api_key="exa-test",
+        tavily_api_key="tavily-test",
+        deepseek_api_key="deepseek-test",
+        search_providers=("exa", "tavily", "deepseek"),
+        extract_providers=("exa", "tavily", "deepseek", "browser"),
+    )
+    runtime = _runtime(web_sources=settings)
+
+    service = runtime.web_sources()
+
+    assert service is not None and service.search_enabled
+    assert [provider.name for provider in service._search_providers] == [
+        "exa",
+        "tavily",
+        "deepseek",
+    ]
+    assert [provider.name for provider in service._extract_providers] == [
+        "exa",
+        "tavily",
+        "deepseek",
+    ]
+    assert "deepseek-test" not in repr(settings)
+    await runtime.aclose()
+
+
+async def test_deepseek_alone_is_a_complete_web_source() -> None:
+    runtime = _runtime(
+        web_sources=WebSourceRuntimeSettings(
+            deepseek_api_key="deepseek-test",
+            search_providers=("deepseek",),
+            extract_providers=("deepseek",),
+        )
+    )
+
+    service = runtime.web_sources()
+
+    assert service is not None
+    assert [provider.name for provider in service._search_providers] == ["deepseek"]
+    await runtime.aclose()
+
+
 def test_query_image_describer_follows_vlm_profile() -> None:
     runtime = _runtime()
 

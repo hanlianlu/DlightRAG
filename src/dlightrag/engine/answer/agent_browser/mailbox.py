@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 from html.parser import HTMLParser
 from typing import Protocol
 
+from dlightrag.engine.answer.agent_browser.elision import elide
 from dlightrag.engine.answer.agent_browser.passwords import FilledPasswords
 
 #: What an inbox reads of each alias: its newest messages, and no more of one than this.
@@ -101,6 +102,8 @@ class MailSummary:
     codes: tuple[str, ...] = ()
     omitted_links: int = 0
     """How many distinct links are not in ``links``: too long, or after the first four."""
+    omitted_codes: int = 0
+    """How many distinct codes are not in ``codes``, after the first five."""
 
 
 _HEADER_CHARS = 200
@@ -143,13 +146,15 @@ def summarize_mail(raw: bytes, passwords: FilledPasswords) -> MailSummary:
             omitted += 1
         else:
             links.append(link)
+    found_codes, omitted_codes = _codes(f"{subject} {_LINK.sub(' ', text)}")
     return MailSummary(
         readable=True,
         sender=sender,
         subject=subject,
         links=tuple(links),
-        codes=_codes(f"{subject} {_LINK.sub(' ', text)}"),
+        codes=found_codes,
         omitted_links=omitted,
+        omitted_codes=omitted_codes,
     )
 
 
@@ -157,7 +162,7 @@ def _header(value: object, passwords: FilledPasswords) -> str:
     """One header as a line: no control character, whitespace collapsed, a password masked."""
     line = " ".join(str(value or "").split())
     line = "".join(c for c in line if unicodedata.category(c) != "Cc")
-    return passwords.redact(line)[:_HEADER_CHARS]
+    return elide(passwords.redact(line), _HEADER_CHARS)
 
 
 def _text_links(text: str) -> list[str]:
@@ -170,13 +175,14 @@ def _link(url: str) -> str:
     return "".join(c for c in url if not c.isspace() and unicodedata.category(c) != "Cc")
 
 
-def _codes(text: str) -> tuple[str, ...]:
+def _codes(text: str) -> tuple[tuple[str, ...], int]:
+    """The codes one message holds, and how many of them the cap left out."""
     found: dict[str, None] = {}
     for token in _TOKEN.findall(text):
         token = token.strip("._-")
         if len(token) in _CODE_CHARS and _CODE.fullmatch(token):
             found.setdefault(token)
-    return tuple(found)[:_MAX_CODES]
+    return tuple(found)[:_MAX_CODES], max(0, len(found) - _MAX_CODES)
 
 
 _TIME = "%Y-%m-%dT%H:%M:%SZ"
@@ -251,6 +257,8 @@ def _message_lines(
         lines.append(f"   ({summary.omitted_links} longer link(s) omitted)")
     if summary.codes:
         lines.append(f"   codes: {', '.join(summary.codes)}")
+    if summary.omitted_codes:
+        lines.append(f"   ({summary.omitted_codes} more code(s) omitted)")
     return lines
 
 

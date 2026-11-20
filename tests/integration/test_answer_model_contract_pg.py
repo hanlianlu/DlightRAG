@@ -8,6 +8,7 @@ from uuid import uuid7
 import pytest
 
 from dlightrag._compose import _compose
+from dlightrag.adapters.postgres.core._pool import pg_pool
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import model_invocation_fingerprint
@@ -34,7 +35,9 @@ store = coordinator_pg.store
 async def test_incompatible_answer_does_not_block_startup_or_new_run(
     store, test_config, monkeypatch, incompatibility
 ):
-    monkeypatch.setattr("dlightrag.adapters.postgres.runtime.PGRunStore", lambda **kw: store)
+    monkeypatch.setattr(
+        "dlightrag.adapters.postgres.runtime.run_store.PGRunStore", lambda **kw: store
+    )
     components = _compose(test_config)
     executor = components.coordinator._executors["answer"]
     effects = AsyncMock(return_value=Succeeded(result={"answer": "current model result"}))
@@ -109,6 +112,10 @@ async def test_incompatible_answer_does_not_block_startup_or_new_run(
     finally:
         await application.aclose()
         await components.models.aclose()
+        # The composed Run settlement reads the queued turns through the process-wide pool, which
+        # this test's stand-in Application never closes as a real one does at shutdown. Left open it
+        # outlives this test's event loop, and the next suite that binds the pool inherits it dead.
+        await pg_pool.close()
 
 
 @pytest.mark.parametrize(
@@ -117,7 +124,9 @@ async def test_incompatible_answer_does_not_block_startup_or_new_run(
 async def test_active_run_storage_failure_still_aborts_startup(
     store, test_config, monkeypatch, error
 ):
-    monkeypatch.setattr("dlightrag.adapters.postgres.runtime.PGRunStore", lambda **kw: store)
+    monkeypatch.setattr(
+        "dlightrag.adapters.postgres.runtime.run_store.PGRunStore", lambda **kw: store
+    )
     components = _compose(test_config)
     original_requirements = store.iter_active_run_requirements
 

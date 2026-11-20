@@ -24,7 +24,7 @@ from collections.abc import Generator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal
 from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
 
@@ -40,19 +40,19 @@ from playwright.sync_api import (
 )
 
 from dlightrag.adapters.http.server import create_app
-from dlightrag.application.access import WorkspaceRecord
-from dlightrag.application.answer_runs import RunResourceDescriptor
-from dlightrag.application.answer_runs.service import AgentEffortOffer
-from dlightrag.application.config import DlightragConfig, set_config
-from dlightrag.application.corpus_admin import (
-    FilePanelCursorCodec,
+from dlightrag.application.access.workspaces import WorkspaceRecord
+from dlightrag.application.answer_runs.service import AgentEffortOffer, RunResourceDescriptor
+from dlightrag.application.config.loading import set_config
+from dlightrag.application.config.sections import DlightragConfig
+from dlightrag.application.corpus_admin.file_panel import FilePanelCursorCodec
+from dlightrag.application.corpus_admin.workspace_catalog import (
     WorkspaceCatalogCursor,
     WorkspaceCatalogCursorCodec,
     WorkspaceCatalogPage,
     WorkspaceCatalogPageRequest,
 )
 from dlightrag.application.runs import RunEvent, RunStatus, RunView
-from dlightrag.application.web_conversations import (
+from dlightrag.application.web_conversations.models import (
     ConversationCursor,
     ConversationCursorCodec,
     ConversationHead,
@@ -63,11 +63,12 @@ from dlightrag.application.web_conversations import (
     ConversationPage,
     ConversationPageRequest,
     LinkedTurn,
-    WebAnswerSubmission,
+    QueuedMessage,
 )
-from dlightrag.application.web_conversations import (
+from dlightrag.application.web_conversations.models import (
     ConversationSummary as ApplicationConversationSummary,
 )
+from dlightrag.application.web_conversations.service import WebAnswerDelivery, WebAnswerSubmission
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import MODEL_CATALOG_REVISION
 from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
@@ -87,8 +88,9 @@ from dlightrag.engine.answer.execution.input import (
     new_resource_identity,
 )
 from dlightrag.engine.answer.image_capability import AnswerImageCapability
-from tests.config_helpers import mutate_config
 from tests.support.application_double import application_double, delegate
+from tests.support.config_helpers import mutate_config
+from tests.support.resource_ids import attachment_ordinal
 
 MOCK_WORKSPACES = [
     {"workspace": "default", "display_name": "Default", "embedding_model": "voyage-multimodal-3.5"},
@@ -99,8 +101,8 @@ MOCK_WORKSPACES = [
     },
 ]
 
-ANSWER_TEXT = "DlightRAG is a multimodal RAG system."
-_ANSWER_TOKENS = ("DlightRAG is a ", "multimodal RAG system.")
+ANSWER_TEXT = "DlightRAG is a durable agent."
+_ANSWER_TOKENS = ("DlightRAG is a durable ", "agent.")
 _PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
 )
@@ -202,6 +204,7 @@ class E2EConversationService:
         with self._lock:
             self._conversations: dict[str, dict[str, Any]] = {}
             self._runs: dict[str, dict[str, Any]] = {}
+            self._queues: dict[str, list[QueuedMessage]] = {}
 
     @staticmethod
     def _summary(value: dict[str, Any]) -> ApplicationConversationSummary:
@@ -276,16 +279,14 @@ class E2EConversationService:
                 return None
             turns = sorted(value["turns"], key=lambda turn: turn.turn_number, reverse=True)
             if page.cursor is not None:
-                turns = [
-                    turn for turn in turns if turn.turn_number < page.cursor.before_turn_number
-                ]
+                turns = [turn for turn in turns if turn.turn_number < page.cursor.before_sequence]
             fetched = turns[: page.limit + 1]
             returned = fetched[: page.limit]
             next_cursor = None
             if len(fetched) > page.limit:
                 next_cursor = ConversationHistoryCursor(
                     conversation_id=UUID(conversation_id),
-                    before_turn_number=returned[-1].turn_number,
+                    before_sequence=returned[-1].turn_number,
                 )
             return ConversationHistoryPage(
                 conversation=ConversationHead(
@@ -379,7 +380,8 @@ class E2EConversationService:
         mode: str | None = None,
         requested_skill: str | None = None,
         effort: AnswerEffort | None = None,
-    ) -> WebAnswerSubmission | None:
+        delivery: Literal["queue", "steer"] | None = None,
+    ) -> WebAnswerSubmission | WebAnswerDelivery | None:
         with self._lock:
             if conversation_id is None:
                 replay = self._submission_for(submission_id)
@@ -400,6 +402,14 @@ class E2EConversationService:
             for turn in value["turns"]:
                 if turn.submission_id == submission_id:
                     return self._project_submission(value, turn)
+            live = next(
+                (turn.run for turn in value["turns"] if turn.run.status in ("queued", "running")),
+                None,
+            )
+            if live is not None:
+                return self._deliver_to_live_run(
+                    conversation_id, live.run_id, query=query, delivery=delivery
+                )
             run_id = str(uuid4())
             requested_mode = mode or "auto"
             request = _run_request(
@@ -429,6 +439,33 @@ class E2EConversationService:
                 },
             }
             return self._project_submission(value, turn)
+
+    def _deliver_to_live_run(
+        self, conversation_id: str, run_id: str, *, query: str, delivery: str | None
+    ) -> WebAnswerDelivery:
+        """Hold a send that arrives while a Run is live, as the durable service does.
+
+        The default is the queue, one row behind the live Run; a steer is acknowledged with the
+        control sequence the Run would have given it.
+        """
+        if delivery == "steer":
+            return WebAnswerDelivery(mode="steer", steered_run_id=run_id, control_sequence=1)
+        held = self._queues.setdefault(conversation_id, [])
+        message = QueuedMessage(
+            message_id=str(uuid4()),
+            content=query.strip(),
+            position=len(held) + 1,
+            created_at=datetime.now(UTC),
+        )
+        held.append(message)
+        return WebAnswerDelivery(mode="queue", queued=message)
+
+    async def queue(self, _user: Any, conversation_id: str) -> tuple[QueuedMessage, ...] | None:
+        """The messages held behind the conversation's live Run, oldest first."""
+        with self._lock:
+            if conversation_id not in self._conversations:
+                return None
+            return tuple(self._queues.get(conversation_id, ()))
 
     async def turn_for_run(self, _user: Any, run_id: str) -> LinkedTurn | None:
         with self._lock:
@@ -476,7 +513,7 @@ class E2EConversationService:
                 )
 
     async def run_resource(self, _user: Any, run_id: str, resource_id: str) -> Any:
-        ordinal = _resource_ordinal(resource_id)
+        ordinal = attachment_ordinal(resource_id)
         if ordinal is None:
             return None
         with self._lock:
@@ -569,17 +606,6 @@ class E2EConversationService:
         return conversation_id
 
 
-def _resource_ordinal(resource_id: str) -> int | None:
-    """Read the ordinal one accepted upload's resource id spells."""
-    prefix = "attachment-"
-    if not resource_id.startswith(prefix):
-        return None
-    try:
-        return int(resource_id[len(prefix) :])
-    except ValueError:
-        return None
-
-
 def _request_attachments(request: Mapping[str, Any]) -> list[dict[str, Any]]:
     return list(request.get("attachments") or [])
 
@@ -616,7 +642,7 @@ def e2e_base_url(
         models={
             "chat": ModelRoleSettings(
                 default=ModelSettings(
-                    model="google/gemini-3.8-flash",
+                    model="google/gemini-4-hydrogen",
                     base_url="https://openrouter.ai/api/v1",
                     api_key="test",
                 )
@@ -692,6 +718,8 @@ def e2e_base_url(
     application.answers.agent_effort_offer.return_value = AgentEffortOffer(
         ("low", "high", "max"), None
     )
+    # Answer feedback is offered, as in a deployment whose policy nobody has edited.
+    application.policies.value_for.return_value = True
     workspace_records = [dict(record) for record in MOCK_WORKSPACES]
 
     async def _list_workspaces() -> list[str]:
@@ -812,6 +840,10 @@ def e2e_base_url(
     conversations = application.web_conversations
     conversations.cursor_codec = e2e_conversation_service.cursor_codec
     conversations.history_cursor_codec = e2e_conversation_service.history_cursor_codec
+    # The double's conversations carry no goal, as most real ones do not: the service answers None
+    # and the browser draws no goal bar. An autospecced AsyncMock would answer a MagicMock instead,
+    # which the goal route cannot project into ConversationGoalState.
+    conversations.goal.return_value = None
     delegate(
         conversations,
         e2e_conversation_service,
@@ -824,6 +856,7 @@ def e2e_base_url(
         "submission",
         "run_external_sources",
         "start_answer",
+        "queue",
         "turn_for_run",
         "run_resource",
         "thumbnail",

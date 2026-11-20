@@ -18,14 +18,34 @@
 		"rules": {
 			"preset": "recommended",
 			"style": {
-				// Non-null assertions after updateComplete/guarded lookups are idiomatic
-				// throughout this Lit codebase (~165 sites); the assertion is the check.
-				"noNonNullAssertion": "off"
+				// A non-null assertion in production code is a claim nothing checks, so each one
+				// is either rewritten or carries a biome-ignore saying why it holds. Tests assert
+				// after updateComplete and guarded lookups all the time; see the override below.
+				"noNonNullAssertion": "error",
+				// Every source file is kebab-case (the convention of Lit's own repositories and modern
+				// scaffolds), so a stray camelCase or snake_case file cannot reintroduce the split this retired.
+				"useFilenamingConvention": {
+					"level": "error",
+					"options": {"filenameCases": ["kebab-case"], "requireAscii": true}
+				}
 			},
 			"complexity": {
 				// Named function expressions in tests read better than arrow rewrites.
 				"useArrowFunction": "off"
 			}
 		}
-	}
+	},
+	"overrides": [
+		{
+			"includes": ["**/*.test.ts", "testing/**"],
+			"linter": {
+				"rules": {
+					"style": {
+						// A test that dereferences a missing element should fail there, loudly.
+						"noNonNullAssertion": "off"
+					}
+				}
+			}
+		}
+	]
 }

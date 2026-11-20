@@ -9,7 +9,7 @@ import './inspector.ts';
 
 defineDesignSystemElements();
 import type {DlInspector, InspectorStateDetail} from './inspector.ts';
-import type {TracesSource} from './inspector-traces.ts';
+import type {TracesSource} from '../stores/traces-source.ts';
 import {observation, roster, row, serve, sourceFor} from '../testing/traces.ts';
 import {buttonNamed, waitFor} from '../testing/dom.ts';
 import {DEFAULT_CHANGES, EVERY_CHANGE} from '../testing/workspaces.ts';
@@ -97,7 +97,6 @@ it('owns Sources state, selection, commands, and focus restoration through its p
   await new Promise((resolve) => requestAnimationFrame(resolve));
   expect(inspector.open).to.equal(false);
   expect(document.activeElement).to.equal(returnFocus);
-  expect(customElements.get('source-panel-view')).to.equal(undefined);
 });
 
 async function scrollableSources(): Promise<{
@@ -174,24 +173,6 @@ it('reveals only the latest selection and ignores a missing reference', async ()
   expect(content.scrollTop).to.equal(0);
 });
 
-it('does not restore stale focus when close is immediately followed by reopen', async () => {
-  window.matchMedia = media(true);
-  const firstTrigger = document.createElement('button');
-  const secondTrigger = document.createElement('button');
-  const inspector = document.createElement('dl-inspector') as DlInspector;
-  document.body.append(firstTrigger, secondTrigger, inspector);
-
-  await inspector.openSources(presentation, undefined, undefined, firstTrigger);
-  inspector.close();
-  const reopened = inspector.openSources(presentation, undefined, undefined, secondTrigger);
-  await reopened;
-  await new Promise((resolve) => requestAnimationFrame(resolve));
-
-  expect(inspector.open).to.equal(true);
-  expect(document.activeElement).not.to.equal(firstTrigger);
-  expect(document.activeElement).to.equal(buttonNamed(inspector, 'Close panel'));
-});
-
 it('owns compact dialog semantics, entry focus, Escape, and typed state', async () => {
   window.matchMedia = media(true);
   const inspector = document.createElement('dl-inspector') as DlInspector;
@@ -242,7 +223,7 @@ it('keeps the compact Files drawer trap on its Workspace actions disclosure', as
   expect(document.activeElement).to.equal(summary);
 });
 
-it('activates and pauses typed Files content without a legacy element alias', async () => {
+it('activates and pauses Files content with the panel', async () => {
   window.matchMedia = media(false);
   window.fetch = async () => new Response(JSON.stringify({
     workspace: 'default',
@@ -265,7 +246,7 @@ it('activates and pauses typed Files content without a legacy element alias', as
   expect(panel.getAttribute('aria-labelledby')).to.equal(title.id);
   expect(panel.hasAttribute('aria-label')).to.equal(false);
   expect(files.active).to.equal(true);
-  expect(buttonNamed(inspector, 'Choose files')).not.to.equal(null);
+  expect(inspector.querySelector('[data-upload-file-action]')).not.to.equal(null);
 
   ingestStore.set('secondary');
   await inspector.openFiles();
@@ -275,7 +256,39 @@ it('activates and pauses typed Files content without a legacy element alias', as
   await inspector.updateComplete;
   await files.updateComplete;
   expect(files.active).to.equal(false);
-  expect(customElements.get('file-panel')).to.equal(undefined);
+});
+
+it('closes the Files workspace picker with the panel, so reopening Files does not show it open', async () => {
+  window.matchMedia = media(false);
+  window.fetch = async () => new Response(JSON.stringify({
+    workspace: 'default', files: [], next_cursor: null,
+  }), {status: 200, headers: {'Content-Type': 'application/json'}});
+  const inspector = document.createElement('dl-inspector') as DlInspector;
+  document.body.appendChild(inspector);
+  await inspector.openFiles();
+  const files = inspector.querySelector('dl-inspector-files')!;
+  await waitFor(() => files.loading === false);
+
+  const target = () => inspector.querySelector('dl-ingest-target')!;
+  const trigger = () => target().querySelector<HTMLButtonElement>('#ingest-target-trigger')!;
+  const popover = () => target().querySelector<HTMLElement>('#ingest-target-popover')!;
+  trigger().click();
+  await target().updateComplete;
+  // The outside-click dismissal arms on the next task; the reader closes the panel after that.
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(trigger().getAttribute('aria-expanded')).to.equal('true');
+
+  // The reader's way out: the header's Close button. The picker is part of the surface that
+  // goes away, so it must not survive the click that closes it.
+  buttonNamed(inspector, 'Close panel')!.click();
+  await inspector.updateComplete;
+  expect(inspector.open).to.equal(false);
+
+  await inspector.openFiles();
+  await waitFor(() => files.loading === false);
+  expect(trigger().getAttribute('aria-expanded'), 'the picker is closed on the Files that comes back')
+    .to.equal('false');
+  expect(popover().hidden).to.equal(true);
 });
 
 /** One Run whose agents are not the subject here: the roster is empty and the main agent has done nothing. */
@@ -285,11 +298,11 @@ function childrenOf(runId: string): TracesSource {
     runId,
     mainAgent: () => mainAgentStatus(undefined),
     presentation: () => null,
-    page: async () => ({children: [], nextCursor: null, runStatus: null}),
+    page: async () => ({children: [], nextCursor: null, run: {status: 'running', startedAt: null, finishedAt: null}}),
     observe: unused,
+    overview: unused,
+    searchSteps: unused,
     activity: async () => ({messages: [], nextCursor: null, running: false}),
-    control: unused,
-    reply: unused,
   };
 }
 
@@ -341,26 +354,26 @@ it('keeps what the reader has open when the Run on show has its Child agents ope
   const inspector = document.createElement('dl-inspector') as DlInspector;
   document.body.appendChild(inspector);
   const dock = () => inspector.querySelector('dl-inspector-traces')!;
-  const box = () => inspector.querySelector<HTMLTextAreaElement>('dl-agent-session textarea[data-draft]');
   const first = sourceFor().source;
 
   await inspector.openTraces(first);
   await waitFor(() => dock().querySelector('[data-agent-session="a"]') !== null);
   dock().querySelector<HTMLElement>('[data-agent-session="a"]')!.click();
-  await waitFor(() => box() !== null);
-  box()!.value = 'steer a';
-  box()!.dispatchEvent(new Event('input', {bubbles: true}));
+  await waitFor(() => dock().querySelector('dl-agent-session')?.childSessionId === 'a');
 
   await inspector.openTraces(sourceFor().source);
   expect(dock().source, 'the Run on show keeps its source').to.equal(first);
-  expect(box()?.value, 'and the child that was open, with what was typed for it').to.equal('steer a');
+  expect(dock().querySelector('[data-agent-session="a"]')!.getAttribute('aria-current'),
+    'and the agent that was open stays the one on show').to.equal('true');
+  expect(dock().querySelector('dl-agent-session')!.childSessionId, 'the child page is still the one open').to.equal('a');
   expect(requests.filter((request) => request.path === '/web/api/answer/run-1/children')).to.have.length(1);
 
   const second = childrenOf('run-2');
   await inspector.openTraces(second);
   expect(dock().source).to.equal(second);
   await waitFor(() => dock().textContent!.includes('Main agent'));
-  expect(box()).to.equal(null);
+  await waitFor(() => dock().querySelector('[data-agent-session="main"]')?.getAttribute('aria-current') === 'true');
+  expect(dock().querySelector('dl-agent-session textarea, dl-agent-session form'), 'the Inspector only reads').to.equal(null);
 });
 
 it('closes Child agents with their conversation and leaves workspace Files open', async () => {

@@ -119,8 +119,8 @@ class IndexRequirement:
     """One index a scope owns, declared once for both its DDL and its verification.
 
     ``definition`` is everything after the table name: the column list and any
-    ``WHERE`` predicate. A migration that introduces the index and the baseline
-    that bakes the current schema both use :attr:`ddl`, so the two cannot drift.
+    ``WHERE`` predicate. The baseline creates the index from :attr:`ddl` and a
+    reader verifies it by name, so the two cannot drift.
     """
 
     name: str
@@ -181,12 +181,12 @@ async def apply_migrations(
     migrations: tuple[Migration, ...],
     tables: tuple[TableRequirement, ...],
     schema_error: type[RuntimeError],
-    require_applied_prefix: bool = True,
 ) -> None:
     """Ensure idempotent migrations, record their versions, and read back ``tables``.
 
-    A recorded version never re-runs, so a database a writer created before this
-    revision's baseline grew an object never gains it: the writer refuses it as
+    Every scope declares one ``baseline``: the whole current schema. A recorded
+    version never re-runs, so a database created by an earlier revision never
+    gains what this one added: the writer refuses it, before any DDL, exactly as
     the reader does, and the remedy is a development-data reset, never a
     migration of old data.
 
@@ -195,10 +195,7 @@ async def apply_migrations(
     the same ``IF NOT EXISTS`` DDL. WorkspaceRag startup already holds a broader
     init lock; this keeps ``apply_migrations`` safe on its own path too.
 
-    ``require_applied_prefix`` keeps static migration scopes fail-fast by
-    default. Dynamic scopes can opt out and replay missing declared versions in
-    the current order. Both modes reject undeclared ledger versions and require
-    a development-data reset.
+    The ledger must hold exactly a prefix of the declared versions.
     """
     _validate_unique_versions(migrations)
     lock_key = advisory_lock_key("dlightrag_schema_migration", scope)
@@ -206,13 +203,7 @@ async def apply_migrations(
     try:
         await conn.execute(_CREATE_LEDGER)
         applied_versions = await _applied_versions_for_scope(conn, scope)
-        _validate_applied_state(
-            scope,
-            migrations,
-            applied_versions,
-            schema_error=schema_error,
-            require_applied_prefix=require_applied_prefix,
-        )
+        _validate_applied_state(scope, migrations, applied_versions, schema_error=schema_error)
         for migration in migrations:
             if migration.version in applied_versions:
                 continue
@@ -259,13 +250,7 @@ async def verify_migrations(
             "on a writer instance before starting a reader"
         )
     applied_versions = await _applied_versions_for_scope(conn, scope)
-    _validate_applied_state(
-        scope,
-        migrations,
-        applied_versions,
-        schema_error=schema_error,
-        require_applied_prefix=False,
-    )
+    _validate_applied_state(scope, migrations, applied_versions, schema_error=schema_error)
     missing = [
         migration.version for migration in migrations if migration.version not in applied_versions
     ]
@@ -390,8 +375,8 @@ def _validate_applied_state(
     applied_versions: set[str],
     *,
     schema_error: type[RuntimeError],
-    require_applied_prefix: bool,
 ) -> None:
+    """Refuse a ledger that is not exactly the first ``k`` declared versions."""
     declared_versions = [migration.version for migration in migrations]
     undeclared_versions = sorted(applied_versions - set(declared_versions))
     if undeclared_versions:
@@ -400,36 +385,9 @@ def _validate_applied_state(
             f"{', '.join(undeclared_versions)}; reset the development database "
             "before starting this revision"
         )
-    if not require_applied_prefix:
-        return
-
-    applied_indices = [
-        index for index, version in enumerate(declared_versions) if version in applied_versions
-    ]
-    if not applied_indices:
-        return
-
-    last_applied_index = max(applied_indices)
-    missing_versions = [
-        version
-        for index, version in enumerate(declared_versions[:last_applied_index])
-        if version not in applied_versions
-    ]
-    if not missing_versions:
-        return
-
-    first_missing_index = next(
-        index for index, version in enumerate(declared_versions) if version not in applied_versions
-    )
-    out_of_order_versions = [
-        version
-        for version in declared_versions[first_missing_index:]
-        if version in applied_versions
-    ]
-    raise schema_error(
-        "Schema migration ledger for "
-        f"scope '{scope}' is non-prefix across current migrations; "
-        f"missing current versions: {', '.join(missing_versions)}; "
-        "out-of-order recorded current versions: "
-        f"{', '.join(out_of_order_versions)}"
-    )
+    if applied_versions != set(declared_versions[: len(applied_versions)]):
+        raise schema_error(
+            f"Schema migration ledger for scope '{scope}' is not a prefix of the declared "
+            f"versions ({', '.join(declared_versions)}); reset the development database "
+            "before starting this revision"
+        )

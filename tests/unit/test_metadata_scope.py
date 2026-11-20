@@ -17,7 +17,10 @@ from dlightrag.adapters.postgres.corpus.pg_metadata_index import (
     metadata_match_conditions,
 )
 from dlightrag.adapters.postgres.corpus.pg_metadata_scope import build_bounded_scope_probe
-from dlightrag.engine.rag.retrieval import MetadataFilter, MetadataScope
+from dlightrag.engine.rag.retrieval.models import (
+    MetadataFilter,
+    MetadataScope,
+)
 
 
 def _scope(*, candidate_count: int, candidate_count_exact: bool = True) -> MetadataScope:

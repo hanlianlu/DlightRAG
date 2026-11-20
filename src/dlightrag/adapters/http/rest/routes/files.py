@@ -13,14 +13,15 @@ from dlightrag.adapters.http.rest.models import (
     FileListResponse,
 )
 from dlightrag.adapters.http.source_download import source_download_response
-from dlightrag.application.access import AccessAction, UserContext
-from dlightrag.application.corpus_admin import (
+from dlightrag.application.access.control import AccessAction
+from dlightrag.application.access.principal import UserContext
+from dlightrag.application.corpus_admin.file_panel import (
     FILE_PANEL_PAGE_DEFAULT_LIMIT,
     FILE_PANEL_PAGE_MAX_LIMIT,
     FilePanelCursorError,
     FilePanelPageRequest,
-    safe_log_text,
 )
+from dlightrag.engine.ai.telemetry import safe_log_text
 
 from .deps import enforce_access, get_application, resolve_workspace
 

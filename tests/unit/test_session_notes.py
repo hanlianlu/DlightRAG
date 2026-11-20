@@ -17,7 +17,7 @@ from dlightrag.engine.answer.session_notes import (
     SessionNotesPlane,
     read_working_copy_notes,
 )
-from dlightrag.engine.runtime.workspace import (
+from dlightrag.engine.runtime.agentspace import (
     SESSION_NOTES_BUDGET_REFUSED,
     SESSION_NOTES_LEASE_LOST,
     SESSION_NOTES_MAX_BYTES,
@@ -242,7 +242,7 @@ async def test_the_planes_bounds_come_from_the_deployment(tmp_path: Path) -> Non
     The plane admits against the configured bound: a note that fits the default and
     not the deployment's is refused by name, and the working copy keeps it.
     """
-    from dlightrag.engine.runtime.workspace import SessionNotesLimits
+    from dlightrag.engine.runtime.agentspace import SessionNotesLimits
 
     workspace = tmp_path / "workspace"
     (workspace / "notes").mkdir(parents=True)
@@ -368,7 +368,7 @@ async def test_a_plane_that_refuses_the_write_degrades(tmp_path: Path) -> None:
     store = InMemoryWorkspaceStore()
 
     async def lease_lost(*, session_id: str, upserts, deletes, limits):
-        from dlightrag.engine.runtime.workspace import SessionNotesPromotion
+        from dlightrag.engine.runtime.agentspace import SessionNotesPromotion
 
         return SessionNotesPromotion(degraded_reason=SESSION_NOTES_LEASE_LOST)
 

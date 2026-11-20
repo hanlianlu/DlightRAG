@@ -10,12 +10,19 @@ from pydantic import BaseModel
 
 from dlightrag.application.connections.models import CatalogueTool
 from dlightrag.application.connections.service import Connections
-from dlightrag.engine.agent.environment import SearchToolchain
 from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
+from dlightrag.engine.agent.environment.toolchain import (
+    SearchToolchain,
+)
 from dlightrag.engine.agent.session.ids import IntentId
 from dlightrag.engine.agent.session.plan import AgentRunPlan, AgentToolPlan
 from dlightrag.engine.agent.skills import SkillsBundleFactory
-from dlightrag.engine.agent.tools import AgentTool, ToolDeclaration, ToolResult, ToolRuntime
+from dlightrag.engine.agent.tools.contracts import (
+    AgentTool,
+    ToolDeclaration,
+    ToolResult,
+    ToolRuntime,
+)
 from dlightrag.engine.agent.tools.files import ls_declaration, materialize_declaration
 from dlightrag.engine.answer.continuation_handles import SESSION_NOTE_DIRECTORY
 from dlightrag.engine.answer.evidence import EvidenceLedger
@@ -158,7 +165,8 @@ def test_research_acceptance_and_execution_use_identical_declarations(
     assert all(isinstance(tool, AgentTool) for tool in bound)
     if child:
         assert "attach_artifact" not in {tool.name for tool in declared}
-        assert "remember" not in {tool.name for tool in declared}
+        assert "memory_remember" not in {tool.name for tool in declared}
+        assert "memory_undo" not in {tool.name for tool in declared}
         assert "ask_parent" in {tool.name for tool in declared}
     # Copying a Resource into the workspace needs one, and every Session may ask for it.
     assert ("materialize" in {tool.name for tool in declared}) == (paths and narrow is None)
@@ -246,6 +254,7 @@ def test_only_tools_that_change_nothing_outside_their_run_are_read_only(tmp_path
         "ls",
         "grep",
         "find",
+        "read_subagent",
     }
     assert {
         "browser",
@@ -254,7 +263,10 @@ def test_only_tools_that_change_nothing_outside_their_run_are_read_only(tmp_path
         "materialize",
         "edit",
         "attach_artifact",
-        "remember",
+        "memory_remember",
+        "memory_undo",
+        # Recall stays sequential though it only reads (ADR 0029).
+        "memory_lookup",
         "mcp__test__lookup",
     } <= {tool.name for tool in declared if not tool.read_only}
 
@@ -273,14 +285,13 @@ def test_workspace_tools_state_what_a_run_workspace_holds() -> None:
     }
 
     for name in ("find", "grep"):
-        assert "starts with only" not in declared[name].description
+        assert "Session's workspace" not in declared[name].description
     for name in ("bash", "ls"):
         description = declared[name].description
-        assert (
-            f"starts with only `{SESSION_NOTE_DIRECTORY}/` from earlier Runs of this "
-            "conversation" in description
-        )
-        assert "`tmp/` is scratch for this Run alone" in description
+        assert "Each Run's workspace is the Session's workspace" in description
+        assert "the files earlier Runs of this conversation left are already there" in description
+        assert f"`{SESSION_NOTE_DIRECTORY}/` is its memory" in description
+        assert "`tmp/` is scratch that is not carried to the next Run" in description
         assert "Knowledge-base documents are never files in it" in description
         assert "a Resource becomes one only when materialize copies its resource_id" in description
         assert "fetched pages" not in description, "what copies is materialize's to list"
@@ -319,6 +330,7 @@ def test_read_states_what_a_url_and_an_earlier_artifact_return() -> None:
     read = publishing["read"].description
 
     assert "A url read returns the page's full content" in read
+    assert "takes no offset or limit" in read
     assert (
         "An Artifact an earlier Run published is reopened by its resource_id, the "
         f"`{PUBLISHED_ARTIFACT_HANDLE_PREFIX}…` id in its `artifact:` link." in read
@@ -340,10 +352,12 @@ def test_skill_declarations_need_no_owner_or_catalogue(tmp_path: Path, monkeypat
     factory = SkillsBundleFactory(global_root=tmp_path / "global", owner_root=tmp_path / "owners")
     assert [tool.name for tool in factory.declarations(child=False)] == [
         "load_skill",
+        "materialize_skill",
         "publish_skill",
         "delete_skill",
         "set_skill_enabled",
     ]
+    # A kit write is the Run's construction work, not a Child's: it gets the read only.
     assert [tool.name for tool in factory.declarations(child=True)] == ["load_skill"]
     assert list(tmp_path.iterdir()) == []
 
@@ -360,7 +374,11 @@ async def test_connection_acceptance_returns_only_the_stored_declaration() -> No
     catalogue = CatalogueTool("lookup", "Remote lookup.", schema, local_name="mcp__Remote__lookup")
     binding = RunConnectionBinding("owner", "a" * 32, 1, 1, "b" * 64)
     store = AsyncMock()
-    store.research_catalogues.return_value = [(binding, (catalogue,))]
+    from dlightrag.application.connections.models import PinnedCatalogue
+
+    store.research_catalogues.return_value = [
+        PinnedCatalogue(binding=binding, tools=(catalogue,), label="Remote")
+    ]
     mcp = AsyncMock()
     connections = Connections(
         store=cast(Any, store), mcp=cast(Any, mcp), cipher=CredentialCipher(None)

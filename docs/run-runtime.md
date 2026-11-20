@@ -58,8 +58,8 @@ semantics.
 
 An executor ends each attempt with success, failure, a deferral, a wait for
 repair (Corpus Mutations only), or a terminal it committed itself. A transient
-interruption of corpus storage, the parser, a model provider, or the Agent
-Workspace volume defers the Run:
+interruption of corpus storage, the parser, a model provider, or the Agentspace
+volume defers the Run:
 it checkpoints, releases its execution slot, and becomes claimable again at
 `next_attempt_at`, with backoff from five seconds (two for Corpus Mutations)
 doubling to 60. A Run has ten deferrals across all dependencies, about six to
@@ -91,8 +91,11 @@ epoch; a database trigger also refuses a nonterminal event for a Run that is not
 running with a lease owner, and a terminal event that does not match the stored
 status and result.
 Retrieval and Corpus Mutation emit `progress` and one terminal event. Answer
-also emits tokens, `reset`, Tool, and memory events, and commits token text in
-batches once they reach 512 characters or 250 ms after their first token.
+also emits tokens, model reasoning, `reset`, Tool, and memory events, and commits
+token or reasoning text in batches once the buffered stream reaches 512
+characters or 250 ms after its first batch; a switch from one stream to the other
+commits the first before the second is buffered, so a reader sees the order the
+model wrote.
 [Interfaces](interfaces.md#run-lifecycle-and-answer-endpoints) defines every
 event and payload.
 
@@ -105,7 +108,13 @@ polls PostgreSQL every second for commits made elsewhere. The event log, not
 the stream connection, is authoritative. `progress` is last-writer-wins and may
 move back after recovery. Only a successful `done` result is terminal result
 authority: Retrieval publishes no contexts before it, and Answer `reset`
-invalidates the draft text streamed so far. An Answer that resumes after it
+invalidates the draft text streamed so far. An open Agent
+traces dock draws a live Run from this log: the batch a subscriber receives is
+what tells it the Run stated something — a tool step, a phase, the end — and the
+pages it reads for those carry the Entries, while a batch of tokens or reasoning
+costs it no read at all, because the chat draws those words and a row already
+counts its own time. The log states no child agent's work: a Run's own agent streams, and a
+child's pane comes from the pages again until a child has a stream of its own. An Answer that resumes after it
 committed events emits `reset` just before its first new token, so a recovery
 that streams nothing emits none.
 
@@ -139,9 +148,9 @@ cancellation takes, or its reservation, keeping the unanswered question.
 Before each provider call the Runtime commits the exact request snapshot and
 attempt. Assistant settlement records the complete response and its ordered Tool
 Batch Plan, and in the same transaction the `call` that made it: the model,
-parameters, prompt digests and timings of the attempt that produced the response,
-which a Compaction Entry records for its summarizer call in the same way
-([ADR 0041](adr/0041-a-step-records-the-model-parameters-and-prompt-digests-it-ran-on.md)).
+parameters, prompt digests and timings of the attempt that produced the response, which
+a Compaction Entry records for its summarizer call in the same way
+([ADR 0043](adr/0043-a-step-records-the-model-parameters-and-prompt-digests-it-ran-on.md)).
 That record takes no part in usage, cost, a Plan or acceptance digest, or any
 check that decides whether an active Run may resume. Tool clearance, effect
 settlement, ToolResult placement, Host deltas, and progress then commit under
@@ -151,10 +160,10 @@ or removes whole assistant and Tool exchanges. A Research compaction summary
 carries the twenty newest committed spills and up to eight published-Artifact
 handles, read from their rows, then Evidence citation handles from the Run's
 ledger, forty handles at most in all, plus up to eight note paths from the Run's
-Workspace Inventory; a Fast compaction carries only the notes
+Agentspace Inventory; a Fast compaction carries only the notes
 ([ADR 0018](adr/0018-run-notes-and-one-continuation-narrative.md)).
 
-A call runs alone unless its Tool declares it read-only. Up to eight adjacent
+A call runs alone unless its Tool declares it read-only. Up to sixteen adjacent
 read-only calls run at once and settle in source order, so Evidence, citations,
 and Host deltas match one-at-a-time execution
 ([ADR 0029](adr/0029-read-only-calls-run-at-once-and-settle-in-source-order.md)).
@@ -193,8 +202,8 @@ and a missing or mismatched attachment blob fails the Run.
 A Fork opens its Lane at the parent Run's recorded Fork Point, not at the source
 Lane's current head, and a parent with no recorded Fork Point refuses the Fork
 with a remedy ([ADR 0019](adr/0019-turn-accurate-forking-and-the-carry-point.md)).
-A Run's first bind materializes the Session's notes into its fresh Workspace
-epoch, and the handoff records them as that epoch's Inventory in the transaction
+A Run's first bind materializes the Session's notes into its fresh Agentspace
+Epoch, and the handoff records them as that epoch's Agentspace Inventory in the transaction
 that sets the Run's epoch; a recovered attempt instead copies the recorded epoch,
 verified, and records the copied manifest, never materializing again, and
 unrecorded epochs below the current fencing epoch are discarded
@@ -256,9 +265,23 @@ response); accepted Runs stay durable, and a repeated submission key still
 returns its existing Run. The limits keep a dependency outage from growing an
 unbounded durable queue. Queue residence has no timeout.
 
-DlightRAG has no aggregate byte quota, tenant quota, or per-user fairness.
-Monitor PostgreSQL and blob growth, and rate-limit acceptance at ingress before
-either limit is reached ([Security](security.md#ingress-responsibilities)).
+An administrator may also bound how many Answers one owner has in progress, with the
+`active_answer_runs` [Runtime Policy](interfaces.md#runtime-policies)
+([ADR 0042](adr/0042-runtime-policies-are-read-at-the-door-and-pinned-into-the-run.md)).
+It is not a lane limit. At acceptance, under the same lane-wide lock and after a repeated
+submission key has been answered, the store counts the owner's `answer` Runs that are
+`queued` or `running`, deferred ones included, and refuses the new Run with HTTP 429
+`active_run_limit` when the count has reached the limit. Racing submissions of one owner
+therefore admit exactly the limit, a keyed retry of an accepted Run is still answered, an
+accepted Run is never cancelled because a limit dropped, and a Run that ended makes room. The
+policy is read once and the limit is not stored with the Run. The count is served by
+`idx_dlightrag_runs_owner_active`, a partial index over the queued and running Answers, so
+it reads the owner's active Runs and not the lane's or the owner's history. Under `none` and
+`simple` authentication every caller is one owner, so the limit there is the deployment's.
+
+DlightRAG has no aggregate byte quota or tenant quota, and no fairness between owners beyond
+that opt-in limit. Monitor PostgreSQL and blob growth, and rate-limit acceptance at ingress
+before either limit is reached ([Security](security.md#ingress-responsibilities)).
 
 ## Corpus Mutations
 
@@ -434,10 +457,25 @@ Deleting a Run cascades its events, turns, and artifact references. A blob goes
 only when no reference of its owner survives, so blobs have no retention clock
 of their own ([ADR 0010](adr/0010-separate-run-blob-plane-from-operational-state.md)).
 An Agent Session goes when no routed Run references it. A pruned Answer Run's
-Agent Workspace root (`workspace_root/<owner shard>/<run id>`) goes with it, and
+Agentspace root (`workspace_root/<owner shard>/<run id>`) goes with it, and
 an orphan sweep removes roots whose Run row is gone. The sweep follows the
 configured root, not the execution mode, so turning execution off still
-reclaims trees earlier Runs left. On a writer the same pass removes Corpus
+reclaims trees earlier Runs left.
+
+The tree itself has a shorter clock than the Run. Nothing reads a finished Run's
+Agentspace tree: its notes are the Session's rows, which the next Run materializes; a
+published Artifact is a Blob its row pins, so the Answer and a later Run reach the
+bytes without the tree; a spilled Tool result is read only by the Run that wrote
+it, and a terminal Run never runs again. What is left is what the Run's processes
+generated on the way — a script, a chart preview, a downloaded page, a fetched
+library — so the same sweep that removes orphan roots removes the root of a Run
+that has been over for seven days, while the row and its events keep the
+retention above. A Run still working keeps its tree however long it has been at
+it, and the Agentspace quota is what bounds one that grows: past
+`WORKSPACE_MAX_ENTRIES` or `WORKSPACE_MAX_BYTES` a write is refused rather than a
+directory emptied under an agent that is using it.
+
+On a writer the same pass removes Corpus
 Mutation stages no Run will read again: one whose Run has ended, and one with no
 Run a day after its request began.
 

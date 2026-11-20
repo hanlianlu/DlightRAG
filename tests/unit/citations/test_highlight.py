@@ -25,76 +25,51 @@ def _report_source(chunks: list[ChunkSnippet]) -> SourceReference:
     )
 
 
-def test_extract_citing_sentences_basic():
-    text = "Market grew fast. Growth was 15% [1-1]. Tech improved too [2-1]."
-    result = extract_all_citing_sentences(text)
-    assert "1-1" in result
-    assert "2-1" in result
-    assert any("15%" in s for s in result["1-1"])
+@pytest.mark.parametrize(
+    ("text", "keys"),
+    [
+        ("Market grew fast. Growth was 15% [1-1]. Tech improved too [2-1].", {"1-1", "2-1"}),
+        ("市场增长了15%[1-1]。技术也提升了[2-1]。", {"1-1", "2-1"}),
+        ("Both growth [1-1] and tech [2-1] improved.", {"1-1", "2-1"}),
+        ("Revenue grew 15% [1]. Tech improved [2].", {"1", "2"}),
+        ("翟东升观点见《货币、权力与人》[1]和《中国为什么有前途》[3]。", {"1", "3"}),
+        ("Revenue grew 15% [1-1]. Overall the report [1] is positive.", {"1-1", "1"}),
+    ],
+    ids=["chunk", "chinese-punctuation", "one-sentence", "doc", "doc-before-chinese", "mixed"],
+)
+def test_extract_citing_sentences_finds_every_citation_level(text: str, keys: set[str]) -> None:
+    assert set(extract_all_citing_sentences(text)) == keys
 
 
-def test_extract_citing_sentences_chinese_punctuation():
-    text = "市场增长了15%[1-1]。技术也提升了[2-1]。"
-    result = extract_all_citing_sentences(text)
-    assert "1-1" in result
-    assert "2-1" in result
-
-
-def test_extract_citing_sentences_multiple_citations_one_sentence():
-    text = "Both growth [1-1] and tech [2-1] improved."
-    result = extract_all_citing_sentences(text)
-    assert "1-1" in result
-    assert "2-1" in result
-
-
-def test_extract_citing_sentences_doc_level():
-    text = "Revenue grew 15% [1]. Tech improved [2]."
-    result = extract_all_citing_sentences(text)
-    assert "1" in result
-    assert "2" in result
-    assert any("15%" in s for s in result["1"])
-
-
-def test_extract_citing_sentences_doc_level_before_chinese_text():
-    text = "翟东升观点见《货币、权力与人》[1]和《中国为什么有前途》[3]。"
-    result = extract_all_citing_sentences(text)
-    assert "1" in result
-    assert "3" in result
-
-
-def test_extract_citing_sentences_mixed_levels():
-    text = "Revenue grew 15% [1-1]. Overall the report [1] is positive."
-    result = extract_all_citing_sentences(text)
-    assert "1-1" in result
-    assert "1" in result
-
-
-def test_extract_citing_sentences_attachment_doc_and_chunk_levels():
-    text = "The attachment supports this [att-1]. Exact evidence is here [att-1-2]."
-
-    assert extract_all_citing_sentences(text) == {
-        "att-1": ["The attachment supports this [att-1]."],
-        "att-1-2": ["Exact evidence is here [att-1-2]."],
-    }
-
-
-def test_extract_citing_sentences_supports_named_chunk_references():
-    text = "Generic evidence [report_deadbeef-4]. Other evidence [project_alpha-2]."
-
-    assert extract_all_citing_sentences(text) == {
-        "report_deadbeef-4": ["Generic evidence [report_deadbeef-4]."],
-        "project_alpha-2": ["Other evidence [project_alpha-2]."],
-    }
-
-
-def test_extract_citing_sentences_preserves_normal_references_prose():
-    text = "Revenue grew 15% [1-1].\n\n### References\n- [1] report.pdf"
-    result = extract_all_citing_sentences(text)
-    assert result == {"1-1": ["Revenue grew 15% [1-1]."], "1": ["[1] report."]}
-
-
-def test_extract_citing_sentences_empty():
-    assert extract_all_citing_sentences("no citations here") == {}
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "The attachment supports this [att-1]. Exact evidence is here [att-1-2].",
+            {
+                "att-1": ["The attachment supports this [att-1]."],
+                "att-1-2": ["Exact evidence is here [att-1-2]."],
+            },
+        ),
+        (
+            "Generic evidence [report_deadbeef-4]. Other evidence [project_alpha-2].",
+            {
+                "report_deadbeef-4": ["Generic evidence [report_deadbeef-4]."],
+                "project_alpha-2": ["Other evidence [project_alpha-2]."],
+            },
+        ),
+        (
+            "Revenue grew 15% [1-1].\n\n### References\n- [1] report.pdf",
+            {"1-1": ["Revenue grew 15% [1-1]."], "1": ["[1] report."]},
+        ),
+        ("no citations here", {}),
+    ],
+    ids=["attachment", "named-chunk", "references-prose", "none"],
+)
+def test_extract_citing_sentences_returns_each_citing_sentence_exactly(
+    text: str, expected: dict[str, list[str]]
+) -> None:
+    assert extract_all_citing_sentences(text) == expected
 
 
 def test_highlight_phrases_model():
@@ -334,3 +309,54 @@ class TestHighlightExtractor:
         assert highlighted[0].chunks is not None
         highlighted_count = sum(1 for c in highlighted[0].chunks if c.highlight_phrases)
         assert highlighted_count == 3
+
+    @pytest.mark.asyncio
+    async def test_batch_instructions_precede_the_items_they_apply_to(self):
+        """Concurrent batches share the instruction block, so it must be the prefix.
+
+        One answer's items run as several calls at once, and those calls cannot
+        share a cache unit a later one has not written yet. What they can share
+        is the bytes before the first item: the system message and the batch
+        instructions. Both are pinned here ahead of the per-batch items, so a
+        reordering that put citations or chunk text first would show up as a
+        lost prefix rather than as a slower answer.
+        """
+        messages_by_batch: list[list[dict[str, str]]] = []
+
+        async def batch_llm(*, messages, **kwargs) -> str:
+            messages_by_batch.append(list(messages))
+            items = json.loads(messages[-1]["content"].split("Items:\n", 1)[1])
+            return json.dumps(
+                {
+                    "items": [
+                        {"id": item["id"], "phrases": ["hit"], "confidence": 0.9} for item in items
+                    ]
+                }
+            )
+
+        chunks = [
+            ChunkSnippet(chunk_id=f"c{i}", chunk_idx=i + 1, content=f"Chunk body {i} [MARKER-{i}].")
+            for i in range(16)
+        ]
+        sources = [_report_source(chunks)]
+        answer_text = " ".join(f"Chunk {i} is supported [1-{i}]." for i in range(1, 17))
+
+        await extract_highlights_for_sources(
+            sources,
+            answer_text,
+            batch_llm,
+            batch_size=8,
+            max_concurrency=2,
+        )
+
+        assert len(messages_by_batch) == 2
+        for messages in messages_by_batch:
+            assert [message["role"] for message in messages] == ["system", "user"]
+            user_prompt = messages[1]["content"]
+            assert user_prompt.index("identify 1-3 short supporting phrases") < user_prompt.index(
+                "Items:\n"
+            )
+        first_payload = messages_by_batch[0][1]["content"]
+        second_payload = messages_by_batch[1][1]["content"]
+        assert messages_by_batch[0][0] == messages_by_batch[1][0]
+        assert first_payload.split("Items:\n", 1)[0] == second_payload.split("Items:\n", 1)[0]

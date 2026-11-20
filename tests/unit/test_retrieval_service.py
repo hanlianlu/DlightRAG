@@ -10,7 +10,7 @@ from unittest.mock import ANY, AsyncMock, Mock, patch
 
 import pytest
 
-from dlightrag.application.retrieval import (
+from dlightrag.application.retrieval.service import (
     CorpusUnavailableError,
     ProjectedRetrieval,
     RetrievalService,
@@ -19,7 +19,13 @@ from dlightrag.application.retrieval import (
 )
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.telemetry import NoopTelemetry
-from dlightrag.engine.rag.retrieval import MetadataFilter, RetrievalOptions, RetrievalResult
+from dlightrag.engine.rag.retrieval.models import (
+    MetadataFilter,
+    RetrievalOptions,
+)
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalResult,
+)
 from dlightrag.engine.rag.retrieval.runtime import RetrievalPlannerRuntime
 from dlightrag.engine.rag.workspace.pool import WorkspacePool
 from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag

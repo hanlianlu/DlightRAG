@@ -9,9 +9,8 @@ tools and writes the answer when it stops calling tools.
 
 import base64
 import hashlib
-import json
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,7 +22,11 @@ from dlightrag_memory import Memory
 from dlightrag.engine.agent.environment.access import AccessScheduler
 from dlightrag.engine.agent.environment.errors import TOOL_RESULT_MAX_BYTES, TOOL_RESULT_MAX_LINES
 from dlightrag.engine.agent.environment.toolchain import SearchToolchain
-from dlightrag.engine.agent.session.entries import AssistantMessageEntry, CompactionEntry
+from dlightrag.engine.agent.session.entries import (
+    AssistantMessageEntry,
+    CompactionEntry,
+    DeliveryWarningEntry,
+)
 from dlightrag.engine.agent.session.fold import (
     PriorTurns,
     WorkingContextProjection,
@@ -44,15 +47,19 @@ from dlightrag.engine.agent.session.runtime import (
     CompactionResult,
     RuntimeContext,
 )
+from dlightrag.engine.agent.skill_delivery import DeliveryFindings, DeliveryLedger
+from dlightrag.engine.agent.skill_protection import ProtectedTextIndex
+from dlightrag.engine.agent.skill_reads import sealed_skills_from_events, skill_reads_from_events
 from dlightrag.engine.agent.skills import SkillsBundle
-from dlightrag.engine.agent.tools import (
+from dlightrag.engine.agent.tools.contracts import (
     AdmittedBytesReader,
     AgentTool,
     ExecutedTurn,
+    ToolModelFunc,
     ToolResult,
     ToolRuntime,
+    declaration_tokens,
 )
-from dlightrag.engine.agent.tools.contracts import ToolModelFunc
 from dlightrag.engine.agent.tools.files import (
     PreparedImageAttachment,
     ResourceReader,
@@ -68,7 +75,7 @@ from dlightrag.engine.ai.media import decode_image_base64, detect_image_mime
 from dlightrag.engine.ai.messages import AssistantTurn, ToolDefinition
 from dlightrag.engine.ai.providers.base import provider_input_tokens, usage_counters
 from dlightrag.engine.ai.telemetry import Telemetry
-from dlightrag.engine.ai.tokens import estimate_tokens
+from dlightrag.engine.answer.agentspace import RunAgentspace
 from dlightrag.engine.answer.compaction import CompactionCoordinator, CompactionUnavailable
 from dlightrag.engine.answer.continuation_handles import (
     MAX_SPILL_HANDLES,
@@ -79,7 +86,10 @@ from dlightrag.engine.answer.errors import (
     AnswerInputOverflowError,
 )
 from dlightrag.engine.answer.evidence import EvidenceLedger
-from dlightrag.engine.answer.execution.connection_binding import is_connection_tool
+from dlightrag.engine.answer.execution.connection_binding import (
+    ConnectionSurface,
+    is_connection_tool,
+)
 from dlightrag.engine.answer.images import AnswerImageBudget
 from dlightrag.engine.answer.mode import ResolvedMode
 from dlightrag.engine.answer.publication import PublicationLimits
@@ -94,6 +104,7 @@ from dlightrag.engine.answer.research.persistence import (
     ListChildren,
     LoadChild,
     LoadChildGuidance,
+    LoadChildTranscript,
     PersistChild,
     ReleaseChildren,
     ReplyChildGuidance,
@@ -107,18 +118,27 @@ from dlightrag.engine.answer.resources.models import (
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.answer.session_notes import SESSION_NOTES_DEGRADED_KEY
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
-from dlightrag.engine.answer.tools import KnowledgeRetrieval, WebSearch, compose_research_tools
 from dlightrag.engine.answer.tools.browser import BrowserToolHost
-from dlightrag.engine.answer.tools.memory import MemoryHost
+from dlightrag.engine.answer.tools.composition import (
+    compose_research_tools,
+)
+from dlightrag.engine.answer.tools.goals import GoalHost
+from dlightrag.engine.answer.tools.mcp_resources import RESOURCE_TOOL_NAMES, McpResourceHost
+from dlightrag.engine.answer.tools.memory import MEMORY_REMEMBER, MemoryHost
+from dlightrag.engine.answer.tools.search import (
+    KnowledgeRetrieval,
+    WebSearch,
+)
 from dlightrag.engine.answer.tools.subagents import (
     ChildContextSnapshot,
     ChildOutcome,
     ChildRequest,
     SubagentHost,
 )
-from dlightrag.engine.answer.workspace import RunWorkspace
-from dlightrag.engine.rag.retrieval import RetrievalContexts
-from dlightrag.engine.runtime.workspace import SessionNoteRecord, WorkspaceStore
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalContexts,
+)
+from dlightrag.engine.runtime.agentspace import AgentspaceStore, SessionNoteRecord
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +206,26 @@ class ChildAttachmentAdmissions:
     cumulative: dict[str, int]
 
 
+def _pending_repair(context: RuntimeContext) -> tuple[str, ...]:
+    """The newest delivery warning that belongs to this Operation and still follows its draft."""
+    graph = context.snapshot.graph
+    if graph is None:
+        return ()
+    entries = graph.ancestry()
+    assistant_sequence = max(
+        (entry.sequence for entry in entries if isinstance(entry, AssistantMessageEntry)),
+        default=0,
+    )
+    for entry in reversed(entries):
+        if (
+            isinstance(entry, DeliveryWarningEntry)
+            and entry.operation_id == context.operation_id.value
+            and entry.sequence > assistant_sequence
+        ):
+            return entry.findings
+    return ()
+
+
 class AnswerOrchestrator:
     """Route every answer through one fast or research path and one final answer."""
 
@@ -214,9 +254,12 @@ class AnswerOrchestrator:
         subagent_host: SubagentHost | None = None,
         memory_host: MemoryHost | None = None,
         skills: SkillsBundle | None = None,
+        protected_index: Callable[[], ProtectedTextIndex] | None = None,
         child_model_resolver: Callable[[str], tuple[ToolModelFunc, StreamModel, ModelProfile]]
         | None = None,
         child_model_identities: Mapping[str, Mapping[str, Any]] | None = None,
+        connection_surface: Sequence[ConnectionSurface] = (),
+        mcp_resource_host: McpResourceHost | None = None,
     ) -> None:
         self._synthesizer = synthesizer
         self._retrieve_knowledge_base = retrieve_knowledge_base
@@ -238,10 +281,10 @@ class AnswerOrchestrator:
         self._browser = browser
         self._resource_viewer = resource_viewer
         self._admitted_bytes_reader = admitted_bytes_reader
-        self._workspace: RunWorkspace | None = None
+        self._workspace: RunAgentspace | None = None
         #: The Run's durable spill rows, read when a summary must name the handles
         #: the covered prefix is about to take with it.
-        self._workspace_store: WorkspaceStore | None = None
+        self._workspace_store: AgentspaceStore | None = None
         #: The Session notes materialized into this Run's working copy at bind. Empty
         #: means the Session holds no memory and the first request says nothing about it.
         self._session_notes: tuple[SessionNoteRecord, ...] = ()
@@ -251,12 +294,20 @@ class AnswerOrchestrator:
         self._resolved_mode: ResolvedMode = resolved_mode
         self._subagent_host = subagent_host
         self._memory_host = memory_host
+        self._goal_host: GoalHost | None = None
         self._memory_text = ""
-        self._parent_query = ""
-        self._parent_history = PriorTurns()
         self._skills = skills
+        # The reader's content gate for a published deliverable (ADR 0061); asked for the
+        # process index only when an attach actually validates a file.
+        self._protected_index = protected_index
+        # One Run's attempt: the in-loop record the attach preview reads (ADR 0058).
+        self._delivery_ledger: DeliveryLedger | None = None
         self._child_model_resolver = child_model_resolver
         self._child_model_identities = child_model_identities
+        #: The Run's pinned external Connections: rendered into the system prompt and, when
+        #: one is enabled, the three shared resource tools bind to their host.
+        self._connection_surface = tuple(connection_surface)
+        self._mcp_resource_host = mcp_resource_host
         self._access = AccessScheduler()
         self._compaction: dict[str, CompactionCoordinator] = {}
 
@@ -269,6 +320,7 @@ class AnswerOrchestrator:
         persist: PersistChild,
         load_child: LoadChild,
         list_children: ListChildren,
+        load_transcript: LoadChildTranscript,
         finish_child: FinishChild,
         request_cancel: CancelChild,
         release_children: ReleaseChildren,
@@ -296,6 +348,7 @@ class AnswerOrchestrator:
         self._subagent_host.persist = persist
         self._subagent_host.load_child = load_child
         self._subagent_host.list_children = list_children
+        self._subagent_host.load_transcript = load_transcript
         self._subagent_host.finish_child = finish_child
         self._subagent_host.request_cancel = request_cancel
         self._subagent_host.release_children = release_children
@@ -411,14 +464,75 @@ class AnswerOrchestrator:
         self._memory_host.epoch = epoch
         self._memory_host.capability_current = capability_current
 
+    def bind_goal(self, host: GoalHost | None) -> None:
+        """Bind this Run's goal capability; a Child Session is never given one (ADR 0025)."""
+        self._goal_host = host
+
+    def goal_completion_refusal(self) -> str | None:
+        """Why this Run may not mark its goal complete, from the attempt's own delivery evidence.
+
+        A goal that loaded a Skill declaring a sealed artifact may not call complete while that
+        delivery is unattested: a skipped required read, a verifier that did not pass, or a refused
+        seal is evidence the objective is not finished. The refusal leaves the goal active so the
+        next round can finish it; ``blocked`` remains the honest early exit. No Skill was loaded,
+        or no sealed claim is implicated: completion is the model's call as before.
+        """
+        ledger = self._delivery_ledger
+        if ledger is None:
+            return None
+        preview = ledger.preview()
+        if preview is None:
+            return None
+        unattested = sorted(set(preview.sealed_skills) - set(preview.sealed_attested))
+        if not unattested and not preview.sealed_refused:
+            return None
+        lines: list[str] = []
+        for artifact, skill, reason in preview.sealed_refused:
+            lines.append(f"- {skill}'s sealed gate refused {artifact}: {reason}")
+        for skill in unattested:
+            lines.append(
+                f"- {skill} declares a sealed artifact, but no sealed artifact was attested "
+                "in this Run"
+            )
+        rendered = "\n".join(lines)
+        return (
+            "this Run loaded a Skill that declares a sealed artifact, but that delivery is "
+            "not attested in this Run, so the objective is not established as finished:\n"
+            f"{rendered}\n"
+            "Attach the sealed artifact and let its declared gate attest it, then complete; "
+            "if the sealed deliverable cannot be finished in this Run, mark the goal blocked "
+            "with the concrete condition."
+        )
+
+    def delivery_findings(self) -> DeliveryFindings:
+        """What the current attempt's ledger would have the reader's record say, before delivery.
+
+        Evidence only: the pre-delivery checkpoint injects these lines as a warning entry and lets
+        the model correct the record; they are the preview's own, as an attach result carries them.
+        An attempt that attached nothing has no delivery to warn about, but the labels follow the
+        ledger regardless, so a sealed claim made without an attached artifact is still labelled.
+        """
+        ledger = self._delivery_ledger
+        if ledger is None:
+            return DeliveryFindings()
+        preview = ledger.preview()
+        labels = () if preview is None else preview.unsealed_labels
+        if not ledger.has_attachment:
+            return DeliveryFindings(unsealed_labels=labels)
+        # An Artifact this Run attached with no Skill loaded is still delivered with a reader
+        # record -- ``unattested``, "the Run loaded no Agent Skill at all". The checkpoint says
+        # that while the model can still load the Skill and re-attach.
+        lines = ledger.no_skill_delivery() if preview is None else preview.lines()
+        return DeliveryFindings(lines=lines, unsealed_labels=labels)
+
     def bind_recall(self, text: str) -> None:
         """Attach the non-citable auto-recall block for this run."""
         self._memory_text = text
 
-    def bind_workspace(
+    def bind_agentspace(
         self,
-        workspace: RunWorkspace,
-        store: WorkspaceStore | None = None,
+        workspace: RunAgentspace,
+        store: AgentspaceStore | None = None,
         *,
         session_notes: Sequence[SessionNoteRecord] = (),
         memory_degradation: str | None = None,
@@ -521,7 +635,7 @@ class AnswerOrchestrator:
         the Run holds instead of asking for the same compaction again.
         """
         self._record_working_fold(run, runtime_context.snapshot)
-        tool_schema_tokens = _tool_schema_tokens(run.tools)
+        tool_schema_tokens = declaration_tokens(tool.definition for tool in run.tools)
         # Anchor on what the provider billed for the previous request before
         # measuring this one: the estimator's undercount is the only input error
         # nothing else absorbs.
@@ -544,6 +658,9 @@ class AnswerOrchestrator:
             evidence=run.evidence,
             working=run.working,
         )
+        repair = _pending_repair(runtime_context)
+        if repair:
+            messages = [*messages, *run.context.repair_messages(repair)]
         max_tokens = run.context.output_allowance(
             messages,
             additional_input_tokens=tool_schema_tokens,
@@ -566,6 +683,7 @@ class AnswerOrchestrator:
         model_profile: ModelProfile | None = None,
         model_func: ToolModelFunc | None = None,
         emit_text: ProviderTextSink | None = None,
+        emit_reasoning: ProviderTextSink | None = None,
     ) -> AssistantTurn:
         """Execute one already-persisted exact provider Request Snapshot."""
         definitions = [ToolDefinition(**definition) for definition in request.tools]
@@ -581,6 +699,8 @@ class AnswerOrchestrator:
         stream_turn = getattr(selected_model, "stream_turn", None)
         if emit_text is not None and callable(stream_turn):
             kwargs["emit_text"] = emit_text
+            if emit_reasoning is not None:
+                kwargs["emit_reasoning"] = emit_reasoning
             return await cast(Callable[..., Awaitable[AssistantTurn]], stream_turn)(**kwargs)
         return await cast(ToolModelFunc, selected_model)(**kwargs)
 
@@ -602,7 +722,7 @@ class AnswerOrchestrator:
                 tail_target_tokens=tail,
                 accounted_before=(
                     run.context.corrected_input_tokens(evidence=run.evidence, working=run.working)
-                    + _tool_schema_tokens(run.tools)
+                    + declaration_tokens(tool.definition for tool in run.tools)
                 ),
                 durable_handles=await self._continuation_handles(run),
                 run_notes=await self._session_note_names(),
@@ -701,7 +821,29 @@ class AnswerOrchestrator:
                     ),
                 ),
             )
-        run.stop_reason = "model_stop"
+        # The provider's own last-turn stop reason is what the settlement must see: a Run
+        # cut off at the output token limit reports "length", and the goal driver blocks the
+        # goal instead of treating the truncated round as success. A settled snapshot with no
+        # assistant turn states no provider reason and keeps the model's stop.
+        provider_stop_reason = (
+            run.last_turn.assistant.stop_reason if run.last_turn is not None else None
+        )
+        run.stop_reason = provider_stop_reason or "model_stop"
+
+    def restore_delivery_record(self, events: Iterable[tuple[str, Mapping[str, Any]]]) -> None:
+        """Give a continued attempt's fresh ledger what the Run's earlier attempts recorded.
+
+        ``events`` are the Run's durable ``(event_type, payload)`` pairs: the Skill loads, and the
+        sealed artifacts a Skill's gate attested. A Run that loaded a Skill and was deferred must
+        still label its answer after the resume, and one whose sealed artifact the gate already
+        attested must not be labelled unsealed, so both are read back from the one record that
+        outlives an attempt, the way the reader's derivation reads them.
+        """
+        if self._delivery_ledger is not None and self._skills is not None:
+            recorded = tuple(events)
+            self._skills.restore_loads(self._delivery_ledger, skill_reads_from_events(recorded))
+            for skill in sealed_skills_from_events(recorded):
+                self._delivery_ledger.record_sealed_attestation(skill)
 
     # ------------------------------------------------------------------
     # Research helpers
@@ -721,20 +863,34 @@ class AnswerOrchestrator:
         """Build one run's memory and the tools bound to it, before any restore."""
         if self._model_func is None:
             raise RuntimeError("Research answer requires a tool-capable model")
-        self._parent_query = query
         self._attachment_snapshots = dict(attachment_snapshots or {})
-        self._parent_history = conversation_history or PriorTurns()
         evidence = EvidenceLedger(image_budget=self._image_budget)
         trace = _fresh_research_trace()
         if self._memory_degradation is not None:
             # The Run proceeds without its notes; the trace is what says so.
             trace[SESSION_NOTES_DEGRADED_KEY] = self._memory_degradation
         skills = self._skills
+        self._delivery_ledger = None if skills is None else DeliveryLedger()
         tools = self._compose_tools(
             evidence,
             trace,
             child=False,
-            skill_tools=[] if skills is None else skills.tools(child=False),
+            delivery_ledger=self._delivery_ledger,
+            skill_tools=(
+                []
+                if skills is None
+                else skills.tools(
+                    child=False,
+                    delivery_ledger=self._delivery_ledger,
+                    # The model whose window this result is, and the workspace surface
+                    # `write_to` copies through: the same environment and scheduler the
+                    # file tools are bound to below, so a Skill write is accounted
+                    # exactly as `write` is.
+                    model_profile=self._model_profile,
+                    environment=None if self._workspace is None else self._workspace.environment,
+                    scheduler=self._access,
+                )
+            ),
         )
         return PreparedRun(
             context=ContextAssembler(
@@ -746,13 +902,16 @@ class AnswerOrchestrator:
                 resource_manifest=self._resource_manifest,
                 memory_text=self._memory_text,
                 contributions=() if skills is None else skills.context_contributions(child=False),
-                profile_memory_write=any(tool.name == "remember" for tool in tools),
+                profile_memory_write=any(tool.name == MEMORY_REMEMBER for tool in tools),
                 artifact_publication=any(tool.name == "attach_artifact" for tool in tools),
                 # Writing notes needs a workspace, so the habit rides the same
                 # composed-tool fact the publication guidance uses: a read-only
                 # Child Session is told nothing about a path it cannot write.
                 run_notes=any(tool.name == "write" for tool in tools),
                 connection_tools=any(is_connection_tool(tool.name) for tool in tools),
+                goal_tools=self._goal_host is not None,
+                connection_surface=self._connection_surface,
+                mcp_resources=any(tool.name in RESOURCE_TOOL_NAMES for tool in tools),
                 session_notes=self._session_notes,
             ),
             tools=tools,
@@ -839,7 +998,20 @@ class AnswerOrchestrator:
             evidence,
             trace,
             child=True,
-            skill_tools=[] if skills is None else skills.tools(child=True),
+            delivery_ledger=self._delivery_ledger,
+            skill_tools=(
+                []
+                if skills is None
+                else skills.tools(
+                    child=True,
+                    delivery_ledger=self._delivery_ledger,
+                    # A Child reads its own model's window, and writes through the same
+                    # workspace surface its sibling tools are bound to.
+                    model_profile=child_profile,
+                    environment=None if self._workspace is None else self._workspace.environment,
+                    scheduler=self._access,
+                )
+            ),
             tool_names=request.tools,
             child_session_id=child_session_id,
             model_profile=child_profile,
@@ -867,8 +1039,17 @@ class AnswerOrchestrator:
                     if skills is not None and any(tool.name == "load_skill" for tool in tools)
                     else ()
                 ),
-                # A Child inherits the Run's Connection tools, and their descriptions with them.
+                # A Child inherits the Run's Connection tools, and their descriptions with
+                # them; a narrowing that removes every Connection fact carries no external
+                # guidance either, so the prompt never names a tool the Child does not hold.
                 connection_tools=any(is_connection_tool(tool.name) for tool in tools),
+                connection_surface=(
+                    self._connection_surface
+                    if any(is_connection_tool(tool.name) for tool in tools)
+                    or any(tool.name in RESOURCE_TOOL_NAMES for tool in tools)
+                    else ()
+                ),
+                mcp_resources=any(tool.name in RESOURCE_TOOL_NAMES for tool in tools),
                 instructions=child_instructions(child_session_id),
             ),
             tools=tools,
@@ -926,6 +1107,21 @@ class AnswerOrchestrator:
         for exchange in exchanges:
             working.record(exchange)
 
+    def sealed_artifact_names(self) -> frozenset[str]:
+        """The built-in Skills' declared sealed artifact names, as machine-artifact exemptions.
+
+        Terminal publication revalidates the attached closure after the Tool that wrote the
+        attachment is gone. The declared sealed file is machine data, not reader-facing prose;
+        the exact-byte digest gate still protects it, and this name set keeps the text gate from
+        refusing the engine/verifier prose the sealed case legitimately carries. An empty set on a
+        Child or a Run without Skills means no file is exempt.
+        """
+        if self._skills is None:
+            return frozenset()
+        return frozenset(
+            contract.name.casefold() for contract in self._skills.sealed_artifact_contracts()
+        )
+
     def _compose_tools(
         self,
         evidence: EvidenceLedger,
@@ -933,6 +1129,7 @@ class AnswerOrchestrator:
         *,
         child: bool,
         skill_tools: list[AgentTool],
+        delivery_ledger: DeliveryLedger | None = None,
         tool_names: tuple[str, ...] | None = None,
         child_session_id: str = "",
         model_profile: ModelProfile | None = None,
@@ -956,6 +1153,13 @@ class AnswerOrchestrator:
         memory_host = self._memory_host
         if child and child_session_id and memory_host is not None:
             memory_host = replace(memory_host, session_id=child_session_id)
+        # One read of the catalog the Run's Skills came from: what a Skill lets a Run
+        # publish is decided by the Skill, and publication is where it is enforced. A Child
+        # never attaches, and its composition shares the parent's, so it reads nothing here.
+        skills_catalog = None if child or self._skills is None else self._skills.catalog()
+        sealed_artifacts = (
+            () if child or self._skills is None else self._skills.sealed_artifact_contracts()
+        )
         composed = compose_research_tools(
             evidence=evidence,
             trace=trace,
@@ -967,6 +1171,10 @@ class AnswerOrchestrator:
             browser=self._browser,
             resource_viewer=self._resource_viewer,
             admitted_bytes_reader=self._admitted_bytes_reader,
+            protected_digests=(
+                frozenset() if skills_catalog is None else skills_catalog.protected_digests()
+            ),
+            protected_index=self._protected_index,
             environment=None if self._workspace is None else self._workspace.environment,
             scheduler=self._access,
             search_toolchain=self._search_toolchain,
@@ -983,8 +1191,12 @@ class AnswerOrchestrator:
             publication_limits=self._publication_limits,
             subagent_host=subagent_host,
             memory_host=memory_host,
+            goal_host=self._goal_host,
+            mcp_resource_host=self._mcp_resource_host,
             skill_tools=skill_tools,
             child=child,
+            delivery_ledger=delivery_ledger,
+            sealed_artifacts=sealed_artifacts,
             tool_names=tool_names,
         )
         # Membership is composition's, and exactly one place decides it: a Child's
@@ -1034,7 +1246,7 @@ class AnswerOrchestrator:
         return read
 
     def _output_stage_factory(self) -> Any:
-        from dlightrag.engine.answer.workspace import FileOutputStage
+        from dlightrag.engine.answer.agentspace import FileOutputStage
 
         workspace = self._workspace
         if workspace is None:
@@ -1049,7 +1261,7 @@ class AnswerOrchestrator:
         return create
 
     def _spill_writer(self) -> Any:
-        from dlightrag.engine.answer.workspace import spill_receipt, write_spill_file
+        from dlightrag.engine.answer.agentspace import spill_receipt, write_spill_file
 
         workspace = self._workspace
         if workspace is None:
@@ -1284,17 +1496,6 @@ def child_instructions(child_session_id: str) -> str:
     steer that redirects it.
     """
     return _CHILD_INSTRUCTIONS.format(child_session_id=child_session_id)
-
-
-def _tool_schema_tokens(tools: list[AgentTool]) -> int:
-    return estimate_tokens(
-        json.dumps(
-            [asdict(tool.definition) for tool in tools],
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-    )
 
 
 __all__ = [

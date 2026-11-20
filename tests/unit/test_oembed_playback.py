@@ -2,8 +2,6 @@
 """Publishers outside the qualification examples use one registry-driven path."""
 
 import json
-from collections.abc import Callable
-from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -14,19 +12,6 @@ from dlightrag.adapters.http.browser.video_playback import (
     video_playback_link,
 )
 from dlightrag.engine.public_http import PublicHttpFetch
-
-
-@pytest.fixture
-def serve_oembed(monkeypatch: pytest.MonkeyPatch) -> Callable[[Any], Any]:
-    """Answer the playback resolver's oEmbed reads with a scripted fetch."""
-
-    def install(fetch: Any) -> Any:
-        monkeypatch.setattr(
-            "dlightrag.adapters.http.browser.video_playback.fetch_public_http", fetch
-        )
-        return fetch
-
-    return install
 
 
 @pytest.mark.parametrize(

@@ -12,8 +12,12 @@ from mcp.server.auth.provider import AccessToken
 from dlightrag.adapters.mcp import auth as mcp_auth
 from dlightrag.adapters.mcp import server as mcp_server
 from dlightrag.adapters.mcp.server import DlightRAGRequestScopeMiddleware
-from dlightrag.application.access import UserContext, current_request_scope
-from dlightrag.application.config import DlightragConfig, set_config
+from dlightrag.application.access.principal import UserContext
+from dlightrag.application.access.scope import (
+    current_request_scope,
+)
+from dlightrag.application.config.loading import set_config
+from dlightrag.application.config.sections import DlightragConfig
 
 
 @pytest.mark.asyncio

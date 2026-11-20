@@ -6,8 +6,10 @@
  *  single in-flight list or mutation request.
  */
 
+import {LatestRequest} from '../lib/latest-request.ts';
+
 export class InspectorFilesSession {
-  #request: AbortController | null = null;
+  readonly #request = new LatestRequest();
   #mutations = 0;
 
   get mutating(): boolean {
@@ -15,24 +17,19 @@ export class InspectorFilesSession {
   }
 
   get requestBusy(): boolean {
-    return this.#request !== null;
+    return this.#request.busy;
   }
 
-  startRequest(): AbortController {
-    this.#request?.abort();
-    const controller = new AbortController();
-    this.#request = controller;
-    return controller;
+  startRequest(): AbortSignal {
+    return this.#request.start();
   }
 
-  isCurrent(controller: AbortController, workspace: string, current: string): boolean {
-    return this.#request === controller && current === workspace;
+  isCurrent(signal: AbortSignal, workspace: string, current: string): boolean {
+    return this.#request.isCurrent(signal) && current === workspace;
   }
 
-  finishRequest(controller: AbortController): boolean {
-    if (this.#request !== controller) return false;
-    this.#request = null;
-    return true;
+  finishRequest(signal: AbortSignal): boolean {
+    return this.#request.finish(signal);
   }
 
   beginMutation(): void {
@@ -44,7 +41,6 @@ export class InspectorFilesSession {
   }
 
   pause(): void {
-    this.#request?.abort();
-    this.#request = null;
+    this.#request.cancel();
   }
 }

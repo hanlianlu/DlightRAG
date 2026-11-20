@@ -43,7 +43,7 @@ from dlightrag.adapters.postgres.runtime.run_store import (
     PGRunStore,
 )
 from dlightrag.adapters.postgres.web import web_conversations
-from dlightrag.application.config import (
+from dlightrag.application.config.sections import (
     DeploymentSettings,
     DlightragConfig,
     PostgresSettings,
@@ -229,10 +229,12 @@ async def test_reader_startup_fails_when_a_declared_version_is_missing(database:
     pool = await _pool(config, domain_pool_server_settings(config))
     try:
         async with pool.acquire() as conn:
+            # The shape is current and the ledger is not: a declared version is missing
+            # from it, which is what a reader refuses to start on.
             await apply_migrations(
                 conn,
                 scope=RUN_MIGRATION_SCOPE,
-                migrations=RUN_MIGRATIONS[:1],
+                migrations=RUN_MIGRATIONS,
                 tables=RUN_SCHEMA_TABLES,
             )
             await conn.execute(
@@ -251,55 +253,6 @@ async def test_reader_startup_fails_when_a_declared_version_is_missing(database:
         await pool.close()
 
 
-async def test_metadata_field_stats_migration_backfills_only_published_rows(
-    database: str,
-) -> None:
-    config = _config(database, service_role="writer")
-    pool = await _pool(config, domain_pool_server_settings(config))
-    pre_stats = tuple(
-        migration
-        for migration in pg_metadata_index._SCHEMA_MIGRATIONS
-        if migration.version not in {"metadata_field_stats", "product_document_visibility"}
-    )
-    try:
-        async with pool.acquire() as conn:
-            # An earlier revision, which declared none of the later objects.
-            await apply_migrations(
-                conn,
-                scope="doc_metadata",
-                migrations=pre_stats,
-                tables=(),
-                require_applied_prefix=False,
-            )
-            await conn.execute(
-                "INSERT INTO dlightrag_doc_metadata "
-                "(workspace, doc_id, title, custom_metadata, "
-                "_dlightrag_finalization_complete) VALUES "
-                "('legacy', 'doc-hidden', 'Hidden', '{\"hidden_only\":true}', FALSE), "
-                "('legacy', 'doc-ready', 'Report', '{\"department\":\"finance\"}', TRUE)"
-            )
-
-            await apply_migrations(
-                conn,
-                scope="doc_metadata",
-                migrations=pg_metadata_index._SCHEMA_MIGRATIONS,
-                tables=pg_metadata_index._SCHEMA_TABLES,
-                require_applied_prefix=False,
-            )
-
-            rows = await conn.fetch(
-                "SELECT field_id, document_count "
-                "FROM dlightrag_metadata_field_stats "
-                "WHERE workspace = 'legacy' ORDER BY field_id"
-            )
-            assert [(str(row["field_id"]), int(row["document_count"])) for row in rows] == [
-                ("department", 1),
-                ("title", 1),
-            ]
-    finally:
-        await pool.close()
-
-
 # ---------------------------------------------------------------------------
 # Required schema objects, not just the ledger
 # ---------------------------------------------------------------------------
@@ -312,7 +265,6 @@ class _Scope:
     name: str
     migrations: tuple[Migration, ...]
     tables: tuple[TableRequirement, ...]
-    require_applied_prefix: bool = True
 
 
 _SCOPES = (
@@ -321,7 +273,6 @@ _SCOPES = (
         "doc_metadata",
         pg_metadata_index._SCHEMA_MIGRATIONS,
         pg_metadata_index._SCHEMA_TABLES,
-        require_applied_prefix=False,
     ),
     _Scope(RUN_MIGRATION_SCOPE, RUN_MIGRATIONS, RUN_SCHEMA_TABLES),
     _Scope(
@@ -424,7 +375,6 @@ async def _migrate_every_scope(conn: Any) -> None:
             scope=scope.name,
             migrations=scope.migrations,
             tables=scope.tables,
-            require_applied_prefix=scope.require_applied_prefix,
         )
 
 
@@ -501,24 +451,6 @@ async def test_reader_rejects_a_recorded_ledger_missing_a_required_object(
             assert await _ledger_snapshot(conn) == before
     finally:
         await verify_pool.close()
-
-
-async def test_writer_refuses_a_database_that_predates_its_baseline(database: str) -> None:
-    """A recorded version never re-runs, so a column the baseline grew later never arrives:
-    the writer reads its objects back and asks for a reset instead of serving without it."""
-    config = _config(database, service_role="writer")
-    pool = await _pool(config, domain_pool_server_settings(config))
-    try:
-        async with pool.acquire() as conn:
-            await _migrate_every_scope(conn)
-            await conn.execute("ALTER TABLE dlightrag_workspace_meta DROP COLUMN created_by")
-            with pytest.raises(CorpusSchemaError) as excinfo:
-                await _migrate_every_scope(conn)
-            message = str(excinfo.value)
-            assert "column dlightrag_workspace_meta.created_by" in message
-            assert "reset the development database" in message
-    finally:
-        await pool.close()
 
 
 async def test_reader_rejects_an_undeclared_migration_version(database: str) -> None:

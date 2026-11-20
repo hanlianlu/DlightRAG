@@ -8,7 +8,7 @@
 import type {AttachmentKind} from '../lib/attachment-policy.ts';
 import {Store} from './base.ts';
 
-export type PendingAttachmentKind = Extract<AttachmentKind, 'image' | 'document'>;
+type PendingAttachmentKind = Extract<AttachmentKind, 'image' | 'document'>;
 
 export interface PendingAttachment {
     id: string;

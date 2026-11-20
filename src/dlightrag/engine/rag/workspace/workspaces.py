@@ -5,6 +5,10 @@ import re
 from collections.abc import Iterable
 
 _CANONICAL_WORKSPACE_RE = re.compile(r"[a-z_][a-z0-9_]{0,63}")
+# LightRAG 1.5.8 files every workspace's configuration under this fixed partition of
+# its configuration table, so a workspace of that name would share it. The other names
+# LightRAG reserves start with ``$``, which the canonical pattern never matches.
+_RESERVED_WORKSPACE_IDS = frozenset({"_lightrag_config"})
 
 
 def normalize_workspace(name: str) -> str:
@@ -29,7 +33,11 @@ def normalize_workspace_ids(workspaces: Iterable[str]) -> list[str]:
 
 def require_canonical_workspace_id(workspace_id: str) -> str:
     """Return a canonical workspace id or reject display-name input."""
-    if not isinstance(workspace_id, str) or not _CANONICAL_WORKSPACE_RE.fullmatch(workspace_id):
+    if (
+        not isinstance(workspace_id, str)
+        or not _CANONICAL_WORKSPACE_RE.fullmatch(workspace_id)
+        or workspace_id in _RESERVED_WORKSPACE_IDS
+    ):
         raise ValueError(f"canonical workspace id required, got {workspace_id!r}")
     return workspace_id
 

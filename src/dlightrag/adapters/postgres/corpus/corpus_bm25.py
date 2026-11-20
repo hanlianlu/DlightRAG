@@ -20,7 +20,6 @@ from dlightrag.adapters.postgres.corpus.pg_metadata_index import (
     metadata_match_conditions,
     metadata_visibility_condition,
 )
-from dlightrag.engine.rag.retrieval import ContextRow, MetadataScope
 from dlightrag.engine.rag.retrieval.bm25 import (
     BM25_PROFILE_FALLBACK,
     BM25Profile,
@@ -32,6 +31,10 @@ from dlightrag.engine.rag.retrieval.language import (
     BM25_FALLBACK_LANGUAGE,
     BM25LanguageClassifier,
     normalize_language_code,
+)
+from dlightrag.engine.rag.retrieval.models import (
+    ContextRow,
+    MetadataScope,
 )
 from dlightrag.engine.rag.retrieval.visibility import bounded_visibility_candidate_limit
 

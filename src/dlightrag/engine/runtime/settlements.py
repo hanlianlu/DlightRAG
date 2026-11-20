@@ -128,7 +128,7 @@ class InventoryPathRecord:
 
 
 @dataclass(frozen=True, slots=True)
-class WorkspaceInventoryUpdate:
+class AgentspaceInventoryUpdate:
     """Inventory upserts/deletes, or a full replace after bash/handoff scan."""
 
     upserts: Sequence[InventoryPathRecord] = ()
@@ -166,6 +166,10 @@ class ArtifactAttachmentUpdate:
     presentation: str
     session_id: str
     intent_id: str
+    #: The workspace files the root was built from, as Artifact-root-relative paths. They
+    #: are published with it, are not deliverables of their own, and come back with it when
+    #: a later Run reopens the published version (ADR 0052).
+    sources: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.relative_path.strip():
@@ -186,6 +190,8 @@ class ArtifactAttachmentUpdate:
             raise ValueError("Artifact attachment presentation is invalid")
         if not self.session_id.strip() or not self.intent_id.strip():
             raise ValueError("Artifact attachment provenance cannot be empty")
+        if len(set(self.sources)) != len(self.sources) or any(not s.strip() for s in self.sources):
+            raise ValueError("Artifact attachment sources must be distinct, non-empty paths")
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,7 +216,7 @@ class EffectHostUpdate:
     resources: Sequence[OpaqueEvidenceResourceWrite] = ()
     fetched: Sequence[FetchedResourceSettlementUpdate] = ()
     committed_outputs: Sequence[CommittedSpillUpdate] = ()
-    workspace_inventory: WorkspaceInventoryUpdate | None = None
+    workspace_inventory: AgentspaceInventoryUpdate | None = None
     artifact_attachment: ArtifactAttachmentUpdate | None = None
     memory_operation: MemoryOperationSettlement | None = None
 
@@ -226,5 +232,5 @@ __all__ = [
     "OpaqueEvidenceResourceWrite",
     "OpaqueEvidenceWrite",
     "OpaqueFetchedResourceWrite",
-    "WorkspaceInventoryUpdate",
+    "AgentspaceInventoryUpdate",
 ]

@@ -9,11 +9,20 @@ from typing import Any
 import httpx
 import pytest
 
-from dlightrag.engine.agent.environment import AccessScheduler, local
+from dlightrag.engine.agent.environment import local
+from dlightrag.engine.agent.environment.access import (
+    AccessScheduler,
+)
 from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
 from dlightrag.engine.agent.session.ids import IntentId
-from dlightrag.engine.agent.tools import AgentTool, ToolEffects, ToolResult, ToolRuntime
-from dlightrag.engine.agent.tools.contracts import WorkspaceInventoryFacts, WorkspacePathFact
+from dlightrag.engine.agent.tools.contracts import (
+    AgentspaceInventoryFacts,
+    AgentspacePathFact,
+    AgentTool,
+    ToolEffects,
+    ToolResult,
+    ToolRuntime,
+)
 from dlightrag.engine.agent.tools.files import materialize_tool
 from dlightrag.engine.answer.resources.models import ResourceInput
 from dlightrag.engine.answer.resources.registry import (
@@ -27,7 +36,7 @@ from tests.support.agent_browser import RecordingRenderer
 from tests.support.dns import public_dns
 from tests.support.public_http import serve_public_http
 from tests.support.resources import call, tools
-from tests.tool_helpers import recording_tool_runtime
+from tests.support.tool_helpers import recording_tool_runtime
 
 # CRLF line ends and a quoted newline: what MarkItDown's text view of a CSV does not keep.
 CSV = b'"Month", "1958"\r\n"JAN", 340\r\n"NOTE", "two\r\nlines"\r\n'
@@ -153,9 +162,9 @@ async def test_a_resource_copies_byte_for_byte_and_is_accounted_like_write(
         )
         mode = (tmp_path / DESTINATION).stat().st_mode
         assert result.effects == ToolEffects(
-            workspace_inventory=WorkspaceInventoryFacts(
+            workspace_inventory=AgentspaceInventoryFacts(
                 upserts=(
-                    WorkspacePathFact(
+                    AgentspacePathFact(
                         DESTINATION, "file", len(CSV), mode, hashlib.sha256(CSV).hexdigest()
                     ),
                 )

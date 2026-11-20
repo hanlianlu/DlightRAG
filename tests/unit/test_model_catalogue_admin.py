@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 
 import pytest
 
-from dlightrag.application.model_catalogue import (
+from dlightrag.application.model_catalogue.service import (
     ModelCatalogueAdmin,
     ModelCatalogueEntryNotFoundError,
     ModelCatalogueReadOnlyError,

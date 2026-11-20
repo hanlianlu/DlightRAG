@@ -32,19 +32,27 @@ def test_each_member_is_alone_on_an_internal_network_its_peers_join(members: int
     pool = sorted(
         name
         for name in stack["services"]
-        if name.startswith("agent-browser-") and name != "agent-browser-egress"
+        if name.startswith("agent-browser-")
+        and name not in ("agent-browser-egress", "agent-browser-headed")
     )
     assert pool == names
-    for name in names:
+    # One headed member runs beside the numbered ones, on a network of its own.
+    assert stack["services"]["agent-browser-headed"]["networks"] == ["agent-browser-headed"]
+    entries = [*names, "agent-browser-headed"]
+    for name in entries:
         assert stack["services"][name]["networks"] == [name]
         assert stack["networks"][name] == {"internal": True}
     for peer in _PEERS:
-        assert set(stack["services"][peer]["networks"]) == {"default", *names}
+        assert set(stack["services"][peer]["networks"]) == {"default", *entries}
     for service in _SERVICES:
-        endpoints = stack["services"][service]["environment"][
-            "DLIGHTRAG_ANSWER__AGENT__BROWSER__ENDPOINTS"
+        environment = stack["services"][service]["environment"]
+        assert json.loads(environment["DLIGHTRAG_ANSWER__AGENT__BROWSER__ENDPOINTS"]) == [
+            *(f"ws://{name}:3000/" for name in names),
+            "ws://agent-browser-headed:3001/",
         ]
-        assert json.loads(endpoints) == [f"ws://{name}:3000/" for name in names]
+        assert json.loads(environment["DLIGHTRAG_ANSWER__AGENT__BROWSER__HEADED_ENDPOINTS"]) == [
+            "ws://agent-browser-headed:3001/"
+        ]
 
 
 def test_a_pool_has_at_least_one_member() -> None:

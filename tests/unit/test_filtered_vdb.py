@@ -5,12 +5,15 @@ from collections.abc import Sequence
 from unittest.mock import AsyncMock
 
 from dlightrag.adapters.postgres.corpus.corpus_vectors import PGChunkVectorStore
-from dlightrag.engine.rag.retrieval import MetadataFilter, MetadataScope
 from dlightrag.engine.rag.retrieval.filtering import (
     FilteredChunkStore,
     FilteredVectorStorage,
     _active_filter,
     metadata_filter_scope,
+)
+from dlightrag.engine.rag.retrieval.models import (
+    MetadataFilter,
+    MetadataScope,
 )
 
 

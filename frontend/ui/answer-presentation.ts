@@ -6,20 +6,29 @@ import {repeat} from 'lit/directives/repeat.js';
 import type {
   AnswerArtifact,
   AnswerPresentation,
+  ArtifactAttestation,
   PresentationImage,
   PresentationPart,
+  PresentationSource,
 } from '../api/conversations.ts';
-import {icon} from '../design-system/index.ts';
 import {raise} from '../lib/dom.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {safeExternalHttpHref, safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
 import answerStyles from '../styles/answer-presentation.module.css';
 import chatStyles from '../styles/chat.module.css';
+import {artifactDeliveryRecord} from './artifact-attestation.ts';
 import {artifactDownloadLink} from './artifact-download.ts';
+import {holdsDiagramSource} from './mermaid.ts';
 import {mountRichHtml, typesetRichContent} from './rich-rendering.ts';
 import './video-playback.ts';
 
-export interface ArtifactOpenDetail {
+/** How long a reference the trace points at stays lit.
+ *
+ * Long enough for an eye to land on the row it was sent to, short enough that the page is not
+ * left carrying a highlight the reader did not ask for. */
+const REFERENCE_HIGHLIGHT_MS = 2000;
+
+interface ArtifactOpenDetail {
   artifact: AnswerArtifact;
   returnFocus: HTMLElement;
 }
@@ -31,36 +40,93 @@ export interface AnswerSourceOpenDetail {
   returnFocus: HTMLElement;
 }
 
+/** One source a trace asked an Answer to show, named by the id the presentation publishes.
+ *
+ *  ``runId`` names the Answer that published it: two Answers on one page can number their
+ *  sources the same way, and only the one the trace was opened from should answer. */
+export interface ShowReferenceDetail {
+  sourceId: string;
+  runId?: string | null;
+}
+
 interface MountedRichPart {
   html: string;
   links: {anchor: HTMLAnchorElement; slot: HTMLSpanElement | null}[];
+}
+
+/** The name of the bytes behind one Answer image, for the places a reader gets one name.
+ *
+ * An Evidence Image's `label` is the source's own name -- a document title, or "Page 3" -- and the
+ * card already shows it beside the thumbnail. Saying it a second time as the `alt` told a screen
+ * reader one thing twice and dumped a title into the layout whenever the thumbnail failed; the
+ * file the picture actually is answers both, and it is the one name a broken image can carry
+ * honestly. */
+function imageName(url: string): string {
+  const path = url.split(/[?#]/, 1)[0];
+  const name = path.slice(path.lastIndexOf('/') + 1);
+  return name || path || url;
 }
 
 /** Canonical Answer body, placed Artifacts, Evidence Images, and References. */
 export class AnswerPresentationElement extends LightElement {
   static properties = {
     presentation: {attribute: false},
+    runId: {attribute: false},
     referencesExpanded: {state: true},
+    recordExpanded: {state: true},
+    highlightedReferenceId: {state: true},
   };
 
   declare presentation: AnswerPresentation | null;
+  /** The Run this Answer answers, when the page knows it: a trace request names one Run's source. */
+  declare runId: string | null;
   declare referencesExpanded: boolean;
+  declare recordExpanded: boolean;
+  declare highlightedReferenceId: string | null;
 
   #mountedRichParts = new WeakMap<HTMLElement, MountedRichPart>();
+  #highlightTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The one id the delivery record's disclosure names; every Answer on a page needs its own. */
+  readonly #recordEvidenceId = `answer-artifact-record-${crypto.randomUUID()}`;
 
   constructor() {
     super();
     this.presentation = null;
+    this.runId = null;
     this.referencesExpanded = false;
+    this.recordExpanded = false;
+    this.highlightedReferenceId = null;
+  }
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    // Every Answer on the page hears one trace request and answers only for the sources it holds.
+    document.addEventListener('dl-show-reference', this.#handleShowReference, {
+      signal: this.lifetime,
+    });
+  }
+
+  override disconnectedCallback(): void {
+    this.#clearHighlight();
+    super.disconnectedCallback();
   }
 
   protected override willUpdate(changed: PropertyValues<this>): void {
-    if (changed.has('presentation')) this.referencesExpanded = false;
+    if (!changed.has('presentation')) return;
+    this.referencesExpanded = false;
+    // A new Answer starts with its record folded, whatever the one before it had opened.
+    this.recordExpanded = false;
+    // A lit row belongs to the Answer the trace was pointing at, not to the one that replaces it.
+    this.#clearHighlight();
   }
 
-  protected override updated(): void {
+  protected override updated(changed: PropertyValues<this>): void {
     const presentation = this.presentation;
     if (!presentation) return;
+    // What the words say is typeset once for each presentation. A redraw for anything else (the language,
+    // the References opening) draws the typed resources again but leaves the typeset content alone, unless
+    // a diagram in it is still its source: the load that would draw it failed, and the redraw is another try.
+    const typeset = changed.has('presentation');
     this.querySelectorAll<HTMLElement>('[data-answer-part]').forEach((host) => {
       const index = Number(host.dataset.answerPart);
       const part = presentation.parts[index];
@@ -84,7 +150,7 @@ export class AnswerPresentationElement extends LightElement {
           render(this.#part(placed, partIndex), slot);
         }
       }
-      typesetRichContent(host);
+      if (typeset || holdsDiagramSource(host)) typesetRichContent(host);
     });
   }
 
@@ -92,14 +158,18 @@ export class AnswerPresentationElement extends LightElement {
     const presentation = this.presentation;
     if (!presentation) return nothing;
     return html`
+      <p class="dl-sr-only" role="status" data-reference-announcer>${this.highlightedReferenceId === null
+        ? ''
+        : msg(str`Reference ${this.highlightedReferenceId} shown`, {id: 'answerPresentation.referenceShown'})}</p>
       ${presentation.artifactOutcome.status === 'complete' ? nothing : html`
         <div class="artifact-publication-warning" role="alert">
-          ${msg('Some requested Artifacts could not be published.', {id: 'answerPresentation.publicationWarning'})}
+          ${msg('Some requested files could not be published.', {id: 'answerPresentation.publicationWarning'})}
         </div>
       `}
       <div class="answer-parts" @click=${this.#handleIntent} @keydown=${this.#handleKeyIntent}>
         ${presentation.parts.map((part, index) => part.slot == null ? this.#part(part, index) : nothing)}
       </div>
+      ${this.#deliveryRecord()}
       ${presentation.evidenceImages.length > 0 ? html`
         <section class="answer-evidence" aria-label=${msg('Visual Evidence', {id: 'answerPresentation.visualEvidenceAria'})}
                  @click=${this.#handleIntent} @keydown=${this.#handleKeyIntent}>
@@ -116,29 +186,35 @@ export class AnswerPresentationElement extends LightElement {
       ${presentation.sources.length > 0 ? html`
         <section class=${answerStyles['answer-references']} aria-label=${msg('References', {id: 'answerPresentation.referencesAria'})}
                  @click=${this.#handleIntent} @keydown=${this.#handleKeyIntent}>
-          <h3 class=${answerStyles['answer-section-title']}>${msg('References', {id: 'answerPresentation.references'})}</h3>
+          ${presentation.sources.length > 2 ? html`
+            <h3 class=${answerStyles['answer-section-title']}>
+              <button class=${answerStyles['answer-references-toggle']} type="button"
+                      aria-expanded=${String(this.referencesExpanded)}
+                      @click=${this.#toggleReferences}>
+                ${msg('References', {id: 'answerPresentation.references'})}
+                <span class=${answerStyles['answer-references-count']}>
+                  ${this.referencesExpanded
+                    ? msg('Show fewer', {id: 'answerPresentation.showFewerReferences'})
+                    : msg(str`Show all ${presentation.sources.length}`, {id: 'answerPresentation.showAllReferences'})}
+                </span>
+              </button>
+            </h3>
+          ` : html`
+            <h3 class=${answerStyles['answer-section-title']}>${msg('References', {id: 'answerPresentation.references'})}</h3>
+          `}
           <div class=${`${answerStyles['answer-reference-list']}${this.referencesExpanded ? ` ${answerStyles.expanded}` : ''}`}>
           ${repeat(
             presentation.sources,
             (source) => source.id,
             (source) => html`
-              <button class=${answerStyles['answer-ref-item']} type="button" data-ref=${source.id} data-answer-ref>
+              <button class=${this.#referenceItemClass(source)} type="button" data-ref=${source.id}
+                      data-reference-id=${source.id} data-answer-ref>
                 <span class=${answerStyles['answer-ref-id']}>${source.id}</span>
                 <span class=${answerStyles['answer-ref-title']}>${source.title}</span>
               </button>
             `,
           )}
           </div>
-          ${presentation.sources.length > 3 ? html`
-            <button class=${answerStyles['answer-references-toggle']} type="button"
-                    aria-expanded=${String(this.referencesExpanded)}
-                    @click=${this.#toggleReferences}>
-              <span class=${answerStyles['answer-references-toggle-icon']}>${icon('disclosure', {size: 'xs'})}</span>
-              ${this.referencesExpanded
-                ? msg('Show fewer', {id: 'answerPresentation.showFewerReferences'})
-                : msg(str`Show all ${presentation.sources.length}`, {id: 'answerPresentation.showAllReferences'})}
-            </button>
-          ` : nothing}
         </section>
       ` : nothing}
     `;
@@ -230,20 +306,33 @@ export class AnswerPresentationElement extends LightElement {
                  aria-label=${msg(str`${artifact.label}, unavailable`, {id: 'answerPresentation.artifactUnavailableAria'})}>
           <strong>${artifact.label}</strong>
           <span>${artifact.filename}</span>
-          <p>${artifact.issue?.description || msg('This Artifact is unavailable.', {id: 'answerPresentation.artifactUnavailable'})}</p>
+          <p>${artifact.issue?.description || msg('This file is unavailable.', {id: 'answerPresentation.artifactUnavailable'})}</p>
+          ${/* The issue already names the reason a withheld Artifact was withheld; a badge here
+                would repeat it in other words. */ ''}
         </article>
       `;
     }
     if (inline && artifact.presentation === 'image') {
       const source = safeImageSrc(artifact.dataUrl || '');
       if (source) {
+        // The Model writes this Artifact's link text as the picture's own sentence -- "2026-10-15
+        // Photo of the Day: Rotation Station (Garret Suhrie)" -- and drawing it three times told a
+        // reader nothing twice. The caption is where a sentence belongs, and the alt is where a
+        // broken image and a screen reader need one: the file's own name, which is what the bytes
+        // under the picture currently are. The control's accessible name keeps the sentence for the
+        // reader who navigates by control rather than by picture, and nothing repeats it visually.
         return html`
           <figure class="answer-artifact-image">
             <button type="button" data-answer-image data-src=${source}
                     aria-label=${msg(str`Open image: ${artifact.label}`, {id: 'answerPresentation.openImage'})}>
-              <img src=${source} alt=${artifact.label} loading="lazy">
+              <img src=${source} alt=${artifact.filename} loading="lazy">
             </button>
-            <figcaption>${artifact.label}</figcaption>
+            <figcaption>
+              <span class="answer-artifact-image-caption">${artifact.label}</span>
+              ${artifact.width && artifact.height
+                ? html`<span class="answer-artifact-image-size">${artifact.width}×${artifact.height}</span>`
+                : nothing}
+            </figcaption>
           </figure>
         `;
       }
@@ -280,9 +369,32 @@ export class AnswerPresentationElement extends LightElement {
         </div>
         <button class="dl-btn" type="button" @click=${(event: Event) => {
           this.#openArtifact(artifact, event.currentTarget as HTMLElement);
-        }}>${msg('Open Artifact', {id: 'answerPresentation.openArtifact'})}</button>
+        }}>${msg('Open file', {id: 'answerPresentation.openArtifact'})}</button>
       </article>
     `;
+  }
+
+  /** The one delivery record this Answer's files carry, or nothing when it has none to draw.
+   *
+   * The server stamps one record on every Artifact of a Run (`stamp_projected_artifacts`), so the
+   * record under the files is any available placement's. A withheld Artifact is not counted: its
+   * own issue already names why it was withheld, and a record here would say it again. */
+  #deliveryRecord(): TemplateResult | typeof nothing {
+    const presentation = this.presentation;
+    if (!presentation) return nothing;
+    let record: ArtifactAttestation | null = null;
+    for (const part of presentation.parts) {
+      const artifact = part.type === 'artifact' ? part.artifact : null;
+      if (artifact?.status === 'available' && artifact.attestation !== null) {
+        record = artifact.attestation;
+        break;
+      }
+    }
+    return artifactDeliveryRecord(record, {
+      expanded: this.recordExpanded,
+      onToggle: this.#toggleRecord,
+      evidenceId: this.#recordEvidenceId,
+    });
   }
 
   #evidenceImage(image: PresentationImage): TemplateResult | typeof nothing {
@@ -293,11 +405,11 @@ export class AnswerPresentationElement extends LightElement {
       <div class="answer-evidence-image">
         <button class=${answerStyles['answer-image-item']} type="button" data-answer-image
                 data-src=${source} aria-label=${msg(str`Open image: ${image.label}`, {id: 'answerPresentation.openImage'})}>
-          <img src=${thumbnail} alt=${image.label} loading="lazy">
+          <img src=${thumbnail} alt=${imageName(image.url)} loading="lazy">
           <span class=${answerStyles['answer-image-label']}>${image.label}</span>
         </button>
         ${image.sourceRef ? html`
-          <button class="answer-image-source" type="button" data-ref=${image.sourceRef}
+          <button class="dl-text-action answer-image-source" type="button" data-ref=${image.sourceRef}
                   aria-label=${msg(str`Open source ${image.sourceRef}`, {id: 'answerPresentation.openSourceAria'})}>
             ${msg(str`Source ${image.sourceRef}`, {id: 'answerPresentation.openSource'})}
           </button>
@@ -309,6 +421,60 @@ export class AnswerPresentationElement extends LightElement {
   #toggleReferences = (): void => {
     this.referencesExpanded = !this.referencesExpanded;
   };
+
+  #toggleRecord = (): void => {
+    this.recordExpanded = !this.recordExpanded;
+  };
+
+  /** The row a trace sent the reader to, with the light that says which row it is. */
+  #referenceItemClass(source: PresentationSource): string {
+    const classes = [answerStyles['answer-ref-item']];
+    if (this.highlightedReferenceId === source.id) {
+      classes.push(answerStyles['answer-ref-item-highlighted']);
+    }
+    return classes.join(' ');
+  }
+
+  /** A trace asks the page for one source by the id its Answer publishes.
+   *
+   * The request is dispatched on the document, so every Answer on the page hears it; an Answer
+   * that does not hold that source has nothing to show and says nothing. */
+  #handleShowReference = (event: CustomEvent<ShowReferenceDetail>): void => {
+    const sourceId = event.detail?.sourceId;
+    if (typeof sourceId !== 'string' || sourceId === '') return;
+    const askedFor = event.detail?.runId;
+    if (typeof askedFor === 'string' && this.runId !== null && askedFor !== this.runId) return;
+    const presentation = this.presentation;
+    if (!presentation?.sources.some((source) => source.id === sourceId)) return;
+    this.#revealReference(sourceId);
+  };
+
+  #revealReference(sourceId: string): void {
+    const presentation = this.presentation;
+    if (!presentation) return;
+    // The list shows two rows folded; the one named may be behind the caption, so revealing it
+    // means opening the list first. The row it names is the Answer's, not its summary's.
+    if (presentation.sources.length > 2) this.referencesExpanded = true;
+    this.highlightedReferenceId = sourceId;
+    clearTimeout(this.#highlightTimer);
+    this.#highlightTimer = setTimeout(() => {
+      this.#highlightTimer = undefined;
+      this.highlightedReferenceId = null;
+    }, REFERENCE_HIGHLIGHT_MS);
+    // The lit row has to be laid out before it can be brought into view, and the reader lands on
+    // it: a request from the trace moved them here, so the focus follows the thing they asked for.
+    void this.updateComplete.then(() => {
+      const row = this.querySelector<HTMLElement>(`[data-reference-id="${CSS.escape(sourceId)}"]`);
+      row?.focus({preventScroll: true});
+      row?.scrollIntoView({block: 'nearest'});
+    });
+  }
+
+  #clearHighlight(): void {
+    clearTimeout(this.#highlightTimer);
+    this.#highlightTimer = undefined;
+    this.highlightedReferenceId = null;
+  }
 
   #handleIntent = (event: Event): void => {
     const target = event.target instanceof Element ? event.target : null;
@@ -379,5 +545,9 @@ declare global {
   interface HTMLElementEventMap {
     'dl-answer-source-open': CustomEvent<AnswerSourceOpenDetail>;
     'dl-artifact-open': CustomEvent<ArtifactOpenDetail>;
+  }
+
+  interface DocumentEventMap {
+    'dl-show-reference': CustomEvent<ShowReferenceDetail>;
   }
 }

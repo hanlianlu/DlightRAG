@@ -1,0 +1,19 @@
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
+
+@layer features {
+  .searchRow {
+    align-items: center;
+    display: flex;
+    gap: var(--space-tight);
+    padding: 0 var(--space-related) var(--space-tight);
+  }
+
+  .searchInput {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .searchClear {
+    flex: none;
+  }
+}

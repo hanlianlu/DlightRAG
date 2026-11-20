@@ -86,7 +86,7 @@ def test_reloading_recovers_the_answer_from_the_run_not_the_response(page):
     page.wait_for_function(
         """
         () => Array.from(document.querySelectorAll('[class*="aiMessageContent"]'))
-            .some(node => node.textContent.includes('DlightRAG is a multimodal'))
+            .some(node => node.textContent.includes('DlightRAG is a durable agent'))
         """,
         timeout=15000,
     )
@@ -98,7 +98,7 @@ def test_reloading_recovers_the_answer_from_the_run_not_the_response(page):
     page.wait_for_function(
         """
         () => Array.from(document.querySelectorAll('[class*="aiMessageContent"]'))
-            .some(node => node.textContent.includes('DlightRAG is a multimodal'))
+            .some(node => node.textContent.includes('DlightRAG is a durable agent'))
         """,
         timeout=15000,
     )
@@ -157,14 +157,17 @@ def _frame(sequence: int, event_type: str, data: str) -> str:
 
 
 _PROGRESS = _frame(1, "progress", '{"phase": "planning"}')
-_TOKENS = [_frame(2, "token", '"DlightRAG is a "'), _frame(3, "token", '"multimodal RAG system."')]
+_TOKENS = [
+    _frame(2, "token", '"DlightRAG is a "'),
+    _frame(3, "token", '"agent."'),
+]
 _DONE = _frame(
     4,
     "done",
     '{"status":"succeeded","presentation":{'
-    '"answer_text":"DlightRAG is a multimodal RAG system.",'
-    '"parts":[{"type":"markdown","text":"DlightRAG is a multimodal RAG system.",'
-    '"html":"<p>DlightRAG is a multimodal RAG system.</p>","artifact":null,'
+    '"answer_text":"DlightRAG is a durable agent.",'
+    '"parts":[{"type":"markdown","text":"DlightRAG is a durable agent.",'
+    '"html":"<p>DlightRAG is a durable agent.</p>","artifact":null,'
     '"evidence_image":null,"inline":false}],"sources":[],"evidence_images":[],'
     '"artifacts":[],"artifact_outcome":{"status":"complete","issues":[]}}}',
 )
@@ -252,26 +255,23 @@ def test_navigating_away_from_a_pending_run_detaches_instead_of_blocking(page: P
 
 
 @pytest.mark.e2e
-def test_steering_clears_only_text_and_keeps_pending_attachments(page: Page) -> None:
+def test_a_send_while_a_run_is_live_is_queued_behind_it(page: Page) -> None:
     page.goto("/web/")
     page.wait_for_selector(".composer-input", timeout=10000)
     _install_event_transport(
         page,
         [[_frame(index + 1, "progress", '{"phase":"planning"}')] for index in range(200)],
     )
-    page.route("**/web/api/answer/*/steer", lambda route: route.fulfill(status=202, json={}))
 
     _submit(page, "Start research")
     page.wait_for_selector(".composer-send.is-stop", timeout=10000)
-    page.locator("#attachment-input").set_input_files(
-        {"name": "notes.md", "mimeType": "text/markdown", "buffer": b"notes"}
-    )
-    page.get_by_role("textbox", name="Message").fill("Use these notes")
-    page.get_by_role("button", name="Steer").click()
+    page.get_by_role("textbox", name="Message").fill("One more thing")
+    page.get_by_role("button", name="Queue", exact=True).click()
 
     page.wait_for_function("document.querySelector('.composer-input').value === ''")
-    assert page.locator("#thumbnail-strip").get_by_text("notes.md").is_visible()
-    assert page.get_by_text("Use these notes", exact=True).is_visible()
+    page.locator("dl-queue-strip").get_by_role("button", name="1 queued after this run").wait_for(
+        timeout=5000
+    )
 
 
 @pytest.mark.e2e
@@ -290,7 +290,7 @@ def test_separated_drops_that_make_progress_never_exhaust_the_reconnect_budget(
     page.wait_for_function(
         """
         () => Array.from(document.querySelectorAll('[class*="aiMessageContent"]'))
-            .some(node => node.textContent.includes('DlightRAG is a multimodal RAG system.'))
+            .some(node => node.textContent.includes('DlightRAG is a durable agent.'))
         """,
         timeout=20000,
     )
@@ -299,7 +299,7 @@ def test_separated_drops_that_make_progress_never_exhaust_the_reconnect_budget(
         """() => Array.from(document.querySelectorAll('[data-run-id]'))
             .map(node => node.textContent).join('')"""
     )
-    assert answer.count("DlightRAG is a multimodal RAG system.") == 1
+    assert answer.count("DlightRAG is a durable agent.") == 1
     assert transport["attempts"] == len(script)
     # Every reconnect resumed after the last durable sequence it consumed.
     assert transport["cursors"][:4] == [None, "1", "2", "3"]
@@ -350,7 +350,7 @@ def test_a_second_failed_reconnect_replaces_the_offer_instead_of_stacking_it(
     page.wait_for_function(
         """
         () => Array.from(document.querySelectorAll('[class*="aiMessageContent"]'))
-            .some(node => node.textContent.includes('DlightRAG is a multimodal RAG system.'))
+            .some(node => node.textContent.includes('DlightRAG is a durable agent.'))
         """,
         timeout=20000,
     )

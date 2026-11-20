@@ -63,6 +63,10 @@ def test_localized_sources_are_the_server_messages_verbatim() -> None:
         # The image kinds' public messages carry a bracketed marker the copy omits.
         answer_errors.ANSWER_IMAGE_CAPABILITY_UNKNOWN: image_capability._ERROR_CAPABILITY_UNKNOWN,
         answer_errors.CURRENT_IMAGES_UNSUPPORTED: image_capability._ERROR_IMAGES_NOT_SUPPORTED,
+        # The caller's own limit of Answers in progress: refused at admission, in these words.
+        answer_errors.ACTIVE_RUN_LIMIT: answer_errors.ACTIVE_RUN_LIMIT_MESSAGE,
+        # A lost agent lane: the answer did not run, and its retry is stated in the copy.
+        answer_errors.SESSION_BUSY: answer_errors.SESSION_BUSY_MESSAGE,
     }
 
     assert set(copy) == set(expected)

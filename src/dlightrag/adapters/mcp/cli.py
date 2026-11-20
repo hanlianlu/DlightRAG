@@ -5,7 +5,7 @@ import argparse
 import os
 from pathlib import Path
 
-from dlightrag.application.config import load_config, set_config
+from dlightrag.application.config.loading import load_config, set_config
 
 
 def main() -> None:

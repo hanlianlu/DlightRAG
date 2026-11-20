@@ -70,14 +70,6 @@ class WorkspacePool:
         self._close_task: asyncio.Task[asyncio.CancelledError | None] | None = None
         self._closed = False
 
-    async def is_loaded(self, workspace_id: str) -> bool:
-        """Return whether one runtime is loaded, synchronized with lifecycle changes."""
-        workspace = require_canonical_workspace_id(workspace_id)
-        if self._closed:
-            return False
-        async with self._locks[workspace]:
-            return workspace in self._runtimes and not self._closed
-
     async def acquire(self, workspace_id: str) -> WorkspaceRag:
         """Return one runtime, joining pool-owned construction when it is cold."""
         workspace = require_canonical_workspace_id(workspace_id)

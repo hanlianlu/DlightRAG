@@ -4,7 +4,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  LANGUAGE_STORAGE_KEY,
   parseLanguagePreference,
   resolveLocale,
 } from './language.ts';
@@ -30,8 +29,4 @@ test('auto resolution follows the browser language', () => {
 test('explicit preferences win over the browser language', () => {
   assert.equal(resolveLocale('en', 'zh-CN'), 'en');
   assert.equal(resolveLocale('zh', 'en-US'), 'zh');
-});
-
-test('storage key is stable', () => {
-  assert.equal(LANGUAGE_STORAGE_KEY, 'dlightrag-lang');
 });

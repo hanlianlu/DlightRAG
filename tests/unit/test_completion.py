@@ -155,7 +155,7 @@ async def test_response_family_rejects_product_owned_raw_model_kwargs(
     provider.complete.assert_not_awaited()
 
 
-async def test_provider_error_states_what_failed(
+async def test_provider_error_text_is_redacted_when_sensitive_capture_is_disabled(
     monkeypatch,
 ) -> None:
     class Provider:
@@ -188,7 +188,7 @@ async def test_provider_error_states_what_failed(
     ]
 
 
-async def test_stream_records_ttft_usage_cost_and_sensitive_text(monkeypatch) -> None:
+async def test_stream_records_ttft_usage_cost_and_text(monkeypatch) -> None:
     class Provider:
         def stream(self, **kwargs: Any):
             holder = kwargs["usage_holder"]

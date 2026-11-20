@@ -19,7 +19,10 @@ def _client(
     from lightrag.parser.external.docling.client import DoclingRawClient
 
     apply_docling_request_options(code_formula_preset=preset)
-    client = DoclingRawClient.__new__(DoclingRawClient)
+    client: Any = DoclingRawClient.__new__(DoclingRawClient)
+    # Read by LightRAG 1.5.8's request builder; ignored by 1.5.7's.
+    client.pipeline = "standard"
+    client.vlm_preset = None
     client.do_ocr = True
     client.force_ocr = False
     client.ocr_engine = "auto"
@@ -84,16 +87,8 @@ def test_active_docling_fails_closed_when_upstream_contract_changes(
         apply_docling_request_options(code_formula_preset="granite_docling")
 
 
-def test_do_formula_enrichment_defaults_on_like_mineru() -> None:
-    from lightrag.parser.external.mineru.cache import DEFAULT_MINERU_ENABLE_FORMULA
-
-    from dlightrag.engine.rag.workspace.settings import DoclingSidecarSettings
-
-    assert DoclingSidecarSettings().do_formula_enrichment is DEFAULT_MINERU_ENABLE_FORMULA
-
-
 def test_do_formula_enrichment_reaches_lightrag_env() -> None:
-    from dlightrag.application.config import DlightragConfig
+    from dlightrag.application.config.sections import DlightragConfig
     from dlightrag.engine.rag.workspace.settings import (
         DoclingSidecarSettings,
         ParserSidecarsSettings,
@@ -110,7 +105,7 @@ def test_do_formula_enrichment_reaches_lightrag_env() -> None:
 
 
 def test_force_ocr_reaches_lightrag_env() -> None:
-    from dlightrag.application.config import DlightragConfig
+    from dlightrag.application.config.sections import DlightragConfig
     from dlightrag.engine.rag.workspace.settings import (
         DoclingSidecarSettings,
         ParserSidecarsSettings,

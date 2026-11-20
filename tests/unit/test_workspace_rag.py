@@ -28,7 +28,7 @@ from dlightrag.engine.rag.workspace.settings import (
 )
 from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
 from dlightrag.engine.runtime.coordinator import RunCoordinator
-from tests.config_helpers import mutate_config
+from tests.support.config_helpers import mutate_config
 
 
 class _Coordination:
@@ -149,7 +149,7 @@ def test_workspace_rag_rejects_backend_role_drift() -> None:
 
 
 def test_root_config_maps_independent_rag_pipeline_settings(test_config) -> None:
-    from dlightrag.application.settings import rag_settings
+    from dlightrag.application.settings.projections import rag_settings
 
     mutate_config(test_config, "models.max_concurrency", 3)
     mutate_config(test_config, "corpus.ingestion.pipeline.max_concurrency", 13)
@@ -168,14 +168,14 @@ def test_root_config_maps_independent_rag_pipeline_settings(test_config) -> None
 
 def test_the_engine_reads_and_writes_only_the_private_corpus_directory(test_config) -> None:
     """Operators' source folder is never LightRAG's input root, so nothing writes it."""
-    from dlightrag.application.settings import rag_settings
+    from dlightrag.application.settings.projections import rag_settings
 
     assert rag_settings(test_config).input_root == test_config.corpus_dir_path
     assert test_config.corpus_dir_path != test_config.input_dir_path
 
 
 def test_ai_runtime_and_rag_concurrency_owners_vary_independently(test_config) -> None:
-    from dlightrag.application.settings import rag_settings
+    from dlightrag.application.settings.projections import rag_settings
 
     mutate_config(test_config, "models.max_concurrency", 3)
     mutate_config(test_config, "runtime.query.worker_concurrency", 5)

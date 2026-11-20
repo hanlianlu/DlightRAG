@@ -13,9 +13,9 @@ import pytest
 
 from dlightrag.engine.agent.environment.child import build_child_environment
 from dlightrag.engine.agent.environment.confinement import (
+    AgentspaceConfinement,
     ConfinementPolicy,
     DeclaredLayer,
-    WorkspaceConfinement,
     _parse,
     _supported_rights,
     landlock_abi,
@@ -76,7 +76,7 @@ def test_the_workspace_is_the_only_writable_grant(tmp_path: Path) -> None:
     confinement = ConfinementPolicy(
         declared=(DeclaredLayer(path=tmp_path / "skills", capability="skills"),),
         runtime=(tmp_path / "app",),
-    ).for_workspace(workspace)
+    ).for_agentspace(workspace)
     grants = dict(confinement.rules)
 
     assert grants[workspace] == 0xFFFF
@@ -101,7 +101,7 @@ def test_the_helper_prefix_round_trips_the_grants(tmp_path: Path) -> None:
     """The child rebuilds exactly the grants the parent validated."""
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    confinement = ConfinementPolicy().for_workspace(workspace)
+    confinement = ConfinementPolicy().for_agentspace(workspace)
     command = ["/bin/echo", "hello"]
 
     rules, parsed_command = _parse([*confinement.launch_prefix(), *command])
@@ -110,7 +110,7 @@ def test_the_helper_prefix_round_trips_the_grants(tmp_path: Path) -> None:
     assert parsed_command == command
 
 
-class _MarkerConfinement(WorkspaceConfinement):
+class _MarkerConfinement(AgentspaceConfinement):
     """A confinement whose prefix announces itself, for hosts without a kernel seam."""
 
     def launch_prefix(self) -> list[str]:
@@ -183,7 +183,7 @@ async def test_a_confined_command_reaches_its_workspace_and_nothing_else(
     secret = outside / "secret.txt"
     secret.write_text("corpus-like bytes")
     environment = LocalExecutionEnvironment(
-        workspace, confinement=ConfinementPolicy().for_workspace(workspace)
+        workspace, confinement=ConfinementPolicy().for_agentspace(workspace)
     )
     home, tmp = environment.prepare_process_directories()
     output = _Output()
@@ -211,7 +211,7 @@ def test_without_landlock_the_property_is_absent_and_the_command_still_runs(
     outside.mkdir()
     secret = outside / "secret.txt"
     secret.write_text("corpus-like bytes")
-    prefix = ConfinementPolicy().for_workspace(workspace).launch_prefix()
+    prefix = ConfinementPolicy().for_agentspace(workspace).launch_prefix()
 
     completed = subprocess.run(
         [*prefix, sys.executable, "-c", _probe_script(secret)],
@@ -238,7 +238,9 @@ def test_the_reported_state_says_disabled_or_what_this_host_enforces() -> None:
     other answer is the host's, which is what keeps the absence of a kernel seam
     visible instead of implied (ADR 0024).
     """
-    from dlightrag.engine.agent.environment import confinement_state
+    from dlightrag.engine.agent.environment.execution import (
+        confinement_state,
+    )
 
     assert confinement_state("disabled") == "disabled"
     trust = confinement_state("trust")
@@ -277,7 +279,7 @@ def test_the_policy_declares_the_roots_skills_are_loaded_from(test_config: Any) 
     source checkout keeps them in the project tree, which the Agent may not see at all.
     """
     from dlightrag._compose import agent_confinement_policy
-    from dlightrag.application.settings import agent_skills_root, owner_skills_root
+    from dlightrag.application.settings.projections import agent_skills_root, owner_skills_root
     from dlightrag.engine.agent.skills import builtin_skills_root, owner_skill_root
 
     policy = agent_confinement_policy(test_config)
@@ -298,7 +300,7 @@ def test_one_owners_skills_are_not_another_owners(test_config: Any) -> None:
     isolation).
     """
     from dlightrag._compose import agent_confinement_policy
-    from dlightrag.application.settings import agent_skills_root, owner_skills_root
+    from dlightrag.application.settings.projections import agent_skills_root, owner_skills_root
     from dlightrag.engine.agent.skills import owner_skill_root
 
     policy = agent_confinement_policy(test_config)
@@ -316,14 +318,14 @@ async def test_binding_a_run_grants_only_its_own_owners_skills(
 ) -> None:
     """The binder is where an owner becomes known, so the shard arrives with the Run."""
     from dlightrag._compose import agent_confinement_policy
-    from dlightrag.application.settings import owner_skills_root
+    from dlightrag.application.settings.projections import owner_skills_root
     from dlightrag.engine.agent.environment.execution import TrustExecutionAdapter
     from dlightrag.engine.agent.skills import owner_skill_root
-    from dlightrag.engine.answer.workspace import bind_run_workspace
+    from dlightrag.engine.answer.agentspace import bind_run_agentspace
     from tests.support.workspace_store import InMemoryWorkspaceStore
 
     policy = agent_confinement_policy(test_config)
-    bound = await bind_run_workspace(
+    bound = await bind_run_agentspace(
         workspace_root=tmp_path,
         owner_id="alice",
         run_id="run-alice",
@@ -345,7 +347,7 @@ async def test_binding_a_run_grants_only_its_own_owners_skills(
 def test_a_skills_root_inside_the_project_tree_is_refused(test_config: Any, tmp_path: Path) -> None:
     """A Skill root inside the project tree would expose what the Agent may not see."""
     from dlightrag._compose import agent_confinement_policy
-    from tests.config_helpers import replace_config
+    from tests.support.config_helpers import replace_config
 
     inside = Path.cwd() / "skills-in-the-project"
     config = replace_config(test_config, "answer.agent.skills_root", str(inside))
@@ -361,7 +363,7 @@ def test_a_policy_whose_paths_do_not_exist_still_runs_the_command(tmp_path: Path
     policy = ConfinementPolicy(
         declared=(DeclaredLayer(path=tmp_path / "not-installed", capability="skills"),)
     )
-    prefix = policy.for_workspace(workspace).launch_prefix()
+    prefix = policy.for_agentspace(workspace).launch_prefix()
 
     completed = subprocess.run(
         [*prefix, sys.executable, "-c", "print('ran')"],
@@ -383,7 +385,7 @@ def test_the_helper_never_writes_plumbing_to_the_command_output(tmp_path: Path) 
     """
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    prefix = ConfinementPolicy().for_workspace(workspace).launch_prefix()
+    prefix = ConfinementPolicy().for_agentspace(workspace).launch_prefix()
 
     completed = subprocess.run(
         [*prefix, sys.executable, "-c", "print('payload')"],
@@ -420,7 +422,7 @@ async def test_a_declared_skill_root_serves_its_script_while_a_sibling_stays_out
     elsewhere.mkdir()
     (elsewhere / "secret.txt").write_text("corpus-like bytes")
     policy = ConfinementPolicy(declared=(DeclaredLayer(path=skills, capability="skills"),))
-    environment = LocalExecutionEnvironment(workspace, confinement=policy.for_workspace(workspace))
+    environment = LocalExecutionEnvironment(workspace, confinement=policy.for_agentspace(workspace))
     home, tmp = environment.prepare_process_directories()
     output = _Output()
     script_body = (
@@ -465,7 +467,7 @@ async def test_the_corpus_is_readable_by_the_process_and_denied_to_its_children(
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     policy = ConfinementPolicy(forbidden=(corpus,))
-    environment = LocalExecutionEnvironment(workspace, confinement=policy.for_workspace(workspace))
+    environment = LocalExecutionEnvironment(workspace, confinement=policy.for_agentspace(workspace))
     home, tmp = environment.prepare_process_directories()
     output = _Output()
 

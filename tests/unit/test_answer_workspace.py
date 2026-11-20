@@ -1,37 +1,39 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Epoch workspace bind creates a rooted environment and can copy a prior epoch."""
 
+import datetime
 import hashlib
 import logging
 import shutil
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
-from dlightrag.engine.answer import workspace as workspace_module
-from dlightrag.engine.answer.session_notes import SessionNotesPlane
-from dlightrag.engine.answer.workspace import (
-    AgentWorkspaceReclaimer,
-    WorkspaceIntegrityError,
-    WorkspaceUnavailable,
-    agent_workspace_reclaimer,
-    bind_run_workspace,
+from dlightrag.engine.answer import agentspace as agentspace_module
+from dlightrag.engine.answer.agentspace import (
+    AgentspaceIntegrityError,
+    AgentspaceReclaimer,
+    AgentspaceUnavailable,
+    agentspace_reclaimer,
+    bind_run_agentspace,
     copy_epoch_verified,
     epoch_paths,
     materialize_session_notes,
     owner_shard,
     reclaim_discovered_run_root,
-    reclaim_run_workspace,
+    reclaim_run_agentspace,
     run_root,
     write_spill_file,
 )
+from dlightrag.engine.answer.session_notes import SessionNotesPlane
+from dlightrag.engine.runtime.agentspace import CommittedSpillRecord, SessionNoteRecord
 from dlightrag.engine.runtime.coordinator import LeaseLostError
 from dlightrag.engine.runtime.records import DeletedRun
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
-from dlightrag.engine.runtime.workspace import CommittedSpillRecord, SessionNoteRecord
 from tests.support.workspace_store import InMemoryWorkspaceStore
 
 
@@ -111,7 +113,7 @@ async def test_binding_without_an_adapter_still_binds_a_confined_environment(
     caller that binds without supplying an adapter gets a rooted environment under the
     default policy rather than a host-authority one.
     """
-    bound = await bind_run_workspace(
+    bound = await bind_run_agentspace(
         workspace_root=tmp_path,
         owner_id="owner",
         run_id="run-confined",
@@ -128,7 +130,7 @@ async def test_binding_without_an_adapter_still_binds_a_confined_environment(
 @pytest.mark.asyncio
 async def test_first_bind_creates_workspace_and_handoffs(tmp_path: Path) -> None:
     store = InMemoryWorkspaceStore()
-    bound = await bind_run_workspace(
+    bound = await bind_run_agentspace(
         workspace_root=tmp_path,
         owner_id="owner",
         run_id="run-1",
@@ -188,7 +190,7 @@ async def test_first_bind_reclaims_only_exact_older_claim_local_temps(tmp_path: 
     other_temp.mkdir(parents=True)
     (other_temp / "outside-claim.txt").write_text("keep", encoding="utf-8")
 
-    await bind_run_workspace(
+    await bind_run_agentspace(
         workspace_root=tmp_path,
         owner_id="owner",
         run_id="run-temps",
@@ -210,7 +212,7 @@ async def test_first_bind_reclaims_only_exact_older_claim_local_temps(tmp_path: 
 @pytest.mark.asyncio
 async def test_recover_copies_prior_epoch(tmp_path: Path) -> None:
     store = InMemoryWorkspaceStore(workspace_epoch=1)
-    first = await bind_run_workspace(
+    first = await bind_run_agentspace(
         workspace_root=tmp_path,
         owner_id="owner",
         run_id="run-1",
@@ -224,7 +226,7 @@ async def test_recover_copies_prior_epoch(tmp_path: Path) -> None:
     )
     (stale_temp / "nested").mkdir(parents=True)
     (stale_temp / "nested" / "orphan.txt").write_text("remove", encoding="utf-8")
-    recovered = await bind_run_workspace(
+    recovered = await bind_run_agentspace(
         workspace_root=tmp_path,
         owner_id="owner",
         run_id="run-1",
@@ -255,7 +257,7 @@ async def test_stale_temp_symlinks_are_unlinked_without_touching_their_targets(
     stale_tree.mkdir()
     (stale_tree / "outside-link").symlink_to(outside, target_is_directory=True)
 
-    await bind_run_workspace(
+    await bind_run_agentspace(
         workspace_root=tmp_path,
         owner_id="owner",
         run_id="run-symlink-temp",
@@ -292,9 +294,9 @@ async def test_stale_temp_cleanup_is_best_effort_per_tree(
             raise PermissionError("simulated undeletable temp")
         real_rmtree(path, *args, **kwargs)
 
-    monkeypatch.setattr(workspace_module.shutil, "rmtree", fail_one_tree)
-    with caplog.at_level(logging.WARNING, logger=workspace_module.__name__):
-        bound = await bind_run_workspace(
+    monkeypatch.setattr(agentspace_module.shutil, "rmtree", fail_one_tree)
+    with caplog.at_level(logging.WARNING, logger=agentspace_module.__name__):
+        bound = await bind_run_agentspace(
             workspace_root=tmp_path,
             owner_id="owner",
             run_id="run-cleanup-failure",
@@ -313,7 +315,7 @@ async def test_stale_temp_cleanup_is_best_effort_per_tree(
 @pytest.mark.asyncio
 async def test_recover_rejects_a_symlink_as_integrity_error(tmp_path: Path) -> None:
     store = InMemoryWorkspaceStore(workspace_epoch=1)
-    first = await bind_run_workspace(
+    first = await bind_run_agentspace(
         workspace_root=tmp_path,
         owner_id="owner",
         run_id="run-2",
@@ -322,8 +324,8 @@ async def test_recover_rejects_a_symlink_as_integrity_error(tmp_path: Path) -> N
         store=store,
     )
     (first.workspace / "link").symlink_to(tmp_path / "outside")
-    with pytest.raises(WorkspaceIntegrityError):
-        await bind_run_workspace(
+    with pytest.raises(AgentspaceIntegrityError):
+        await bind_run_agentspace(
             workspace_root=tmp_path,
             owner_id="owner",
             run_id="run-2",
@@ -342,7 +344,7 @@ async def test_a_recovery_that_cannot_finish_leaves_only_the_recorded_epoch(tmp_
     recorded is discarded.
     """
     store = InMemoryWorkspaceStore(workspace_epoch=1)
-    first = await bind_run_workspace(
+    first = await bind_run_agentspace(
         workspace_root=tmp_path,
         owner_id="owner",
         run_id="run-3",
@@ -357,8 +359,8 @@ async def test_a_recovery_that_cannot_finish_leaves_only_the_recorded_epoch(tmp_
 
     data.chmod(0)
     try:
-        with pytest.raises(WorkspaceUnavailable):
-            await bind_run_workspace(
+        with pytest.raises(AgentspaceUnavailable):
+            await bind_run_agentspace(
                 workspace_root=tmp_path,
                 owner_id="owner",
                 run_id="run-3",
@@ -372,7 +374,7 @@ async def test_a_recovery_that_cannot_finish_leaves_only_the_recorded_epoch(tmp_
 
     store.live = False
     with pytest.raises(LeaseLostError):
-        await bind_run_workspace(
+        await bind_run_agentspace(
             workspace_root=tmp_path,
             owner_id="owner",
             run_id="run-3",
@@ -389,7 +391,7 @@ async def test_a_recovery_that_cannot_finish_leaves_only_the_recorded_epoch(tmp_
 async def test_recovery_pages_spills_in_keyset_order_without_repeats(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(workspace_module, "_SPILL_RECOVERY_PAGE_SIZE", 2)
+    monkeypatch.setattr(agentspace_module, "_SPILL_RECOVERY_PAGE_SIZE", 2)
     root = tmp_path / "run"
     store = RecordingWorkspaceStore()
     resource_ids = [f"spill-{index:02d}" for index in reversed(range(7))]
@@ -418,7 +420,7 @@ async def test_recovery_pages_spills_in_keyset_order_without_repeats(
 async def test_recovery_exact_page_multiple_fetches_one_final_empty_page(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(workspace_module, "_SPILL_RECOVERY_PAGE_SIZE", 2)
+    monkeypatch.setattr(agentspace_module, "_SPILL_RECOVERY_PAGE_SIZE", 2)
     root = tmp_path / "run"
     store = RecordingWorkspaceStore()
     await _seed_spills(root, store, ["spill-03", "spill-01", "spill-02", "spill-00"])
@@ -446,7 +448,7 @@ async def test_recovery_rejects_broken_spill_page_and_removes_temp_tree(
     for record in records:
         (source_spills / f"{record.resource_id}.txt").write_bytes(record.resource_id.encode())
 
-    with pytest.raises(WorkspaceIntegrityError, match="strictly ordered"):
+    with pytest.raises(AgentspaceIntegrityError, match="strictly ordered"):
         await copy_epoch_verified(root, 1, 2, store)
 
     _assert_no_temp_recovery_tree(root, 2)
@@ -470,7 +472,7 @@ async def test_recovery_rejects_corrupt_spill_and_removes_temp_tree(tmp_path: Pa
     _, source_spills = epoch_paths(root, 1)
     (source_spills / "spill-01.txt").write_text("corrupt", encoding="utf-8")
 
-    with pytest.raises(WorkspaceIntegrityError, match="failed digest check"):
+    with pytest.raises(AgentspaceIntegrityError, match="failed digest check"):
         await copy_epoch_verified(root, 1, 2, store)
 
     _assert_no_temp_recovery_tree(root, 2)
@@ -486,7 +488,7 @@ async def test_handoff_records_the_copied_epochs_observation(tmp_path: Path) -> 
     proven every path, size, and digest it was throwing away.
     """
     store = InMemoryWorkspaceStore()
-    first = await bind_run_workspace(
+    first = await bind_run_agentspace(
         workspace_root=tmp_path,
         owner_id="owner",
         run_id="run-notes",
@@ -499,7 +501,7 @@ async def test_handoff_records_the_copied_epochs_observation(tmp_path: Path) -> 
     note.parent.mkdir(exist_ok=True)
     note.write_text(payload, encoding="utf-8")
 
-    recovered = await bind_run_workspace(
+    recovered = await bind_run_agentspace(
         workspace_root=tmp_path,
         owner_id="owner",
         run_id="run-notes",
@@ -532,11 +534,11 @@ def test_reclaim_removes_a_run_root_is_idempotent_and_does_not_follow_symlinks(
     outside.write_text("keep", encoding="utf-8")
     (inside / "escape").symlink_to(outside)
 
-    reclaim_run_workspace(tmp_path, owner, run_id)
+    reclaim_run_agentspace(tmp_path, owner, run_id)
     assert not root.exists()
     assert outside.read_text(encoding="utf-8") == "keep"
 
-    reclaim_run_workspace(tmp_path, owner, run_id)
+    reclaim_run_agentspace(tmp_path, owner, run_id)
     assert not root.exists()
     assert outside.read_text(encoding="utf-8") == "keep"
 
@@ -551,17 +553,17 @@ def test_reclaim_unlinks_a_run_root_symlink_without_following_it(tmp_path: Path)
     (outside / "secret.txt").write_text("keep", encoding="utf-8")
     expected.symlink_to(outside)
 
-    reclaim_run_workspace(tmp_path, owner, run_id)
+    reclaim_run_agentspace(tmp_path, owner, run_id)
 
     assert not expected.exists()
     assert (outside / "secret.txt").read_text(encoding="utf-8") == "keep"
 
 
 def test_reclaim_refuses_a_path_that_is_not_the_expected_run_root(tmp_path: Path) -> None:
-    with pytest.raises(WorkspaceIntegrityError, match="not a run root"):
-        reclaim_run_workspace(tmp_path, "owner", "../not-a-run")
-    with pytest.raises(WorkspaceIntegrityError, match="not a run root"):
-        reclaim_run_workspace(tmp_path, "owner", "not-a-uuid")
+    with pytest.raises(AgentspaceIntegrityError, match="not a run root"):
+        reclaim_run_agentspace(tmp_path, "owner", "../not-a-run")
+    with pytest.raises(AgentspaceIntegrityError, match="not a run root"):
+        reclaim_run_agentspace(tmp_path, "owner", "not-a-uuid")
 
 
 @pytest.mark.asyncio
@@ -583,25 +585,118 @@ async def test_orphan_sweep_deletes_a_directory_with_no_run_row_and_keeps_one_wh
                 return object()
             return None
 
-    removed = await AgentWorkspaceReclaimer(tmp_path, page_size=1).sweep_orphans(_Store())
+    removed = await AgentspaceReclaimer(tmp_path, page_size=1).sweep_orphans(_Store())
 
     assert removed == 1
     assert live.exists()
     assert not dead.exists()
 
 
+@pytest.mark.asyncio
+async def test_a_finished_run_past_the_clock_loses_its_whole_tree(tmp_path: Path) -> None:
+    """Nothing reads a finished Run's tree, so no plane of it is kept for the row's year.
+
+    The notes are the Session's rows and the next Run materializes them from there; a
+    published Artifact is a Blob its row pins; a spill is read only by the Run that wrote
+    it, and a finished Run never runs again. What an Agent fetched into `work/` is the
+    case that made this whole-tree: a wheel and a font, 45 MB, kept a year for no reader.
+    """
+    owner = "owner"
+    run_id = str(uuid.uuid4())
+    root = run_root(tmp_path, owner, run_id)
+    workspace, spill = epoch_paths(root, 1)
+    planes = (
+        workspace / "tmp",
+        workspace / "artifacts",
+        workspace / "notes",
+        workspace / "work" / "libs",
+        spill,
+    )
+    for plane in planes:
+        plane.mkdir(parents=True)
+        (plane / "left.txt").write_text("x", encoding="utf-8")
+
+    now = datetime.datetime(2026, 10, 11, tzinfo=datetime.UTC)
+    record = SimpleNamespace(terminal=True, finished_at=now - datetime.timedelta(days=7))
+
+    class _Store:
+        async def get_run_global(self, *, run_id: str) -> object | None:
+            return record
+
+    changed = await AgentspaceReclaimer(tmp_path, now=lambda: now).sweep_orphans(_Store())
+
+    assert changed == 1
+    assert not root.exists()
+    assert root.parent.exists(), "the owner's shard is not the Run's to remove"
+
+
+@pytest.mark.asyncio
+async def test_a_tree_is_kept_until_its_clock_says_otherwise(tmp_path: Path) -> None:
+    """A Run that just finished, and one still working, keep what they wrote."""
+    owner = "owner"
+    now = datetime.datetime(2026, 10, 11, tzinfo=datetime.UTC)
+    just_finished = str(uuid.uuid4())
+    still_running = str(uuid.uuid4())
+    for run_id in (just_finished, still_running):
+        workspace, _spill = epoch_paths(run_root(tmp_path, owner, run_id), 1)
+        (workspace / "tmp").mkdir(parents=True)
+        (workspace / "tmp" / "half-written.py").write_text("x", encoding="utf-8")
+        (workspace / "work").mkdir()
+        (workspace / "work" / "draft.md").write_text("x", encoding="utf-8")
+
+    records = {
+        just_finished: SimpleNamespace(terminal=True, finished_at=now - datetime.timedelta(days=1)),
+        # Nothing but the Run itself may decide that an agent still working has stopped
+        # needing its scratch, however long it has been at it.
+        still_running: SimpleNamespace(
+            terminal=False, finished_at=now - datetime.timedelta(days=30)
+        ),
+    }
+
+    class _Store:
+        async def get_run_global(self, *, run_id: str) -> object | None:
+            return records[run_id]
+
+    changed = await AgentspaceReclaimer(tmp_path, now=lambda: now).sweep_orphans(_Store())
+
+    assert changed == 0
+    for run_id in records:
+        workspace, _spill = epoch_paths(run_root(tmp_path, owner, run_id), 1)
+        assert (workspace / "tmp" / "half-written.py").exists()
+        assert (workspace / "work" / "draft.md").exists()
+
+
+@pytest.mark.asyncio
+async def test_a_record_that_states_no_finish_keeps_its_tree(tmp_path: Path) -> None:
+    """The clock is the Run's own end: a row that states none sweeps nothing."""
+    owner = "owner"
+    run_id = str(uuid.uuid4())
+    workspace, _spill = epoch_paths(run_root(tmp_path, owner, run_id), 1)
+    (workspace / "tmp").mkdir(parents=True)
+    (workspace / "tmp" / "left.py").write_text("x", encoding="utf-8")
+
+    class _Store:
+        async def get_run_global(self, *, run_id: str) -> object | None:
+            return SimpleNamespace(terminal=True, finished_at=None)
+
+    changed = await AgentspaceReclaimer(tmp_path).sweep_orphans(_Store())
+
+    assert changed == 0
+    assert (workspace / "tmp" / "left.py").exists()
+
+
 def test_a_reclaimer_follows_the_configured_root_not_the_execution_mode(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "ws"
-    reclaimer = agent_workspace_reclaimer(
+    reclaimer = agentspace_reclaimer(
         execution_environment="disabled",
         workspace_root=str(root),
     )
     assert reclaimer is not None
     assert reclaimer._root == root.resolve()
     assert not root.exists()
-    assert agent_workspace_reclaimer(execution_environment="disabled", workspace_root=None) is None
+    assert agentspace_reclaimer(execution_environment="disabled", workspace_root=None) is None
 
 
 @pytest.mark.asyncio
@@ -620,7 +715,7 @@ async def test_the_production_reclaimer_removes_an_answer_runs_bytes(tmp_path: P
         root.mkdir(parents=True)
         (root / "note.txt").write_text("x", encoding="utf-8")
 
-    await AgentWorkspaceReclaimer(tmp_path).reclaim(
+    await AgentspaceReclaimer(tmp_path).reclaim(
         (
             DeletedRun(owner_id=owner, run_id=answer_id, run_kind="answer"),
             DeletedRun(owner_id=owner, run_id=retrieval_id, run_kind="retrieval"),
@@ -652,12 +747,12 @@ async def test_a_failed_reclaim_is_retried_by_the_next_orphan_sweep(
         async def get_run_global(self, *, run_id: str) -> object | None:
             return None
 
-    reclaimer = AgentWorkspaceReclaimer(tmp_path)
-    monkeypatch.setattr(workspace_module.shutil, "rmtree", fail_this_tree)
+    reclaimer = AgentspaceReclaimer(tmp_path)
+    monkeypatch.setattr(agentspace_module.shutil, "rmtree", fail_this_tree)
     await reclaimer.reclaim((DeletedRun(owner_id=owner, run_id=run_id, run_kind="answer"),))
     assert root.exists()
 
-    monkeypatch.setattr(workspace_module.shutil, "rmtree", real_rmtree)
+    monkeypatch.setattr(agentspace_module.shutil, "rmtree", real_rmtree)
     assert await reclaimer.sweep_orphans(_Store()) == 1
     assert not root.exists()
 
@@ -676,7 +771,7 @@ async def test_the_sweep_walks_every_page_of_orphans(tmp_path: Path) -> None:
         async def get_run_global(self, *, run_id: str) -> object | None:
             return None
 
-    removed = await AgentWorkspaceReclaimer(tmp_path, page_size=1).sweep_orphans(_Store())
+    removed = await AgentspaceReclaimer(tmp_path, page_size=1).sweep_orphans(_Store())
 
     assert removed == 3
     assert all(not run_root(tmp_path, owner, run_id).exists() for run_id in run_ids)
@@ -689,9 +784,9 @@ def test_reclaim_refuses_a_path_outside_the_shard_layout(tmp_path: Path) -> None
     outside.mkdir()
     (outside / run_id).mkdir()
 
-    with pytest.raises(WorkspaceIntegrityError, match="not a run root"):
+    with pytest.raises(AgentspaceIntegrityError, match="not a run root"):
         reclaim_discovered_run_root(tmp_path, outside / run_id)
-    with pytest.raises(WorkspaceIntegrityError, match="not a run root"):
+    with pytest.raises(AgentspaceIntegrityError, match="not a run root"):
         reclaim_discovered_run_root(tmp_path, tmp_path / "zz" / run_id)
     assert (outside / run_id).exists()
 
@@ -706,8 +801,8 @@ def test_reclaim_never_follows_a_symlinked_shard(tmp_path: Path) -> None:
     shard = tmp_path / owner_shard(owner)
     shard.symlink_to(outside, target_is_directory=True)
 
-    with pytest.raises(WorkspaceIntegrityError, match="not a run root"):
-        reclaim_run_workspace(tmp_path, owner, run_id)
+    with pytest.raises(AgentspaceIntegrityError, match="not a run root"):
+        reclaim_run_agentspace(tmp_path, owner, run_id)
 
     assert (outside / run_id / "keep.txt").read_text(encoding="utf-8") == "keep"
 
@@ -725,13 +820,6 @@ def _note(
         ),
         content,
     )
-
-
-def _parent_workspace(tmp_path: Path, owner: str, run_id: str, epoch: int = 1) -> Path:
-    root = run_root(tmp_path, owner, run_id)
-    workspace, _ = epoch_paths(root, epoch)
-    workspace.mkdir(parents=True)
-    return workspace
 
 
 def _claim_over(plane: dict[str, dict[str, bytes]]) -> InMemoryWorkspaceStore:
@@ -806,7 +894,7 @@ async def test_a_sessions_notes_outlive_the_run_that_wrote_them(tmp_path: Path) 
     plane: dict[str, dict[str, bytes]] = {}
 
     writer_store = _claim_over(plane)
-    writer = await bind_run_workspace(
+    writer = await bind_run_agentspace(
         workspace_root=tmp_path,
         owner_id=owner,
         run_id=writer_id,
@@ -827,7 +915,7 @@ async def test_a_sessions_notes_outlive_the_run_that_wrote_them(tmp_path: Path) 
     shutil.rmtree(run_root(tmp_path, owner, writer_id))
 
     reader_store = _claim_over(plane)
-    reader = await bind_run_workspace(
+    reader = await bind_run_agentspace(
         workspace_root=tmp_path,
         owner_id=owner,
         run_id=reader_id,
@@ -846,7 +934,7 @@ async def test_a_sessions_notes_outlive_the_run_that_wrote_them(tmp_path: Path) 
     assert await reader_notes.reconcile() is None
 
     third_store = _claim_over(plane)
-    await bind_run_workspace(
+    await bind_run_agentspace(
         workspace_root=tmp_path,
         owner_id=owner,
         run_id="01930000-0000-7000-8000-0000000000c3",
@@ -877,7 +965,7 @@ async def test_an_inert_hop_holds_the_memory_for_the_next_research_turn(tmp_path
     digest = hashlib.sha256(payload).hexdigest()
 
     research_store = _claim_over(plane)
-    research = await bind_run_workspace(
+    research = await bind_run_agentspace(
         workspace_root=tmp_path,
         owner_id=owner,
         run_id=research_id,
@@ -892,7 +980,7 @@ async def test_an_inert_hop_holds_the_memory_for_the_next_research_turn(tmp_path
     assert await notes.reconcile() is None
 
     fast_store = _claim_over(plane)
-    fast = await bind_run_workspace(
+    fast = await bind_run_agentspace(
         workspace_root=tmp_path,
         owner_id=owner,
         run_id=fast_id,
@@ -921,7 +1009,7 @@ async def test_first_bind_records_the_materialized_notes_as_its_inventory(tmp_pa
         deletes=(),
     )
 
-    bound = await bind_run_workspace(
+    bound = await bind_run_agentspace(
         workspace_root=tmp_path,
         owner_id=owner,
         run_id="01930000-0000-7000-8000-0000000000e1",
@@ -944,7 +1032,7 @@ async def test_recovery_bind_does_not_materialize_over_the_runs_own_notes(
     owner = "owner"
     child_id = str(uuid.uuid4())
     store = InMemoryWorkspaceStore()
-    first = await bind_run_workspace(
+    first = await bind_run_agentspace(
         workspace_root=tmp_path,
         owner_id=owner,
         run_id=child_id,
@@ -955,7 +1043,7 @@ async def test_recovery_bind_does_not_materialize_over_the_runs_own_notes(
     (first.workspace / "notes").mkdir(exist_ok=True)
     (first.workspace / "notes" / "own.md").write_text("mine", encoding="utf-8")
 
-    recovered = await bind_run_workspace(
+    recovered = await bind_run_agentspace(
         workspace_root=tmp_path,
         owner_id=owner,
         run_id=child_id,
@@ -977,7 +1065,7 @@ async def test_the_audit_reports_orphans_and_deletes_nothing(tmp_path: Path) -> 
     deployment does not own has to be countable before anything is asked to remove
     it. Both directories therefore still exist after the pass.
     """
-    from dlightrag.engine.answer.workspace import audit_run_workspaces
+    from dlightrag.engine.answer.agentspace import audit_run_agentspaces
 
     owner = "owner"
     live_id = str(uuid.uuid4())
@@ -991,7 +1079,7 @@ async def test_the_audit_reports_orphans_and_deletes_nothing(tmp_path: Path) -> 
         async def get_run_global(self, *, run_id: str) -> object | None:
             return object() if run_id == live_id else None
 
-    report = await audit_run_workspaces(
+    report = await audit_run_agentspaces(
         workspace_root=tmp_path, store=_Store(), page_size=1, sample=5
     )
 
@@ -1011,20 +1099,17 @@ def test_the_root_rule_follows_a_named_path_whatever_the_execution_mode(
     An unnamed root is the default path, and only an enabled configuration owns it;
     disabled does not invent it.
     """
-    from dlightrag.engine.answer.workspace import (
-        agent_workspace_reclaimer,
-        resolve_workspace_root,
+    from dlightrag.engine.answer.agentspace import (
+        agentspace_reclaimer,
+        resolve_agentspace_root,
     )
 
     named = str(tmp_path / "dlightrag-named-root")
-    assert resolve_workspace_root(execution_environment="disabled", workspace_root=named) == Path(
+    assert resolve_agentspace_root(execution_environment="disabled", workspace_root=named) == Path(
         named
     )
-    assert resolve_workspace_root(execution_environment="disabled", workspace_root=None) is None
-    default = resolve_workspace_root(execution_environment="trust", workspace_root=None)
+    assert resolve_agentspace_root(execution_environment="disabled", workspace_root=None) is None
+    default = resolve_agentspace_root(execution_environment="trust", workspace_root=None)
     assert default is not None and default.is_absolute()
-    assert (
-        agent_workspace_reclaimer(execution_environment="disabled", workspace_root=named)
-        is not None
-    )
-    assert agent_workspace_reclaimer(execution_environment="disabled", workspace_root=None) is None
+    assert agentspace_reclaimer(execution_environment="disabled", workspace_root=named) is not None
+    assert agentspace_reclaimer(execution_environment="disabled", workspace_root=None) is None

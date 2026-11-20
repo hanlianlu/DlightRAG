@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
@@ -26,20 +27,33 @@ import pytest
 from pydantic import SecretStr, ValidationError
 
 from dlightrag.adapters.agent_mailbox import S3AgentMailbox
-from dlightrag.engine.agent.environment import AccessScheduler
+from dlightrag.engine.agent.environment.access import (
+    AccessScheduler,
+)
 from dlightrag.engine.agent.tool_content import tool_content_attachments
-from dlightrag.engine.agent.tools import AgentTool, ToolResult
-from dlightrag.engine.answer.agent_browser import (
+from dlightrag.engine.agent.tools.contracts import (
+    AgentTool,
+    ToolResult,
+)
+from dlightrag.engine.answer.agent_browser.accounts import (
     ACCOUNT_LABEL,
-    PASSWORD_MASK,
     AgentAccountsBinding,
-    AgentMailbox,
-    BrowserHolder,
     RunAgentAccounts,
-    RunAgentBrowser,
     StoredAgentAccount,
     generate_password,
     owner_alias,
+)
+from dlightrag.engine.answer.agent_browser.contracts import (
+    BrowserHolder,
+)
+from dlightrag.engine.answer.agent_browser.mailbox import (
+    AgentMailbox,
+)
+from dlightrag.engine.answer.agent_browser.passwords import (
+    PASSWORD_MASK,
+)
+from dlightrag.engine.answer.agent_browser.run import (
+    RunAgentBrowser,
 )
 from dlightrag.engine.answer.resources.registry import (
     FetchedResourceBytes,
@@ -64,7 +78,7 @@ from tests.support.dns import public_dns
 from tests.support.loopback import bypass_proxies, loopback_certificate
 from tests.support.resources import preparer
 from tests.support.s3 import S3Stub, StoredObject, s3_stub
-from tests.tool_helpers import recording_tool_runtime
+from tests.support.tool_helpers import recording_tool_runtime
 
 pytestmark = pytest.mark.asyncio
 
@@ -77,14 +91,14 @@ OTHER_KEYRING = (
     '{"active": "next", "keys": {"next": "YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI="}}'
 )
 EMAIL, HANDLE = "shopper@example.com", "shopper-77"
-DOMAIN = "orliantra.cc"
+DOMAIN = "mail.example"
 
 
 def page(title: str, body: str) -> Served:
     return Served(f"<html><head><title>{title}</title></head><body>{body}</body></html>")
 
 
-def signup(*, password: str = 'type="password"', confirm: bool = True) -> Served:
+def signup(*, password: str = 'type="password"', confirm: bool = True, search: str = "") -> Served:
     """A sign-up form posting to /join. ``password`` is the attributes of its password field."""
     return page(
         "Join",
@@ -93,6 +107,7 @@ def signup(*, password: str = 'type="password"', confirm: bool = True) -> Served
 <input aria-label="Email" name="email" type="email">
 <input aria-label="Password" name="password" {password}>
 {'<input aria-label="Confirmation" name="confirm" type="password">' if confirm else ""}
+{search}
 <button type="submit">Join</button></form>""",
     )
 
@@ -137,6 +152,25 @@ EMBED = page(
 <iframe src="https://pay.example.org/card"></iframe>
 <iframe src="https://accounts.example.com/card"></iframe>""",
 )
+#: How many constrained textboxes the large form carries: more than most forms a Run meets, few
+#: enough that one call reads it.
+MANY_FIELDS = 50
+
+
+def many_fields(count: int = MANY_FIELDS) -> Served:
+    """A form of ``count`` textboxes, each stating constraints of its own. The last states a
+    pattern longer than one snapshot line repeats, so its line has to be elided, and every line
+    before it has to carry its own field's numbers whole."""
+    inputs = []
+    for number in range(1, count + 1):
+        pattern = "x" * 300 if number == count else f"[A-Za-z0-9]{{{number},{number + 100}}}"
+        inputs.append(
+            f'<input aria-label="Field {number}" minlength="{number}" maxlength="{number + 100}" '
+            f'pattern="{pattern}" required>'
+        )
+    return page("Many fields", "<form>" + "".join(inputs) + "</form>")
+
+
 PAGES = {
     f"{SHOP}/signup": signup(),
     f"{SHOP}/signin": SIGNIN,
@@ -152,6 +186,23 @@ PAGES = {
     f"{SHOP}/embed": EMBED,
     f"{SHOP}/short": signup(password='type="password" maxlength="14"', confirm=False),
     f"{SHOP}/tiny": signup(password='type="password" maxlength="10"', confirm=False),
+    # A field that takes fewer characters than the shortest password this mechanism makes: the
+    # agent is told the site cannot be registered on, rather than sent to ask for four.
+    f"{SHOP}/floor": signup(password='type="password" maxlength="4"', confirm=False),
+    # A field that takes exactly the shortest password the composition leaves room for: reading
+    # the site's own constraint and asking for it has to work, with no floor in the way.
+    f"{SHOP}/exact": signup(password='type="password" maxlength="6"', confirm=False),
+    f"{SHOP}/many": many_fields(),
+    # A field that states a minimum, a maximum, a pattern, and that it must be filled: what a
+    # model choosing a value to put in it has to know, and what no snapshot prints by itself.
+    # The search box states as much, and is left alone: what DlightRAG fills is a textbox.
+    f"{SHOP}/strict": signup(
+        password=(
+            'type="password" minlength="12" maxlength="20" pattern="[A-Za-z0-9._-]{12,20}" required'
+        ),
+        confirm=False,
+        search=('<input aria-label="Find" type="search" maxlength="8" pattern="[a-z]+" required>'),
+    ),
     f"{SHOP}/locked": signup(password='type="password" disabled', confirm=False),
     # Its handler drops every capital letter of a value it is given, so what it holds is not what
     # was filled.
@@ -482,7 +533,10 @@ async def test_every_page_text_is_redacted(tmp_path: Path) -> None:
         (capture, _) = web.admitted[-1]
         assert_hidden(password, capture.content, capture.url)
         assert f'value="{PASSWORD_MASK}"'.encode() in capture.content
-        alerted = await web.call(action="click", ref=await ref_in(web, 'button "Alert"'))
+        # The alert is answered here, so the page the test goes on to use is not stopped.
+        alerted = await web.call(
+            action="click", ref=await ref_in(web, 'button "Alert"'), dialog="accept"
+        )
         assert f'a alert dialog: "echo {PASSWORD_MASK}" (accepted).' in alerted.text_content
         await web.call(action="click", ref=await ref_in(web, 'link "Save"'))
         (download, _) = web.admitted[-1]
@@ -566,28 +620,126 @@ async def test_a_password_fills_only_password_fields_of_the_pages_site(tmp_path:
         assert len(web.rows) == 1
 
 
-@pytest.mark.parametrize(
-    ("page_path", "length", "stored"), [("short", 14, True), ("tiny", 10, False)]
-)
-async def test_maxlength_shortens_the_password_and_below_12_refuses(
-    tmp_path: Path, page_path: str, length: int, stored: bool
+@pytest.mark.parametrize(("page_path", "limit"), [("short", 14), ("tiny", 10)])
+async def test_a_site_that_takes_fewer_characters_than_asked_for_refuses_and_names_both(
+    tmp_path: Path, page_path: str, limit: int
 ) -> None:
     async with browsing(tmp_path) as web:
         form = await web.form(f"{SHOP}/{page_path}")
 
+        # The call asks for no length, so the platform's own twenty is what was asked for: a
+        # field that takes fewer is refused, and the refusal names its limit and the ask.
         registered = await web.register(form)
 
-        assert registered.is_error is not stored
-        if stored:
-            await web.call(action="click", ref=form["button"])
-            sent = [len(value) for value in posted(web.proxy, "/join")["password"]]
-            assert (sent, size(web.stored_password())) == ([length], length)
-        else:
-            assert registered.text_content == (
-                f"This site's password field takes at most {length} characters, fewer than the "
-                "12 an Agent Account needs, so nothing was filled."
-            )
-            assert (web.rows, bool(web.run.filled_passwords("parent"))) == ([], False)
+        assert registered.is_error is True
+        assert registered.text_content == (
+            f"This site's password field takes at most {limit} characters and 20 were asked "
+            f"for; ask for {limit} or fewer."
+        )
+        # Nothing was filled and nothing was stored, so nothing could be submitted either.
+        assert (web.rows, bool(web.run.filled_passwords("parent"))) == ([], False)
+        assert posts(web.proxy, "/join") == []
+
+
+async def test_a_site_capped_below_the_shortest_password_this_mechanism_makes_is_named(
+    tmp_path: Path,
+) -> None:
+    """Four characters is a limit no ask can meet: the schema's floor is six, so the refusal
+    names the mechanism's own minimum and the site as one no registration can succeed on,
+    rather than advising an ask the agent could not make. The form is read to learn the limit,
+    and nothing is filled or stored."""
+    async with browsing(tmp_path) as web:
+        form = await web.form(f"{SHOP}/floor")
+
+        registered = await web.register(form)
+
+        assert registered.is_error is True
+        assert registered.text_content == (
+            "This site's password field takes at most 4 characters, and the shortest password "
+            "this mechanism makes is 6: no registration can succeed on this site."
+        )
+        assert (web.rows, bool(web.run.filled_passwords("parent"))) == ([], False)
+        assert posts(web.proxy, "/join") == []
+
+
+@pytest.mark.parametrize(("page_path", "limit"), [("short", 14), ("tiny", 10), ("exact", 6)])
+async def test_asking_for_the_length_the_site_allows_registers(
+    tmp_path: Path, page_path: str, limit: int
+) -> None:
+    async with browsing(tmp_path) as web:
+        form = await web.form(f"{SHOP}/{page_path}")
+
+        registered = await web.register(form, length=limit)
+
+        assert not registered.is_error, registered.text_content
+        await web.call(action="click", ref=form["button"])
+        sent = [len(value) for value in posted(web.proxy, "/join")["password"]]
+        assert (sent, size(web.stored_password())) == ([limit], limit)
+
+
+async def test_a_snapshot_prints_what_a_field_states_it_takes_beside_its_ref(
+    tmp_path: Path,
+) -> None:
+    async with browsing(tmp_path) as web:
+        opened = await web.call(action="navigate", url=f"{SHOP}/strict")
+
+        # What a field takes is the page's own statement, and nothing else prints it: the
+        # length a password is made with is a choice only a model that reads this can make.
+        assert "(minlength 12, maxlength 20, pattern [A-Za-z0-9._-]{12,20}, required)" in (
+            opened.text_content
+        )
+        # A line of another role states nothing, whatever its field carries: the fields
+        # DlightRAG fills are textboxes, and the snapshot leaves the rest as the driver wrote.
+        searchbox = next(ln for ln in opened.text_content.splitlines() if 'searchbox "Find"' in ln)
+        assert "maxlength" not in searchbox and "pattern" not in searchbox
+        found = await web.call(action="find", query="minlength")
+        assert "maxlength 20" in found.text_content
+        # A field that states none reads as it always did.
+        plain = await web.call(action="navigate", url=f"{SHOP}/signup")
+        line = next(ln for ln in plain.text_content.splitlines() if 'textbox "Password"' in ln)
+        assert "maxlength" not in line and "pattern" not in line
+
+
+async def test_a_form_of_fifty_constrained_fields_stays_one_line_per_field(
+    tmp_path: Path,
+) -> None:
+    """The annotation is one ``evaluate`` per textbox line, so a large form is where its line
+    discipline and its cost show. Fifty fields stay fifty lines, each carrying its own field's
+    constraints, each elided on its own, inside the size one call keeps; and the read of the
+    fifty is measured against the read of a three-field form, so a per-field cost that made a
+    large form slow would be a number here rather than a suspicion.
+
+    Real Chromium, because ``element.minLength``, ``element.maxLength``, the pattern attribute
+    and the elision of a long line are all facts of the driver's own snapshot.
+    """
+    async with browsing(tmp_path) as web:
+        await web.call(action="navigate", url=f"{SHOP}/many")
+
+        started = time.perf_counter()
+        opened = await web.call(action="snapshot")
+        many_seconds = time.perf_counter() - started
+
+        lines = [line for line in opened.text_content.splitlines() if "- textbox " in line]
+        assert len(lines) == MANY_FIELDS, f"{len(lines)} textbox lines for {MANY_FIELDS} fields"
+        for number, line in enumerate(lines, start=1):
+            assert f"(minlength {number}, maxlength {number + 100}, pattern " in line, line
+        # The last field states a pattern longer than one line repeats: its line says what it
+        # cut, and the forty-nine before it are whole, so the elision is each line's own.
+        assert "… [200 of " in lines[-1], lines[-1]
+        assert not [line for line in lines[:-1] if "… [" in line]
+        size = len(opened.text_content.encode())
+        assert size < 16 * 1024, f"{size} bytes for {MANY_FIELDS} fields"
+
+        # The same read of the three-field sign-up form, for what the fifty fields add.
+        await web.call(action="navigate", url=f"{SHOP}/signup")
+        few = time.perf_counter()
+        await web.call(action="snapshot")
+        few_seconds = time.perf_counter() - few
+
+        assert many_seconds < few_seconds + 1.0, (
+            f"{many_seconds - few_seconds:.3f}s more to annotate {MANY_FIELDS - 3} more fields "
+            f"({many_seconds:.3f}s against {few_seconds:.3f}s)"
+        )
 
 
 # -- a registration that does not complete ------------------------------------------------------

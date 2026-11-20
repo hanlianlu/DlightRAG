@@ -11,25 +11,31 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import ValidationError
 
-from dlightrag.application.corpus_admin import (
-    CorpusAdmin,
-    CorpusAdminSettings,
+from dlightrag.application.corpus_admin.errors import RedirectDownloadTarget
+from dlightrag.application.corpus_admin.file_panel import (
     FailedFileRow,
     FailedFileRowPage,
     FilePanelCursor,
     FilePanelPageRequest,
     FilePanelRowPage,
-    IngestSpec,
+    ProcessedFileRow,
+    public_failure_diagnostic,
+)
+from dlightrag.application.corpus_admin.metadata_search import (
     MetadataMatchRowPage,
     MetadataSearchCursor,
     MetadataSearchPageRequest,
-    ProcessedFileRow,
-    RedirectDownloadTarget,
+)
+from dlightrag.application.corpus_admin.service import (
+    CorpusAdmin,
+    CorpusAdminSettings,
+    IngestSpec,
+)
+from dlightrag.application.corpus_admin.workspace_catalog import (
     WorkspaceCatalogCursor,
     WorkspaceCatalogPageRequest,
-    public_failure_diagnostic,
 )
-from dlightrag.engine.rag.retrieval import MetadataFilter
+from dlightrag.engine.rag.retrieval.models import MetadataFilter
 
 
 def _settings(
@@ -59,7 +65,6 @@ def _admin(
     runtime = AsyncMock()
     pool = SimpleNamespace(
         acquire=AsyncMock(return_value=runtime),
-        is_loaded=AsyncMock(return_value=False),
         evict=AsyncMock(),
     )
     maintenance = SimpleNamespace(
@@ -121,7 +126,7 @@ def _admin(
 
 
 async def test_a_reader_refuses_workspace_and_metadata_writes_with_the_remedy() -> None:
-    from dlightrag.application.corpus_admin import CorpusMutationUnavailableError
+    from dlightrag.application.corpus_admin.errors import CorpusMutationUnavailableError
 
     reader, pool, _maintenance, _, _, _ = _admin(read_only=True)
 
@@ -137,7 +142,7 @@ async def test_a_reader_refuses_workspace_and_metadata_writes_with_the_remedy() 
 
 
 async def test_create_workspace_refuses_an_existing_identity_instead_of_renaming_it() -> None:
-    from dlightrag.application.corpus_admin import WorkspaceExistsError
+    from dlightrag.application.corpus_admin.errors import WorkspaceExistsError
 
     admin, pool, _maintenance, _, _, _ = _admin()
     runtime = pool.acquire.return_value
@@ -562,7 +567,7 @@ async def test_workspace_catalog_full_reads_remain_full() -> None:
 
 
 async def test_workspace_catalog_cursor_codec_is_exposed() -> None:
-    from dlightrag.application.corpus_admin import WorkspaceCatalogCursorCodec
+    from dlightrag.application.corpus_admin.workspace_catalog import WorkspaceCatalogCursorCodec
 
     admin, _, _, _, _, _ = _admin()
 

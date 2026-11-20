@@ -19,12 +19,21 @@ _PRODUCT_CSS = (_FOUNDATIONS / "color.css").read_text(encoding="utf-8")
 _PRODUCT_GEOMETRY = (_FOUNDATIONS / "geometry.css").read_text(encoding="utf-8")
 _MODES = ("light", "dark")
 
-# What a chart can be drawn on: the page, a card, and a raised surface (stone 50, 200, 300; 950, 900,
-# 800). Charts sit on the first two; the third is what a tooltip or a menu would be.
-_SURFACES = {
-    "light": ("#fafaf9", "#e7e5e4", "#d6d3d1"),
-    "dark": ("#0c0a09", "#1c1917", "#292524"),
-}
+
+def _surfaces(mode: str) -> tuple[colour.Rgba, ...]:
+    """The three surfaces a chart can be drawn on — page, card, raised — read from the product.
+
+    The page and the card are what a chart sits on; the raised one is what a tooltip or a menu wears.
+    Read rather than copied: this was a hand-kept tuple of stone steps once, and it stayed behind when
+    the light theme moved its card to stone-100.
+    """
+    tokens = _product_tokens(mode)
+    return tuple(
+        colour.parse(tokens[name])
+        for name in ("--color-bg-base", "--color-bg-surface", "--color-bg-elevated")
+    )
+
+
 # Colours are one and the same family when their pairwise distance clears these floors (OKLab x 100).
 _NORMAL_NEIGHBOUR = 15
 _CVD_FLOOR = 8
@@ -59,9 +68,7 @@ def _report_tokens(mode: str) -> dict[str, str]:
     light = _declarations(_block(_REPORT_CSS, ":root {"))
     if mode == "light":
         return light
-    dark = _declarations(
-        _block(_block(_REPORT_CSS, "@media (prefers-color-scheme: dark) {"), ":root {")
-    )
+    dark = _declarations(_block(_REPORT_CSS, ":root[data-color-mode='dark'] {"))
     return {**light, **dark}
 
 
@@ -120,7 +127,7 @@ def test_the_report_names_the_roles_the_owner_asked_for() -> None:
 
 def test_the_stylesheet_has_no_colour_outside_its_token_blocks() -> None:
     body = re.sub(r"/\*.*?\*/", "", _REPORT_CSS, flags=re.DOTALL)
-    for opener in (":root {", "@media (prefers-color-scheme: dark) {"):
+    for opener in (":root {", ":root[data-color-mode='dark'] {"):
         block = _block(body, opener)
         body = body.replace(block, "", 1)
     literals = re.findall(r"#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(|\boklch\(|\blab\(", body)
@@ -164,7 +171,7 @@ def test_the_lead_colour_is_the_primary_accent_of_the_mode(mode: str) -> None:
 def test_every_categorical_mark_holds_three_to_one_on_the_surfaces_a_chart_sits_on(
     mode: str,
 ) -> None:
-    page, card, _raised = (colour.parse(s) for s in _SURFACES[mode])
+    page, card, _raised = _surfaces(mode)
 
     assert len(_PALETTE[mode]["categorical"]) == 8
     for mark in _colours(mode, "categorical"):
@@ -250,7 +257,7 @@ def test_the_diverging_ramp_has_a_neutral_middle_and_two_unlike_hues(mode: str) 
 @pytest.mark.parametrize("mode", _MODES)
 def test_the_highlight_palette_is_the_lead_colour_then_graded_stone(mode: str) -> None:
     marks = _colours(mode, "highlight")
-    card = colour.parse(_SURFACES[mode][1])
+    card = _surfaces(mode)[1]
 
     assert all(colour.oklch(c)[1] < 0.02 for c in marks[1:])
     greys = [colour.oklch(c)[0] for c in marks[1:4]]
@@ -263,7 +270,7 @@ def test_the_highlight_palette_is_the_lead_colour_then_graded_stone(mode: str) -
 @pytest.mark.parametrize("mode", _MODES)
 def test_chart_text_holds_its_contrast_on_every_surface(mode: str) -> None:
     roles = _PALETTE[mode]["roles"]
-    for surface in map(colour.parse, _SURFACES[mode]):
+    for surface in _surfaces(mode):
         assert colour.contrast(colour.parse(roles["textMuted"]), surface) >= 4.5
         assert colour.contrast(colour.parse(roles["text"]), surface) >= 7
 

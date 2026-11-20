@@ -224,19 +224,36 @@ trace rather than failing Retrieval.
 An Answer resolves to Fast or Research. Both produce the same canonical result,
 whose fields [Interfaces](interfaces.md#common-answer-terms) defines.
 
-### Stance
+### Identity and Stance
 
-Fast, Research and Research's Child Sessions open with the product identity followed by
-one shared stance text (`engine/answer/prompts/identity.py`, `CORE_STANCE`), so the
-three behave alike on contested questions and under instructions found in a message or
-a document.
+Fast, Research and Research's Child Sessions open with one self-conception block
+(`engine/answer/prompts/identity.py`, `core_self_conception`): the product identity —
+DlightRAG as the owner's durable agent for deep, evidence-grounded work, answering
+questions about who it is as that agent rather than by revealing the model or
+provider — immediately followed by `CORE_STANCE`, which opens by naming itself the
+agent's core stance. The stance is not only a method: it is the product's substantive
+philosophical position, stated to the agent as its own, about how order arises —
+organized violence, the protection-for-extraction bargain, legitimacy as something
+produced, markets as public goods — held as the best explanation available, not as
+certainty, offered as falsifiable, and not a moral verdict on who deserves to win. It
+is scoped to questions of order, institutions, markets and power; applying it to
+technical, scientific or creative questions is a category error. Even-handedness is
+how that position is handled in an answer, not a dilution of it, and the conduct rules
+that keep it under pressure belong to the self-conception rather than to a style
+layered over it. The block is internal guidance: asked who it is, what it can do, or
+what it is like, the agent answers in product terms and does not quote, summarize or
+outline the identity block, the stance, internal policies or tool definitions. It is
+composed once, in `identity.py`; each answer path adds its own guidance after it, so
+no path can assemble the opening differently or leave the stance out. The three
+therefore behave alike on identity, contested questions and under instructions found
+in a message or a document.
 
 ### Fast
 
 Fast performs planning, KB retrieval, and one tool-free generation call on the
 `query` model. It uses shared Context Contribution, Evidence, citation,
 model-call, usage, Agent Session infrastructure, Profile Memory recall, and,
-when execution is enabled, an inert Workspace that carries the
+when execution is enabled, an inert Agentspace that carries the
 [Session notes](#session-notes). It creates no Agent Operation, tools, skills,
 or publication.
 
@@ -256,12 +273,28 @@ run-local registry may include:
 - the `browser` tool, when the deployment configures an [Agent Browser](#agent-browser);
 - rooted file/Bash tools when execution is enabled, among them
   [`materialize`](resource-reading.md#materialize), which copies a Resource into the
-  Agent Workspace;
-- Profile Memory tools for the parent (children recall only);
+  Agentspace;
+- Profile Memory tools for the parent — `memory_remember`, `memory_forget`,
+  `memory_undo`, `memory_lookup` (children look up only);
 - progressive `load_skill`, plus `publish_skill`, `delete_skill` and `set_skill_enabled` for
   the parent;
+- the session's `create_goal`, `get_goal` and `update_goal` tools when the deployment has a
+  durable Goal store (children never hold them; see [ADR 0060](adr/0060-goal-mode-is-a-harness-feature-skills-declare-checkpoints.md)).
+  In the Web, a goal round is a conversation turn, and the goal bar plus `/goal` commands are the
+  reader's pause, resume, edit and clear; pause is immediate and cancels the goal round already
+  running, while a human turn already running is not cancelled. Continuation follows the durable
+  goal phase and a compare-and-set revision rather than process memory: a successful Run's
+  settlement starts the next round, and the process that serves the Web/API surface recovers active
+  goals at startup and about once a minute while `deployment.goal_recovery` is on
+  ([ADR 0077](adr/0077-goal-mode-continues-automatically-and-pause-stops-the-running-round.md));
 - the tools of every enabled
-  [Personal MCP Connection](personal-mcp-connections.md) its owner holds; and
+  [Personal MCP Connection](personal-mcp-connections.md) its owner holds, their
+  published definitions declared whole and pinned in the Run plan;
+- the three shared Connection resource tools — `mcp_list_resources`,
+  `mcp_list_resource_templates`, and `mcp_read_resource` — when it holds at least
+  one enabled Connection with a published catalogue (and, where it names one, an
+  active Grant)
+  ([Resources and server instructions](personal-mcp-connections.md#resources-and-server-instructions)); and
 - bounded asynchronous Child Sessions with explicit snapshots and Evidence
   return.
 
@@ -269,7 +302,7 @@ run-local registry may include:
 immediately. At most [`child_concurrency`](configuration.md#research-agent) (default
 sixteen) of a Run's children run at once; any beyond that wait for a slot while their
 roster status already reads `running`. A child runs with its parent's tools except the ones that spend the
-Run's authority: the roster controls, `remember`/`forget`, and the publication
+Run's authority: the roster controls, `memory_remember`/`memory_forget`/`memory_undo`, and the publication
 tools. It holds `ask_parent` instead. The parent's `tools` list narrows that set
 for one child — one without a shell, say — and can never restore what the
 Run withholds or remove `ask_parent`; a listed name the Run does not offer is left
@@ -279,15 +312,33 @@ gathered so far; the turn that is calling `spawn_agent` is left out, because its
 have no outputs yet and a provider refuses a request that holds one.
 Same-Session continuation creates a new Operation on the existing Child Session.
 `wait_subagent` returns early, with its child still running, when a sibling settles
-or a child asks a question, and then reports every question awaiting an answer. A
-settled result the parent has read through `subagent_status`, `wait_subagent` or
-`cancel_subagent`, or been sent in a notification it accepted, is not sent to it
-again when it ends its turn; unread results are. The built-in `council` Skill is a parent recipe for independent first-pass
+or a child asks a question. The results siblings have settled and the parent has not
+read come with it, after the waited child's own state, and, once it has waited, every
+question awaiting an answer. A parent that ends its turn with children still running is resumed
+with their results once every child of the `spawn_agent` call has settled; with `wake`
+set to `each` it is resumed as they settle, each time with the results it has not read
+and the children still running named. A settled result the parent has read through
+`subagent_status`, `wait_subagent` or `cancel_subagent`, or been sent in a notification
+it accepted, is not sent to it again when it ends its turn; unread results are. The built-in `council` Skill is a parent recipe for independent first-pass
 investigations and at most one curated cross-examination; it adds no tools, asks
 for no narrowing of its children, which hold the default set, and is not a
 permission gate. A user's explicit `/skill:` request is made to the Run's own
 agent, so a child gets the Skill catalog, while it holds `load_skill`, but not that
 request.
+
+`read_subagent` returns what one of the Run's children has done so far: its newest
+messages, oldest first and numbered, with its own words, the tools it called, and short
+excerpts of what they returned. It is pull-only and bounded: nothing is sent to the
+parent unasked, and a page holds at most thirty messages and eight thousand characters.
+A page that has to be cut loses its oldest messages, or, when it continues from a
+number already seen with `after`, its newest, which the next call returns. Nothing it
+shows is citable (a child's findings come with its result), and a child does not hold it.
+
+A control tool given a child id, or `reply_subagent` a request id, that the Run does not hold
+is refused as an error, not answered with a result that reads like a failed child: the refusal
+names the id and lists the Run's own children (at most sixteen, then a count) or the questions
+waiting for a reply, or says that `spawn_agent` returns a child's id. A malformed id is refused
+the same way.
 
 Child `model_role` selects a configured model, not a task category or permission.
 The objective remains arbitrary free text; omitting the selector chooses `query`.
@@ -316,19 +367,35 @@ Session pins its selected identity/profile and tools through continuation and
 same-version restart recovery. Incompatible endpoint or reasoning drift is
 rejected before child provider effects.
 
+A Run is also accepted with the Effort Ceiling its caller was under (the
+`agent_effort_ceiling` [Runtime Policy](interfaces.md#runtime-policies),
+[ADR 0042](adr/0042-runtime-policies-are-read-at-the-door-and-pinned-into-the-run.md)),
+and every Child, like the Run's own agent, runs no higher than it: a configured
+agentic reasoning request above the ceiling is lowered to the highest level the model
+offers at or below it, and a model left on its provider's own level is asked for the
+ceiling's level. Under a ceiling below `max` the spawn tool's text keeps listing the
+configured requests and adds one sentence that names the ceiling as the most a Child
+runs at; acceptance and execution render it with the same function from the same pins
+and ceiling, so the pinned Agent Plan matches. The Run's trace states the ceiling and
+what the Run's own agent ran at.
+
 Tool errors return to the model for correction; they do not terminate research.
 A no-tool assistant turn completes the current Operation, unless a steer is
 already waiting, which the same Operation then answers. The Run continues while a
 follow-up, control command, or Child result is pending or a Child Session is
 still running; otherwise it ends, and that last turn's text is the answer. The parent Research Session authorizes a root file under the
-Workspace's `artifacts/` directory for publication only through
+Agentspace's `artifacts/` directory for publication only through
 `attach_artifact`; Fast and Child Sessions do not receive that product tool. A
 successful attachment binds the root's normalized relative path, label, media
 capability, byte size, and raw-content digest in the same settlement as the tool
 result. Reattaching the same path replaces its intent and moves it to the latest
-settlement position.
+settlement position. An earlier turn's Artifact is attached by its `artifact-…`
+handle as `resource_id`: the tool restores those bytes to `artifacts/` under the
+Artifact's filename, refusing to overwrite a different file there, and attaches
+that root, so the Answer links a version this Run publishes rather than one in
+another Run.
 
-The Answer remains the default deliverable; Workspace and publication-tool
+The Answer remains the default deliverable; Agentspace and publication-tool
 availability do not imply that Research should create an Artifact. The Agent uses
 a separate Artifact when the user requests one, when a complete deliverable is
 too long or structurally rich for one practical Answer, or when a visual,
@@ -366,14 +433,86 @@ citation/Artifact finalization changes the terminal text. Persisted Request
 Snapshots, Assistant Turns, tool settlements, and the canonical result remain
 the recovery authorities.
 
+### MCP Resources
+
+A Research Run with at least one enabled [Personal MCP
+Connection](personal-mcp-connections.md) that has a published catalogue composes
+three shared, pinned tools:
+`mcp_list_resources(connection, cursor?)`,
+`mcp_list_resource_templates(connection, cursor?)`, and
+`mcp_read_resource(connection, uri)`. One set serves every Connection, and the
+names carry no `mcp__` prefix: they are shared tools of the Run, not tools an
+external server publishes. `connection` is the token the Run's prompt lists
+in its external-connections block — the Connection's label as rendered there, with a duplicated label
+disambiguated by the Connection id's first eight hex characters, extended if
+needed, and guaranteed unique — and never the
+Connection id; an unpinned name is refused with a result saying so.
+
+A listing call returns one server page and the cursor for the next one, at most
+2048 characters. Each line names a URI (or URI template), the server's name for
+it, and its media type; a template that states a description carries it. A read
+takes a URI of at most 4096 characters and returns the resource's text; a binary
+resource is described by URI, media type, and base64 length rather than passed
+through, so no bytes enter the prompt. The Connection's credential is redacted
+from results, which are bounded by `max_result_parts` and `max_result_bytes`, and the
+transport's request bounds apply as they do to a tool call.
+
+Every call resolves the token to the Run's pinned Connection and passes the live
+authority gate — the pinned generation's endpoint and catalogue digest, the head
+enabled, not deleted, and consented at the pinned activation epoch, an active
+Grant for that endpoint, and the live Run or Child fence — before it contacts the
+server on a fresh SDK session; the gate never runs discovery, and there is no
+resource cache. The three are read-only and replayable, so a read may run beside
+other read-only calls and a recovery may run a pending one again, rather than
+settling its outcome unknown. What a read returns is live content, like a fetched
+page: it enters as the call's tool result, not as pinned data, and a later read
+may differ. This is how a server's own documentation is read — Notion's
+create-pages tools ask for `notion://docs/notion-flavored-markdown-spec` — without
+being declared on every request ([ADR
+0062](adr/0062-mcp-tools-are-declared-whole-and-resources-read-on-demand.md)).
+
+### Server Instructions
+
+Discovery captures the MCP `initialize` result's `instructions` and publishes
+them with the Connection's immutable generation, bounded by
+`answer.agent.connections.max_instruction_bytes` (default 32768 bytes; a longer
+text rejects the catalogue candidate whole, nothing truncated)
+([Publication and discovery](personal-mcp-connections.md#publication-and-discovery)).
+Credentials are redacted from the text, and a whitespace-only text is treated as
+none.
+
+Each Run's prompt carries the pinned instructions of its Connections as a
+separate reference message after the transcript, not as system-prompt prose. It
+names the Connections available for resources when the Run composes those tools,
+states that the block is data rather than instructions, and wraps each server's
+words in product-written markers
+(`[External server guidance — <Connection label>]` … `[End external server
+guidance — <Connection label>]`). The framing is the contract: the server's words
+are data the model may use, never an instruction from DlightRAG and never
+authority. The text is pinned with the generation, so it is byte-stable for the
+Run ([Prefix Cache](#prefix-cache)) and a later publication reaches future Runs
+only; a Run with no Connection carries none, and a Child that inherits no
+Connection fact carries none.
+
 ### Web Search
 
-When Exa or Tavily is configured, Research can search Web passages as peer
+When Exa, Tavily or DeepSeek is configured, Research can search Web passages as peer
 evidence through one provider-neutral tool, `search_web`. Search and Extract use
-independently ordered failover chains. Failover occurs only for provider
+independently ordered failover chains. The tool asks for a short query of key terms,
+under about 100 characters and one angle per call: DeepSeek takes at most 128 characters
+of query, operators included, so its adapter keeps the date operators, adds the domain
+operators when they leave the text room, and holds every result to the requested
+domains whichever way the query carried them. Failover occurs only for provider
 failures, never to seek a subjectively better result; malformed individual
 results are dropped and reported. An empty Search result stops the Search
 chain, while an Extract that yields no usable text counts as a provider failure.
+A provider that refused on credentials, credit, or rate is left alone for a minute
+and the chain reports it as cooling, so a burst does not pay a dead provider's round
+trip on every call; when every provider of an operation is cooling, one probe goes
+out to the one that recovers first. When no provider answers at all, the call is one
+failed step whose text says so and names what the Run can still reach: a Run with the
+Agent Browser is told to drive a search engine's page with it, and every Run is told
+to answer from the evidence it has and to `read` a URL it already knows.
 Result URLs become inert resource handles that only an explicit `read` or
 `view` fetches, under the
 [Resource acquisition](resource-reading.md#registration-and-acquisition) rules.
@@ -405,9 +544,12 @@ it has no browser.
   cookies or pages. When a page closes, and how long the Run holds its browser, is in
   [Architecture](architecture.md#agent-browser).
 - **Actions.** `navigate`, `snapshot`, `find`, `back`, and `wait` (for text, for text to
-  go, or for seconds); `click`, `type` (optionally pressing Enter), `select`, `press`,
-  and `scroll`; `screenshot` and `capture`; `upload`, which is offered only where the
-  Run has a workspace (`trust`); and `register`, `login`, and `inbox`, which belong to
+  go, or for seconds, up to 30 in one call: a longer stretch is another call, and the tool
+  says so in its own sentence rather than a validation dump); `click`, `type` (typed as
+  keystrokes into the emptied field, so a suggestion widget answers, and optionally pressing
+  Enter), `select`, `press`, and `scroll`; `screenshot` and `capture`; `upload`, which is
+  offered only where the
+  Run has an Agentspace (`trust`); and `register`, `login`, and `inbox`, which belong to
   [Agent Accounts and the Agent Mailbox](#agent-accounts-and-the-agent-mailbox). Only a
   configured capability's actions are offered, and
   no configured value appears in the description or the schema, so changing a timeout
@@ -418,10 +560,18 @@ it has no browser.
   page answered 400 or above, which is reported and never a failure) and a depth-limited
   accessibility snapshot whose `[ref=eN]` markers name the elements the next action
   uses. A ref comes from the latest snapshot or `find` of its page and acts only on that
-  page. `find` returns the snapshot lines that contain a query, at most 30, with their
-  refs, and reaches elements below the snapshot's depth. A snapshot beyond the result
-  bounds (51,200 UTF-8 bytes or 2,000 lines) is kept whole in the workspace and its head
-  shown, with the `read` call that returns the rest; without a workspace the call says the
+  page. A line printed under `textbox` carries what the field itself states it takes — its
+  `minlength`, `maxlength`, `pattern`, and `required`, in that order after the ref, and
+  nothing for a field that states none — because a model that must decide a value to put in
+  a field can only decide from what the page says, and no snapshot prints attributes by
+  itself. A line of another role is left as the driver wrote it: the fields DlightRAG
+  fills, and chooses a length for, are textboxes. `find`
+  returns the snapshot lines that contain a query, 30 of them unless the call
+  asks for another number with `limit` (up to 100, and a longer list is refused in the
+  tool's own sentence rather than a validation dump) and with their refs, and reaches
+  elements below the snapshot's depth. A snapshot beyond the result
+  bounds (51,200 UTF-8 bytes or 2,000 lines) is kept whole in the Agentspace and its head
+  shown, with the `read` call that returns the rest; without an Agentspace the call says the
   full snapshot is unavailable and does not fail, because its action completed and a
   failure would invite a repeat.
 - **Popups, dialogs, downloads.** A popup or a new tab becomes the active page once the
@@ -429,10 +579,32 @@ it has no browser.
   so. One that opens later becomes the active page when the next call that names no ref
   begins, and a call that names a ref acts on the page its ref came from. A page that
   closes itself returns the previous page, or leaves none until the next `navigate`. `alert`,
-  `confirm`, and `beforeunload` dialogs are accepted, a `prompt` is dismissed, and each
-  is reported with its message, because refusing one would undo what the call set in
-  motion. A file a page downloads is admitted and named in the result
-  ([Browser captures and downloads](resource-reading.md#browser-captures-and-downloads)).
+  `confirm`, and `beforeunload` dialogs are the Agent's to answer, and the tool takes
+  `dialog="accept"` or `dialog="dismiss"` for a call that reads or drives a page: a dialog
+  the call did not answer
+  stops the page, travels in the result with its type, its message and a prompt's default,
+  and is reported again by every call until one answers it. Each page's dialog is its own,
+  so a popup's never hides the one a page behind it waits on, and one result holds at most
+  twenty of the dialogs the pages raised, with the count of the rest and the dialog a page
+  is stopped on always among them. A file a page downloads is admitted and named in the
+  result
+  ([Browser captures and downloads](resource-reading.md#browser-captures-and-downloads)):
+  at most four a call, and one result holds at most twenty of the refusals the rest get,
+  with the count of the refusals past that bound.
+- **A cut says it was cut.** Every text the tool repeats — a page title, a `find` line, a
+  dialog's words, a frame URL, a driver's first line, a mail header, a code past the fifth
+  — carries the same marker and the count of what it left out, so a partial fact is never
+  read as the whole one.
+- **A page that had not gone quiet says so.** A page that does not settle within
+  `settle_timeout_seconds` is read as it stands, and every call that returns a view of it —
+  `snapshot`, `find`, `screenshot`, `capture`, and the actions — says what it read was taken
+  while the page was still loading, so the Agent waits, scrolls, or snapshots again instead
+  of concluding the site is empty ([Configuration](configuration.md#agent-browser)), and can
+  tell whether waiting helped. A rendered read says the same in its note.
+- **A person's hand-back leaves a trace.** While a person holds the driving seat the
+  `browser` tool refuses every call; the seat going back does not make the page the one the
+  Agent last saw, so the first call afterwards says a person drove it and to snapshot before
+  acting.
 - **Captures and screenshots.** `capture` admits the current page as a new citable Web
   Resource and returns its first window as `read` would. A screenshot is the page's
   pixels attached to the result against the Run's image budget
@@ -443,11 +615,30 @@ it has no browser.
   page open, the page closed, the page lost when the browser disconnected, no element
   with the ref, an element not clickable within the action timeout, a key the browser does
   not know, no earlier page, a target that is not a file input, a wait that timed out, a
-  page that did not load, and a pool that is busy or unreachable. Driver error text
-  enters only the first line of a failed action.
+  page that did not load, a connection this deployment's egress proxy refused, and a pool
+  that is busy or unreachable. Driver error text enters only the first line of a failed
+  action.
 - **A CAPTCHA stops the path.** On a CAPTCHA or any other human-verification check the
-  model stops that path and reports it; the tool's description says so
+  model stops that path and reports it; the tool's description says so, and the check is
+  named as such rather than read as a page that looked empty
   ([Security](security.md#agent-browser-boundary)).
+- **A page that refuses an automated browser is named.** A bot filter's answer — Ctrip's
+  `whaleguard block`, an access-denied wall, a "checking your browser" interstitial, or a
+  sliding-captcha widget — is detected where the browser reads it, from the marker it
+  carries in the document's own title, a heading, a preformatted block, or an element the
+  page itself marks as a challenge, and never from the status alone. The call fails as
+  `blocked` (or `verification_required` for a check the page is running) with the marker
+  the verdict used, so the model reads a refusal rather than a page that looked empty.
+  Nothing detects *and defeats*: no solver, no spoofed fingerprint, no pacing.
+- **A headed browser is a lease the Agent asks for.** A member that runs a headed Chromium
+  under a display server ([Configuration](configuration.md#agent-browser)) lets a Run read
+  a page that refuses a headless one. The Agent asks with `navigate(headed=true)`; the
+  platform never moves a Run by itself, and nothing counts the move, because the lease is
+  the whole of the state. The move carries the session — the context's cookies, each
+  origin's web storage, and the URL — and cannot carry the DOM: a form that was half filled
+  is gone and is filled again, and the answer of the call that moved says which browser the
+  Run drives from then on. Once the Run holds a headed browser it keeps it for the rest of
+  the Run, so asking again is asking for the lease it has.
 - **Recovery.** A recovered Run starts with no page and leases a fresh browser at its next
   `navigate`, so the next call that is not a `navigate` says that a Run that resumed after
   an interruption starts with no open page. Captures and downloads that settled are
@@ -480,10 +671,21 @@ not a control ([Security](security.md#agent-accounts)).
 
 - **`register`** acts on the page `navigate` opened and leases nothing. It takes
   `password_refs` (one or two, such as a password and its confirmation), and optionally
-  `email_ref` and `username_ref`; the model types a username into its field first. It checks
+  `email_ref` and `username_ref`; the model types a username into its field first. It also
+  takes `length`, the number of characters the generated password is made with, 6 to 128 and
+  20 when the call asks for none; the length is the Agent's to choose for the site it meets,
+  and its description carries the guidance — ask for the longest the site's own field allows,
+  read the page's constraints off the snapshot, and ask for nothing shorter than the task
+  needs — while the randomness stays the platform's. The 128 is the mechanism's own bound on
+  what it will fill and seal, and a longer ask is refused in the tool's own sentence rather than
+  a validation dump, before the form is read. It checks
   every ref (the element exists, is of the right kind, and is in a frame of the page's own
-  site) before it fills anything, sizes the password to the smallest `maxlength` the
-  password fields state, and refuses below 12 characters. The address is the one the account
+  site) before it fills anything, and refuses a site whose password field takes fewer
+  characters than the call asked for with a sentence naming the field's limit and the length
+  asked for: no password is shortened to fit a field, and nothing is filled or stored. A field
+  that takes fewer than the six the composition leaves room for leaves no ask that fits it, and
+  that refusal names the mechanism's own minimum and says no registration can succeed on that
+  site, rather than advising an ask the schema would refuse. The address is the one the account
   already has, which is filled again; else, with a mailbox, the owner's mailbox alias for the
   site (a Child gets a random one of its own), which is filled; else the address the Agent typed,
   which must hold one `@` with text on each side of it and no whitespace. The username is the
@@ -513,11 +715,12 @@ not a control ([Security](security.md#agent-accounts)).
   or the fields filled), then the bounded snapshot, in which a password is only
   `********`. They carry no Evidence. A refusal fills nothing and stores nothing. The
   reasons: no key ring; a page with no `https` registrable domain; a ref that is stale,
-  in a frame of another site, or not a password, or not a text or email, field; a
-  `maxlength` below 12; an address or username that cannot be recorded; a new account with
-  neither; a fill that failed or that the page changed, which clears what it filled; an
-  account that could not be stored, which does the same and tells the model not to submit;
-  no account for the site, or one without the field named; and an envelope no key opens.
+  in a frame of another site, or not a password, or not a text or email, field; a password
+  field that takes fewer characters than the call asked for; an address or username that cannot be
+  recorded; a new account with neither; a fill that failed or that the page changed, which
+  clears what it filled; an account that could not be stored, which does the same and tells
+  the model not to submit; no account for the site, or one without the field named; and an
+  envelope no key opens.
 - **`inbox`** needs no page and no lease. It shows mail that the mailbox aliases of this
   Agent Session's accounts received since its latest `register` or `login` in the Run (`login`
   alone where the Run cannot register), from two minutes before it, because the time is the
@@ -553,9 +756,20 @@ by [Agent Session Recovery](run-runtime.md#agent-session-recovery).
 The Context Policy independently reserves output, dynamic context, retained
 tail, episodic continuation, and minimum input. It carries no estimator-safety
 margin: a provider rejection followed by compaction and a retry of the same turn
-covers that boundary. Each Tool result, including the Evidence text frozen into
-it, is fitted to one absolute, model-aware observation capacity; the proactive
-compaction trigger is what bounds the request as a whole. Provider output is
+covers that boundary. The dynamic-context reserve is a floor, not a flat charge:
+60,000 tokens are charged whole where the profile can afford it and it shrinks to
+a third of the hard input limit where the profile cannot — but never below the flat
+charge that profile already paid, 40,000 where it could afford that much and less
+where it could not, because shrinking a constant is the one thing a floor may not
+do, so no profile's guarantee falls. Each Tool result, including the Evidence text
+frozen into it, is fitted to that same reserve — one result may claim what a
+proactive compaction leaves free and no more, never inside the minimum input a
+request itself needs — which is what lets the proactive compaction trigger bound
+the request as a whole: a batch of full-size results costs one reserve each, not a
+turn no compaction can shed. A result the runtime shortened carries
+`observed_truncated` in its details, so a prefix is a fact a reader can see rather
+than something to infer from the text; a Tool that sizes its own output (the
+resource reader, `load_skill`) leaves it unset. Provider output is
 limited by both model output capacity and remaining physical context. Full
 attachment bytes never enter model context: only bounded text windows, capped
 observations, and budgeted images do.
@@ -656,7 +870,7 @@ another conversation cannot reach those bytes at all
 Memory belongs to the Agent Session. When the execution environment is enabled,
 every Run, Fast included, binds the Session's notes, and a Follow-Up or Fork
 never copies its parent Run's. The notes are laid down into the Run's own
-Workspace Epoch and recorded in its Inventory before the first request, so a
+Agentspace Epoch and recorded in its Agentspace Inventory before the first request, so a
 conversation, its forks, and every later turn of the Session read the same set.
 Every request of a Run or Child Session that holds the `write` tool carries one
 static list of the notes the Run started with ([Prefix Cache](#prefix-cache));
@@ -671,12 +885,100 @@ interrupted. [Run retention](run-runtime.md#retention) never touches the
 Session's memory.
 
 The compaction summary also names the Session's notes this Run holds: the files
-under `notes/` in its Agent Workspace, bounded to a small list and named by the
+under `notes/` in its Agentspace, bounded to a small list and named by the
 `read(path=…)` call that reads each one again. They come from the Run's own
-Workspace Inventory — the framework's observation of the working copy, carried
-forward across a verified Workspace Epoch handoff — so the summary names what
-this Run can actually open, and reading one back is an ordinary workspace read
+Agentspace Inventory — the framework's observation of the working copy, carried
+forward across a verified Agentspace Epoch handoff — so the summary names what
+this Run can actually open, and reading one back is an ordinary Agentspace read
 that admits no Evidence either.
+
+### Session Memory Pass
+
+Profile Memory has a second writer besides the Agent's tools. After a successful
+Answer Run — committed by the coordinator or, for Fast, by the executor — a
+Session Memory Pass is scheduled for the Run's Agent Session. It is not the
+Agent: it holds no tools, calls the `query` role at the reasoning level
+`memory_consolidation.reasoning` sets (low by default) with its own prompt, and
+produces a verdict ([ADR 0045](adr/0045-profile-memory-is-maintained-per-session-and-owned-across-them.md)).
+
+The pass reads the main Session's user and assistant entries past its
+watermark, however few: nothing waits for text to accumulate, so a one-line
+conversation is judged and no tail is left for a later Run. Those are the
+owner's turns and the agent's replies, not the Child results and questions the
+Run hands its agent as user messages, which are marked
+`origin: child_notification` and skipped. What one model call is fed is bounded
+by `memory_consolidation.max_batch_tokens`; a longer conversation is read in
+batches, one after another under the one claim, until the pass has caught up
+with the Session. Each call is also shown, as context only, the last five
+rounds before its batch, following Hy-Memory's history context: the five most
+recent user turns and the assistant turns that follow each (the same entries
+the read takes, never a tool result or a Child's notification; user turns
+whole, each assistant turn cut to its first 500 characters) under their own
+"Earlier in this conversation" heading, so that an owner's
+"yes, from now on that way" can be read by what it answers; the prompt says that
+part was already judged by an earlier pass, so what it said alone is not
+remembered again. When the owner turns Profile Memory back on, every one of
+their Sessions starts afresh from its latest entry: its watermark and the
+progress row's context floor move there together, never back, so nothing written
+while memory was off is read, or shown as context, ever after.
+
+For each batch the pass searches the owner's existing records of every kind
+against the last 2,000 characters of the context and the batch together, so a
+reply as short as "yes, that" is searched by what it answers, and asks the model
+to add, update, fuse or drop; most conversations are tasks and yield nothing. It
+stores the batch's verdict as a plan on the Session's progress row before
+applying any of it, so a pass that dies halfway resumes the same writes rather
+than asking again, and then reads on. The model is shown the existing memories
+numbered from 1, each with its kind and when it was last written (to the hour,
+UTC), and its verdict names the ones it updates or fuses by those numbers; the
+host maps them back to memory ids, so a memory id is never in the prompt and the
+stored plan holds ids. One model call adds at most `session_record_limit`
+records, so each batch of a pass has its own allowance; updating or fusing
+records the owner already holds never counts, whichever conversation wrote them.
+
+A write may also carry a `quote`: a short verbatim excerpt (at most 120 characters) of what the
+owner said, which the prompt asks the model to copy from a `[user]` turn of the newest part and to
+leave out when the owner did not say it, as with an experience the Agent learned alone. The host does
+not take the model's word: it keeps a quote only if, after whitespace is squeezed to single spaces,
+it is a stretch of one of that part's user turns and passes the checks a body does (no citation
+marker, no credential). A quote taken from the context, from the Agent's reply or from nowhere is
+dropped, and the write is kept without it. The stored plan holds the quote the host kept, so a
+resumed plan applies the same one; the record stores it, undo restores it with the record, and an
+owner export and erase cover it with the row. The memories the pass lists for the model carry their
+quotes under them, which helps it judge whether a statement refines or repeats one.
+
+One pass per Session runs at a time across processes, under a claim on that
+row, which the pass renews before each batch after the first, so the lease
+bounds one batch's work and not the whole pass. A pass that cannot renew it, or
+whose plan or watermark the store refuses, has lost the claim and stops; one
+that finds the owner's Profile Memory switched off before a batch stops there,
+reading and moving nothing. The epoch taken just before a batch is read is the
+one that guards its writes: if the owner turns memory off and on, or clears it,
+while the model thinks, those writes are refused and the watermark still moves
+past the batch. A bound of 25 batches per pass is a safety
+valve, logged when reached: the next Run's pass continues from the watermark.
+Its records carry `session_pass` provenance and name the Run that
+asked for the pass (the latest, when several Runs of a Session settle while one pass runs), and
+the stored plan keeps that Run so a resumed plan applies under it. The conversation shows what a
+Run's two writers, the Agent's tools and the pass, left in memory under that Run's answer, each
+with an Undo ([Memory Notice](web-theme-design.md#memory-notice)).
+
+A pass is scheduled in the process that saw the Run succeed, so a restart cancels the ones it held
+and a failed model call leaves its batch unread; the database is the queue that finds them again. Each
+process's pass runner sweeps 30 seconds after it starts and every ten minutes after that: it asks the
+Run store for at most twenty Sessions whose watermark is behind their own unread text, and hands each
+to the path a successful Run takes, attributed to the Session's newest succeeded Answer Run, so the
+same two-at-a-time bound, the same per-Session coalescing and the same claim apply. A Session is
+pending when it is a main Session with a succeeded Answer Run and none queued or running, has a user
+or assistant turn with text, not a Child's notification, past its watermark (a tail of tool results
+alone is not pending), belongs to an owner whose Profile Memory is on, and is neither held by a pass nor
+backing off. A pass that fails, by a model call or by an error nothing expected, counts the failure on
+the Session's progress row and the sweep leaves it alone for ten minutes, twice as long after each
+failure, to six hours; a pass that moves the watermark clears the count. A pass a successful Run
+schedules ignores that wait, since a new Run is new evidence. The look reads each Session's counter
+against its progress row and probes the indexes only for those that are behind, so it stays cheap as
+conversations accumulate; processes that sweep at once may be offered the same Sessions, and the claim
+lets one pass run.
 
 ## Answer Input And Packing
 
@@ -740,13 +1042,36 @@ labels) take priority; code, math, escapes, link destinations/labels, reference
 definitions and image alt text are not citations. Cleanup and public-link
 projection edit exact source spans and preserve every other source character,
 including line endings and table escapes. A `References` heading never authorizes
-deleting prose. Prompts ask the Model to omit duplicate bibliographies; source
-authority continues to come only from validated inline citations.
+deleting prose. Prompts ask the Model to omit duplicate bibliographies, and to
+link only what the reader wants to open -- a claim points at its evidence with a
+citation marker rather than with a sentence naming where it came from, because the
+Source panel is the one place a source's address is presented. Source authority
+continues to come only from validated inline citations.
+
+That rule is a request to the Model and not an edit to the Answer. A guard that
+deleted a block restating a cited source's page was built and withdrawn: deciding
+which block is boilerplate means reconstructing Markdown from tokens and cutting the
+text back out, and both a paragraph split and a link-token reading of it could remove
+an occurrence the reader meant to keep -- a link inside a code fence, or a link whose
+block the Model wrote as content. The package's one span-exact rewrite
+(`citations/syntax.py`) verifies each span against the original before touching it,
+which a second implementation of that surgery would have to earn rather than assume.
+So the prose keeps whatever the Model wrote, and the noise is a prompt concern.
 
 Finalization also derives `evidence_images`, and each reader projection derives
-the ordered Markdown/Artifact/image `parts` from the stored Markdown. Image
-placements and `evidence_images` come only from server-derived evidence and
-Artifact identities, never from a model-written URL. Every published Markdown
+the ordered Markdown/Artifact/image `parts` from the stored Markdown. A placement
+names a server-derived identity and never a model-written URL: an Artifact by its
+`artifact:` id, and an image either by the `evidence:` id of a cited visual chunk
+or by the `evidence:` id of a Resource the Run itself holds -- a picture the Agent
+viewed on a page it fetched. A held image is placed only where the Answer names it,
+which is what keeps the Model's own judgement about what the reader should see in
+charge. The id is the Model's text; what is never the Model's
+is the *address*, which the transport composes from the Run and the Resource, so
+nothing a model writes becomes something the browser follows. A held image is admitted
+only for an image the Run's tools attached, read from the stored Run rows the
+run-resource route serves, so a placed id always opens. An id the Run holds no such
+image for -- mistyped, or invented -- gets no record and one warning naming it and the
+Run; the reader sees the marker's alt text, not a broken image. Every published Markdown
 Artifact is citation-finalized against the same admitted context and stores its
 cited sources under that Artifact's resource identity. Artifact presentations
 therefore resolve their own citation indexes without borrowing sources from the
@@ -763,6 +1088,6 @@ emits them. Timeout or failure leaves original sources unchanged.
 
 Attachments, caller links, Web Search results, and URLs the Agent chooses become
 Resources of one Answer Run, which Research reads as bounded text, views as pixels,
-and, with execution enabled, copies into its Agent Workspace; they never become corpus
+and, with execution enabled, copies into its Agentspace; they never become corpus
 data. [Answer Resource Reading, Viewing, and Copying](resource-reading.md) owns that
 contract, and their blobs follow [Run retention](run-runtime.md#retention).

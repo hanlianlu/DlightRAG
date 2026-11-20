@@ -18,7 +18,6 @@ from dlightrag.adapters.postgres.corpus.corpus_bm25 import (
     rebuild_postgres_bm25,
     required_postgres_extensions,
 )
-from dlightrag.engine.rag.retrieval import MetadataFilter, MetadataScope
 from dlightrag.engine.rag.retrieval.bm25 import (
     BM25_PROFILE_FALLBACK,
     BM25Profile,
@@ -27,6 +26,10 @@ from dlightrag.engine.rag.retrieval.bm25 import (
 )
 from dlightrag.engine.rag.retrieval.filtering import metadata_filter_scope
 from dlightrag.engine.rag.retrieval.language import BM25LanguageClassifier
+from dlightrag.engine.rag.retrieval.models import (
+    MetadataFilter,
+    MetadataScope,
+)
 
 
 def _scope(
@@ -39,18 +42,6 @@ def _scope(
         candidate_count=candidate_count,
         candidate_count_exact=candidate_count_exact,
     )
-
-
-def _metadata_conditions(workspace: str = "default") -> tuple[str, ...]:
-    from dlightrag.adapters.postgres.corpus.pg_metadata_index import metadata_match_conditions
-
-    conditions, _params = metadata_match_conditions(
-        workspace,
-        MetadataFilter(filename="x.pdf"),
-        filename_mode="exact",
-        start_index=3,
-    )
-    return tuple(conditions)
 
 
 def _profiled_bm25(

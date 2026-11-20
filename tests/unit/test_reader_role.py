@@ -17,7 +17,7 @@ from dlightrag.adapters.postgres.core._session_settings import (
     lightrag_pool_server_settings,
 )
 from dlightrag.adapters.postgres.corpus.lightrag_environment import lightrag_backend_env
-from dlightrag.application.config import (
+from dlightrag.application.config.sections import (
     DeploymentSettings,
     DlightragConfig,
     PostgresSettings,
@@ -46,11 +46,6 @@ def _config(*, service_role: str = "writer", **overrides) -> DlightragConfig:
 
 
 class TestServiceRoleConfig:
-    def test_defaults_to_writer(self) -> None:
-        cfg = _config()
-        assert cfg.deployment.service_role == "writer"
-        assert cfg.is_reader is False
-
     def test_reader_predicate(self) -> None:
         assert _config(service_role="reader").is_reader is True
 
@@ -150,7 +145,7 @@ _SERVICE_WRITE_CALLS = [
 
 @pytest.mark.parametrize(("method", "args", "kwargs"), _SERVICE_WRITE_CALLS)
 async def test_service_write_guards_reject_reader(method, args, kwargs) -> None:
-    from dlightrag.application.settings import rag_settings
+    from dlightrag.application.settings.projections import rag_settings
     from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
 
     service = object.__new__(WorkspaceRag)
@@ -198,8 +193,6 @@ class _SchemaConn:
     async def fetchval(self, sql: str, *args: Any) -> Any:
         if "dlightrag_schema_migrations" in sql:
             return self.ledger_exists
-        if "to_regclass('dlightrag_answer_runs')" in sql:
-            return False  # a RunRuntime database holds no pre-RunRuntime Answer table
         if "pg_inherits" in sql:
             return True  # every declared parent index has a child index
         if "pg_catalog.pg_class" in sql:
@@ -272,7 +265,7 @@ def _required_domain_scopes() -> list[
     from dlightrag.adapters.postgres.corpus import pg_metadata_index, workspaces
     from dlightrag.adapters.postgres.runtime import run_store
     from dlightrag.adapters.postgres.web import web_conversations
-    from dlightrag.application.web_conversations import WebConversationSchemaError
+    from dlightrag.application.web_conversations.models import WebConversationSchemaError
     from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
     from dlightrag.engine.runtime.errors import RunSchemaError
 

@@ -1,6 +1,6 @@
 ---
 name: council
-description: Use when the user asks for a judgment, recommendation, or go/no-go call on something with real stakes (pricing, an acquisition, compliance or legal exposure, contract terms, a strategy choice) where the knowledge base may hold evidence on both sides; when sources disagree and must be reconciled; or when the user asks for an independent review, second opinion, or red-team critique. Skip lookups, summaries, and simple factual questions. User veto, cancellation, and scope constraints win.
+description: Use when the user wants a judgment or go/no-go call on something with real stakes — pricing, a deal, compliance, contract terms, strategy — where the evidence is two-sided or sources disagree, or wants an independent review, second opinion or red-team critique. Skip lookups, summaries and simple factual questions.
 ---
 
 # Council
@@ -13,3 +13,7 @@ A recipe, not a runtime: it grants no tools or permissions. You run it with ordi
 4. Write the answer from what the children found: your recommendation, which claims you accepted or rejected and why, and the dissent that remains. Cancel children you no longer need.
 
 The user's veto, cancellation or narrowed scope ends the recipe at once. Children cannot spawn further children.
+
+| Path | Read it when |
+|---|---|
+| `references/routing-cases.md` | Only before changing the `description` above — it is the test set for that line, and a change to it ships only with a re-run |

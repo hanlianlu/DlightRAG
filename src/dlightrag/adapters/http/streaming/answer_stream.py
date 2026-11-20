@@ -1,33 +1,48 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Durable Answer run event streaming shared by every HTTP transport.
+"""Event streaming shared by the Server-Sent Events transports: cursors, keepalive, detachment.
 
-Resuming from a cursor, keeping a quiet run's connection alive, and detaching a
-subscriber are properties of the durable event log, not of any one transport, so
-they live here once. A transport contributes only how it renders one event: REST
-serves the canonical result, the browser serves rendered presentation.
+Resuming from a cursor, keeping a quiet subscription's connection alive, and detaching a
+subscriber are properties of the SSE event iterator, not of any one route that serves one, so
+they live here once. A route contributes only how it renders an event: REST serves the
+canonical result and the browser serves rendered presentation, and both then hand an
+``EventRenderer`` to ``follow_frames``.
+
+The live browser's frames socket is deliberately not one of them. It is a different protocol
+— a WebSocket whose binary opcode is a JPEG and whose text opcode is the state beside it,
+with one keepalive of its own — so what it shares with this module is the *shape* of the
+race (a pending read against a keepalive clock, so a keepalive cannot lose the event it
+raced), not this code. The two keepalive windows are different for that reason:
+``SSE_KEEPALIVE_SECONDS`` here is 10 s because a comment frame on a proxied response is
+cheap and frequent, while the socket's 30 s heartbeat (``HEARTBEAT_SECONDS`` in
+``browser/routes/live_browser.py``) answers Cloudflare's ~100 s idle close with a margin
+that survives one lost beat.
 
 Nothing here writes durable state. Closing the returned generator detaches one
-subscriber and never cancels the run.
+subscriber and never cancels the run it was watching.
 """
 
 import asyncio
 import contextlib
+import inspect
 import json
-from collections.abc import AsyncGenerator, AsyncIterator, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from typing import Any
 
 from fastapi import Request
 
 from dlightrag.adapters.http.errors import invalid_request
-from dlightrag.application.runs import RunEvent
 from dlightrag.engine.answer.client_contracts import model_dump_json_safe
 
-#: A queued or quiet run keeps its connection alive with comments, not events.
+#: A queued or quiet SSE subscription keeps its connection alive with comments, not events.
 SSE_KEEPALIVE_SECONDS = 10.0
 KEEPALIVE_FRAME = ": keepalive\n\n"
 
-#: How one transport turns a durable event into the frame its clients read.
-type EventRenderer = Callable[[RunEvent], str]
+#: How one SSE route turns an event into the frame its clients read. Most renderers are a pure
+#: function of the event, so their frames are returned; the browser's ``done`` frame also derives a
+#: Run's Artifact attestation from that Run's own durable records, so it returns an awaitable
+#: instead. Both are the same contract: a route that needs to read something before it can render
+#: says so by being ``async``, and every other route keeps the shape its work actually has.
+type EventRenderer[T] = Callable[[T], str | Awaitable[str]]
 
 
 def resume_cursor(request: Request) -> int:
@@ -61,16 +76,17 @@ def sse_frame(*, sequence: int, event_type: str, payload: Any) -> str:
     return f"id: {sequence}\nevent: {event_type}\ndata: {data}\n\n"
 
 
-async def follow_run_frames(
-    events: AsyncIterator[RunEvent], render: EventRenderer
+async def follow_frames[T](
+    events: AsyncIterator[T], render: EventRenderer[T]
 ) -> AsyncGenerator[str]:
-    """Replay and follow one run's durable events as this transport's frames.
+    """Follow one SSE subscription as text frames, keeping it alive while it is quiet.
 
-    The pending read survives every keepalive, so a comment written while the run
-    is quiet neither restarts nor loses the event that arrives next.
+    Every frame is a string, because that is the whole of what this transport can send, and
+    the pending read survives every keepalive: a comment written while nothing is happening
+    neither restarts the read nor loses the event that arrives next.
     """
     iterator = events.__aiter__()
-    pending: asyncio.Task[RunEvent] | None = None
+    pending: asyncio.Task[T] | None = None
     try:
         while True:
             if pending is None:
@@ -84,7 +100,8 @@ async def follow_run_frames(
                 pending = None
                 return
             pending = None
-            yield render(event)
+            frame = render(event)
+            yield (await frame) if inspect.isawaitable(frame) else frame
     finally:
         if pending is not None:
             pending.cancel()
@@ -99,7 +116,7 @@ __all__ = [
     "KEEPALIVE_FRAME",
     "SSE_KEEPALIVE_SECONDS",
     "EventRenderer",
-    "follow_run_frames",
+    "follow_frames",
     "resume_cursor",
     "sse_frame",
 ]

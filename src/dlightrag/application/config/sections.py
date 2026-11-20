@@ -17,9 +17,8 @@ import json
 import math
 import os
 import warnings
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from pathlib import Path
-from types import MappingProxyType
 from typing import Annotated, Any, Literal, Self
 from urllib.parse import urlsplit
 
@@ -27,14 +26,17 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    ValidationInfo,
     field_serializer,
     field_validator,
     model_validator,
 )
 from pydantic_settings import BaseSettings, DotEnvSettingsSource, NoDecode, SettingsConfigDict
 
+from dlightrag.application.access.control import ACTION_PRESETS, unknown_action_patterns
 from dlightrag.application.config.yaml_source import Yaml12ConfigSettingsSource
 from dlightrag.application.connections.policy import ConnectionPolicy
+from dlightrag.engine.ai.reasoning import ReasoningLevel
 from dlightrag.engine.ai.settings import (
     FrozenSettings,
     ModelsSettings,
@@ -60,37 +62,16 @@ _LOCAL_MCP_ALLOWED_ORIGINS = [
     "http://[::1]:*",
 ]
 _LOCAL_API_HOSTS = {"127.0.0.1", "localhost", "::1"}
-#: The HTTP client's names share the reserved namespace without being settings;
-#: the process environment and a .env shared with clients may carry them. Test
-#: suites and Compose-only inputs never join them: they use their own names.
+#: The HTTP client's names, and the operator's trace-export key that the host tool
+#: `scripts/export_traces.py` reads from the same .env (ADR 0044), share the reserved
+#: namespace without being settings; the process environment and a .env shared with them may
+#: carry them. Test suites and Compose-only inputs never join them: they use their own names.
 _AUXILIARY_ENV_NAMES = frozenset(
     {
         "DLIGHTRAG_API_TOKEN",
         "DLIGHTRAG_API_URL",
         "DLIGHTRAG_CLIENT_TIMEOUT",
-    }
-)
-#: Compose-only inputs that left the reserved namespace, named in the startup error.
-_RENAMED_ENV_NAMES = MappingProxyType(
-    {
-        **{
-            f"DLIGHTRAG_POSTGRES_{suffix}": f"COMPOSE_POSTGRES_{suffix}"
-            for suffix in (
-                "EFFECTIVE_CACHE_SIZE",
-                "MAINTENANCE_WORK_MEM",
-                "MAX_CONNECTIONS",
-                "PG_TEXTSEARCH_FILTERED_SEED",
-                "PG_TEXTSEARCH_FILTERED_SEED_MARGIN",
-                "SHARED_BUFFERS",
-                "SHM_SIZE",
-                "WORK_MEM",
-            )
-        },
-        **{
-            f"DLIGHTRAG_MEMORY_POSTGRES_{suffix}": f"COMPOSE_MEMORY_POSTGRES_{suffix}"
-            for suffix in ("DATABASE", "USER", "PASSWORD")
-        },
-        "DLIGHTRAG_SKILLS_DIR": "COMPOSE_GLOBAL_SKILLS_DIR",
+        "DLIGHTRAG_EXPORT_KEY",
     }
 )
 
@@ -99,25 +80,12 @@ def _is_auxiliary_env_name(name: str) -> bool:
     return name.upper() in _AUXILIARY_ENV_NAMES
 
 
-def _unknown_environment(names: Sequence[str]) -> ValueError:
-    renamed = [
-        f"{name} -> {_RENAMED_ENV_NAMES[name.upper()]}"
-        for name in names
-        if name.upper() in _RENAMED_ENV_NAMES
-    ]
-    hint = f"; renamed: {', '.join(renamed)}" if renamed else ""
-    return ValueError(f"Unknown DlightRAG environment variables: {list(names)}{hint}")
-
-
 def _drop_auxiliary_dotenv_names(source: DotEnvSettingsSource) -> None:
     """Let a .env shared with clients carry their names; they are not settings.
 
     Only this source is filtered: constructor values and config.yaml keep rejecting
-    unknown keys. A renamed Compose input fails here with its replacement named.
+    unknown keys.
     """
-    renamed = sorted(name for name in source.env_vars if name.upper() in _RENAMED_ENV_NAMES)
-    if renamed:
-        raise _unknown_environment(renamed)
     source.env_vars = {
         name: value for name, value in source.env_vars.items() if not _is_auxiliary_env_name(name)
     }
@@ -333,6 +301,126 @@ class SessionNotesConfig(BaseModel):
     )
 
 
+class MemoryConsolidationConfig(BaseModel):
+    """The Session Memory Pass (ADR 0045): a Session's conversation, consolidated into memory.
+
+    After a successful Answer Run the pass reads the Session's own user and assistant
+    turns past its watermark, however few, and asks the query role's model, at the
+    reasoning level set here, what is worth remembering across conversations. Text
+    longer than one model call takes is read in several calls within the same pass.
+    Each owner's Profile Memory switch still governs that owner; this switch governs
+    the deployment.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    enabled: bool = Field(
+        default=True,
+        description="Whether this deployment consolidates Sessions into Profile Memory.",
+    )
+    max_batch_tokens: int = Field(
+        default=40_000,
+        ge=1,
+        description=(
+            "The most estimated tokens of new user and assistant text one model call is "
+            "fed; a longer conversation is read in several calls, in order, within one pass."
+        ),
+    )
+    session_record_limit: int = Field(
+        default=5,
+        ge=1,
+        le=50,
+        description=(
+            "The most records one model call of a Session Memory Pass may add, across every "
+            "kind; a pass that reads a long conversation in several calls gives each its own "
+            "allowance. Updating or fusing records the owner already holds never counts "
+            "against it."
+        ),
+    )
+    reasoning: ReasoningLevel = Field(
+        default="low",
+        description=(
+            "The reasoning level the pass asks of the query role's model, whatever levels "
+            "that role sets for its own work; the model profile clamps a level it does "
+            "not support."
+        ),
+    )
+
+
+class AgentBrowserLiveBudgetConfig(BaseModel):
+    """What one watcher of a Run's browser may cost.
+
+    The frame rate is a ceiling, never a pace: frames come from the page's own screencast,
+    which encodes when the page changes and nothing when it does not. One budget serves the
+    whole session whoever drives; a session whose viewers cannot keep up steps itself down
+    from these numbers rather than being configured with a second, cheaper set.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    frames_per_second: float = Field(
+        default=24.0,
+        gt=0,
+        le=60,
+        description="The most frames one watcher is sent per second.",
+    )
+    max_width: int = Field(
+        default=1280,
+        ge=320,
+        le=3840,
+        description="The widest frame the browser encodes; the page's aspect ratio is kept.",
+    )
+    jpeg_quality: int = Field(
+        default=70,
+        ge=10,
+        le=95,
+        description="The JPEG quality every frame is encoded with.",
+    )
+
+
+class AgentBrowserLiveConfig(BaseModel):
+    """The live preview and co-drive of the browser a Run already leases (ADR 0032).
+
+    A live session only exists while somebody is watching it, so these bounds are what one
+    watcher may cost: frames come from the page's own screencast, are encoded once, and are
+    delivered to every watcher at one budget, whoever drives. There is no idle rate: an
+    unchanged page produces no frame. Who holds the driving seat is authority over the page
+    rather than an allowance of frames, so it changes nothing here.
+
+    Twenty-four frames is what a co-drive is meant to feel like, and it is a ceiling the
+    mechanism reaches: measured through the real frames socket on the bundled pool, a page
+    repainting every 50 ms arrives at 93–97 % of the budget in force, 22.6 fps under this
+    one, and what limits a stream at this rate is bytes rather than frames
+    (``docs/configuration.md`` has the table). A page the browser cannot encode that fast is
+    served more slowly, never with a frame it did not produce.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    budget: AgentBrowserLiveBudgetConfig = Field(
+        default_factory=AgentBrowserLiveBudgetConfig,
+        description="What one watcher costs while the session can deliver it.",
+    )
+    session_seconds: float = Field(
+        default=1800.0,
+        gt=0,
+        le=14400,
+        description=(
+            "The hard cap on one live session, however it is used. Reaching it ends the "
+            "session; the browser stays the Run's."
+        ),
+    )
+    control_idle_seconds: float = Field(
+        default=90.0,
+        gt=0,
+        le=3600,
+        description=(
+            "How long a person may hold control of the page without touching it before it "
+            "goes back to the agent, so a forgotten handover cannot strand the Run."
+        ),
+    )
+
+
 class AgentBrowserConfig(BaseModel):
     """The Agent Browser pool (ADR 0032): Research renders and drives pages in a browser it leases.
 
@@ -355,6 +443,14 @@ class AgentBrowserConfig(BaseModel):
         description=(
             "The HTTP proxy every browser launch uses. It is the pool's only way out, so "
             "endpoints require it."
+        ),
+    )
+    headed_endpoints: tuple[ServiceUrl, ...] = Field(
+        default=(),
+        description=(
+            "The pool members that run a headed browser with a display server, as their own "
+            "Playwright run-server WebSocket URLs. Empty leases headless browsers alone, and "
+            "a Run may then ask for no headed one. Every URL here must also be in endpoints."
         ),
     )
     chromium_sandbox: bool = Field(
@@ -430,24 +526,29 @@ class AgentBrowserConfig(BaseModel):
             "owner has. An owner's own switch can only turn registration off further."
         ),
     )
+    live: AgentBrowserLiveConfig = Field(
+        default_factory=AgentBrowserLiveConfig,
+        description="The live preview of a Run's browser, and the co-drive that follows it.",
+    )
 
-    @field_validator("endpoints")
+    @field_validator("endpoints", "headed_endpoints")
     @classmethod
-    def _websocket_endpoints(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+    def _websocket_endpoints(cls, value: tuple[str, ...], info: ValidationInfo) -> tuple[str, ...]:
+        field = info.field_name
         identities = []
         for endpoint in value:
             try:
                 parts = urlsplit(endpoint)
                 port = parts.port
             except ValueError:
-                raise ValueError("endpoints must be valid URLs") from None
+                raise ValueError(f"{field} must be valid URLs") from None
             if parts.scheme not in {"ws", "wss"} or not parts.hostname:
-                raise ValueError("endpoints must be ws:// or wss:// URLs with a host")
+                raise ValueError(f"{field} must be ws:// or wss:// URLs with a host")
             if parts.query or parts.fragment:
-                raise ValueError("endpoints must not carry a query or a fragment")
+                raise ValueError(f"{field} must not carry a query or a fragment")
             identities.append((parts.scheme, parts.hostname.lower(), port, parts.path or "/"))
         if len(set(identities)) != len(identities):
-            raise ValueError("endpoints must be unique")
+            raise ValueError(f"{field} must be unique")
         return value
 
     @field_validator("egress_proxy")
@@ -470,6 +571,11 @@ class AgentBrowserConfig(BaseModel):
     def _endpoints_have_a_proxy(self) -> Self:
         if self.endpoints and self.egress_proxy is None:
             raise ValueError("answer.agent.browser.endpoints require egress_proxy")
+        if headed := [url for url in self.headed_endpoints if url not in self.endpoints]:
+            raise ValueError(
+                "answer.agent.browser.headed_endpoints must also be in endpoints: "
+                + ", ".join(headed)
+            )
         return self
 
     @property
@@ -613,6 +719,9 @@ class AgentExecutionConfig(BaseModel):
         ),
     )
     session_notes: SessionNotesConfig = Field(default_factory=SessionNotesConfig)
+    memory_consolidation: MemoryConsolidationConfig = Field(
+        default_factory=MemoryConsolidationConfig
+    )
     workspace_root: str | None = Field(
         default=None,
         description=(
@@ -700,7 +809,7 @@ class WebSourceProviderConfig(BaseModel):
 class WebSourcesConfig(BaseModel):
     """Independent ordered Search and Extract provider chains.
 
-    ``None`` derives an order from configured keys (Exa, then Tavily). An
+    ``None`` derives an order from configured keys (Exa, then Tavily, then DeepSeek). An
     explicit empty tuple disables that operation while retaining credentials.
     The Extract chain may also name ``browser``, the Agent Browser (ADR 0032), which
     is a configured deployment capability rather than a keyed provider.
@@ -708,10 +817,11 @@ class WebSourcesConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
-    search_providers: tuple[Literal["exa", "tavily"], ...] | None = None
-    extract_providers: tuple[Literal["exa", "tavily", "browser"], ...] | None = None
+    search_providers: tuple[Literal["exa", "tavily", "deepseek"], ...] | None = None
+    extract_providers: tuple[Literal["exa", "tavily", "deepseek", "browser"], ...] | None = None
     exa: WebSourceProviderConfig = Field(default_factory=WebSourceProviderConfig)
     tavily: WebSourceProviderConfig = Field(default_factory=WebSourceProviderConfig)
+    deepseek: WebSourceProviderConfig = Field(default_factory=WebSourceProviderConfig)
 
     @field_validator("search_providers", "extract_providers")
     @classmethod
@@ -722,21 +832,25 @@ class WebSourcesConfig(BaseModel):
             raise ValueError("Web provider order cannot contain duplicates")
         return value
 
-    def configured_providers(self) -> tuple[Literal["exa", "tavily"], ...]:
+    def configured_providers(self) -> tuple[Literal["exa", "tavily", "deepseek"], ...]:
         return tuple(
             name
-            for name, configured in (("exa", self.exa.api_key), ("tavily", self.tavily.api_key))
+            for name, configured in (
+                ("exa", self.exa.api_key),
+                ("tavily", self.tavily.api_key),
+                ("deepseek", self.deepseek.api_key),
+            )
             if configured
         )  # type: ignore[return-value]
 
-    def search_order(self) -> tuple[Literal["exa", "tavily"], ...]:
+    def search_order(self) -> tuple[Literal["exa", "tavily", "deepseek"], ...]:
         return (
             self.search_providers
             if self.search_providers is not None
             else self.configured_providers()
         )
 
-    def extract_order(self) -> tuple[Literal["exa", "tavily", "browser"], ...]:
+    def extract_order(self) -> tuple[Literal["exa", "tavily", "deepseek", "browser"], ...]:
         return (
             self.extract_providers
             if self.extract_providers is not None
@@ -745,7 +859,11 @@ class WebSourcesConfig(BaseModel):
 
     @model_validator(mode="after")
     def _orders_have_credentials(self) -> WebSourcesConfig:
-        keys = {"exa": self.exa.api_key, "tavily": self.tavily.api_key}
+        keys = {
+            "exa": self.exa.api_key,
+            "tavily": self.tavily.api_key,
+            "deepseek": self.deepseek.api_key,
+        }
         for operation, order in (
             ("search", self.search_order()),
             ("extract", self.extract_order()),
@@ -767,6 +885,26 @@ class AccessControlRuleConfig(BaseModel):
     value: str
     workspaces: list[str] = Field(default_factory=lambda: ["*"])
     actions: list[str]
+
+    @field_validator("actions")
+    @classmethod
+    def _actions_can_match(cls, value: list[str]) -> list[str]:
+        """Refuse a pattern that names nothing, which denies its callers in silence.
+
+        An Access Rule matches an Action through a preset, an Action's own name, or
+        an Action namespace. Anything else — a mistyped preset, a preset this
+        deployment no longer has, a stale action name — matches no Action at all, so
+        the rule would grant nothing and no request would say why. The deployment
+        fails to start instead.
+        """
+        unknown = unknown_action_patterns(value)
+        if unknown:
+            raise ValueError(
+                f"actions name no preset or Action: {', '.join(sorted(set(unknown)))}; "
+                f"the presets are {', '.join(sorted(ACTION_PRESETS))}, and any other "
+                "pattern must be an Action name or an Action namespace such as workspace.*"
+            )
+        return value
 
 
 class AccessControlConfig(BaseModel):
@@ -880,6 +1018,11 @@ class DeploymentSettings(FrozenSettings):
     # The default workspace's display name; `workspace_id` is its canonical id.
     workspace: str = "default"
     working_dir: str = "./dlightrag_storage"
+    #: Whether this process takes up active goals when it starts. Goals continue automatically,
+    #: so a restart resumes them from the durable row; only the process that serves the Web/API
+    #: surface runs the startup scan, and the MCP service sets this false in Compose so two
+    #: processes do not scan the same goals at once (ADR 0077).
+    goal_recovery: bool = True
 
     @field_validator("workspace")
     @classmethod
@@ -1119,6 +1262,27 @@ class InterfacesSettings(FrozenSettings):
     max_upload_size_mb: int = Field(default=512, ge=1)
 
 
+class TelemetryErasureSettings(FrozenSettings):
+    """The delete-capable ClickHouse endpoint an owner erase reaches telemetry through.
+
+    The collector's own user is write-only, so erasing one owner's spans before
+    their TTL needs credentials of its own (ADR 0049).
+    """
+
+    url: str | None = Field(
+        default=None,
+        description=(
+            "ClickHouse HTTP endpoint of the deployment's own telemetry store, such as "
+            "http://clickhouse:8123/. Unset leaves an owner erase unable to reach spans, "
+            "which the operator command refuses rather than silently half-erasing."
+        ),
+    )
+    user: str | None = Field(
+        default=None, repr=False, description="A user that may run ALTER TABLE ... DELETE."
+    )
+    password: str | None = Field(default=None, repr=False, description="That user's password.")
+
+
 class ObservabilitySettings(FrozenSettings):
     """Where telemetry goes, and what identifies the process that sends it.
 
@@ -1134,6 +1298,7 @@ class ObservabilitySettings(FrozenSettings):
     # The ingestion credential rides here, never in the URL: DlightRAG sends
     # `authorization`, and ClickStack's ingestion key is the value.
     otlp_headers: dict[str, str] = Field(default_factory=dict, repr=False)
+    telemetry_erasure: TelemetryErasureSettings = Field(default_factory=TelemetryErasureSettings)
     # The service.name every span carries; a deployment sets one per process so
     # the service map separates the API from the MCP server and the reader.
     service_name: str = "dlightrag"
@@ -1141,6 +1306,15 @@ class ObservabilitySettings(FrozenSettings):
     release: str | None = None
     sample_rate: float = Field(default=1.0, ge=0, le=1)
     timeout: int | None = Field(default=None, ge=1, le=300)
+    # The browser channel (RUM, errors, session replay). It exists only where both are set,
+    # because a page can send nowhere without a destination and nothing without a key.
+    browser_otlp_url: str | None = None
+    browser_api_key: str | None = Field(default=None, repr=False)
+    # Replay is the one signal whose volume grows with a session rather than with the
+    # work in it, so it is the one signal a deployment may sample. Errors and RUM are
+    # never sampled: the page decides once per session, and a session the coin flip
+    # passed over reports everything except the recording.
+    browser_replay_sample_rate: float = Field(default=1.0, ge=0, le=1)
 
 
 class DlightragConfig(BaseSettings):
@@ -1170,7 +1344,7 @@ class DlightragConfig(BaseSettings):
             and key.upper().removeprefix("DLIGHTRAG_").split("__", 1)[0] not in allowed
         )
         if unknown:
-            raise _unknown_environment(unknown)
+            raise ValueError(f"Unknown DlightRAG environment variables: {unknown}")
         super().__init__(**values)
         # BaseSettings serializes constructor-supplied nested models through its
         # source pipeline. Restore the already-validated canonical instances so

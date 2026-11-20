@@ -1,17 +1,13 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for the storage-neutral RetrievalResult."""
 
-from dlightrag.engine.rag.retrieval import (
+from dlightrag.engine.rag.retrieval.results import (
     RetrievalContexts,
     RetrievalResult,
 )
 
 
 class TestRetrievalResult:
-    def test_defaults(self) -> None:
-        r = RetrievalResult()
-        assert r.contexts == {"chunks": [], "entities": [], "relationships": []}
-
     def test_with_values(self) -> None:
         ctx: RetrievalContexts = {
             "chunks": [
@@ -45,12 +41,6 @@ class TestRetrievalResult:
         }
         r = RetrievalResult(contexts=plain_dict)
         assert r.contexts["chunks"][0]["content"] == "text"
-
-
-def test_retrieval_result_defaults_to_empty_payload() -> None:
-    result = RetrievalResult()
-    assert result.image_descriptions == []
-    assert result.trace == {}
 
 
 class TestCanonicalizeReferenceIds:

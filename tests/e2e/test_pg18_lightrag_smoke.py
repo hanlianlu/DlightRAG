@@ -11,12 +11,14 @@ from typing import Any, cast
 
 import pytest
 
-from dlightrag.application.config import set_config
+from dlightrag.application.config.loading import set_config
 from dlightrag.engine.ai.scheduler import ModelScheduler
-from dlightrag.engine.rag.retrieval import MetadataFilter, MetadataScope
 from dlightrag.engine.rag.retrieval.filtering import metadata_filter_scope
+from dlightrag.engine.rag.retrieval.models import (
+    MetadataFilter,
+    MetadataScope,
+)
 from dlightrag.engine.rag.retrieval.rerank_breaker import RerankBreaker
-from tests.config_helpers import clone_config, mutate_config
 from tests.e2e.pg18_harness import (
     RUN_E2E_ENV,
     e2e_enabled,
@@ -28,6 +30,7 @@ from tests.e2e.pg18_harness import (
     pg_conn_kwargs_from_env,
     stable_vector,
 )
+from tests.support.config_helpers import clone_config, mutate_config
 from tests.support.pg import delete_runs
 
 pytestmark = [
@@ -80,7 +83,7 @@ async def test_initialized_default_runtime_does_not_capture_tenant_workspace(
 ) -> None:
     from dlightrag.adapters.postgres.core._pool import pg_pool
     from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
-    from dlightrag.application.settings import rag_settings
+    from dlightrag.application.settings.projections import rag_settings
     from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
     from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
 
@@ -162,8 +165,8 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
     from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
     from dlightrag.adapters.postgres.corpus.file_panel import PGFilePanelStore
     from dlightrag.adapters.postgres.corpus.pg_metadata_index import PGMetadataIndex
-    from dlightrag.application.corpus_admin import FilePanelPageRequest
-    from dlightrag.application.settings import rag_settings
+    from dlightrag.application.corpus_admin.file_panel import FilePanelPageRequest
+    from dlightrag.application.settings.projections import rag_settings
     from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
     from dlightrag.engine.rag.corpus.downloads import (
         LocalDownloadTarget,
@@ -227,10 +230,10 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
         assert metadata["filename"] == doc_path.name
         assert metadata["title"] == "PG18 E2E Document"
 
-        doc_ids = await service.asearch_metadata(MetadataFilter(custom={"e2e_case": "pg18"}))
+        assert service._metadata_index is not None
+        doc_ids = await service._metadata_index.query(MetadataFilter(custom={"e2e_case": "pg18"}))
         assert doc_ids == [doc_id]
 
-        assert service._metadata_index is not None
         assert service._lightrag_stores is not None
         scope = await service._lightrag_stores.resolve_scope(
             MetadataFilter(custom={"e2e_case": "pg18"})
@@ -316,7 +319,7 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
             await conn.close()
 
         assert await service.aget_metadata(doc_id) == {}
-        assert await service.asearch_metadata(MetadataFilter()) == []
+        assert await PGMetadataIndex(workspace).query(MetadataFilter()) == []
         assert (await PGMetadataIndex(workspace).get_field_schema())["filters"] == []
         with pytest.raises(SourceDownloadNotFoundError):
             await downloads.prepare(doc_id)
@@ -542,9 +545,9 @@ async def test_nested_local_sources_are_parsed_from_their_flat_inputs_never_a_de
 
     from dlightrag.adapters.postgres.core._pool import pg_pool
     from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
-    from dlightrag.application.corpus_admin import IngestSpec
     from dlightrag.application.corpus_admin.mutations import CorpusMutationService, UploadLimits
-    from dlightrag.application.settings import rag_settings
+    from dlightrag.application.corpus_admin.service import IngestSpec
+    from dlightrag.application.settings.projections import rag_settings
     from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
     from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
 
@@ -645,8 +648,8 @@ async def test_a_document_is_listed_while_the_rest_of_its_batch_is_still_parsing
     from dlightrag.adapters.postgres.core._pool import pg_pool
     from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
     from dlightrag.adapters.postgres.corpus.file_panel import PGFilePanelStore
-    from dlightrag.application.corpus_admin import FilePanelPageRequest
-    from dlightrag.application.settings import rag_settings
+    from dlightrag.application.corpus_admin.file_panel import FilePanelPageRequest
+    from dlightrag.application.settings.projections import rag_settings
     from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
     from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
 
@@ -747,7 +750,7 @@ async def test_a_parser_outage_defers_a_corpus_run_that_resumes_what_it_did_not_
     from dlightrag.adapters.postgres.core._pool import pg_pool
     from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
     from dlightrag.application.corpus_admin.mutations import CorpusMutationExecutor
-    from dlightrag.application.settings import rag_settings
+    from dlightrag.application.settings.projections import rag_settings
     from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
     from dlightrag.engine.dependencies import ParserUnavailableError
     from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
@@ -907,8 +910,8 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
     from dlightrag.adapters.postgres.core._pool import pg_pool
     from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
     from dlightrag.adapters.postgres.runtime.run_store import PGRunStore
-    from dlightrag.application.config import set_config
-    from dlightrag.application.settings import rag_settings
+    from dlightrag.application.config.loading import set_config
+    from dlightrag.application.settings.projections import rag_settings
     from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
     from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
     from dlightrag.engine.runtime.records import (

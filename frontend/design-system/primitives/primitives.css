@@ -4,7 +4,55 @@
 
  * Every model-visible control ships from this file. Adding a new control
  * without a primitive here (or a variant below) is a bug, not a choice.
+ *
+ * The action row leads the file because it lays parts out rather than being one of them, and because the
+ * rule that makes a native part bare has to stand before the file's heavier button selectors rather than
+ * after them (no-descending-specificity).
  */
+
+/* === Action row ===
+ *
+ * A line of inline affordances and short statuses parted by one hairline: the row under an answer, and
+ * any row that parts its things the same way. The row lays the parts out and draws the line before every
+ * part but the first — `gap` and `padding-inline-start` are one measure, so a divider here stands the
+ * same distance from what it parts on either side, and an empty row shows nothing.
+ *
+ * A part that is no box of its own — one that composes `display: contents`, so its own children join this
+ * row's line, as the reader's thumbs do — declares `data-action-part` on the part it hoists. The row then
+ * draws that part's line, gives it the row's measure, and takes its height from the row's line, because
+ * what it holds (two 12px marks) is shorter than the words beside it. That is the whole contract: a
+ * feature says where its part stands, and never draws a divider of its own — which is how two dividers in
+ * one row once drifted apart. */
+.dl-action-row {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-tight);
+}
+
+.dl-action-row > :not(:first-child),
+.dl-action-row [data-action-part] {
+    border-inline-start: 1px solid var(--color-divider);
+    padding-inline-start: var(--space-tight);
+}
+
+.dl-action-row [data-action-part] {
+    align-self: stretch;
+}
+
+/* A part is its own words or marks and nothing else: the row lays it out, parts it, and stands it the
+ * row's measure from the line. A native control's own padding is therefore reset here, beside the rule
+ * that sets that measure — a feature that zeroed it instead would take the clearance with it, since a
+ * product stylesheet's layer outranks this one. */
+.dl-action-row > button {
+    appearance: none;
+    background: transparent;
+    border: 0;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    padding: 0;
+}
 
 /* ── Dialog actions ── */
 
@@ -22,7 +70,7 @@
     /* The hover tint insets itself instead of moving the row's text. */
     margin-inline: calc(-1 * var(--space-tight));
     padding-inline: var(--space-tight);
-    transition: background 0.1s, color 0.1s;
+    transition: background var(--duration-instant), color var(--duration-instant);
 }
 
 .dl-dialog-checkbox:hover,
@@ -47,6 +95,9 @@
     margin-top: var(--space-related);
 }
 
+/* The face fixes the control's height, so its label is one line: a label that wraps is a label
+ * the height it cannot grow clips. A caller that lets the label break has no way to size the
+ * control it draws, so the primitive keeps the label on one line wherever it is used. */
 .dl-dialog-actions button,
 .dl-btn {
     background: transparent;
@@ -60,7 +111,8 @@
     line-height: var(--line-height-control);
     padding-block: 0;
     padding-inline: var(--space-component);
-    transition: background 150ms, border-color 150ms, color 150ms;
+    transition: background var(--duration-control), border-color var(--duration-control), color var(--duration-control);
+    white-space: nowrap;
 }
 
 /* A link wears the button face: flex supplies the centering a native control
@@ -100,6 +152,56 @@ a.dl-btn {
     background: color-mix(in srgb, var(--color-danger-bg) 90%, var(--color-text-primary));
     border-color: transparent;
     color: var(--color-on-danger);
+}
+
+/* === Text action === */
+
+/* A control whose face is its own words: unlike `.dl-btn`, nothing is drawn around it, so it can
+ * stand inside a line of caption or secondary text -- a Source link under an image, the artifact
+ * record's skipped-read disclosure. The feature owns where it stands and what it says; the
+ * primitive owns the face: caption type, the accent text role, one line, the WCAG 2.2 target-size
+ * floor, the focus ring, and the hover both themes can show (Mineral Light has no darker gold, so
+ * hover underlines). */
+.dl-text-action {
+    align-items: center;
+    appearance: none;
+    background: transparent;
+    border: 0;
+    color: var(--color-accent-text);
+    cursor: pointer;
+    display: inline-flex;
+    font: inherit;
+    font-size: var(--font-size-caption);
+    gap: var(--space-3xs);
+    line-height: var(--line-height-control);
+    min-block-size: var(--size-target-min);
+    padding: 0;
+    white-space: nowrap;
+}
+
+.dl-text-action:focus-visible {
+    outline: 2px solid var(--focus-ring-color);
+    outline-offset: 2px;
+}
+
+.dl-text-action:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+.dl-text-action:hover:not(:disabled) {
+    color: var(--color-accent-emphasis);
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+}
+
+/* The disclosure form: the owner states `aria-expanded`, and the primitive owns the mark's turn. */
+.dl-text-action--disclosure .dl-icon {
+    transition: transform var(--duration-control) var(--easing-standard);
+}
+
+.dl-text-action--disclosure[aria-expanded='true'] .dl-icon {
+    transform: rotate(180deg);
 }
 
 /* === Switch === */
@@ -386,7 +488,7 @@ label.dl-dialog-checkbox--row:has(input:focus-visible) {
     outline-offset: -2px;
 }
 
-
+.dl-input,
 .dl-dialog-input {
     background: var(--color-bg-subtle);
     border: 1px solid var(--color-border-subtle);
@@ -396,10 +498,14 @@ label.dl-dialog-checkbox--row:has(input:focus-visible) {
     font-size: var(--font-size-detail);
     height: var(--size-button);
     line-height: var(--line-height-control);
-    margin: var(--space-tight) 0 0;
     outline: none;
     padding-block: 0;
     padding-inline: var(--space-component);
+}
+
+/* The dialog's own field fills its row and leaves the row above it air. */
+.dl-dialog-input {
+    margin: var(--space-tight) 0 0;
     width: 100%;
 }
 
@@ -410,8 +516,22 @@ textarea.dl-dialog-input {
     resize: vertical;
 }
 
+.dl-input:focus,
 .dl-dialog-input:focus {
     border-color: var(--color-accent-border);
+}
+
+/* One quiet line that says what is happening, or what is missing. */
+.dl-note {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+}
+
+/* The words a reader searched for, marked where they appear. */
+.dl-mark {
+    background: var(--color-accent-surface);
+    color: var(--color-accent-text);
 }
 
 /* === Anchored placement ===
@@ -477,7 +597,7 @@ textarea.dl-dialog-input {
     min-height: var(--size-button);
     padding: var(--space-tight) var(--space-component);
     text-align: left;
-    transition: background 0.1s;
+    transition: background var(--duration-instant);
 }
 
 .dl-popover-item:hover {
@@ -491,6 +611,30 @@ textarea.dl-dialog-input {
     outline: 2px solid var(--focus-ring-color);
     outline-offset: 2px;
     scroll-margin-block: 4px;
+}
+
+/* === Popover choice marker ===
+ *
+ * The ring a popover row's choice wears: one ring in both states, the accent dot inside it when
+ * the row states that it is pressed. The search scope and the Files panel's ingest target both
+ * draw it, so the drawing lives here and not in either feature's module; one drawing is what
+ * keeps the two lists looking like the same control. */
+.dl-popover-radio {
+    border: 1.5px solid var(--color-text-subtle);
+    border-radius: var(--radius-circle);
+    flex-shrink: 0;
+    height: var(--size-radio);
+    transition: background var(--duration-control), border-color var(--duration-control);
+    width: var(--size-radio);
+}
+
+.dl-popover-item[aria-pressed='true'] .dl-popover-radio {
+    background: radial-gradient(
+        circle at 50% 50%,
+        var(--color-accent-action) 0 calc(var(--size-radio) * 0.23),
+        transparent calc(var(--size-radio) * 0.24)
+    );
+    border-color: var(--color-accent-action);
 }
 
 .dl-popover-create {
@@ -538,7 +682,7 @@ textarea.dl-dialog-input {
     height: var(--size-button);
     justify-content: center;
     padding: 0;
-    transition: background 0.15s, border-color 0.15s;
+    transition: background var(--duration-control), border-color var(--duration-control);
     width: var(--size-button);
 }
 
@@ -549,4 +693,46 @@ textarea.dl-dialog-input {
 .dl-popover-create-btn:hover {
     background: var(--color-action-bg-subtle-hover);
     border-color: var(--color-action-border-hover);
+}
+
+/* === Product variants ===
+ *
+ * Controls this file does not ship, recorded where the rule above can see them. Each was weighed for a
+ * primitive and left with the feature that draws it: a pill, a two-row note field with room for its own
+ * Send, and the round Send itself. Promote one here when a second feature asks for that same face rather
+ * than for a variant of it — except the round Send, which already has three consumers and waits instead
+ * on the three agreeing about the face a waiting control wears.
+ *
+ * - `.chip` — the reason a reader picks under a thumb down (styles/answer-feedback.module.css). One
+ *   consumer; it is a pill, and its chosen state is accent ink on the accent fill with a check beside it.
+ * - `.note` — that feature's note field. It is `.dl-input`'s face with a strong border, a ring on focus
+ *   rather than the primitive's border-colour one, no resize grip, and the trailing room Send needs.
+ * - `.send` — the round send button, now in three places: `.composer-send` (styles/layout.css), the dock
+ *   (styles/agent-session.module.css) and Answer Feedback. Three consumers, so this is the next
+ *   candidate for extraction; the three disagree about the face a waiting control wears, and settling
+ *   that is a product decision, not a refactor.
+ */
+
+/* === Pulse ===
+ *
+ * The breathing of a mark that stands for work in progress: a streaming dot, a running step, a loading
+ * row. One keyframes serves every such mark and each mark states how deep its own breath goes: it starts
+ * and ends at `--pulse-start-opacity` and reaches `--pulse-mid-opacity` and `--pulse-mid-scale` halfway.
+ * Unstated, it is the status dot's breath: full strength, dimming to 0.45 while it shrinks to 0.8.
+ *
+ * A CSS Module renames every animation name it uses, even one it does not define, so a feature's module
+ * names this keyframes as `animation: var(--duration-pulse) global(dl-pulse) ease-in-out infinite`.
+ * The period is not zeroed under reduced motion (foundations/motion.css), so each mark states what it
+ * does instead of moving. */
+@keyframes dl-pulse {
+    0%,
+    100% {
+        opacity: var(--pulse-start-opacity, 1);
+        transform: scale(1);
+    }
+
+    50% {
+        opacity: var(--pulse-mid-opacity, 0.45);
+        transform: scale(var(--pulse-mid-scale, 0.8));
+    }
 }

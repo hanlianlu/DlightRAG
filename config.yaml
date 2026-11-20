@@ -115,6 +115,16 @@ answer:
     session_notes:
       max_count: 64
       max_bytes: 262144
+    # Session Memory Pass (ADR 0045): after a successful Run, whatever new user and
+    # assistant text the Session holds is consolidated into Profile Memory, however
+    # little, in as many model calls as it takes to reach the end.
+    # Zero memories is the ordinary outcome; each owner's Memory switch still applies.
+    # It asks the query role's model at the reasoning level set here, not the role's own.
+    memory_consolidation:
+      enabled: true
+      max_batch_tokens: 40000  # most estimated tokens one model call is fed
+      session_record_limit: 5  # most records one model call may add, every kind; 1-50
+      reasoning: low  # the pass's own level on the query role's model; off to max
     # Personal Settings Connections (Streamable HTTP only). Policy only narrows
     # owner grants; credentials are sealed under the key ring the first writer
     # creates in the working directory. Timeouts and size ceilings keep their
@@ -124,6 +134,17 @@ answer:
       allow_private_hosts: []
       max_connections: 20
       max_enabled_tools: 256
+      # Notion's remote MCP publishes a 160,357-byte input schema (65 tools,
+      # 342,733 catalogue bytes). The shipped 128 KiB per-tool bound refused the
+      # catalogue, so discovery published nothing and the OAuth flow ended
+      # "without publishing". 256 KiB is the documented hard ceiling and only
+      # has to admit a real provider's schema; the 512 KiB catalogue bound is
+      # the real budget.
+      max_schema_bytes: 262144
+      # A server's initialize instructions ride in the Run prompt as attributed data and
+      # are pinned per Run. 32 KiB is the harness MCP client's own maxInstructionBytes;
+      # a longer text rejects the catalogue candidate whole rather than truncating.
+      max_instruction_bytes: 32768
 
 access:
   # The development default. A deployment sets its own access in .env (see
@@ -138,3 +159,11 @@ observability:
   # (DLIGHTRAG_OBSERVABILITY__OTLP_HEADERS); service_name and environment are
   # per-process and a deployment sets them in its own environment.
   otlp_endpoint: http://host.docker.internal:4318
+
+  # A data-subject erase (ADR 0049) reaches the deployment's own telemetry store
+  # through a delete-capable ClickHouse user: the collector's user is write-only.
+  # Unset, `dlightrag-owner-data erase` refuses rather than half-erasing.
+  telemetry_erasure:
+    url: null
+    user: null
+    password: null

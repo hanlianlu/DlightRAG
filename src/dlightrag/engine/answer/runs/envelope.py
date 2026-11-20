@@ -13,6 +13,11 @@ def accepted_input_envelope(prepared: Mapping[str, Any]) -> dict[str, Any]:
     prepared input is cleared. Pinned model facts and resource manifests remain
     execution-only; normalized history, retrieval controls, and input-resource
     identities remain in this bounded public envelope.
+
+    A continuation's identity does not depend on a parent Run: a goal round a
+    human created with ``/goal`` has no parent and still carries
+    ``continuation_kind`` and its goal identity, so the settlement reading this
+    envelope can tell what the Run was continuing.
     """
     envelope = {
         "query": str(prepared.get("query") or ""),
@@ -38,7 +43,18 @@ def accepted_input_envelope(prepared: Mapping[str, Any]) -> dict[str, Any]:
     }
     if prepared.get("parent_run_id"):
         envelope["parent_run_id"] = str(prepared["parent_run_id"])
-        envelope["continuation_kind"] = str(prepared.get("continuation_kind") or "")
+    continuation_kind = prepared.get("continuation_kind")
+    if continuation_kind:
+        envelope["continuation_kind"] = str(continuation_kind)
+    goal_id = prepared.get("goal_id")
+    if goal_id:
+        envelope["goal_id"] = str(goal_id)
+    goal_revision = prepared.get("goal_revision")
+    if goal_revision is not None:
+        envelope["goal_revision"] = int(goal_revision)
+    goal_round = prepared.get("goal_round")
+    if goal_round is not None:
+        envelope["goal_round"] = int(goal_round)
     return envelope
 
 

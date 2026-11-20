@@ -12,8 +12,10 @@ import pytest
 
 from dlightrag.adapters.mcp.oauth import PersonalOAuthClient
 from dlightrag.adapters.postgres.connections import PGConnectionsStore
-from dlightrag.application.connections import ConnectionCommand, ConnectionPolicy, Connections
 from dlightrag.application.connections.credentials import GrantCipher
+from dlightrag.application.connections.models import ConnectionCommand
+from dlightrag.application.connections.policy import ConnectionPolicy
+from dlightrag.application.connections.service import Connections
 from dlightrag.engine.credential_cipher import CredentialCipher
 from tests.integration.run_runtime_pg_harness import isolated_run_runtime
 from tests.integration.test_connection_authorization_pg import cipher
@@ -567,7 +569,7 @@ async def test_sdk_effect_refresh_is_fenced_before_and_after_remote_io(outcome, 
         _, (final,) = await store.read("a")
         if outcome == "concurrent":
             assert final.secret_version == item.secret_version + 1
-            assert mcp.call.call_args.kwargs["bearer"].get_secret_value() == "fresh-token"
+            assert mcp.call.call_args.kwargs["access"].token.get_secret_value() == "fresh-token"
         elif outcome == "rotation":
             assert rotating is not None
             assert (await rotating.maintain())["reencrypted"] == 1
@@ -923,8 +925,7 @@ async def test_notification_reconnect_wakes_a_scan_after_listener_connection_los
 
 @pytest.mark.asyncio
 async def test_owner_authorization_quota_is_durable_across_workers():
-    from dlightrag.application.connections import ConnectionsError
-    from dlightrag.application.connections.models import OAuthFlow
+    from dlightrag.application.connections.models import ConnectionsError, OAuthFlow
     from tests.integration.test_connections_pg import FakeMcp
 
     async with isolated_run_runtime("oauth_quota") as (_, pool):

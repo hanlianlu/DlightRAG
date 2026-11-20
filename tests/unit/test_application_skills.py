@@ -3,7 +3,7 @@
 
 from pathlib import Path
 
-from dlightrag.application.config import DlightragConfig
+from dlightrag.application.config.sections import DlightragConfig
 from dlightrag.application.skills import (
     owner_skills_directory,
     skill_read_layers,

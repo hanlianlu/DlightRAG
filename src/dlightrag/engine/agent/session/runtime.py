@@ -29,6 +29,7 @@ from dlightrag.engine.agent.session.entries import (
     AssistantMessageEntry,
     CompactionEntry,
     ControlMessageEntry,
+    DeliveryWarningEntry,
     SessionEntry,
     ToolResultMessageEntry,
     UserMessageEntry,
@@ -114,7 +115,9 @@ from dlightrag.engine.agent.session.transactions import (
     TransactionCommit,
     TransactionLeaseLost,
 )
+from dlightrag.engine.agent.skill_delivery import DeliveryFindings
 from dlightrag.engine.agent.tools.contracts import (
+    OBSERVED_TRUNCATED_DETAIL,
     AgentTool,
     SourceOrder,
     already_in_source_order,
@@ -267,6 +270,7 @@ class AgentSessionEvent:
 
 
 EventSink = Callable[[AgentSessionEvent], Awaitable[None]]
+DeliveryCheck = Callable[[RuntimeContext], Awaitable[DeliveryFindings]]
 
 
 class AgentRuntimeEffects[HostDeltaT](Protocol):
@@ -389,6 +393,7 @@ class AgentSessionRuntime[HostDeltaT]:
         provider_attempt_limit: int = 2,
         event_sink: EventSink | None = None,
         controls: RuntimeControlPort | None = None,
+        delivery_check: DeliveryCheck | None = None,
         initial_snapshot: AgentSessionSnapshotSeed[HostDeltaT] | None = None,
     ) -> None:
         if fencing_epoch < 1:
@@ -407,6 +412,7 @@ class AgentSessionRuntime[HostDeltaT]:
         self._provider_attempt_limit = provider_attempt_limit
         self._event_sink = event_sink
         self._controls = controls
+        self._delivery_check = delivery_check
         if initial_snapshot is not None and initial_snapshot.repository is not repository:
             raise ValueError("Agent Session seed belongs to another repository")
         self._snapshots: dict[SessionId, AgentSessionSnapshot] = (
@@ -426,11 +432,14 @@ class AgentSessionRuntime[HostDeltaT]:
         idempotency_key: str,
         content: Any,
         plan: AgentRunPlan,
+        origin: Literal["child_notification"] | None = None,
     ) -> AcceptedOperation:
         """Atomically append UserMessage plus initial total Operation state."""
         if not idempotency_key:
             raise ValueError("Agent operation idempotency key cannot be empty")
         operation_id = OperationId.deterministic(idempotency_key=idempotency_key)
+        # ``origin`` stays out of the digest: the idempotency key already names the notification,
+        # and an Operation accepted before it existed must still match when a recovery accepts it.
         acceptance_digest = _digest(
             {
                 "session_id": session_id.value,
@@ -480,6 +489,7 @@ class AgentSessionRuntime[HostDeltaT]:
             session_id=session_id,
             timestamp=_now(),
             content=content,
+            origin=origin,
         )
         try:
             lane = snapshot.tree.lane(lane_id)
@@ -1038,6 +1048,7 @@ class AgentSessionRuntime[HostDeltaT]:
             await self._fail(view, kind="repeated_call_loop", detail=trip)
             return
         batch, arguments = self._tool_batch_for_meta(view.context.meta, entry, assistant, repeated)
+        warning: DeliveryWarningEntry | None = None
         if batch.items:
             next_state: RunOperationState = ToolBatchReady(
                 view.context.operation_id,
@@ -1059,17 +1070,22 @@ class AgentSessionRuntime[HostDeltaT]:
                 steers=state.steers,
             )
         else:
-            next_state = CompletionReady(
-                view.context.operation_id,
-                turn_count=state.turn_number,
-                assistant_entry_id=entry.entry_id,
-                steers=state.steers,
-            )
+            next_state, warning, labels = await self._delivery_state(view, entry, state)
+            text = _label_unsealed(entry.content, labels)
+            if text != entry.content:
+                # The provider replays the answer only while its own native output text is
+                # the canonical content (the Responses transport checks exactly that). The
+                # delivery label rewrites the answer, so the replay state becomes a record of
+                # text this entry no longer holds, and a stateless request carrying it is
+                # rejected before it is sent. Dropping it here falls back to the canonical
+                # message every provider without replay carries.
+                entry = replace(entry, content=text, provider_state=None)
         snapshot = view.context.snapshot
         head_record = _require_register(snapshot, LaneHead(view.context.lane_id, None).ref)
         state_record = _state_record(snapshot, view.context.operation_id)
+        head_entry = entry if warning is None else warning
         writes = [
-            SetRegister(LaneHead(view.context.lane_id, entry.entry_id)),
+            SetRegister(LaneHead(view.context.lane_id, head_entry.entry_id)),
             SetRegister(OperationStateRegister(next_state)),
             DeleteRegister(request_record.ref),
             *(SetRegister(value) for value in arguments),
@@ -1083,7 +1099,7 @@ class AgentSessionRuntime[HostDeltaT]:
         commit = await self._transact(
             view.context.session_id,
             SessionTransaction.from_parts(
-                entries=[entry],
+                entries=[entry] if warning is None else [entry, warning],
                 register_writes=writes,
                 expectations=expectations,
             ),
@@ -1098,7 +1114,62 @@ class AgentSessionRuntime[HostDeltaT]:
                 "entry_id": entry.entry_id.value,
                 "turn_number": state.turn_number,
                 "tool_positions": len(batch.items),
+                **({"delivery_warning": warning.attempt} if warning is not None else {}),
             },
+        )
+
+    async def _delivery_state(
+        self,
+        view: OperationView,
+        entry: AssistantMessageEntry,
+        state: ProviderRequestPending,
+    ) -> tuple[RunOperationState, DeliveryWarningEntry | None, tuple[str, ...]]:
+        """The state after a proposed final response, and the labels the answer must open with.
+
+        Complete, or warn and let the model revise. The retry count is read from the operation's
+        durable DeliveryWarningEntry rows, never a local counter. The check is advice, not a gate:
+        a failure in it never blocks completion. The labels come from the check on every proposal,
+        warned about or not: they state what the delivery record holds.
+        """
+        completion = CompletionReady(
+            view.context.operation_id,
+            turn_count=state.turn_number,
+            assistant_entry_id=entry.entry_id,
+            steers=state.steers,
+        )
+        check = self._delivery_check
+        if check is None:
+            return completion, None, ()
+        operation_id = view.context.operation_id.value
+        try:
+            findings = await check(view.context)
+        except Exception:
+            logger.warning("Delivery check failed for operation %s", operation_id, exc_info=True)
+            return completion, None, ()
+        attempts = sum(
+            1
+            for item in view.context.snapshot.graph.ancestry()
+            if isinstance(item, DeliveryWarningEntry) and item.operation_id == operation_id
+        )
+        if not findings.lines or attempts >= 2 or _latest_input_is_child_notification(view):
+            return completion, None, findings.unsealed_labels
+        warning = DeliveryWarningEntry(
+            entry_id=EntryId.new(),
+            session_id=view.context.session_id,
+            timestamp=_now(),
+            operation_id=operation_id,
+            attempt=attempts + 1,
+            findings=findings.lines,
+            parent_entry_id=entry.entry_id,
+        )
+        return (
+            ReadyForProvider(
+                view.context.operation_id,
+                turn_count=state.turn_number,
+                steers=state.steers,
+            ),
+            warning,
+            findings.unsealed_labels,
         )
 
     def _tool_batch_for_meta(
@@ -1106,7 +1177,7 @@ class AgentSessionRuntime[HostDeltaT]:
         meta: OperationMeta,
         assistant_entry: AssistantMessageEntry,
         assistant: AssistantTurn,
-        repeated: frozenset[str],
+        repeated: frozenset[str] = frozenset(),
     ) -> tuple[ToolBatchPlan, tuple[ToolArguments, ...]]:
         import json
 
@@ -1499,6 +1570,8 @@ class AgentSessionRuntime[HostDeltaT]:
             raise TypeError("ToolResult settlement requires a Tool Batch state")
         if item.source_index != position:
             raise ValueError("a ToolResult settles only its batch's next source position")
+        # ``details`` are transport-private and for recovery, so they stay out of the entry;
+        # the Tool's bounded ``facts`` are the product's own step-card structure and are kept.
         durable_result = replace(result, details=None)
         entry = ToolResultMessageEntry(
             entry_id=item.result_entry_id,
@@ -1578,7 +1651,7 @@ class AgentSessionRuntime[HostDeltaT]:
             commit=commit,
             data={
                 "entry_id": entry.entry_id.value,
-                **_settlement_facts(item, durable_result, duration_ms),
+                **_settlement_facts(item, result, duration_ms),
             },
         )
 
@@ -2100,7 +2173,9 @@ def _settlement_facts(
     Call identity belongs here because a settlement is the only event that says
     a call finished: without it a reader can only guess which row to close. The
     durable contract keeps these events metadata-only, so no Tool output,
-    arguments, or stdout ever joins them.
+    arguments, or stdout ever joins them; the exceptions are the metadata bool
+    ``observed_truncated``, read from the result's ``details`` before the durable entry strips
+    them, and the result's own bounded ``facts`` -- structure a step card shows, never result text.
     """
     facts: dict[str, Any] = {
         "tool_name": item.tool_name,
@@ -2110,6 +2185,12 @@ def _settlement_facts(
     }
     if duration_ms is not None:
         facts["duration_ms"] = max(0, int(duration_ms))
+    if isinstance(result.details, Mapping) and result.details.get(OBSERVED_TRUNCATED_DETAIL):
+        facts[OBSERVED_TRUNCATED_DETAIL] = True
+    if isinstance(result.facts, Mapping) and result.facts:
+        # Already bounded by ``bounded_tool_facts`` where the Tool reported them, so the event
+        # carries the same structure the entry keeps rather than a second, weak copy of it.
+        facts["facts"] = dict(result.facts)
     return facts
 
 
@@ -2121,7 +2202,9 @@ _LOOP_GUARD_TOOLS = frozenset({"search_web", "bash"})
 _LOOP_GUARD_TURNS = 2
 #: How many repeated calls in a row, of any digest, the guard may refuse before the Run is stopped
 #: instead. The guard's own window includes the refused turns, so without the cap a model that
-#: re-issues the call (or alternates between a few) is refused for ever and the Run never ends.
+#: re-issues the call (or alternates between a few) is refused for ever and the Run never ends: one
+#: live extract child accumulated 650 synthetic refusals in 30 minutes, every retry synthesised
+#: rather than executed.
 _LOOP_GUARD_BLOCK_LIMIT = 3
 
 
@@ -2130,7 +2213,8 @@ def _repeated_search_calls(view: OperationView, assistant: AssistantTurn) -> fro
 
     A model that retries the same search or shell command can burn a Run on one call; the guard
     turns a repeated identical call into a synthetic Tool result so the next turn has to change
-    strategy (and `_repeated_call_trip` stops the Run when the model does not).
+    strategy (and `_repeated_call_trip` stops the Run when the model does not). Shell commands are
+    included because the observed CAT run repeated one heredoc 227 times and another 124 times.
     """
     graph = view.context.snapshot.graph
     if graph is None:
@@ -2181,6 +2265,32 @@ def _repeated_call_trip(view: OperationView, repeated: frozenset[str]) -> str:
         "duplicate and not new evidence. The Run is stopped so the repetition cannot consume it; "
         "change the command, or answer with the evidence already held."
     )
+
+
+def _label_unsealed(text: str, labels: Sequence[str]) -> str:
+    """Prefix the answer with each label it does not already open with; the body is never rewritten.
+
+    The label is the declaring Skill's own text, so a model that already opened the answer with it
+    (bold, heading or quote markup aside) is left alone and a second pass over a revised answer adds
+    nothing. Only the answer's opening lines count, one per label: the same words further down are
+    prose, not the label. An empty answer stays empty, so the empty-answer guard still sees it.
+    """
+    if not text.strip():
+        return text
+    opening = [line.lstrip("#*> \t") for line in text.splitlines() if line.strip()][: len(labels)]
+    missing = [label for label in labels if not any(line.startswith(label) for line in opening)]
+    return "".join(f"**{label}**\n\n" for label in missing) + text
+
+
+def _latest_input_is_child_notification(view: OperationView) -> bool:
+    """Whether the current turn answers a Child result rather than the owner's request."""
+    graph = view.context.snapshot.graph
+    if graph is None:
+        return False
+    for item in reversed(graph.ancestry()):
+        if isinstance(item, UserMessageEntry):
+            return item.origin == "child_notification"
+    return False
 
 
 def _duplicates(values: Iterable[str]) -> list[str]:

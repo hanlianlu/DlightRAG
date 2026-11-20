@@ -1,8 +1,8 @@
 /* DlightRAG Web Frontend — Immersive Chat Design
  *
- * Fluid design system: type, spacing, and layout scale with viewport width.
- * On phones (390px) → compact but readable.
- * On laptops (1440px) → slightly more relaxed without changing UI character.
+ * Type scales with the viewport width (body text is 15px at 390px and 15.5px at 1440px). Spacing is
+ * a fixed rem scale, and layout widths clamp against the viewport. A phone and a laptop share one UI
+ * character: spacing and layout hold, and only the type breathes.
  *
  * layout.css — Static layout shell: topbar, workspace selector (static parts),
  * chat area container, composer, panel (slide-out), welcome state, workspace
@@ -160,7 +160,7 @@ body.files-panel-open #files-btn {
     padding: 0 var(--space-component);
     border-radius: var(--radius-control);
     cursor: pointer;
-    transition: color 0.15s, background 0.15s;
+    transition: color var(--duration-control), background var(--duration-control);
     text-transform: none;
 }
 
@@ -202,7 +202,7 @@ body.files-panel-open #files-btn {
     max-width: 100%;
     min-width: 0;
     padding: 0 var(--space-related);
-    transition: background 0.15s, border-color 0.15s;
+    transition: background var(--duration-control), border-color var(--duration-control);
     user-select: none;
     white-space: nowrap;
 }
@@ -332,16 +332,20 @@ body.files-panel-open #files-btn {
 
 .app:not(.has-messages) .welcome {
     min-height: 42vh;
-    padding-top: clamp(17vh, 18vh, 20vh);
+    padding-top: 18vh;
     padding-bottom: var(--space-section);
 }
 
 .app:not(.has-messages) .composer {
     flex: 0 0 auto;
-    padding-bottom: clamp(28vh, 30vh, 32vh);
+    padding-bottom: 30vh;
 }
 
 .composer-form {
+    /* The size of the text a reader types, which the textarea, its mirror, and the input line's
+       minimum height all follow. A touch pointer takes the entry floor (see the media query below). */
+    --composer-text-size: var(--font-size-body);
+
     position: relative;
     display: flex;
     align-items: center;
@@ -349,27 +353,35 @@ body.files-panel-open #files-btn {
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-composer);
     padding: var(--space-composer-y) var(--space-composer-trailing) var(--space-composer-y) var(--space-inline);
-    transition: border-color 0.2s, box-shadow 0.2s;
+    transition: border-color var(--duration-overlay), box-shadow var(--duration-overlay);
 }
 
 .composer-form:focus-within {
-    border-color: var(--color-accent-border-soft);
+    border-color: var(--color-control-ring);
     box-shadow: 0 0 0 2px var(--color-accent-ghost);
 }
 
+@media (pointer: coarse) {
+    .composer-form {
+        --composer-text-size: var(--font-size-touch-entry);
+    }
+}
+
+/* Block, not the textarea's default inline-block: on the wrap's baseline it
+   leaves a descender gap below, and the centred wrap carries the text up. */
 .composer-input {
+    display: block;
     width: 100%;
     position: relative;
     z-index: 1;
     background: transparent;
     border: none;
     color: var(--color-text-primary);
-    font-size: var(--font-size-body);
+    font-size: var(--composer-text-size);
     font-family: inherit;
     line-height: var(--line-height-control);
     padding: 0;
-    margin-left: var(--space-inline);
-    min-height: calc(var(--font-size-body) * var(--line-height-control));
+    min-height: calc(var(--composer-text-size) * var(--line-height-control));
     outline: none;
     resize: none;
     max-height: 160px;
@@ -392,7 +404,7 @@ body.files-panel-open #files-btn {
     background: transparent;
     color: var(--color-text-muted);
     font: inherit;
-    font-size: 0.75rem;
+    font-size: var(--font-size-detail);
     min-height: var(--size-button);
     min-width: var(--size-button);
     padding: 0.25rem 0.4rem;
@@ -444,22 +456,27 @@ body.files-panel-open #files-btn {
 /* Skill directive combobox: ghost preview in the input plus a bounded
    suggestion panel anchored above the composer. */
 .composer-input-wrap {
+    /* The text starts this far in from the wrap's edge. The textarea fills what is left of the wrap and
+       the mirror is inset by the same measure, so the two are one box and wrap the draft at one width. */
+    --composer-text-inset: var(--space-inline);
+
     position: relative;
     flex: 1;
+    padding-inline-start: var(--composer-text-inset);
 }
 
 .composer-input-mirror {
     position: absolute;
     inset: 0;
+    inset-inline-start: var(--composer-text-inset);
     z-index: 0;
     pointer-events: none;
     white-space: pre-wrap;
     overflow: hidden;
     font: inherit;
-    font-size: var(--font-size-body);
+    font-size: var(--composer-text-size);
     line-height: var(--line-height-control);
     color: transparent;
-    margin-left: var(--space-inline);
 }
 
 .composer-input-mirror .skill-ghost-text {
@@ -508,14 +525,14 @@ body.files-panel-open #files-btn {
 
 .skill-menu-name {
     font-weight: 600;
-    font-size: 0.8rem;
+    font-size: var(--font-size-detail);
     flex-shrink: 0;
 }
 
 .skill-menu-desc {
     flex: 1;
     min-width: 0;
-    font-size: 0.72rem;
+    font-size: var(--font-size-caption);
     color: var(--color-text-muted);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -523,7 +540,7 @@ body.files-panel-open #files-btn {
 }
 
 .skill-menu-source {
-    font-size: 0.65rem;
+    font-size: var(--font-size-caption);
     color: var(--color-text-muted);
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-circle);
@@ -536,10 +553,97 @@ body.files-panel-open #files-btn {
     border-color: var(--color-accent-border-soft);
 }
 
+.command-menu-item {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr) max-content;
+    align-items: baseline;
+    gap: 0.5rem;
+    border: none;
+    background: transparent;
+    text-align: left;
+    font: inherit;
+    min-height: var(--size-button);
+    padding: 0.35rem 0.5rem;
+    border-radius: var(--radius-control);
+    cursor: pointer;
+    color: var(--color-text-primary);
+}
+
+.command-menu-item:hover,
+.command-menu-item.active {
+    background: var(--color-bg-elevated);
+}
+
+.command-menu-name {
+    color: var(--color-accent-text);
+    font-family: monospace;
+    font-size: var(--font-size-detail);
+    font-weight: 600;
+}
+
+.command-menu-desc {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.command-menu-hint {
+    max-width: 22ch;
+    overflow: hidden;
+    color: var(--color-text-subtle);
+    font-family: monospace;
+    font-size: var(--font-size-caption);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .skill-notice {
     padding: 0.4rem var(--space-inline) 0;
     color: var(--color-danger);
-    font-size: 0.75rem;
+    font-size: var(--font-size-detail);
+}
+
+.command-hint {
+    padding: 0.4rem var(--space-inline) 0;
+    color: var(--color-text-muted);
+    font-family: monospace;
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+}
+
+/* A server-kept command is a system notice, not a card: the goal's state lives in the goal bar,
+   so the transcript keeps only the handshake as one muted line. */
+.command-node {
+    align-items: baseline;
+    color: var(--color-text-subtle);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 var(--space-2xs);
+    margin: 0 0 var(--space-tight);
+    max-width: 100%;
+}
+
+.command-node[data-tone='error'] {
+    color: var(--color-danger);
+}
+
+.command-node-line {
+    flex: 0 0 auto;
+    font-family: monospace;
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+}
+
+.command-node-text {
+    flex: 1 1 auto;
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    min-width: 0;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
 }
 
 .composer-mode-menu button,
@@ -549,7 +653,7 @@ body.files-panel-open #files-btn {
     color: var(--color-text-primary);
     text-align: left;
     font: inherit;
-    font-size: 0.8rem;
+    font-size: var(--font-size-detail);
     min-height: var(--size-button);
     padding: 0.35rem 0.5rem;
     border-radius: var(--radius-control);
@@ -568,7 +672,7 @@ body.files-panel-open #files-btn {
 
 .composer-effort-default {
     color: var(--color-text-muted);
-    font-size: 0.7rem;
+    font-size: var(--font-size-caption);
 }
 
 .composer-mode-menu button:hover,
@@ -609,7 +713,7 @@ body.files-panel-open #files-btn {
     color: var(--color-on-action);
     cursor: pointer;
     flex-shrink: 0;
-    transition: background 0.15s, color 0.15s, transform var(--duration-instant);
+    transition: background var(--duration-control), color var(--duration-control), transform var(--duration-instant);
 }
 
 .composer-send:hover {
@@ -627,6 +731,33 @@ body.files-panel-open #files-btn {
     transform: none;
 }
 
+/* Queue or steer: the one choice a send has while a Run is live. One quiet button
+   states the current delivery and switches it, and it appears only while the reader
+   is writing, so a composer with nothing to send keeps no extra control. */
+.composer-delivery {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-control);
+    color: var(--color-text-muted);
+    cursor: pointer;
+    flex-shrink: 0;
+    font: inherit;
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    min-height: var(--size-button);
+    padding: 0 var(--space-2xs);
+}
+
+.composer-delivery:hover {
+    color: var(--color-text-primary);
+    background: var(--color-bg-hover);
+}
+
+.composer-delivery:focus-visible {
+    outline: 2px solid var(--color-control-ring);
+    outline-offset: 2px;
+}
+
 /* Send ⇄ Steer ⇄ Stop: swap the paper-plane for a stop square while an answer
    streams with no text; with text the same button steers the live run. */
 .composer-send-icon--stop {
@@ -639,10 +770,6 @@ body.files-panel-open #files-btn {
 
 .composer-send.is-stop .composer-send-icon--stop {
     display: block;
-}
-
-.composer-send.is-steer {
-    background: var(--color-action-bg-hover);
 }
 
 /* === Composer + Button === */
@@ -661,7 +788,7 @@ body.files-panel-open #files-btn {
     cursor: pointer;
     flex-shrink: 0;
     border-radius: var(--radius-circle);
-    transition: color 0.15s, background 0.15s;
+    transition: color var(--duration-control), background var(--duration-control);
 }
 
 .composer-plus-icon {

@@ -26,7 +26,7 @@ from dlightrag.adapters.http.rest.routes import router
 from dlightrag.engine.answer.client_contracts import MAX_QUERY_IMAGES
 
 if TYPE_CHECKING:
-    from dlightrag.application.config import DlightragConfig
+    from dlightrag.application.config.sections import DlightragConfig
 
 logger = logging.getLogger(__name__)
 
@@ -101,13 +101,13 @@ def create_app() -> FastAPI:
     from dlightrag.adapters.http.browser.auth import WebAuthMiddleware
     from dlightrag.adapters.http.browser.routes import router as web_router
     from dlightrag.adapters.http.browser.static_files import STATIC_DIR, WebStaticFiles
-    from dlightrag.application.config import get_config
+    from dlightrag.application.config.loading import get_config
 
     cfg = get_config()
 
     application = FastAPI(
         title="dlightrag",
-        description="DlightRAG - LightRAG-main unified multimodal RAG service",
+        description="DlightRAG - an agent that runs long, reads deep, and remembers",
         version=__import__("dlightrag").__version__,
         lifespan=lifespan,
         responses=INVALID_REQUEST_RESPONSES,
@@ -139,6 +139,11 @@ def create_app() -> FastAPI:
 
     install_error_handlers(application)
 
+    # -- Well-known documents, before any session middleware --
+    from dlightrag.adapters.http.well_known import router as well_known_router
+
+    application.include_router(well_known_router)
+
     # -- API routes --
     application.include_router(router)
 
@@ -166,7 +171,7 @@ def main() -> None:
 
     import uvicorn
 
-    from dlightrag.application.config import get_config, load_config, set_config
+    from dlightrag.application.config.loading import get_config, load_config, set_config
 
     parser = argparse.ArgumentParser(
         description="dlightrag REST API server",

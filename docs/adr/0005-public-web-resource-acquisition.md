@@ -1,12 +1,22 @@
 # Public Web Resource Acquisition and Provider-Neutral Web Sources
 
-Research admits a known public HTTP(S) URL through `read`, not through a separate browser-opening tool. The Host turns a successful read into a durable Web Resource and Evidence snapshot. Web Search and hosted extraction use provider-neutral seams with separate Exa and Tavily adapters; arbitrary Bash network output remains non-citable model context.
+Research admits a known public HTTP(S) URL through `read`, not through a separate browser-opening tool. The Host turns a successful read into a durable Web Resource and Evidence snapshot. Web Search and hosted extraction use provider-neutral seams with separate Exa, Tavily, and DeepSeek adapters; arbitrary Bash network output remains non-citable model context.
 
 ## Status
 
 Accepted and implemented. Current-state architecture, security, retrieval, and configuration documentation describe the landed vertical slice.
 
 Amended by [ADR 0032](0032-the-agent-browser.md): the acquisition set gains `browser_render`, the representation a Rendered Read appends to a Web Resource, and reading a page as a browser renders it is no longer outside this decision. Capture, download, and interaction arrive with that decision's later slices.
+
+## Amendment 2026-10-17: DeepSeek as the third provider
+
+DeepSeek joins as a third first-class provider, `deepseek`, for both chains: its Search endpoint is a Search provider and its Fetch endpoint is an Extract provider, through the same REST seam as Exa and Tavily. A derived order is `exa`, `tavily`, `deepseek`; the Extract chain then ends in the Agent Browser as before. Its Search hits and extracted pages carry the `deepseek_search` and `deepseek_extract` acquisitions, and it reports no cost, as Tavily does. The decisions this adds:
+
+- **A 128-code-point query budget.** Search accepts at most 128 characters of query, operators included, and takes `site:`, `-site:`, `after:` and `before:` inside the query. The adapter composes `<text> <operators>`: the date operators always, a domain operator group (`site:a OR site:b`, `-site:x -site:y`) only when it leaves the text at least 32 characters (or all of it, when shorter), and the text takes what is left, cut at a word when that keeps half the budget and where the budget ends otherwise (CJK has no spaces to cut at). The model-facing `query` asks for a short run of key terms, under about 100 characters, so the cut is the exception.
+- **Domain filters are enforced client-side.** Whether or not the operators made it into the query, the adapter keeps only results whose host is an included domain or a subdomain of one, and none from an excluded one. A filtered-out result is filtered, not malformed, and is not counted as dropped. Every provider therefore has the same filter semantics. Effort has no DeepSeek knob: `fast` and `balanced` send the same request, which asks for the query-relevant `summary` (falling back to `snippet`) and not the page content.
+- **Fetch is Extract without a final URL.** Fetch returns a title and Markdown content only, so the result keeps the requested URL. A URL over Fetch's 8192-character limit is `unsupported_url` and goes to the next step; `403` (refused by Fetch's security policy) reads as `refused` and `404` (no usable content) as `empty`.
+- **One retry for a `429`, and `throttled` does not cool.** DeepSeek's limits are per second (5 QPS each for Search and Fetch, and Fetch per target domain), so the adapter waits about a second with a little jitter and asks once more, inside the operation's one timeout. If that is also refused the call fails as `throttled`, which is not a cooling reason: leaving DeepSeek alone for a minute would answer a one-second limit with a sixty-second outage. This is the one retry a provider adapter makes, and it narrows "adapters neither retry nor back off" only for this limit. `401` and `402` cool as for every provider.
+- **Setup.** After the Exa/Tavily choice the wizard asks whether to add DeepSeek as the last fallback of both chains. If a chat model in `.env` runs on `api.deepseek.com`, it offers to reuse that key; otherwise it asks for one.
 
 ## Read/view refinement
 
@@ -33,7 +43,7 @@ Browser automation is a different capability. It owns rendered state and interac
 
 ### Web Resource and `read(url)`
 
-A **Web Resource** is a run-scoped public HTTP(S) source represented by a Resource Handle. Its resource kind is Web; its admission origin (`caller`, `search`, or `agent`) and acquisition method (`direct_http`, `exa_extract`, `tavily_extract`, or `browser_render`) are independent provenance facts. Web Search discovers Web Resources but is not the direct reading of one.
+A **Web Resource** is a run-scoped public HTTP(S) source represented by a Resource Handle. Its resource kind is Web; its admission origin (`caller`, `search`, or `agent`) and acquisition method (`direct_http`, `exa_extract`, `tavily_extract`, `deepseek_extract`, or `browser_render`) are independent provenance facts. Web Search discovers Web Resources but is not the direct reading of one.
 
 Extend the existing `read` tool with a URL input. One call validates, acquires, admits, and returns the first bounded view plus its Resource Handle; no separate `open_url` or `register_url` step exists. Existing path and handle inputs remain mutually exclusive with URL input. Generic Agent Core owns only the optional multi-target `read` contract and delegates resource-id or URL targets through a Host callback; it never fetches a URL or imports Answer. A Host without URL-reading capability does not advertise that input branch. Answer owns URL admission rather than registering a second tool named `read`.
 
@@ -87,15 +97,16 @@ dlightrag/engine/answer/web_sources/
   service.py
   exa.py
   tavily.py
+  deepseek.py
 
 dlightrag/engine/answer/tools/web_search.py
 ```
 
-`web_sources` is named for both discovery and hosted extraction; extraction is not search. Its package facade is narrow. Provider-neutral contracts describe search requests and hits, extraction requests and results, usage, and a closed error taxonomy. `service.py` hides provider selection and fallback; adapters normalize provider responses, while Answer records available cost diagnostics. `exa.py` and `tavily.py` separately own their provider APIs. The model-facing tool is a thin adapter over the service and never selects providers.
+`web_sources` is named for both discovery and hosted extraction; extraction is not search. Its package facade is narrow. Provider-neutral contracts describe search requests and hits, extraction requests and results, usage, and a closed error taxonomy. `service.py` hides provider selection and fallback; adapters normalize provider responses, while Answer records available cost diagnostics. `exa.py`, `tavily.py`, and `deepseek.py` separately own their provider APIs. The model-facing tool is a thin adapter over the service and never selects providers.
 
 Tavily is integrated through its REST API as a first-class provider, not as an outbound MCP tool. It implements separate Search and Extract contracts. Search snippets are admitted immediately as provider-extracted Evidence, with acquisition metadata that does not claim they are full-page snapshots; the Agent reads a returned Resource Handle only when it needs more content. Provider-generated answer prose is not authoritative Evidence; DlightRAG admits normalized source hits or exact extracted representations and retains the actual source URL as the citation locator. Provider identity remains acquisition metadata and trace data.
 
-Search and Extract have independent ordered provider chains. When order is not explicitly configured, it is derived from configured credentials in the canonical `exa`, then `tavily` order. An explicitly named provider without required credentials is a configuration error. Direct HTTP always precedes the hosted Extract chain and is not itself a provider entry. Search stops at the first successful provider response, including a valid empty result; Extract requires a non-empty usable representation. The first implementation does not fan out, merge, or calibrate rankings across providers, and the model does not select a provider.
+Search and Extract have independent ordered provider chains. When order is not explicitly configured, it is derived from configured credentials in the canonical `exa`, `tavily`, then `deepseek` order. An explicitly named provider without required credentials is a configuration error. Direct HTTP always precedes the hosted Extract chain and is not itself a provider entry. Search stops at the first successful provider response, including a valid empty result; Extract requires a non-empty usable representation. The first implementation does not fan out, merge, or calibrate rankings across providers, and the model does not select a provider.
 
 The model-facing Search contract exposes only provider-neutral research intent: one query, `max_results` (default 10, range 1–20), included/excluded domains, optional start/end publication dates, and relative `effort` (`fast` or `balanced`; default `balanced`). Adapters map effort to the nearest provider-native latency/relevance tier without enabling provider-generated answers, and never enable a provider's agentic or research tier (Exa `deep*` types, Exa and Tavily research endpoints, Tavily `auto_parameters`): the Agent does its own multi-step search. Provider-specific type, depth, topic, and provider choice remain behind the seam. Repeating an identical Search request performs a new provider call; discovery results are not Run snapshots, while Evidence still deduplicates identical passages and URLs. A partially malformed response admits its complete valid hits and reports the dropped count; a structurally valid response with zero valid hits is a successful empty result and does not trigger quality-based fallback.
 
@@ -107,7 +118,7 @@ Provider configuration moves from the Exa-implied `answer.web_search.api_key` to
 
 `prerequisite_setup.py` gives optional Web providers their own step after required models and document parsing, plus a separate `Web research` entry under Change settings. Skipping is the default and never makes setup incomplete: public `read(url)` remains available, while Search and hosted extraction are reported as unconfigured. The secret-free summary shows Direct URL read availability, effective Search and Extract order, and whether each provider key is set.
 
-The novice path chooses none, Exa, Tavily, or both. A single provider becomes both chains; when both are selected, the user can choose one common order or independent Search/Extract priority. Provider keys are written only to `.env`; behavior and order remain in `config.yaml`. Applying Web settings follows the existing confirm, backup, canonical-load validation, and rollback journey and never resets Corpus data.
+The novice path chooses none, Exa, Tavily, or both, and then whether to add DeepSeek as the last fallback of both chains. A single provider becomes both chains; when both are selected, the user can choose one common order or independent Search/Extract priority. Provider keys are written only to `.env`; behavior and order remain in `config.yaml`. Applying Web settings follows the existing confirm, backup, canonical-load validation, and rollback journey and never resets Corpus data.
 
 The wizard may explicitly migrate a detected legacy `DLIGHTRAG_ANSWER__WEB_SEARCH__API_KEY` to the Exa provider key after confirmation and then remove the legacy entry. This one-time setup migration does not make the old key a runtime alias. Setup validates configuration and reports credentials as `set`, not `verified`; it does not make live provider calls whose transient network or quota failures would block onboarding.
 
@@ -121,7 +132,7 @@ Mandatory local safety bounds remain: per-response bytes after decoding, redirec
 
 `read(url)` is not valuable because its HTTP client is more capable than `curl`; it is valuable because the Host can attest and durably settle the relationship between locator, representation, Resource Handle, and Evidence. Keeping direct transport, provider APIs, resource admission, and the model tool as separate owners preserves that guarantee without making one Web utility a god module.
 
-Provider-specific files contain unstable external schemas. The narrow service facade prevents Exa or Tavily fields, costs, and failure conventions from leaking into tools, resources, citations, or configuration consumers. Independent Search and Extract chains preserve capability semantics while allowing either provider to be primary or fallback.
+Provider-specific files contain unstable external schemas. The narrow service facade prevents Exa, Tavily, or DeepSeek fields, costs, and failure conventions from leaking into tools, resources, citations, or configuration consumers. Independent Search and Extract chains preserve capability semantics while allowing either provider to be primary or fallback.
 
 Avoiding an arbitrary URL-count quota preserves open-ended research. Retaining per-operation bounds and shared concurrency protects worker availability without confusing system safety with research quality.
 
@@ -147,6 +158,6 @@ The configuration key for existing Exa deployments changes and must be documente
 
 This decision lands before product operation, so changed `read` and `search_web` schemas replace the current contracts directly. The implementation does not add legacy tool variants, active-Run deployment gates, or pinned-plan migration machinery for development data; developers reset or cancel incompatible local Runs when necessary.
 
-Public HTTP extraction must close the current DNS validation/use gap before Agent-selected URLs are enabled. Tests must cover actual-target policy, redirects, decompression/byte limits, same-Run snapshot reuse, failed-attempt retry, full process recovery and continuation, Child evidence admission, provider ordering, effort mapping, partial malformed results, fallback classification, and the absence of Exa/Tavily fields outside their adapters.
+Public HTTP extraction must close the current DNS validation/use gap before Agent-selected URLs are enabled. Tests must cover actual-target policy, redirects, decompression/byte limits, same-Run snapshot reuse, failed-attempt retry, full process recovery and continuation, Child evidence admission, provider ordering, effort mapping, partial malformed results, fallback classification, and the absence of Exa/Tavily/DeepSeek fields outside their adapters.
 
 Browser automation, rendered-page interaction, authenticated browsing, and general crawling remain outside this decision.

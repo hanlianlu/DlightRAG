@@ -10,7 +10,9 @@ from urllib.parse import quote, unquote, urlsplit
 from dlightrag.engine.ai.telemetry import safe_log_text
 from dlightrag.engine.answer.citations.contracts import SourceReference, SourceReferencePayload
 from dlightrag.engine.answer.citations.utils import REQUEST_OWNED_WORKSPACES
-from dlightrag.engine.rag.retrieval import RetrievalContexts
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalContexts,
+)
 
 logger = logging.getLogger(__name__)
 

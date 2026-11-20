@@ -6,8 +6,8 @@ import json
 import pytest
 from pydantic import SecretStr
 
-from dlightrag.application.connections import ConnectionsError
 from dlightrag.application.connections.credentials import GRANT_LABEL, GrantCipher
+from dlightrag.application.connections.models import ConnectionsError
 from dlightrag.engine.credential_cipher import CredentialCipher
 
 KEYRING = json.dumps(
@@ -74,7 +74,7 @@ def test_config_import_does_not_eagerly_load_answer_through_connection_policy():
         [
             sys.executable,
             "-c",
-            "import sys; from dlightrag.application.config import DlightragConfig; assert not any(m.startswith('dlightrag.engine.answer') for m in sys.modules); from dlightrag.application.connections import Connections",
+            "import sys; from dlightrag.application.config.sections import DlightragConfig; assert not any(m.startswith('dlightrag.engine.answer') for m in sys.modules); from dlightrag.application.connections.service import Connections",
         ],
         capture_output=True,
         text=True,

@@ -8,14 +8,20 @@ from dataclasses import replace
 import pytest
 from pydantic import ValidationError
 
-from dlightrag.engine.agent.environment import AccessScheduler
+from dlightrag.engine.agent.environment.access import (
+    AccessScheduler,
+)
 from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
 from dlightrag.engine.agent.tool_content import (
     decode_tool_content,
     encode_tool_content,
     tool_content_attachments,
 )
-from dlightrag.engine.agent.tools import ToolEffects, ToolResult, fit_tool_result
+from dlightrag.engine.agent.tools.capacity import fit_tool_result
+from dlightrag.engine.agent.tools.contracts import (
+    ToolEffects,
+    ToolResult,
+)
 from dlightrag.engine.agent.tools.files import (
     RenderedReadArgs,
     ViewArgs,
@@ -25,14 +31,18 @@ from dlightrag.engine.agent.tools.files import (
 )
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY
 from dlightrag.engine.ai.tokens import estimate_tokens
-from dlightrag.engine.answer.agent_browser import browser_failure
+from dlightrag.engine.answer.agent_browser.contracts import (
+    browser_failure,
+)
 from dlightrag.engine.answer.resource_settlement import attached_resource_update
 from dlightrag.engine.answer.resources.converters import ResourceConversionError
 from dlightrag.engine.answer.resources.models import ResourceInput, ResourceRegistryError
 from dlightrag.engine.answer.resources.registry import HostedExtract, ResourceRegistry
 from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
 from dlightrag.engine.answer.tools.resources import make_resource_reader, make_resource_viewer
-from dlightrag.engine.answer.web_sources import WebExtractResult
+from dlightrag.engine.answer.web_sources.contracts import (
+    WebExtractResult,
+)
 from dlightrag.engine.public_http import PublicHttpFetch
 from tests.support.agent_browser import RecordingRenderer
 from tests.support.dns import public_dns
@@ -45,7 +55,7 @@ from tests.support.resources import (
     printed_handle,
     tools,
 )
-from tests.tool_helpers import tool_runtime
+from tests.support.tool_helpers import tool_runtime
 from tests.unit.conftest import answer_model_profile
 
 
@@ -436,6 +446,33 @@ def test_rendered_is_offered_only_with_an_agent_browser_and_only_for_urls() -> N
     assert read_declaration(public_url=False, rendered=True) == read_declaration(public_url=False)
 
 
+def test_read_says_paging_belongs_to_a_workspace_path() -> None:
+    url_read = read_declaration(public_url=True)
+    offered = read_declaration(public_url=True, rendered=True)
+    properties = url_read.definition.parameters["properties"]
+
+    for declaration in (url_read, offered):
+        assert "takes no offset or limit" in declaration.description
+    assert "not accepted with url or resource_id" in properties["limit"]["description"]
+    assert "not accepted with url or resource_id" in properties["offset"]["description"]
+
+    path_only = read_declaration(public_url=False)
+    path_properties = path_only.definition.parameters["properties"]
+    assert "not accepted with resource_id" in path_properties["limit"]["description"]
+    assert "not accepted with resource_id" in path_properties["offset"]["description"]
+
+
+def test_a_non_path_read_refuses_path_paging_with_the_retry_that_works() -> None:
+    for declaration, arguments in (
+        (read_declaration(public_url=True), {"url": _APP, "limit": 300}),
+        (read_declaration(public_url=True), {"url": _APP, "offset": 2}),
+        (read_declaration(public_url=True, rendered=True), {"url": _APP, "limit": 300}),
+        (read_declaration(public_url=False), {"resource_id": "res-1", "limit": 20}),
+    ):
+        with pytest.raises(ValidationError, match="takes neither"):
+            declaration.input_model.model_validate(arguments)
+
+
 @pytest.mark.parametrize(
     ("arguments", "complaint"),
     [
@@ -560,7 +597,10 @@ async def test_a_text_longer_than_one_result_is_read_to_the_end_in_pages_the_run
         f"{index}. Quarterly revenue grew while operating margin held across all segments.\n"
         for index in range(line_count)
     )
-    assert estimate_tokens(text) > 2 * capacity
+    # The premise is that the text needs more than one window, not that it needs a specific
+    # number of them: the window is derived from the profile's capacity, so it moves with the
+    # reserve rather than staying a constant this fixture can outgrow.
+    assert estimate_tokens(text) > 1.5 * capacity
     async with ResourceRegistry(resource_secret=b"r", cursor_secret=b"c") as registry:
         resource = registry.register(
             ResourceInput(filename="long.txt", content=text.encode(), declared_mime="text/plain")

@@ -4,10 +4,7 @@
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from dlightrag.application.retrieval import (
-    ProjectedRetrieval,
-    RetrieveProjection,
-)
+from dlightrag.application.retrieval.service import ProjectedRetrieval, RetrieveProjection
 from dlightrag.engine.answer.capabilities import AnswerCapabilityCoordinator
 from dlightrag.engine.answer.citations.source_builder import build_sources
 from dlightrag.engine.answer.citations.sources import (
@@ -17,7 +14,9 @@ from dlightrag.engine.answer.citations.sources import (
 )
 from dlightrag.engine.answer.model_runtime import AnswerModelRuntime
 from dlightrag.engine.answer.resources.images import prepare_query_images
-from dlightrag.engine.rag.retrieval import RetrievalResult
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalResult,
+)
 
 
 class AnswerQueryImagePreparer:

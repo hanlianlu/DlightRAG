@@ -5,7 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from dlightrag.engine.agent.environment import build_child_environment
+from dlightrag.engine.agent.environment.child import (
+    build_child_environment,
+)
 
 
 def test_child_env_keeps_path_and_drops_seeded_secrets(
@@ -14,6 +16,7 @@ def test_child_env_keeps_path_and_drops_seeded_secrets(
     for name, value in {
         "PATH": "/usr/bin",
         "HOME": "/root",
+        "FONTS_DIR": "/opt/fonts",
         "SSH_AUTH_SOCK": "/tmp/ssh",
         "DLIGHTRAG_STORAGE__POSTGRES__PASSWORD": "secret",
         "POSTGRES_PASSWORD": "secret",
@@ -30,6 +33,9 @@ def test_child_env_keeps_path_and_drops_seeded_secrets(
     assert env["PATH"] == "/usr/bin"
     assert env["HOME"] == str(tmp_path / "home")
     assert env["TERM"] == "dumb"
+    # The Skill's second font path is a child's to read, so a Run on a developer machine can embed
+    # what `make fonts` installed.
+    assert env["FONTS_DIR"] == "/opt/fonts"
     assert "SSH_AUTH_SOCK" not in env
     assert "DLIGHTRAG_STORAGE__POSTGRES__PASSWORD" not in env
     assert "POSTGRES_PASSWORD" not in env

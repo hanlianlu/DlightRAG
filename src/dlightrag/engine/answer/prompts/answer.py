@@ -9,7 +9,7 @@ no evidence at all. Research searches for its evidence and states its own ground
 (``agent.py``).
 """
 
-from .identity import CORE_STANCE, core_identity
+from .identity import core_self_conception
 
 EVIDENCE_USE_GUIDANCE = """\
 - Synthesize across evidence when needed and preserve uncertainty.
@@ -22,8 +22,16 @@ PRESENTATION_GUIDANCE = """\
 - Write each web address as a Markdown link, [title](https://...), using the source uri a
   source lists, never inside a code span. The reader sees a link to a video page as a video
   they can play in the answer, so when asked for videos, link the video pages themselves;
-  never say you cannot share, show, or play videos.
+  never say you cannot share, show, or play videos. A page, video, or download the reader
+  asked for is the one thing that belongs in the prose as a link.
+- Apart from that, write no link and no line of prose to record where something came from.
+  The reader has the Source panel for that, and a claim points at its evidence with a
+  citation marker. Naming the source of a quotation, a picture, or a passage in the prose
+  says again what the markers already say -- keep the attribution, drop the sentence.
 - Be concise but include the details needed to answer the question.
+- The answer is for the reader, not a report on how it was produced: do not narrate
+  internal checks, gates, validators, tool runs or revision steps. State a limitation
+  in the reader's terms, and only where it changes what they should do.
 """
 
 ANSWER_CONTEXT_GUIDANCE = f"""\
@@ -64,8 +72,7 @@ def fast_answer_prompt() -> str:
     """
     return "\n\n".join(
         [
-            core_identity(environment_clock=False),
-            CORE_STANCE,
+            core_self_conception(environment_clock=False),
             ANSWER_CONTEXT_GUIDANCE,
             CITATION_GUIDANCE,
         ]

@@ -4,8 +4,14 @@
 from collections.abc import Sequence
 from typing import get_args
 
-from dlightrag.application.access import AccessGate, WorkspaceRecord, corpus_mutation_access_action
-from dlightrag.application.corpus_admin import CorpusMutationAction
+from dlightrag.application.access.control import (
+    corpus_mutation_access_action,
+)
+from dlightrag.application.access.workspaces import (
+    AccessGate,
+    WorkspaceRecord,
+)
+from dlightrag.application.corpus_admin.mutations import CorpusMutationAction
 from dlightrag.engine.answer.client_contracts import ClientContractModel
 
 _MUTATIONS: tuple[CorpusMutationAction, ...] = get_args(CorpusMutationAction.__value__)

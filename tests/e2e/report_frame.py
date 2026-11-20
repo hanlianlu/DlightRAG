@@ -23,8 +23,10 @@ _SHAPE = (
     "\"script-src 'unsafe-inline'\"",
     "document.currentScript.remove();",
     "sandbox=${this.active ? 'allow-scripts' : ''}",
+    '<!doctype html><html data-color-mode="${colorMode}">',
+    "dl-artifact-frame-color-mode",
     '\'<meta name="color-scheme" content="light dark"></head><body>\'',
-    "escapeBridge + source + '</body></html>'",
+    "bridge + source + '</body></html>'",
 )
 
 _VIOLATIONS = """
@@ -66,19 +68,27 @@ def permissions() -> str:
     return "; ".join(f"{name} 'none'" for name in _constant("PERMISSIONS", frame_source()))
 
 
-def wrapper_document(report: str, token: str = "report-test") -> str:
-    """The srcdoc the product builds for an active HTML Artifact."""
+def wrapper_document(report: str, token: str = "report-test", color_mode: str = "dark") -> str:
+    """The srcdoc the product builds for an active HTML Artifact, in the reader's colour mode."""
     source = frame_source()
     message = re.search(r"const ESCAPE_MESSAGE = '([^']+)'", source)
     assert message, "ESCAPE_MESSAGE is gone from active-artifact-frame.ts"
+    color_message = re.search(r"const COLOR_MODE_MESSAGE = '([^']+)'", source)
+    assert color_message, "COLOR_MODE_MESSAGE is gone from active-artifact-frame.ts"
     bridge = (
         f"<script>(()=>{{const token={json.dumps(token)};document.currentScript.remove();"
+        'window.addEventListener("message",event=>{'
+        "if(event.source!==parent||!event.data)return;"
+        f'if(event.data.type!=="{color_message.group(1)}"||event.data.token!==token)return;'
+        'const mode=event.data.mode==="light"?"light":"dark";'
+        'document.documentElement.setAttribute("data-color-mode",mode);'
+        "document.documentElement.style.colorScheme=mode;},true);"
         'window.addEventListener("keydown",event=>{'
         f'if(event.key==="Escape")parent.postMessage({{type:"{message.group(1)}",token}},"*");'
         "},true);})();</script>"
     )
     return (
-        '<!doctype html><html><head><meta charset="utf-8">'
+        f'<!doctype html><html data-color-mode="{color_mode}"><head><meta charset="utf-8">'
         f'<meta http-equiv="Content-Security-Policy" content="{policy()}">'
         '<meta name="referrer" content="no-referrer">'
         '<meta name="color-scheme" content="light dark"></head><body>'
@@ -101,7 +111,7 @@ class Observed:
 
 
 class ReportPage:
-    """One built report open in the product's sandbox at a width and colour scheme."""
+    """One built report open in the product's sandbox at a width and colour mode."""
 
     def __init__(
         self,
@@ -111,9 +121,17 @@ class ReportPage:
         width: int,
         height: int = 900,
         scheme: Literal["light", "dark"] = "light",
+        color_mode: Literal["light", "dark"] | None = None,
         touch: bool = False,
         ready: bool = True,
     ) -> None:
+        """``scheme`` is the system preference; ``color_mode`` is the product's own choice of it.
+
+        The product's frame hands its colour mode to the report, so the two differ when a reader
+        picks a mode the system does not; either one alone answers what the report should wear.
+        """
+        self.color_mode: Literal["light", "dark"] = color_mode or scheme
+        self.token = "report-test"
         self.context = browser.new_context(
             viewport={"width": width, "height": height},
             color_scheme=scheme,
@@ -130,14 +148,18 @@ class ReportPage:
         self.page.on("requestfailed", self._failed)
         self.page.on("response", self._response)
         self.page.set_content(
-            "<!doctype html><meta charset=utf-8><style>html,body{margin:0;background:white}"
+            f'<!doctype html><html data-color-mode="{self.color_mode}">'
+            "<head><meta charset=utf-8><style>html,body{margin:0;background:white}"
             "iframe{border:0;display:block;width:100vw;height:100vh;background:white}</style>"
+            "</head><body>"
             '<iframe id="artifact" title="report" sandbox="allow-scripts" '
-            f'referrerpolicy="no-referrer" allow="{permissions()}"></iframe>'
+            f'referrerpolicy="no-referrer" allow="{permissions()}"></iframe></body></html>'
         )
         self.page.evaluate(
             "(html) => { document.getElementById('artifact').srcdoc = html; }",
-            wrapper_document(report.read_text(encoding="utf-8")),
+            wrapper_document(
+                report.read_text(encoding="utf-8"), token=self.token, color_mode=self.color_mode
+            ),
         )
         handle = self.page.wait_for_selector("#artifact")
         frame = handle.content_frame() if handle else None
@@ -166,6 +188,19 @@ class ReportPage:
 
     def eval(self, script: str, arg: Any = None) -> Any:
         return self.frame.evaluate(script, arg)
+
+    def switch_color_mode(self, mode: Literal["light", "dark"]) -> None:
+        """The product's frame after the reader switches: the host attribute moves, then the frame
+        hands the new mode to the document — the same attribute and message the real frame sends."""
+        self.color_mode = mode
+        self.page.evaluate(
+            """({token, mode}) => {
+              document.documentElement.setAttribute('data-color-mode', mode);
+              document.getElementById('artifact')?.contentWindow?.postMessage(
+                {type: 'dl-artifact-frame-color-mode', token, mode}, '*');
+            }""",
+            {"token": self.token, "mode": mode},
+        )
 
     def screenshot(self, path: Path) -> None:
         """A full-page shot: the frame grows to its document so the whole report is in view."""

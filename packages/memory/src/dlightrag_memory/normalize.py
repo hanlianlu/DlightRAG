@@ -21,4 +21,13 @@ def normalized_body(text: str) -> str:
     return " ".join(stripped.split())
 
 
-__all__ = ["normalized_body"]
+def single_spaced(text: str) -> str:
+    """``text`` with every run of whitespace, line breaks included, made one space.
+
+    Nothing else changes: not the case, not the width of a character. It is how a quote is held
+    to what the owner wrote, which may differ from it in whitespace alone.
+    """
+    return " ".join(text.split())
+
+
+__all__ = ["normalized_body", "single_spaced"]

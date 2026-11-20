@@ -3,8 +3,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from dlightrag.application.config import DlightragConfig
-from dlightrag.application.settings import rag_settings
+from dlightrag.application.config.sections import DlightragConfig
+from dlightrag.application.settings.projections import rag_settings
 from dlightrag.engine.rag.corpus.downloads import (
     LocalDownloadTarget,
     RedirectDownloadTarget,
@@ -17,7 +17,7 @@ from dlightrag.engine.rag.corpus.sources.aws_s3 import S3CredentialsUnavailable
 from dlightrag.engine.rag.retrieval.metadata_fields import (
     INGEST_FINALIZATION_COMPLETE_FIELD,
 )
-from tests.config_helpers import mutate_config
+from tests.support.config_helpers import mutate_config
 
 
 def _service(

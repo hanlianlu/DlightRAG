@@ -14,8 +14,13 @@ from PIL import Image
 
 from dlightrag.engine.agent.environment.access import AccessScheduler
 from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
+from dlightrag.engine.agent.session.ids import IntentId
 from dlightrag.engine.agent.tool_content import decode_tool_content, encode_tool_content
-from dlightrag.engine.agent.tools import ResourceAttachmentBytes, ToolResult
+from dlightrag.engine.agent.tools.contracts import (
+    DeclaredSource,
+    ResourceAttachmentBytes,
+    ToolResult,
+)
 from dlightrag.engine.agent.tools.files import (
     PreparedImageAttachment,
     materialize_tool,
@@ -31,6 +36,9 @@ from dlightrag.engine.answer.resources.lineage import (
     SNAPSHOT_KIND,
     LineageAdoptionConflict,
     LineageResourceBytes,
+    declared_sources,
+    declared_sources_attribute,
+    declared_sources_capability,
 )
 from dlightrag.engine.answer.resources.models import (
     ResourceAdmissionError,
@@ -48,7 +56,7 @@ from dlightrag.engine.answer.tools.resources import (
 from dlightrag.engine.runtime.coordinator import LeaseLostError
 from dlightrag.engine.runtime.records import RunFetchedResource
 from tests.support.resources import printed_handle
-from tests.tool_helpers import tool_runtime
+from tests.support.tool_helpers import tool_runtime
 from tests.unit.conftest import answer_image_policy
 
 EARLIER_HANDLE = "res-earlier-run-handle"
@@ -1157,3 +1165,79 @@ def test_the_manifest_leaves_an_earlier_resource_id_to_adoption() -> None:
 
     assert "resource id printed by an earlier turn may still resolve" in text
     assert "cursor printed by an earlier turn is historical" in text
+
+
+async def test_what_a_product_was_built_from_survives_its_adoption(tmp_path) -> None:
+    """A later Run that reopens a deliverable gets its provenance, not only its bytes.
+
+    The declaration rides on the published product's Resource row; adopting the product must
+    carry it into this Run's Resource, or the tool that reopens the file can restore the file
+    and not the program that produced it (ADR 0052).
+    """
+    document = adopted_document(with_snapshot=False)
+    lineage = Loader(
+        replace(
+            document,
+            sources=(
+                DeclaredSource("report.docx.build.py", "res-build"),
+                DeclaredSource("data.csv", "res-data"),
+            ),
+        )
+    )
+    async with ResourceRegistry() as registry:
+        copy = materializing(registry, tmp_path, lineage=lineage)
+
+        result = await call(copy, resource_id=EARLIER_HANDLE, path="tmp/earlier.pdf")
+
+        assert result.is_error is False, result.text_content
+        canonical = registry.canonical_resource_id(EARLIER_HANDLE)
+        admitted = await registry.admitted_bytes(
+            canonical, effect_owner=ResourceEffectOwner("session", IntentId.new())
+        )
+        assert admitted.sources == (
+            DeclaredSource("report.docx.build.py", "res-build"),
+            DeclaredSource("data.csv", "res-data"),
+        )
+        # The adoption row carries the same fact, which is what a resumed Run restores from.
+        (recorded,) = lineage.recorded
+        attributes = dict(recorded[0].attributes)
+        assert "report.docx.build.py" in attributes["sources"]
+
+
+@pytest.mark.parametrize(
+    ("stored", "expected"),
+    [
+        # What publication writes on the product's own row.
+        (
+            [{"path": "build.py", "resource_id": "res-build"}],
+            (DeclaredSource("build.py", "res-build"),),
+        ),
+        # What the adoption record repeats, because a row's own attributes are strings.
+        (
+            '[{"path": "build.py", "resource_id": "res-build"}]',
+            (DeclaredSource("build.py", "res-build"),),
+        ),
+        ([], ()),
+        ("not json", ()),
+        ("[]", ()),
+        ({"path": "build.py", "resource_id": "res-build"}, ()),
+        ([{"path": "build.py"}], ()),
+        ([{"path": 7, "resource_id": "res-build"}], ()),
+        ([{"path": "../escape.py", "resource_id": "res-build"}], ()),
+        ([{"path": "/etc/passwd", "resource_id": "res-build"}], ()),
+        ([{"path": "a\\b.py", "resource_id": "res-build"}], ()),
+    ],
+)
+def test_declared_sources_reads_only_what_a_publication_could_have_written(
+    stored, expected
+) -> None:
+    """A product's provenance is read defensively: a value that is not its own write is nothing."""
+    assert declared_sources({"sources": stored}) == expected
+
+
+def test_declared_sources_round_trip_through_both_shapes() -> None:
+    declared = (DeclaredSource("build.py", "res-build"), DeclaredSource("data.csv", "res-data"))
+
+    assert declared_sources({"sources": declared_sources_capability(declared)}) == declared
+    assert declared_sources(dict(declared_sources_attribute(declared))) == declared
+    assert declared_sources_attribute(()) == ()

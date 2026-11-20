@@ -9,12 +9,20 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from dlightrag.engine.agent.environment import AccessScheduler, FullOutputUnavailable
-from dlightrag.engine.agent.environment.errors import TOOL_RESULT_MAX_BYTES
+from dlightrag.engine.agent.environment.access import (
+    AccessScheduler,
+)
+from dlightrag.engine.agent.environment.errors import (
+    TOOL_RESULT_MAX_BYTES,
+    FullOutputUnavailable,
+)
 from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
 from dlightrag.engine.agent.environment.toolchain import SearchToolchain
-from dlightrag.engine.agent.tools import ToolResult, ToolRuntime
-from dlightrag.engine.agent.tools.contracts import CommittedOutput
+from dlightrag.engine.agent.tools.contracts import (
+    CommittedOutput,
+    ToolResult,
+    ToolRuntime,
+)
 from dlightrag.engine.agent.tools.files import (
     BashArgs,
     EditArgs,
@@ -36,7 +44,7 @@ from dlightrag.engine.agent.tools.files import (
     write_tool,
 )
 from tests.support.path_tools import path_tools
-from tests.tool_helpers import recording_tool_runtime, tool_runtime
+from tests.support.tool_helpers import recording_tool_runtime, tool_runtime
 
 
 def _env(tmp_path: Path) -> tuple[LocalExecutionEnvironment, AccessScheduler]:
@@ -104,6 +112,239 @@ async def test_batch_edit_is_unique_atomic_and_returns_a_patch(tmp_path: Path) -
     assert "first change line 1" in done.text_content
     assert "--- note.txt" in done.text_content
     assert (tmp_path / "note.txt").read_text(encoding="utf-8") == "first alpha\nfinal\n"
+
+
+@pytest.mark.asyncio
+async def test_edit_names_a_symbol_and_a_marker_region(tmp_path: Path) -> None:
+    env, scheduler = _env(tmp_path)
+    writer = write_tool(env, scheduler)
+    editor = edit_tool(env, scheduler)
+    original = (
+        "class Case:\n"
+        "    scale = 1.0\n"
+        "\n"
+        "    def validate(self, row):\n"
+        "        return row * 2\n"
+        "\n"
+        "# ===== A =====\n"
+        "OLD = 1\n"
+        "# ===== B =====\n"
+        "AFTER = 2\n"
+    )
+    await writer.execute(WriteArgs(path="model.py", content=original), tool_runtime())
+    result = await editor.execute(
+        EditArgs(
+            path="model.py",
+            edits=[
+                EditOperation(symbol="Case.scale", new_text="scale = 2.0"),
+                EditOperation(
+                    start_marker="# ===== A =====",
+                    end_marker="# ===== B =====",
+                    new_text="NEW = 2",
+                ),
+            ],
+        ),
+        tool_runtime(),
+    )
+    assert result.is_error is False
+    assert 'symbol "Case.scale"' in result.text_content
+    assert 'between "# ===== A =====' in result.text_content
+    assert "--- model.py" in result.text_content
+    assert (tmp_path / "model.py").read_text(encoding="utf-8") == (
+        "class Case:\n"
+        "    scale = 2.0\n"
+        "\n"
+        "    def validate(self, row):\n"
+        "        return row * 2\n"
+        "\n"
+        "# ===== A =====\n"
+        "NEW = 2\n"
+        "# ===== B =====\n"
+        "AFTER = 2\n"
+    )
+
+
+@pytest.mark.asyncio
+async def test_edit_restores_the_newline_style_it_presented(tmp_path: Path) -> None:
+    env, scheduler = _env(tmp_path)
+    editor = edit_tool(env, scheduler)
+    (tmp_path / "crlf.py").write_bytes(b"VALUE = 1\r\nOTHER = 2\r\n")
+    result = await editor.execute(
+        EditArgs(path="crlf.py", edits=[EditOperation(symbol="VALUE", new_text="VALUE = 10")]),
+        tool_runtime(),
+    )
+    assert result.is_error is False
+    assert (tmp_path / "crlf.py").read_bytes() == b"VALUE = 10\r\nOTHER = 2\r\n"
+
+
+@pytest.mark.asyncio
+async def test_refused_region_edit_leaves_the_file_untouched(tmp_path: Path) -> None:
+    env, scheduler = _env(tmp_path)
+    writer = write_tool(env, scheduler)
+    editor = edit_tool(env, scheduler)
+    original = "VALUE = 1\nVALUE = 2\n"
+    await writer.execute(WriteArgs(path="dup.py", content=original), tool_runtime())
+    result = await editor.execute(
+        EditArgs(path="dup.py", edits=[EditOperation(symbol="VALUE", new_text="VALUE = 3")]),
+        tool_runtime(),
+    )
+    assert result.is_error is True
+    assert "defined 2 times" in result.text_content
+    assert (tmp_path / "dup.py").read_text(encoding="utf-8") == original
+
+
+@pytest.mark.asyncio
+async def test_edit_tool_reports_a_refused_target_pairing(tmp_path: Path) -> None:
+    env, scheduler = _env(tmp_path)
+    writer = write_tool(env, scheduler)
+    editor = edit_tool(env, scheduler)
+    await writer.execute(WriteArgs(path="note.py", content="VALUE = 1\n"), tool_runtime())
+    result = await editor.execute(
+        EditArgs(
+            path="note.py",
+            edits=[
+                EditOperation(old_text="VALUE = 1", symbol="VALUE", new_text="VALUE = 2"),
+            ],
+        ),
+        tool_runtime(),
+    )
+    assert result.is_error is True
+    assert "name exactly one target" in result.text_content
+    assert (tmp_path / "note.py").read_text(encoding="utf-8") == "VALUE = 1\n"
+
+
+@pytest.mark.asyncio
+async def test_edit_preserves_the_byte_order_mark_it_presented(tmp_path: Path) -> None:
+    env, scheduler = _env(tmp_path)
+    editor = edit_tool(env, scheduler)
+    cases = {
+        "utf16le.py": (b"\xff\xfe" + "VALUE = 1\r\nOTHER = 2\r\n".encode("utf-16-le"), "utf-16"),
+        "utf16be.py": (b"\xfe\xff" + "VALUE = 1\nOTHER = 2\n".encode("utf-16-be"), "utf-16"),
+        "utf8bom.py": (b"\xef\xbb\xbfVALUE = 1\nOTHER = 2\n", "utf-8-sig"),
+    }
+    for name, (raw, codec) in cases.items():
+        (tmp_path / name).write_bytes(raw)
+        result = await editor.execute(
+            EditArgs(path=name, edits=[EditOperation(symbol="VALUE", new_text="VALUE = 10")]),
+            tool_runtime(),
+        )
+        assert result.is_error is False, result.text_content
+        written = (tmp_path / name).read_bytes()
+        assert written.startswith(
+            b"\xff\xfe"
+            if name == "utf16le.py"
+            else b"\xfe\xff"
+            if name == "utf16be.py"
+            else b"\xef\xbb\xbf"
+        )
+        assert "VALUE = 10" in written.decode(codec)
+
+
+@pytest.mark.asyncio
+async def test_edit_batch_mixes_all_three_target_kinds(tmp_path: Path) -> None:
+    env, scheduler = _env(tmp_path)
+    writer = write_tool(env, scheduler)
+    editor = edit_tool(env, scheduler)
+    original = "VALUE = 1\n# ===== A =====\nOLD = 2\n# ===== B =====\ndef extra():\n    return 0\n"
+    await writer.execute(WriteArgs(path="mixed.py", content=original), tool_runtime())
+    result = await editor.execute(
+        EditArgs(
+            path="mixed.py",
+            edits=[
+                EditOperation(old_text="VALUE = 1", new_text="VALUE = 10"),
+                EditOperation(
+                    start_marker="# ===== A =====",
+                    end_marker="# ===== B =====",
+                    new_text="NEW = 2",
+                ),
+                EditOperation(symbol="extra", new_text="def extra():\n    return 1\n"),
+            ],
+        ),
+        tool_runtime(),
+    )
+    assert result.is_error is False, result.text_content
+    assert (tmp_path / "mixed.py").read_text(encoding="utf-8") == (
+        "VALUE = 10\n# ===== A =====\nNEW = 2\n# ===== B =====\ndef extra():\n    return 1\n"
+    )
+
+
+@pytest.mark.asyncio
+async def test_edit_markers_work_in_a_non_python_file(tmp_path: Path) -> None:
+    env, scheduler = _env(tmp_path)
+    writer = write_tool(env, scheduler)
+    editor = edit_tool(env, scheduler)
+    original = "# A\nold text\n# B\ntail\n"
+    await writer.execute(WriteArgs(path="notes.md", content=original), tool_runtime())
+    result = await editor.execute(
+        EditArgs(
+            path="notes.md",
+            edits=[EditOperation(start_marker="# A", end_marker="# B", new_text="new text")],
+        ),
+        tool_runtime(),
+    )
+    assert result.is_error is False, result.text_content
+    assert (tmp_path / "notes.md").read_text(encoding="utf-8") == "# A\nnew text\n# B\ntail\n"
+
+
+@pytest.mark.asyncio
+async def test_edit_renders_an_applicable_diff_for_a_partial_line_edit(tmp_path: Path) -> None:
+    env, scheduler = _env(tmp_path)
+    writer = write_tool(env, scheduler)
+    editor = edit_tool(env, scheduler)
+    await writer.execute(
+        WriteArgs(path="note.txt", content="TODO: fix this\nkeep\n"), tool_runtime()
+    )
+    result = await editor.execute(
+        EditArgs(path="note.txt", edits=[EditOperation(old_text="TODO: ", new_text="")]),
+        tool_runtime(),
+    )
+    assert result.is_error is False, result.text_content
+    assert "-TODO: fix this" in result.text_content
+    assert "+fix this" in result.text_content
+    assert (tmp_path / "note.txt").read_text(encoding="utf-8") == "fix this\nkeep\n"
+
+
+@pytest.mark.asyncio
+async def test_edit_merges_two_edits_on_one_line_in_its_diff(tmp_path: Path) -> None:
+    env, scheduler = _env(tmp_path)
+    writer = write_tool(env, scheduler)
+    editor = edit_tool(env, scheduler)
+    await writer.execute(WriteArgs(path="same.txt", content="A = 1; B = 2\nnext\n"), tool_runtime())
+    result = await editor.execute(
+        EditArgs(
+            path="same.txt",
+            edits=[
+                EditOperation(old_text="1", new_text="10"),
+                EditOperation(old_text="2", new_text="20"),
+            ],
+        ),
+        tool_runtime(),
+    )
+    assert result.is_error is False, result.text_content
+    assert result.text_content.count("-A = 1; B = 2") == 1
+    assert result.text_content.count("+A = 10; B = 20") == 1
+    assert (tmp_path / "same.txt").read_text(encoding="utf-8") == "A = 10; B = 20\nnext\n"
+
+
+@pytest.mark.asyncio
+async def test_edit_hands_a_large_region_diff_to_the_reader(tmp_path: Path) -> None:
+    env, scheduler = _env(tmp_path)
+    writer = write_tool(env, scheduler)
+    editor = edit_tool(env, scheduler)
+    body = "".join(f"line {index}\n" for index in range(500))
+    await writer.execute(
+        WriteArgs(path="big.txt", content=f"# A\n{body}# B\ntail\n"), tool_runtime()
+    )
+    result = await editor.execute(
+        EditArgs(
+            path="big.txt",
+            edits=[EditOperation(start_marker="# A", end_marker="# B", new_text="one line")],
+        ),
+        tool_runtime(),
+    )
+    assert result.is_error is False, result.text_content
+    assert "diff omitted" in result.text_content
+    assert (tmp_path / "big.txt").read_text(encoding="utf-8") == "# A\none line\n# B\ntail\n"
 
 
 @pytest.mark.asyncio
@@ -215,6 +456,44 @@ async def test_read_paginates_at_2000_lines_with_continuation(tmp_path: Path) ->
     assert second.text_content.startswith("line 2000")
     assert "line 2004" in second.text_content
     assert second.protected_text == ""
+
+
+async def test_read_states_the_path_and_lines_it_answered_with_as_facts(tmp_path: Path) -> None:
+    """A step card states a read by what it covered, not by repeating the page."""
+    env, scheduler = _env(tmp_path)
+    (tmp_path / "note.txt").write_text("one\ntwo\nthree\n", encoding="utf-8")
+
+    result = await read_tool(env, scheduler).execute(ReadArgs(path="note.txt"), tool_runtime())
+
+    assert result.facts == {
+        "path": "note.txt",
+        "lines_read": 3,
+        "total_lines": 3,
+        "truncated": False,
+    }
+
+
+async def test_a_paged_read_states_how_much_of_the_file_this_page_showed(tmp_path: Path) -> None:
+    env, scheduler = _env(tmp_path)
+    text = "".join(f"line {i}\n" for i in range(1, 2005))
+    (tmp_path / "big.txt").write_text(text, encoding="utf-8")
+    reader = read_tool(env, scheduler)
+
+    first = await reader.execute(ReadArgs(path="big.txt"), tool_runtime())
+    second = await reader.execute(ReadArgs(path="big.txt", offset=2000), tool_runtime())
+
+    assert first.facts == {
+        "path": "big.txt",
+        "lines_read": 1999,
+        "total_lines": 2004,
+        "truncated": True,
+    }
+    assert second.facts == {
+        "path": "big.txt",
+        "lines_read": 5,
+        "total_lines": 2004,
+        "truncated": False,
+    }
 
 
 async def test_read_missing_file_is_a_true_error(tmp_path: Path) -> None:
@@ -385,7 +664,7 @@ async def test_path_tool_order_and_hardened_contract_versions(tmp_path: Path) ->
         "read": 3,
         "view": 2,
         "bash": 3,
-        "edit": 3,
+        "edit": 4,
         "write": 3,
         "grep": 3,
         "find": 2,

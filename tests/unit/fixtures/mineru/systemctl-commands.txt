@@ -1,0 +1,5 @@
+--user disable --now dlightrag-mineru-api.service
+--user disable --now dlightrag-mineru-gradio.service
+--user daemon-reload
+--user enable --now dlightrag-mineru-api.service
+--user enable --now dlightrag-mineru-gradio.service

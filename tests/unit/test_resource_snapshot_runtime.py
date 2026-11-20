@@ -7,7 +7,9 @@ from typing import Any, cast
 
 import pytest
 
-from dlightrag.engine.agent.environment import SearchToolchain
+from dlightrag.engine.agent.environment.toolchain import (
+    SearchToolchain,
+)
 from dlightrag.engine.agent.session.entries import ToolResultMessageEntry
 from dlightrag.engine.agent.session.ids import LaneId, SessionId
 from dlightrag.engine.agent.session.operation import OperationCompleted
@@ -22,8 +24,8 @@ from dlightrag.engine.agent.tool_content import (
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.answer.execution.executor import AnswerExecutor
-from dlightrag.engine.answer.orchestration import AnswerOrchestrator
 from dlightrag.engine.answer.orchestration.orchestrator import (
+    AnswerOrchestrator,
     _admit_durable_attachment_messages,
     _hydrate_attachment_messages,
 )
@@ -33,7 +35,7 @@ from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.answer.tools.resources import make_resource_reader, make_resource_viewer
 from dlightrag.engine.runtime.records import RunFetchedResource
 from dlightrag.engine.runtime.settlements import EffectHostUpdate
-from tests.in_memory_session_repository import MemoryAgentSessionRepository
+from tests.support.in_memory_session_repository import MemoryAgentSessionRepository
 from tests.support.resources import call, docx_images, pdf_bytes, tools
 from tests.unit.conftest import answer_image_policy, answer_model_profile
 from tests.unit.test_research_runtime_migration import _Session
@@ -180,7 +182,7 @@ async def test_host_settlement_restores_conversion_and_derivative_without_repars
             conversion = stored.resources[f"{resource_id}-conversion"]
             payload = json.loads(stored.blobs[conversion.digest])
             assert payload["converter"] == "firecrawl-anydoc"
-            assert payload["converter_version"] == "0.2.4"
+            assert payload["converter_version"] == "0.2.5"
             assert len(payload["assets"]) == 2
             assert attachment.source.origin_part == "word/media/image1.png"
             assert attachment.source.anchor is None

@@ -12,10 +12,16 @@ from typing import Any
 
 import pytest
 
-from dlightrag.engine.answer.agent_browser import MAY_REGISTER_PIN, AgentBrowserBinding
-from dlightrag.engine.answer.execution import AnswerExecutor
+from dlightrag.engine.answer.agent_browser.accounts import (
+    MAY_REGISTER_PIN,
+)
+from dlightrag.engine.answer.agent_browser.contracts import (
+    AgentBrowserBinding,
+)
+from dlightrag.engine.answer.execution.executor import AnswerExecutor
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from tests.support.agent_browser import FakeProvider, browser_settings, idle_accounts_binding
+from tests.support.callers import ANONYMOUS as _ANON
 from tests.support.research_run import ResearchRig, research_rig
 from tests.unit.test_answer_executor import _executor
 from tests.unit.test_answer_service import _fingerprint, _request, _Retrieval, _service, _Store
@@ -48,7 +54,7 @@ async def _accepted(deployment: AnswerExecutor, *, registers: bool) -> dict[str,
         agent_may_register=may_register,
         research_tool_declarations=deployment.research_tool_declarations,
     )
-    await service.create(request=_request(mode="research"), owner_id=_OWNER)
+    await service.create(request=_request(mode="research"), owner_id=_OWNER, caller=_ANON)
     return store.created[0]["prepared_input"]
 
 

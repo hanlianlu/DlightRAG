@@ -21,14 +21,18 @@ from typing import Any
 
 import pytest
 
-from dlightrag.adapters.agent_browser import PooledBrowserProvider
+from dlightrag.adapters.agent_browser.pool import (
+    PooledBrowserProvider,
+)
 from dlightrag.adapters.postgres.runtime.browser_leases import PGAgentBrowserLeaseStore
 from dlightrag.adapters.postgres.runtime.run_store import PGRunStore
-from dlightrag.engine.answer.agent_browser import (
+from dlightrag.engine.answer.agent_browser.contracts import (
     AgentBrowserError,
     AgentBrowserSettings,
     BrowserHolder,
     RenderedPage,
+)
+from dlightrag.engine.answer.agent_browser.run import (
     RunAgentBrowser,
 )
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
@@ -90,7 +94,8 @@ async def holder_of(pool: Any, endpoint: str) -> str | None:
     """The Run the lease table says holds ``endpoint``, or None when it is free."""
     async with pool.acquire() as conn:
         return await conn.fetchval(
-            "SELECT run_id::text FROM dlightrag_agent_browser_leases WHERE endpoint = $1", endpoint
+            "SELECT run_id::text FROM dlightrag_agent_browser_leases WHERE endpoint = $1",
+            endpoint,
         )
 
 
@@ -127,6 +132,7 @@ async def pool_of(
     leases = PGAgentBrowserLeaseStore(pool=pool)
     provider = PooledBrowserProvider(
         endpoints=servers,
+        headed_endpoints=(),
         egress_proxy=proxy.url,
         chromium_sandbox=chromium_sandbox,
         connect_timeout_seconds=connect_timeout,
@@ -392,7 +398,7 @@ async def test_a_javascript_only_page_is_read_as_its_script_renders_it_through_t
         assert await holder_of(pool, server.endpoint) is None
 
 
-async def test_a_page_that_answers_an_error_status_or_a_download_is_not_a_page(pg) -> None:
+async def test_a_page_that_answers_an_error_status_is_read_and_a_download_is_not_a_page(pg) -> None:
     store, pool = pg
     holder = await live_run(store, "fails")
     async with AsyncExitStack() as stack:
@@ -401,19 +407,19 @@ async def test_a_page_that_answers_an_error_status_or_a_download_is_not_a_page(p
         provider, _ = await stack.enter_async_context(pool_of(pool, server.endpoint, proxy=proxy))
         browser = RunAgentBrowser(provider, holder, settings())
 
-        with pytest.raises(AgentBrowserError) as forbidden:
-            await browser.render("http://forbidden.example/")
+        forbidden = await browser.render("http://forbidden.example/")
         with pytest.raises(AgentBrowserError) as download:
             await browser.render("http://files.example/report.csv")
-        with pytest.raises(AgentBrowserError) as missing:
-            # The proxy answers its own 404 for a page it holds none of.
-            await browser.render("http://missing.example/")
+        # The proxy answers its own 404 for a page it holds none of.
+        missing = await browser.render("http://missing.example/")
 
-        assert forbidden.value.reason == "http_status"
-        assert forbidden.value.public_message == "The page answered HTTP 403 to the Agent Browser."
+        # The page the site answered with is the render, and its status travels with it.
+        assert forbidden.status == 403
+        assert b"<body>no</body>" in forbidden.html
         assert download.value.reason == "download"
-        assert missing.value.reason == "http_status"
-        # A failed render leaves the browser usable for the next one.
+        assert missing.status == 404
+        assert b"not found" in missing.html
+        # A render of an error page leaves the browser usable for the next one.
         assert (await browser.render("http://js.example/")).status == 200
         await browser.aclose()
 

@@ -9,7 +9,9 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, ConfigDict, StrictBool
 
 from dlightrag.adapters.http.browser.deps import get_application
-from dlightrag.application.access import owner_id_from_user
+from dlightrag.application.access.principal import (
+    owner_id_from_user,
+)
 from dlightrag.application.agent_accounts import AgentAccountsView
 
 router = APIRouter(prefix="/agent-accounts")

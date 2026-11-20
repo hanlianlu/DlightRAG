@@ -13,12 +13,13 @@ import {
 } from './answer-submission-machine.ts';
 
 const accepted = {
+  kind: 'accepted' as const,
   conversation: {conversationId: 'c1', title: null, createdAt: '', updatedAt: '', forkedFromConversationId: null, forkedFromTitle: null},
   turn: {
     turnId: 't1', turnNumber: 1, answerRunId: 'run-1', submissionId: 'submission-1',
     status: 'queued' as const, cancelRequested: false, userText: 'Question', assistantText: '',
     userAttachments: [], steeringMessages: [], presentation: null, usage: {},
-    errorKind: null, errorMessage: null, childCount: 0, createdAt: '',
+    errorKind: null, errorMessage: null, childCount: 0, answerSequence: null, feedback: null, createdAt: '',
   },
 } as AcceptedAnswer;
 const intent = {
@@ -57,7 +58,7 @@ test('successful POST accepts the attachment lease', async () => {
   };
   const actor = createAnswerSubmissionActor({intent, lease: held, adapter});
   const snapshot = await reaches(actor, 'accepted');
-  assert.equal(snapshot.accepted, accepted);
+  assert.equal(snapshot.outcome, accepted);
   assert.equal(held.accepted, 0);
   actor.send({type: 'HANDOFF'});
   await waitFor(actor, (next) => next.matches('handedOff'));
@@ -78,7 +79,7 @@ test('ambiguous POST reconciles by lookup and never posts automatically again', 
     },
   };
   const snapshot = await reaches(createAnswerSubmissionActor({intent, lease: lease(), adapter}), 'accepted');
-  assert.equal(snapshot.accepted, accepted);
+  assert.equal(snapshot.outcome, accepted);
   assert.equal(posts, 1);
   assert.equal(lookups, 1);
 });
@@ -155,4 +156,55 @@ test('editable failures restore the same lease only after Edit', async () => {
   actor.send({type: 'EDIT'});
   await waitFor(actor, (snapshot) => snapshot.matches('edited'));
   assert.equal(held.restored, 1);
+});
+
+test('a refusal over the reader\'s own limit is retryable, keeps the draft, and Retry posts once more', async () => {
+  const held = lease();
+  let posts = 0;
+  const adapter: AnswerSubmissionAdapter = {
+    submit: async () => {
+      posts += 1;
+      if (posts === 1) {
+        throw new AnswerSubmissionError(
+          429, 'service_unavailable', 'at your limit', 'active_run_limit',
+        );
+      }
+      return accepted;
+    },
+    // The server refused before accepting anything, so there is nothing to find.
+    lookup: async () => null,
+  };
+  const actor = createAnswerSubmissionActor({intent, lease: held, adapter});
+
+  const refused = await reaches(actor, 'retryable');
+
+  assert.equal(refused.error?.status, 429);
+  assert.equal(refused.error?.errorKind, 'active_run_limit');
+  assert.deepEqual(
+    [held.accepted, held.restored, held.discarded],
+    [0, 0, 0],
+    'the draft and its files are held for the reader to retry, edit, or discard',
+  );
+  actor.send({type: 'RETRY'});
+  await waitFor(actor, (snapshot) => snapshot.matches('accepted'));
+  assert.equal(posts, 2);
+});
+
+test('a delivered send ends as delivered and accepts the lease without a turn', async () => {
+  const held = lease();
+  const receipt = {
+    kind: 'queue' as const,
+    message: {
+      messageId: 'message-1', content: 'later', position: 1, createdAt: '',
+    },
+  };
+  const adapter: AnswerSubmissionAdapter = {
+    submit: async () => receipt,
+    lookup: async () => { throw new Error('unused'); },
+  };
+  const actor = createAnswerSubmissionActor({intent, lease: held, adapter});
+  const snapshot = await reaches(actor, 'delivered');
+
+  assert.deepEqual(snapshot.outcome, receipt);
+  assert.equal(held.accepted, 1);
 });

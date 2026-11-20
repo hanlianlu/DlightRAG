@@ -6,7 +6,8 @@ REST, MCP) so callers can branch on a stable, machine-readable ``error_kind``
 instead of parsing free-form messages. Caller input rejections derive from
 ``AnswerInputError``; server-side failures such as
 ``InvalidToolConfigurationError`` stand outside it so no surface reports them as
-validation.
+validation. A refusal by a Runtime Policy (``ACTIVE_RUN_LIMIT``) is neither: admission
+raises it as an Application error, and the kind is named here so every surface says it alike.
 """
 
 from __future__ import annotations
@@ -22,6 +23,24 @@ UNSUPPORTED_ATTACHMENT_TYPE = "UNSUPPORTED_ATTACHMENT_TYPE"
 UNSUPPORTED_ANSWER_MODE = "unsupported_answer_mode"
 UNSUPPORTED_RESOURCE_CAPABILITY = "unsupported_resource_capability"
 ROUTING_FAILED = "routing_failed"
+ACTIVE_RUN_LIMIT = "active_run_limit"
+SESSION_BUSY = "session_busy"
+
+#: What a caller who holds as many Answers in progress as the `active_answer_runs` policy lets
+#: them is told, on every surface. It states no number: the Web localizes it as it stands.
+ACTIVE_RUN_LIMIT_MESSAGE = (
+    "You have as many answers in progress as you may run at once. "
+    "Wait for one to finish or stop one, then try again."
+)
+
+#: What a caller is told when this answer lost the Session's agent lane to another answer. It is
+#: truthful about the retry: the work did not run, and sending again while the other answer works
+#: reaches the queue instead of a second competing Run.
+SESSION_BUSY_MESSAGE = (
+    "Another answer in this conversation was using the agent lane. This answer did not run. "
+    "Retry; if the other answer is still working, send this message again and it will be "
+    "queued after that answer."
+)
 
 _IMAGES_NOT_SUPPORTED_MARKER = "[IMAGES_NOT_SUPPORTED_BY_MODEL]"
 
@@ -159,6 +178,8 @@ def classify_answer_error(exc: BaseException) -> str:
 
 
 __all__ = [
+    "ACTIVE_RUN_LIMIT",
+    "ACTIVE_RUN_LIMIT_MESSAGE",
     "ANSWER_IMAGE_CAPABILITY_UNKNOWN",
     "ANSWER_INPUT_OVERFLOW",
     "ANSWER_STREAM_FAILED",
@@ -171,6 +192,8 @@ __all__ = [
     "UNSUPPORTED_RESOURCE_CAPABILITY",
     "REASONING_CONTROL_REJECTED_MESSAGE",
     "ROUTING_FAILED",
+    "SESSION_BUSY",
+    "SESSION_BUSY_MESSAGE",
     "AnswerInputError",
     "AnswerImageError",
     "AnswerInputOverflowError",

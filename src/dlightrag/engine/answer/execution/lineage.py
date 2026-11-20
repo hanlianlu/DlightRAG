@@ -17,13 +17,16 @@ import logging
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Protocol
 
-from dlightrag.engine.agent.tools import ResourceAttachmentBytes
+from dlightrag.engine.agent.tools.contracts import (
+    ResourceAttachmentBytes,
+)
 from dlightrag.engine.answer.resource_settlement import attached_resource_update
 from dlightrag.engine.answer.resources.lineage import (
     ASSET_KIND,
     LINEAGE_ADOPTION_KIND,
     SNAPSHOT_KIND,
     LineageResourceBytes,
+    declared_sources,
 )
 from dlightrag.engine.runtime.records import RunFetchedResource
 from dlightrag.engine.runtime.settlements import FetchedResourceSettlementUpdate
@@ -168,6 +171,9 @@ class RetainedResourceLoader:
                 if asset is not None
             },
             source_url=_source_url(source),
+            # What the product was built from, when it was published with declared sources:
+            # reopening a deliverable reopens its provenance (ADR 0052).
+            sources=declared_sources(source.capabilities),
         )
 
     async def _read(self, digest: str) -> bytes | None:

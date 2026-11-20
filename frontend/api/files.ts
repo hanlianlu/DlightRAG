@@ -9,7 +9,6 @@ const webFileItem = v.pipe(
   v.object({file_name: v.string(), file_path: v.string()}),
   v.transform((w) => ({fileName: w.file_name, filePath: w.file_path})),
 );
-export type WebFileItem = v.InferOutput<typeof webFileItem>;
 
 const webFilePanelSnapshot = v.pipe(
   v.object({
@@ -39,7 +38,6 @@ const webFailedFileItem = v.pipe(
     updatedAt: w.updated_at,
   })),
 );
-export type WebFailedFileItem = v.InferOutput<typeof webFailedFileItem>;
 
 const webFailedFilesPage = v.pipe(
   v.object({

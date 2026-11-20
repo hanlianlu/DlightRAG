@@ -29,8 +29,12 @@ REASONING_LEVELS: tuple[ReasoningLevel, ...] = (
     "max",
 )
 REASONING_FORMATS = frozenset({"openrouter", "openai", "deepseek", "anthropic", "gemini"})
-#: The thinking levels Gemini's Interactions API names. It has none that turns thinking off.
-GEMINI_THINKING_LEVELS = frozenset({"minimal", "low", "medium", "high"})
+#: The thinking levels Gemini's Interactions API names, which a catalogue entry may map to.
+#: It has none that turns thinking off, and a model accepts only the ones its documentation lists.
+GEMINI_THINKING_LEVELS = frozenset({"minimal", "low", "medium", "high", "xhigh"})
+#: The levels an uncatalogued Gemini model is asked for: the four every model accepts. ``xhigh``
+#: belongs to the models that list it, and an older one answers it with a 400.
+GEMINI_BEST_EFFORT_LEVELS = frozenset({"minimal", "low", "medium", "high"})
 
 # Raw provider fields owned by typed reasoning configuration. A caller may use
 # them only when no semantic reasoning level is configured for that request.
@@ -100,7 +104,8 @@ class ReasoningProfile:
             <= GEMINI_THINKING_LEVELS
         ):
             raise ValueError(
-                "gemini reasoning maps levels to minimal, low, medium or high, and off to null"
+                "gemini reasoning maps levels to minimal, low, medium, high or xhigh, "
+                "and off to null"
             )
 
     @classmethod
@@ -116,12 +121,13 @@ class ReasoningProfile:
 def best_effort_reasoning_profile(format_name: str) -> ReasoningProfile:
     """Build an unverified protocol mapping for one uncatalogued endpoint.
 
-    Gemini's protocol names exactly its four thinking levels, so higher requests clamp
-    to ``high`` and ``off`` cannot be honored.
+    An unknown Gemini model is offered the four thinking levels every model accepts, so higher
+    requests clamp to ``high`` and ``off`` cannot be honored.
     """
     if format_name == "gemini":
         levels = {
-            level: level if level in GEMINI_THINKING_LEVELS else None for level in REASONING_LEVELS
+            level: level if level in GEMINI_BEST_EFFORT_LEVELS else None
+            for level in REASONING_LEVELS
         }
         return ReasoningProfile.unverified(format=format_name, levels=ReasoningLevels(**levels))
     off = "disabled" if format_name in {"openrouter", "deepseek", "anthropic"} else "none"
@@ -201,6 +207,45 @@ def resolve_reasoning(
     raise ReasoningConfigurationError(
         f"reasoning={requested!r} requires a supported non-off reasoning level"
     )
+
+
+def request_under_ceiling(
+    profile: ReasoningProfile | None,
+    requested: ReasoningLevel | None,
+    ceiling: ReasoningLevel,
+) -> ReasoningLevel | None:
+    """The level to ask a model for so that it never runs above ``ceiling``.
+
+    A request that already resolves at or below the ceiling is returned as it is, and so is one
+    the profile cannot resolve, which fails where it always did. A request that would resolve
+    above it, and a model left on its own level (``requested`` None) under a ceiling below the
+    top of the ladder, are asked for the highest level the model offers at or below the ceiling
+    instead. The ladder is walked downward, never rounded the way ``resolve_reasoning`` rounds
+    a tie: a rounding that crossed the ceiling would be no ceiling at all.
+
+    ``off`` is not a target: it is the explicit, hard request it is everywhere else. A model
+    that offers nothing at or below the ceiling is asked for its lowest level, which is above
+    it; the level this resolves to says so.
+    """
+    top = REASONING_LEVELS.index(ceiling)
+    if profile is None or top == len(REASONING_LEVELS) - 1:
+        return requested
+    offered: list[ReasoningLevel] = [
+        level for level in REASONING_LEVELS[1:] if profile.levels.value(level) is not None
+    ]
+    if not offered:
+        return requested
+    if requested is not None:
+        try:
+            resolved = resolve_reasoning(profile, requested)
+        except ReasoningConfigurationError:
+            return requested
+        if resolved is not None and REASONING_LEVELS.index(resolved.effective) <= top:
+            return requested
+    within: list[ReasoningLevel] = [
+        level for level in offered if REASONING_LEVELS.index(level) <= top
+    ]
+    return within[-1] if within else offered[0]
 
 
 def cheapest_supported_reasoning(profile: ReasoningProfile | None) -> ReasoningLevel | None:
@@ -324,6 +369,7 @@ def merge_reasoning_kwargs(
 
 
 __all__ = [
+    "GEMINI_BEST_EFFORT_LEVELS",
     "GEMINI_THINKING_LEVELS",
     "PROVIDER_REASONING_KEYS",
     "REASONING_FORMATS",
@@ -338,5 +384,6 @@ __all__ = [
     "conflicting_reasoning_keys",
     "merge_reasoning_kwargs",
     "reasoning_request_kwargs",
+    "request_under_ceiling",
     "resolve_reasoning",
 ]

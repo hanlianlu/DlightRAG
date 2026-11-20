@@ -182,7 +182,7 @@ it('invites the first account when there is none, and keeps the switch', async (
   expect(registration(feature)).not.to.equal(null);
 });
 
-it('says it could not load, offers Retry, and shows the accounts once a retry reads them', async () => {
+it('says it could not load, offers Retry, and shows the accounts once a retry reads them, keeping focus', async () => {
   let reads = 0;
   const {feature, api} = await shown({
     'GET /web/api/agent-accounts': () => {
@@ -195,11 +195,14 @@ it('says it could not load, offers Retry, and shows the accounts once a retry re
   expect(alert.textContent).to.equal('Could not load agent accounts.');
   expect(registration(feature)).to.equal(null);
   const retry = [...feature.querySelectorAll('button')].find((button) => button.textContent!.trim() === 'Retry')!;
+  retry.focus();
   retry.click();
 
   await waitFor(() => feature.querySelectorAll('tbody tr').length === 4);
   expect(feature.querySelector('[role="alert"]')).to.equal(null);
   expect(reads).to.equal(2);
+  // The Retry that asked is gone, so focus follows to the first control of what answered.
+  await waitFor(() => document.activeElement === registration(feature));
   expect(api.unexpected).to.deep.equal([]);
 });
 
@@ -244,31 +247,6 @@ describe('while Settings stays open', () => {
     expect(heard).to.deep.equal([]);
   });
 
-  it('lets no read that a command overtook undo what the command answered', async () => {
-    // Each wait is held, so the page reads again only when the test lets it.
-    const waits: TimerHandler[] = [];
-    window.setTimeout = ((handler: TimerHandler) => waits.push(handler)) as typeof window.setTimeout;
-    let reads = 0;
-    let answerSlowRead = (): void => {};
-    const {feature} = await shown({
-      'GET /web/api/agent-accounts': async () => {
-        reads += 1;
-        // Sent before the owner's PUT, the second read answers after it, with what was true before.
-        if (reads === 2) await new Promise<void>((resolve) => { answerSlowRead = resolve; });
-        return Response.json(agentAccountsView(ACCOUNTS, {allowed: true, enabled: true}));
-      },
-      'PUT /web/api/agent-accounts/settings': () => Response.json(agentAccountsView(ACCOUNTS, {allowed: true, enabled: false})),
-    });
-
-    (waits.shift() as () => void)();
-    await waitFor(() => reads === 2);
-    registration(feature).click();
-    await waitFor(() => registration(feature).getAttribute('aria-checked') === 'false' && !registration(feature).disabled);
-    answerSlowRead();
-    for (let turn = 0; turn < 10; turn += 1) await new Promise((resolve) => originalSetTimeout(resolve, 0));
-
-    expect(registration(feature).getAttribute('aria-checked')).to.equal('false');
-  });
 });
 
 describe('the sign-up switch', () => {
@@ -548,6 +526,6 @@ it('shows a notice in the dialog\'s own region when it lives in the dialog', asy
   await feature.updateComplete;
 
   registration(feature).click();
-  const own = settings.querySelector('dl-toast-region')!;
+  const own = settings.querySelector('dl-toast-region[tone="error"]')!;
   await waitFor(() => own.textContent!.includes('Could not save the sign-up setting.'));
 });

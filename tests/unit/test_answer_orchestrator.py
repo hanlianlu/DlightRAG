@@ -5,36 +5,50 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from dlightrag.engine.agent.environment import SearchToolchain
+from dlightrag.engine.agent.environment.access import (
+    AccessScheduler,
+)
 from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
+from dlightrag.engine.agent.environment.toolchain import (
+    SearchToolchain,
+)
+from dlightrag.engine.agent.sealed_artifact import SealedArtifact
 from dlightrag.engine.agent.session.entries import AssistantMessageEntry
 from dlightrag.engine.agent.session.ids import EntryId, ProjectionId, SessionId
 from dlightrag.engine.agent.session.projection import ContextProjection
-from dlightrag.engine.agent.skills import SkillsBundle
+from dlightrag.engine.agent.skill_delivery import DeliveryLedger
+from dlightrag.engine.agent.skill_reads import RequiredRead, SkillRead
+from dlightrag.engine.agent.skills import SealedArtifactDeclaration, SkillsBundle
+from dlightrag.engine.agent.tools.contracts import ToolResult
 from dlightrag.engine.agent.tools.files import ResourceReadRequest
 from dlightrag.engine.ai.messages import AssistantTurn
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
+from dlightrag.engine.answer.agentspace import RunAgentspace
+from dlightrag.engine.answer.compaction import CompactionOutcome
 from dlightrag.engine.answer.continuation_handles import MAX_SPILL_HANDLES
 from dlightrag.engine.answer.evidence import EvidenceLedger
-from dlightrag.engine.answer.orchestration import AnswerOrchestrator
-from dlightrag.engine.answer.orchestration.orchestrator import _last_provider_input_tokens
+from dlightrag.engine.answer.orchestration.orchestrator import (
+    AnswerOrchestrator,
+    _last_provider_input_tokens,
+)
+from dlightrag.engine.answer.publication import PublicationLimits
 from dlightrag.engine.answer.research.runtime import (
     _record_prompt_cache,
     _usage_from_snapshot_entries,
 )
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
+from dlightrag.engine.answer.tools.artifacts import AttachArtifactArgs, attach_artifact_tool
 from dlightrag.engine.answer.tools.composition import _resource_rows
-from dlightrag.engine.answer.workspace import RunWorkspace
+from dlightrag.engine.runtime.agentspace import CommittedSpillRecord
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
-from dlightrag.engine.runtime.workspace import CommittedSpillRecord
 from tests.support.agent_browser import inert_browser_host
+from tests.support.tool_helpers import recording_tool_runtime, tool_runtime
 from tests.support.workspace_store import InMemoryWorkspaceStore
-from tests.tool_helpers import tool_runtime
 from tests.unit.conftest import answer_image_policy, answer_model_profile
 
 
@@ -167,8 +181,8 @@ async def test_parent_prompt_advertises_artifacts_only_with_workspace_tools(
         return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
 
     orchestrator = _orchestrator(mode="research", model=model)
-    orchestrator.bind_workspace(
-        RunWorkspace(
+    orchestrator.bind_agentspace(
+        RunAgentspace(
             epoch=1,
             workspace=tmp_path,
             spill_dir=tmp_path / "spill",
@@ -204,7 +218,7 @@ async def test_e2_a_continuation_carries_the_note_the_parent_compacted(
 
     The parent's note is written through the tool the product uses to write one, its
     registration is the effect that tool reports, and the continuation binds its
-    workspace through the production `bind_run_workspace`, so the bytes, the new
+    workspace through the production `bind_run_agentspace`, so the bytes, the new
     Inventory, and the static first-request line are all the product's own path
     rather than a hand-built copy. What is not exercised here: a live coordinator
     interrupt of the parent (the parent has already settled, which is the state a
@@ -212,10 +226,12 @@ async def test_e2_a_continuation_carries_the_note_the_parent_compacted(
     """
     import hashlib
 
-    from dlightrag.engine.agent.environment import AccessScheduler
+    from dlightrag.engine.agent.environment.access import (
+        AccessScheduler,
+    )
     from dlightrag.engine.agent.tools.files import WriteArgs, write_tool
+    from dlightrag.engine.answer.agentspace import bind_run_agentspace
     from dlightrag.engine.answer.session_notes import SessionNotesPlane
-    from dlightrag.engine.answer.workspace import bind_run_workspace
     from tests.support.workspace_store import InMemoryWorkspaceStore
 
     async def model(**_kwargs):
@@ -226,7 +242,7 @@ async def test_e2_a_continuation_carries_the_note_the_parent_compacted(
     store = InMemoryWorkspaceStore()
     owner_id = "owner"
     parent_id = "01930000-0000-7000-8000-0000000000aa"
-    parent = await bind_run_workspace(
+    parent = await bind_run_agentspace(
         workspace_root=tmp_path,
         owner_id=owner_id,
         run_id=parent_id,
@@ -261,7 +277,7 @@ async def test_e2_a_continuation_carries_the_note_the_parent_compacted(
 
     child_store = InMemoryWorkspaceStore()
     child_store.session_notes = store.session_notes
-    child = await bind_run_workspace(
+    child = await bind_run_agentspace(
         workspace_root=tmp_path,
         owner_id=owner_id,
         run_id="01930000-0000-7000-8000-0000000000bb",
@@ -271,7 +287,7 @@ async def test_e2_a_continuation_carries_the_note_the_parent_compacted(
         notes=await child_store.load_session_notes(session_id=session_id),
     )
     orchestrator = _orchestrator(mode="research", model=model)
-    orchestrator.bind_workspace(
+    orchestrator.bind_agentspace(
         child,
         child_store,
         session_notes=await child_store.load_session_notes(session_id=session_id),
@@ -362,6 +378,7 @@ def test_child_preparation_excludes_every_parent_subagent_control() -> None:
             "spawn_agent",
             "subagent_status",
             "wait_subagent",
+            "read_subagent",
             "cancel_subagent",
             "steer_subagent",
             "continue_subagent",
@@ -377,9 +394,8 @@ async def test_a_child_states_its_objective_once_and_a_steer_keeps_the_last_word
     Simultaneous children share one workspace, so the instructions name the child's own
     corner: nothing enforces it — two children that write one path are last-writer-wins
     — which is exactly why the convention is stated where the child reads it (ADR 0025).
-    The objective used to travel inside those instructions, which the child's Entry never
-    states, so it was restated after the transcript on every request: behind the
-    parent's steer that had redirected it.
+    The objective is its own User Entry rather than part of those instructions: restating
+    it after the transcript would land behind the parent's steer that redirected it.
     """
     from dlightrag.engine.agent.session.fold import WorkingContextProjection
     from dlightrag.engine.answer.tools.subagents import (
@@ -445,8 +461,8 @@ def _research_owner_with_subagents(tmp_path: Path, **options):
         return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
 
     orchestrator = _orchestrator(mode="research", model=model, **options)
-    orchestrator.bind_workspace(
-        RunWorkspace(
+    orchestrator.bind_agentspace(
+        RunAgentspace(
             epoch=1,
             workspace=tmp_path,
             spill_dir=tmp_path / "spill",
@@ -496,7 +512,13 @@ def test_a_childs_default_is_its_parents_capability_minus_authority(tmp_path: Pa
     # Child's own guidance channel is the one addition for being a Child.
     assert parent_names - child_names <= CHILD_FORBIDDEN_TOOLS
     assert child_names - parent_names == {"ask_parent"}
-    for authority in ("remember", "forget", "attach_artifact", "spawn_agent"):
+    for authority in (
+        "memory_remember",
+        "memory_forget",
+        "memory_undo",
+        "attach_artifact",
+        "spawn_agent",
+    ):
         assert authority not in child_names
 
 
@@ -544,7 +566,9 @@ def test_an_explicit_tool_list_narrows_a_child_and_restores_nothing(tmp_path: Pa
     narrowed = _child_tools(orchestrator, tools=["bash", "search_knowledge_base"])
     assert narrowed == {"bash", "search_knowledge_base", "ask_parent"}
 
-    tolerant = _child_tools(orchestrator, tools=["bash", "no_such_tool", "remember", "spawn_agent"])
+    tolerant = _child_tools(
+        orchestrator, tools=["bash", "no_such_tool", "memory_remember", "spawn_agent"]
+    )
     assert tolerant == {"bash", "ask_parent"}
     assert tolerant & CHILD_FORBIDDEN_TOOLS == set()
 
@@ -600,7 +624,7 @@ async def test_a_parent_context_child_inherits_only_what_the_parent_has_settled(
     from dlightrag.engine.ai.providers.openai_response import response_input
     from dlightrag.engine.answer.evidence import EvidenceLedger
     from dlightrag.engine.answer.tools.subagents import ChildRequest
-    from tests.in_memory_session_repository import MemoryAgentSessionRepository
+    from tests.support.in_memory_session_repository import MemoryAgentSessionRepository
 
     store = MemoryAgentSessionRepository[None]()
     session_id = SessionId.new()
@@ -764,8 +788,8 @@ async def test_compaction_handles_put_the_runs_spills_before_its_evidence(tmp_pa
     orchestrator = _orchestrator(mode="research")
     store = _RecordingWorkspaceStore()
     store.spills = [_spill_record("spill_read_ab12")]
-    orchestrator.bind_workspace(
-        RunWorkspace(epoch=1, workspace=tmp_path, spill_dir=tmp_path, environment=MagicMock()),
+    orchestrator.bind_agentspace(
+        RunAgentspace(epoch=1, workspace=tmp_path, spill_dir=tmp_path, environment=MagicMock()),
         store,
     )
     run = MagicMock()
@@ -797,8 +821,8 @@ async def test_session_note_names_come_from_the_runs_working_copy(tmp_path: Path
         _inventory_record("notes/decisions.md", size_bytes=310),
         _inventory_record("readme.md"),
     ]
-    orchestrator.bind_workspace(
-        RunWorkspace(epoch=1, workspace=tmp_path, spill_dir=tmp_path, environment=MagicMock()),
+    orchestrator.bind_agentspace(
+        RunAgentspace(epoch=1, workspace=tmp_path, spill_dir=tmp_path, environment=MagicMock()),
         store,
     )
 
@@ -835,8 +859,8 @@ async def test_compaction_carries_the_spill_handles_into_the_projection(tmp_path
     store = _RecordingWorkspaceStore()
     store.spills = [_spill_record("spill_grep_7f21")]
     store.inventory = [_inventory_record("notes/plan.md", size_bytes=1_240)]
-    orchestrator.bind_workspace(
-        RunWorkspace(epoch=1, workspace=tmp_path, spill_dir=tmp_path, environment=MagicMock()),
+    orchestrator.bind_agentspace(
+        RunAgentspace(epoch=1, workspace=tmp_path, spill_dir=tmp_path, environment=MagicMock()),
         store,
     )
     captured: dict[str, Any] = {}
@@ -851,7 +875,15 @@ async def test_compaction_carries_the_spill_handles_into_the_projection(tmp_path
                     covered_through_sequence=0,
                     summary=None,
                 ),
-                SimpleNamespace(call=None),  # a coordinator outcome whose summary left no call
+                CompactionOutcome(
+                    covered_through_sequence=0,
+                    first_retained_sequence=1,
+                    accounted_before=100,
+                    accounted_after=50,
+                    summary_chars=0,
+                    hierarchical=False,
+                    tail_target_tokens=0,
+                ),
             )
 
     orchestrator._compaction_coordinator = lambda _run: _RecordingCoordinator()  # type: ignore[method-assign]
@@ -892,8 +924,8 @@ async def test_reading_a_spill_admits_no_evidence_and_mints_no_citation(tmp_path
     spill_dir.mkdir()
     (spill_dir / "spill_read_ab12.txt").write_text("line one\nline two\n", encoding="utf-8")
     orchestrator = _orchestrator(mode="research")
-    orchestrator.bind_workspace(
-        RunWorkspace(epoch=1, workspace=tmp_path, spill_dir=spill_dir, environment=MagicMock()),
+    orchestrator.bind_agentspace(
+        RunAgentspace(epoch=1, workspace=tmp_path, spill_dir=spill_dir, environment=MagicMock()),
         _RecordingWorkspaceStore(),
     )
 
@@ -916,8 +948,8 @@ async def test_a_spill_handle_is_not_a_web_resource_to_read_rendered(tmp_path: P
     spill_dir.mkdir()
     (spill_dir / "spill_read_ab12.txt").write_text("line one\n", encoding="utf-8")
     orchestrator = _orchestrator(mode="research")
-    orchestrator.bind_workspace(
-        RunWorkspace(epoch=1, workspace=tmp_path, spill_dir=spill_dir, environment=MagicMock()),
+    orchestrator.bind_agentspace(
+        RunAgentspace(epoch=1, workspace=tmp_path, spill_dir=spill_dir, environment=MagicMock()),
         _RecordingWorkspaceStore(),
     )
 
@@ -964,7 +996,7 @@ async def test_the_summary_names_the_products_the_run_attached(tmp_path: Path) -
     The handle is the address publication binds, and the Run's own attachment rows are
     where it comes from — the same durable, claim-local source the spill handles use.
     """
-    from dlightrag.engine.runtime.workspace import RunArtifactRecord
+    from dlightrag.engine.runtime.agentspace import RunArtifactRecord
 
     orchestrator = _orchestrator(mode="research")
     store = _RecordingWorkspaceStore()
@@ -977,8 +1009,8 @@ async def test_the_summary_names_the_products_the_run_attached(tmp_path: Path) -
             presentation="markdown",
         )
     ]
-    orchestrator.bind_workspace(
-        RunWorkspace(epoch=1, workspace=tmp_path, spill_dir=tmp_path, environment=MagicMock()),
+    orchestrator.bind_agentspace(
+        RunAgentspace(epoch=1, workspace=tmp_path, spill_dir=tmp_path, environment=MagicMock()),
         store,
     )
     run = MagicMock()
@@ -1115,7 +1147,7 @@ async def test_response_input_usage_stops_a_systematically_undercounted_request(
     profile = ModelProfile(context_window_tokens=100_000)
     context = ContextAssembler(
         model_profile=profile,
-        query="x" * 100_000,
+        query="x" * 140_000,
         history=PriorTurns(),
         query_images=None,
         resource_manifest=(),
@@ -1126,6 +1158,9 @@ async def test_response_input_usage_stops_a_systematically_undercounted_request(
         working=WorkingContextProjection(),
     )
     assert previous_estimate < CONTEXT_POLICY.compaction_trigger(profile)
+    # The measurement compares a remainder of twice this estimate with the trigger, so the
+    # fixture holds an estimate in the upper half of the band: shrinking the reserve moves the
+    # trigger down with it, and the assertion is about the ratio, not about one reserve size.
     assert previous_estimate * 2 > CONTEXT_POLICY.compaction_trigger(profile)
     run = PreparedRun(
         context=context,
@@ -1210,3 +1245,305 @@ async def test_a_declined_compaction_still_assembles_the_request(tmp_path: Path)
     )
     assert isinstance(declined, RequestSnapshot)
     assert declined.turn_number == 4
+
+
+def _terminal_snapshot(
+    *, assistant_stop_reason: Literal["length", "stop"] | None
+) -> SimpleNamespace:
+    """A terminal Session snapshot carrying one Assistant entry, or none."""
+    entries = []
+    if assistant_stop_reason is not None:
+        entries.append(
+            AssistantMessageEntry(
+                entry_id=EntryId.new(),
+                session_id=SessionId.new(),
+                timestamp=datetime.now(UTC),
+                content="the provider's last answer",
+                stop_reason=assistant_stop_reason,
+                tool_calls=(),
+            )
+        )
+    return SimpleNamespace(active_projection=None, graph=SimpleNamespace(ancestry=lambda: entries))
+
+
+@pytest.mark.parametrize(
+    ("provider_stop_reason", "expected"),
+    [("length", "length"), ("stop", "stop")],
+)
+def test_restoring_a_terminal_snapshot_keeps_the_provider_stop_reason(
+    provider_stop_reason: Literal["length", "stop"], expected: str
+) -> None:
+    """The provider's last turn is the settled stop reason, so a token-limited round is visible."""
+
+    async def model(**_kwargs: Any) -> AssistantTurn:
+        return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
+
+    orchestrator = _orchestrator(mode="research", model=model)
+    prepared = orchestrator.prepare_run("question")
+
+    orchestrator.restore_runtime_snapshot(
+        prepared, _terminal_snapshot(assistant_stop_reason=provider_stop_reason)
+    )
+
+    assert prepared.stop_reason == expected
+    orchestrator.runtime_answer(prepared)
+    assert prepared.trace["agent_stop_reason"] == expected
+
+
+_SEALED = SealedArtifactDeclaration(
+    name="case.json", gate="scripts/verify_sealed_case.py", unsealed_label="Unsealed memo"
+)
+
+
+def _loaded_sealed_ledger() -> DeliveryLedger:
+    ledger = DeliveryLedger()
+    ledger.record_load(
+        skill="sealed-report",
+        verifier="scripts/validate_model.py",
+        required_reads=(
+            RequiredRead(paths=("references/gate-grounding.md",), when="before the first number"),
+        ),
+        read=SkillRead(skill="sealed-report", path="SKILL.md"),
+        sealed_artifact=_SEALED,
+    )
+    return ledger
+
+
+def test_an_attempt_that_attached_nothing_warns_of_no_delivery_but_still_labels_the_answer() -> (
+    None
+):
+    """The warning follows an attached Artifact, whatever Skill ran; the label follows the seal."""
+    orchestrator = _orchestrator(mode="research")
+    ledger = _loaded_sealed_ledger()
+    orchestrator._delivery_ledger = ledger
+
+    idle = orchestrator.delivery_findings()
+    assert idle.lines == ()
+    assert idle.unsealed_labels == ("Unsealed memo",)
+
+    ledger.record_attachment("artifacts/report.html")
+    attached = orchestrator.delivery_findings()
+    assert any(line.startswith("not read: references/gate-grounding.md") for line in attached.lines)
+    assert attached.unsealed_labels == ("Unsealed memo",)
+
+    ledger.record_sealed_attestation("sealed-report")
+    assert orchestrator.delivery_findings().unsealed_labels == ()
+
+
+def test_a_sealed_skill_attested_in_this_run_does_not_need_reads_or_a_clean_verifier() -> None:
+    """Attestation is the gate; a skipped read is evidence, not a completion refusal on its own."""
+    orchestrator = _orchestrator(mode="research")
+    ledger = DeliveryLedger()
+    ledger.record_load(
+        skill="sealed-report",
+        verifier="scripts/validate_model.py",
+        required_reads=(
+            RequiredRead(paths=("references/gate-grounding.md",), when="before the first number"),
+        ),
+        read=SkillRead(
+            skill="sealed-report",
+            path="SKILL.md",
+            start=0,
+            end=10,
+            document_chars=10,
+        ),
+        sealed_artifact=_SEALED,
+    )
+    orchestrator._delivery_ledger = ledger
+    assert orchestrator.goal_completion_refusal() is not None
+
+    ledger.record_sealed_attestation("sealed-report")
+    assert orchestrator.goal_completion_refusal() is None
+
+
+def _case_skill_root(tmp_path: Path) -> Path:
+    """A built-in root with one Skill that declares a sealed `case.json` and its gate."""
+    builtin = tmp_path / "builtin"
+    skill = builtin / "case-skill"
+    (skill / "scripts").mkdir(parents=True)
+    (skill / "scripts" / "verify.py").write_text("", encoding="utf-8")
+    (skill / "scripts" / "gate.py").write_text("", encoding="utf-8")
+    (skill / "SKILL.md").write_text(
+        "---\nname: case-skill\ndescription: reference\nattestation: scripts/verify.py\n"
+        "sealed_artifact:\n  name: case.json\n  gate: scripts/gate.py\n"
+        "  unsealed_label: Unsealed memo\n---\nbody\n",
+        encoding="utf-8",
+    )
+    return builtin
+
+
+def _load_events(call_id: str, outcome: str) -> list[tuple[str, dict[str, object]]]:
+    base = {"call_id": call_id, "tool_name": "load_skill", "object_label": "case-skill"}
+    return [
+        ("tool_start", {"call_id": call_id, "tool_name": "load_skill"}),
+        ("tool_progress", {**base, "skill_path": "SKILL.md"}),
+        ("tool_end", {**base, "outcome": outcome}),
+    ]
+
+
+async def _attach_events(tmp_path: Path, *, sealed: bool) -> list[tuple[str, dict[str, object]]]:
+    """The durable events of one real `attach_artifact` call that the Skill's gate judges."""
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "case.json").write_text('{"delivery": {"case_seal": {}}}', encoding="utf-8")
+    gate = tmp_path / "gate.py"
+    gate.write_text(
+        "import json\n"
+        f"print(json.dumps({{'claim': 'sealed', 'sealed': {sealed!r}, 'reasons': ['unsealed']}}))\n"
+        f"raise SystemExit({0 if sealed else 1})\n",
+        encoding="utf-8",
+    )
+    tool = attach_artifact_tool(
+        root,
+        scheduler=AccessScheduler(),
+        limits=PublicationLimits(),
+        sealed_artifacts=(SealedArtifact(skill="case-skill", name="case.json", gate=gate),),
+    )
+    updates: list[ToolResult] = []
+    result = await tool.execute(
+        AttachArtifactArgs(path="case.json"), recording_tool_runtime(updates, call_id="a1")
+    )
+    base = {"call_id": "a1", "tool_name": "attach_artifact"}
+    outcome = "failed" if result.is_error else "succeeded"
+    return [
+        *(("tool_progress", {**base, **update.progress_facts}) for update in updates),
+        ("tool_end", {**base, "outcome": outcome}),
+    ]
+
+
+def test_a_resumed_attempt_labels_the_answer_for_a_skill_an_earlier_attempt_loaded(
+    tmp_path: Path,
+) -> None:
+    """Load, defer, resume: the new attempt's ledger is empty, and the Run's events refill it."""
+    from dlightrag.engine.agent.session.runtime import _label_unsealed
+
+    async def model(**_kwargs: Any) -> AssistantTurn:
+        return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
+
+    orchestrator = _orchestrator(mode="research", model=model)
+    orchestrator._skills = SkillsBundle(builtin_root=_case_skill_root(tmp_path))
+    orchestrator.prepare_run("question")  # the resumed attempt: a new, empty ledger
+    assert orchestrator.delivery_findings().unsealed_labels == ()
+
+    orchestrator.restore_delivery_record(
+        [*_load_events("c1", "failed"), ("token", {"text": "..."})]
+    )
+    assert orchestrator.delivery_findings().unsealed_labels == ()  # a refused load loaded nothing
+
+    orchestrator.restore_delivery_record(_load_events("c2", "succeeded"))
+    labels = orchestrator.delivery_findings().unsealed_labels
+    assert labels == ("Unsealed memo",)
+    assert _label_unsealed("The answer.", labels) == "**Unsealed memo**\n\nThe answer."
+
+
+@pytest.mark.parametrize(("sealed", "labels"), [(True, ()), (False, ("Unsealed memo",))])
+async def test_a_resumed_attempt_follows_the_gates_verdict_on_an_attached_sealed_artifact(
+    tmp_path: Path, sealed: bool, labels: tuple[str, ...]
+) -> None:
+    """Attach, defer, resume: an attested attach comes back from the Run's events; a refused one does not."""
+    orchestrator = _orchestrator(mode="research", model=AsyncMock())
+    orchestrator._skills = SkillsBundle(builtin_root=_case_skill_root(tmp_path))
+    orchestrator.prepare_run("question")
+    orchestrator.restore_delivery_record(_load_events("c1", "succeeded"))
+    assert orchestrator.delivery_findings().unsealed_labels == ("Unsealed memo",)
+
+    orchestrator.restore_delivery_record(await _attach_events(tmp_path, sealed=sealed))
+
+    assert orchestrator.delivery_findings().unsealed_labels == labels
+
+
+def test_restoring_a_snapshot_without_an_assistant_turn_states_the_model_stopped() -> None:
+    async def model(**_kwargs: Any) -> AssistantTurn:
+        return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
+
+    orchestrator = _orchestrator(mode="research", model=model)
+    prepared = orchestrator.prepare_run("question")
+
+    orchestrator.restore_runtime_snapshot(prepared, _terminal_snapshot(assistant_stop_reason=None))
+
+    assert prepared.stop_reason == "model_stop"
+
+
+def test_a_goal_cannot_complete_while_a_sealed_skill_delivery_is_unattested() -> None:
+    """The goal tool's completion gate reuses the attempt's delivery evidence, not a second rule."""
+    orchestrator = _orchestrator(mode="research")
+    assert orchestrator.goal_completion_refusal() is None
+
+    ledger = DeliveryLedger()
+    ledger.record_load(
+        skill="sealed-report",
+        verifier="scripts/validate_model.py",
+        required_reads=(
+            RequiredRead(paths=("references/gate-grounding.md",), when="before the first number"),
+        ),
+        read=SkillRead(
+            skill="sealed-report",
+            path="SKILL.md",
+            start=0,
+            end=10,
+            document_chars=10,
+        ),
+        sealed_artifact=_SEALED,
+    )
+    orchestrator._delivery_ledger = ledger
+
+    refusal = orchestrator.goal_completion_refusal()
+    assert refusal is not None
+    assert "not attested" in refusal
+    assert "sealed-report declares a sealed artifact" in refusal
+
+    # Reading the declared document and running the verifier to a clean output removes the gate.
+    ledger.record_load(
+        skill="sealed-report",
+        verifier="scripts/validate_model.py",
+        required_reads=(
+            RequiredRead(paths=("references/gate-grounding.md",), when="before the first number"),
+        ),
+        read=SkillRead(
+            skill="sealed-report",
+            path="references/gate-grounding.md",
+            start=0,
+            end=10,
+            document_chars=10,
+        ),
+        sealed_artifact=_SEALED,
+    )
+    ledger.record_execution(
+        tool_name="bash",
+        command="python scripts/validate_model.py case.draft.json --write-audit",
+        failed=False,
+    )
+    # Required reads and a clean verifier are evidence, not the completion gate.
+    assert orchestrator.goal_completion_refusal() is not None
+    ledger.record_sealed_attestation("sealed-report")
+    assert orchestrator.goal_completion_refusal() is None
+
+
+def test_a_corrected_sealed_artifact_clears_the_earlier_refusal_and_can_complete() -> None:
+    """One refused attempt must not poison complete after the same Skill's gate attests a retry."""
+    orchestrator = _orchestrator(mode="research")
+    ledger = DeliveryLedger()
+    ledger.record_load(
+        skill="sealed-report",
+        verifier="scripts/validate_model.py",
+        required_reads=(),
+        read=SkillRead(
+            skill="sealed-report",
+            path="SKILL.md",
+            start=0,
+            end=10,
+            document_chars=10,
+        ),
+        sealed_artifact=_SEALED,
+    )
+    orchestrator._delivery_ledger = ledger
+    ledger.record_sealed_refusal("sealed-report", "case.json", ("the case is not sealed",))
+    assert orchestrator.goal_completion_refusal() is not None
+
+    # The model fixes the case and reattaches; the declared gate now attests it.
+    ledger.record_sealed_attestation("sealed-report")
+
+    preview = ledger.preview()
+    assert preview is not None
+    assert preview.sealed_refused == ()
+    assert orchestrator.goal_completion_refusal() is None

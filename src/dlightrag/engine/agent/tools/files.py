@@ -6,11 +6,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import codecs
-import difflib
 import glob
 import hashlib
 import json
 import os
+import re
+import shlex
 import stat
 import time
 from collections.abc import Awaitable, Callable, Sequence
@@ -22,21 +23,21 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from dlightrag.engine.agent.environment.access import (
     AccessScheduler,
+    AgentspaceAccess,
     PathAccess,
-    WorkspaceAccess,
 )
 from dlightrag.engine.agent.environment.child import build_child_environment
 from dlightrag.engine.agent.environment.errors import (
     TOOL_RESULT_MAX_BYTES,
     TOOL_RESULT_MAX_LINES,
     TOOL_RESULT_PREVIEW_BYTES,
+    AgentspaceQuotaExceeded,
     FullOutputUnavailable,
     PathRejected,
-    WorkspaceQuotaExceeded,
 )
 from dlightrag.engine.agent.environment.execution import ExecutionEnvironment
 from dlightrag.engine.agent.environment.local import ProcessChunk
-from dlightrag.engine.agent.environment.text import decode_workspace_text, encode_workspace_text
+from dlightrag.engine.agent.environment.text import decode_agentspace_text, encode_agentspace_text
 from dlightrag.engine.agent.environment.toolchain import SearchToolchain
 from dlightrag.engine.agent.tool_content import (
     ToolResourceAttachmentPart,
@@ -45,6 +46,8 @@ from dlightrag.engine.agent.tool_content import (
 )
 from dlightrag.engine.agent.tools.contracts import (
     AdmittedBytesReader,
+    AgentspaceInventoryFacts,
+    AgentspacePathFact,
     AgentTool,
     CommittedOutput,
     EvidenceSourceFact,
@@ -53,18 +56,34 @@ from dlightrag.engine.agent.tools.contracts import (
     ToolEffects,
     ToolResult,
     ToolRuntime,
-    WorkspaceInventoryFacts,
-    WorkspacePathFact,
+)
+from dlightrag.engine.agent.tools.editing import (
+    EditResolutionError,
+    apply_edits,
+    edit_summary_lines,
+    render_hunks,
+    resolve_edits,
 )
 from dlightrag.engine.agent.tools.listing import directory_page as _directory_page
 from dlightrag.engine.agent.tools.listing import escape_path as _escape_path
-from dlightrag.engine.agent.tools.output import OutputStage, StreamingToolOutput, ToolOutputSnapshot
+from dlightrag.engine.agent.tools.output import (
+    OutputStage,
+    StreamingToolOutput,
+    ToolOutputSnapshot,
+)
 from dlightrag.engine.ai.media import ImagePayloadBudget, decode_image_base64, detect_image_mime
 
 type SpillWriter = Callable[[str], Awaitable[CommittedOutput]]
 type OutputStageFactory = Callable[[str], OutputStage]
 
 _PATH_MAX_CHARS = 4096
+PATH_MAX_CHARS = _PATH_MAX_CHARS
+"""The longest workspace path any tool accepts.
+
+Public because a second tool that names a workspace-relative destination — the Skill loader's
+``write_to`` — must refuse what this module refuses, and two private copies of one bound are two
+bounds the day either of them moves.
+"""
 _CURSOR_MAX_CHARS = 8192
 _VIOLATION_PATH_PREVIEW_BYTES = 256
 
@@ -109,13 +128,17 @@ class ReadWithoutUrlArgs(BaseModel):
     )
     resource_id: str | None = Field(default=None, description="Opaque durable resource id.")
     offset: int | None = Field(
-        default=None, ge=1, description="1-based line offset in a workspace path."
+        default=None,
+        ge=1,
+        description="1-based line offset in a workspace path; not accepted with resource_id.",
     )
     limit: int | None = Field(
         default=None,
         ge=1,
         le=100_000,
-        description="Maximum lines to return from a workspace path.",
+        description=(
+            "Maximum lines to return from a workspace path; not accepted with resource_id."
+        ),
     )
     focus: str | None = Field(
         default=None,
@@ -137,7 +160,10 @@ class ReadWithoutUrlArgs(BaseModel):
         if self.path is not None and self.cursor is not None and self.offset is not None:
             raise ValueError("read path cursor and offset are mutually exclusive")
         if self.path is None and (self.offset is not None or self.limit is not None):
-            raise ValueError("read offset and limit are available only for paths")
+            raise ValueError(
+                "read offset and limit apply only to a workspace path; a resource_id read "
+                "takes neither"
+            )
         return self
 
 
@@ -153,13 +179,19 @@ class ReadArgs(BaseModel):
     url: str | None = Field(default=None, description="Anonymous public HTTP(S) URL to read.")
     http: HttpReadOptions | None = None
     offset: int | None = Field(
-        default=None, ge=1, description="1-based line offset in a workspace path."
+        default=None,
+        ge=1,
+        description=(
+            "1-based line offset in a workspace path; not accepted with url or resource_id."
+        ),
     )
     limit: int | None = Field(
         default=None,
         ge=1,
         le=100_000,
-        description="Maximum lines to return from a workspace path.",
+        description=(
+            "Maximum lines to return from a workspace path; not accepted with url or resource_id."
+        ),
     )
     focus: str | None = Field(
         default=None,
@@ -182,7 +214,10 @@ class ReadArgs(BaseModel):
         if self.path is not None and self.cursor is not None and self.offset is not None:
             raise ValueError("read path cursor and offset are mutually exclusive")
         if self.path is None and (self.offset is not None or self.limit is not None):
-            raise ValueError("read offset and limit are available only for paths")
+            raise ValueError(
+                "read offset and limit apply only to a workspace path; a url or resource_id "
+                "read takes neither (a url read continues by its returned resource_id and cursor)"
+            )
         if self.url is not None and self.cursor is not None:
             raise ValueError("continue a URL read with its returned resource_id")
         if self.url is None and self.http is not None:
@@ -233,8 +268,40 @@ class WriteArgs(BaseModel):
 class EditOperation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    old_text: str = Field(min_length=1, description="Unique exact text in the original file.")
-    new_text: str = Field(description="Replacement text.")
+    new_text: str = Field(
+        description="Replacement text; an empty string deletes the region.",
+    )
+    old_text: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Exact text that occurs exactly once in the original file.",
+    )
+    symbol: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=512,
+        description=(
+            "A named definition in the file's language, replaced with the whole statement "
+            "that defines it. In a .py file: a module-level assignment (including one that "
+            "unpacks several names), def, async def or class, or a dotted Class.member path."
+        ),
+    )
+    start_marker: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Whole-line marker text that begins the region; its line is kept. Give it with "
+            "end_marker."
+        ),
+    )
+    end_marker: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Whole-line marker text that ends the region; its line is kept. Give it with "
+            "start_marker."
+        ),
+    )
 
 
 class EditArgs(BaseModel):
@@ -243,7 +310,7 @@ class EditArgs(BaseModel):
     path: str = Field(max_length=_PATH_MAX_CHARS, description="Workspace-relative path to edit.")
     edits: list[EditOperation] = Field(
         min_length=1,
-        description="Non-overlapping replacements, all matched against the original file.",
+        description="Non-overlapping replacements, all resolved against the original file.",
     )
 
 
@@ -365,9 +432,10 @@ def read_declaration(*, public_url: bool, rendered: bool = False) -> ToolDeclara
     description = (
         "Read bounded text only (use view for image pixels). Exactly one target: a workspace path, a durable resource_id registered in this run, or an "
         "anonymous public HTTP(S) url. A url read returns the page's full content in "
-        "bounded windows. File pages carry an offset; directory and resource pages carry "
-        "opaque cursors. Follow the printed continuation (for a url, its resource_id and "
-        "cursor) instead of re-reading the whole target."
+        "bounded windows and takes no offset or limit. File pages carry an offset; "
+        "directory and resource pages carry opaque cursors. Follow the printed "
+        "continuation (for a url, its resource_id and cursor) instead of re-reading the "
+        "whole target."
         if url_enabled
         else "Read one workspace path or Host-provided durable resource_id registered in this "
         "run. Files page by offset and directories and resources by opaque cursor. Follow "
@@ -427,16 +495,16 @@ def read_tool(
                 )
         if environment is None or args.path is None:
             return ToolResult.text("path read requires an execution environment", is_error=True)
-        if blocked := workspace_integrity_refusal(environment):
+        if blocked := agentspace_integrity_refusal(environment):
             return blocked
         try:
             path = environment.resolve(args.path)
         except PathRejected as exc:
             return ToolResult.text(str(exc), is_error=True)
-        canonical_path = _workspace_relative_path(environment.root, path)
+        canonical_path = _agentspace_relative_path(environment.root, path)
         await runtime.emit_update(ToolResult.text("", subject=_escape_path(canonical_path)))
         async with scheduler.hold(PathAccess(path=str(path), kind="read")):
-            if blocked := workspace_integrity_refusal(environment):
+            if blocked := agentspace_integrity_refusal(environment):
                 return blocked
             kind = environment.stat_kind(path)
             if kind == "directory":
@@ -464,10 +532,10 @@ def read_tool(
                     f"Use view(path={canonical_path!r}) to see pixels; read returns text only."
                 )
             try:
-                decoded = decode_workspace_text(raw)
+                decoded = decode_agentspace_text(raw)
             except ValueError as exc:
                 return ToolResult.text(str(exc), is_error=True)
-            body, continuation, _remaining = _paginate_lines(
+            body, continuation, remaining = _paginate_lines(
                 decoded.text,
                 path=canonical_path,
                 offset=args.offset,
@@ -479,12 +547,22 @@ def read_tool(
                 ),
             )
             body, committed = await preview_or_spill(body, spill=spill, tool="read")
+            total_lines = len(decoded.text.splitlines())
+            first_line = max(0, (args.offset or 1) - 1)
             return ToolResult.text(
                 body,
                 protected_text=continuation,
                 effects=ToolEffects(
                     committed_outputs=((committed,) if committed is not None else ())
                 ),
+                facts={
+                    "path": canonical_path,
+                    "lines_read": max(0, total_lines - remaining - first_line),
+                    "total_lines": total_lines,
+                    # Either the file continues past this page or the page itself had to be
+                    # spilled for its size: both mean the text the model holds is a window.
+                    "truncated": remaining > 0 or committed is not None,
+                },
             )
 
     return read_declaration(public_url=resource_reader is not None, rendered=rendered).bind(execute)
@@ -560,14 +638,14 @@ def view_tool(
             return await resource_viewer(args, runtime, prepare)
         if environment is None:
             return ToolResult.text("path view requires an execution environment", is_error=True)
-        if blocked := workspace_integrity_refusal(environment):
+        if blocked := agentspace_integrity_refusal(environment):
             return blocked
         try:
             path = environment.resolve(args.path)
-            canonical = _workspace_relative_path(environment.root, path)
+            canonical = _agentspace_relative_path(environment.root, path)
             await runtime.emit_update(ToolResult.text("", subject=_escape_path(canonical)))
             async with scheduler.hold(PathAccess(path=str(path), kind="read")):
-                if blocked := workspace_integrity_refusal(environment):
+                if blocked := agentspace_integrity_refusal(environment):
                     return blocked
                 if environment.stat_kind(path) != "file":
                     return ToolResult.text("view requires a regular image file", is_error=True)
@@ -593,9 +671,9 @@ def view_tool(
     return view_declaration().bind(execute)
 
 
-async def _replace_file_held(
+async def replace_agentspace_file(
     environment: ExecutionEnvironment, scheduler: AccessScheduler, path: Path, data: bytes
-) -> WorkspaceInventoryFacts | ToolResult:
+) -> AgentspaceInventoryFacts | ToolResult:
     """Replace one file with ``data`` under its path's write hold.
 
     The latch is checked again once the hold is taken, because a Bash command that held the
@@ -603,11 +681,11 @@ async def _replace_file_held(
     or the refusal that stopped the write.
     """
     async with scheduler.hold(PathAccess(path=str(path), kind="write")):
-        if blocked := workspace_integrity_refusal(environment):
+        if blocked := agentspace_integrity_refusal(environment):
             return blocked
         try:
             environment.write_bytes(path, data)
-        except (WorkspaceQuotaExceeded, PathRejected) as exc:
+        except (AgentspaceQuotaExceeded, PathRejected) as exc:
             return ToolResult.text(str(exc), is_error=True)
         return _inventory_facts(environment.root, path)
 
@@ -626,16 +704,16 @@ def write_declaration() -> ToolDeclaration:
 def write_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) -> AgentTool:
     async def execute(args: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = cast(WriteArgs, args)
-        if blocked := workspace_integrity_refusal(environment):
+        if blocked := agentspace_integrity_refusal(environment):
             return blocked
         try:
             path = environment.resolve(args.path)
         except PathRejected as exc:
             return ToolResult.text(str(exc), is_error=True)
-        canonical = _workspace_relative_path(environment.root, path)
+        canonical = _agentspace_relative_path(environment.root, path)
         await runtime.emit_update(ToolResult.text("", subject=_escape_path(canonical)))
         data = args.content.encode("utf-8")
-        inventory = await _replace_file_held(environment, scheduler, path, data)
+        inventory = await replace_agentspace_file(environment, scheduler, path, data)
         if isinstance(inventory, ToolResult):
             return inventory
         return ToolResult.text(
@@ -689,7 +767,7 @@ def materialize_tool(
     async def execute(args: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = cast(MaterializeArgs, args)
         # A refusal of the workspace or of the destination loads and adopts nothing.
-        if blocked := workspace_integrity_refusal(environment):
+        if blocked := agentspace_integrity_refusal(environment):
             return blocked
         try:
             path = environment.resolve(args.path)
@@ -698,12 +776,12 @@ def materialize_tool(
         if environment.stat_kind(path) == "directory":
             # The write refuses this too, but only once the bytes are loaded.
             return ToolResult.text("cannot overwrite a directory", is_error=True)
-        destination = _escape_path(_workspace_relative_path(environment.root, path))
+        destination = _escape_path(_agentspace_relative_path(environment.root, path))
         await runtime.emit_update(ToolResult.text("", subject=destination))
         admitted = await admitted_bytes_reader(args.resource_id, runtime)
         if isinstance(admitted, ToolResult):
             return admitted
-        inventory = await _replace_file_held(environment, scheduler, path, admitted.content)
+        inventory = await replace_agentspace_file(environment, scheduler, path, admitted.content)
         if isinstance(inventory, ToolResult):
             return inventory
         return ToolResult.text(
@@ -718,11 +796,16 @@ def materialize_tool(
 def edit_declaration() -> ToolDeclaration:
     return ToolDeclaration(
         name="edit",
-        description="Replace exact text in a workspace file. All edits apply atomically or "
-        "none do; read the file first when a match fails.",
+        description="Replace a region of a workspace file. Each edit names exactly one target: "
+        "symbol (a named definition in a .py file), start_marker with end_marker (two whole-line "
+        "markers; the lines between them are replaced and both marker lines are kept), or "
+        "old_text (exact text, once in the file). Prefer symbol or the markers over old_text "
+        "when the region is a named block or a delimited section; use old_text only for a short "
+        "unique string. All edits resolve against the original file and apply atomically or none "
+        "do; read the file first when a target fails.",
         input_model=EditArgs,
         replay_policy="never",
-        contract_version=3,
+        contract_version=4,
     )
 
 
@@ -734,16 +817,16 @@ def edit_tool(
 ) -> AgentTool:
     async def execute(args: BaseModel, runtime: ToolRuntime) -> ToolResult:
         edit_args = cast(EditArgs, args)
-        if blocked := workspace_integrity_refusal(environment):
+        if blocked := agentspace_integrity_refusal(environment):
             return blocked
         try:
             path = environment.resolve(edit_args.path)
         except PathRejected as exc:
             return ToolResult.text(str(exc), is_error=True)
-        canonical = _workspace_relative_path(environment.root, path)
+        canonical = _agentspace_relative_path(environment.root, path)
         await runtime.emit_update(ToolResult.text("", subject=_escape_path(canonical)))
         async with scheduler.hold(PathAccess(path=str(path), kind="readwrite")):
-            if blocked := workspace_integrity_refusal(environment):
+            if blocked := agentspace_integrity_refusal(environment):
                 return blocked
             if environment.stat_kind(path) != "file":
                 return ToolResult.text(
@@ -751,48 +834,25 @@ def edit_tool(
                     is_error=True,
                 )
             try:
-                decoded = decode_workspace_text(environment.read_bytes(path))
+                decoded = decode_agentspace_text(environment.read_bytes(path))
             except ValueError as exc:
                 return ToolResult.text(str(exc), is_error=True)
-            spans: list[tuple[int, int, str]] = []
-            for index, operation in enumerate(edit_args.edits, start=1):
-                if operation.old_text == operation.new_text:
-                    return ToolResult.text(
-                        f"edit {index} rejected: old_text and new_text are identical",
-                        is_error=True,
-                    )
-                count = decoded.text.count(operation.old_text)
-                if count != 1:
-                    return ToolResult.text(
-                        f"edit {index} old_text matches {count} times; each match must be unique",
-                        is_error=True,
-                    )
-                start = decoded.text.index(operation.old_text)
-                spans.append((start, start + len(operation.old_text), operation.new_text))
-            ordered = sorted(spans)
-            if any(left[1] > right[0] for left, right in zip(ordered, ordered[1:], strict=False)):
-                return ToolResult.text("edit ranges overlap in the original file", is_error=True)
-            updated = decoded.text
-            for start, end, replacement in reversed(ordered):
-                updated = updated[:start] + replacement + updated[end:]
             try:
-                environment.write_bytes(path, encode_workspace_text(decoded, updated))
-            except (WorkspaceQuotaExceeded, PathRejected) as exc:
+                resolved = resolve_edits(decoded.text, edit_args.edits, path=edit_args.path)
+            except EditResolutionError as exc:
+                return ToolResult.text(str(exc), is_error=True)
+            updated = apply_edits(decoded.text, resolved)
+            try:
+                environment.write_bytes(path, encode_agentspace_text(decoded, updated))
+            except (AgentspaceQuotaExceeded, PathRejected) as exc:
                 return ToolResult.text(str(exc), is_error=True)
             inventory = _inventory_facts(environment.root, path)
-        patch = "\n".join(
-            difflib.unified_diff(
-                decoded.text.splitlines(),
-                updated.splitlines(),
-                fromfile=edit_args.path,
-                tofile=edit_args.path,
-                lineterm="",
-            )
-        )
-        first_line = decoded.text.count("\n", 0, ordered[0][0]) + 1
+        first_change = min(resolved, key=lambda edit: edit.start)
+        summary = "\n".join(edit_summary_lines(resolved))
+        patch = render_hunks(decoded.text, updated, resolved, path=edit_args.path)
         body = (
-            f"edited {_escape_path(edit_args.path)} ({len(ordered)} edits; "
-            f"first change line {first_line})\n{patch}"
+            f"edited {_escape_path(edit_args.path)} ({len(resolved)} edits; "
+            f"first change line {first_change.first_line})\n{summary}\n{patch}"
         )
         body, committed = await preview_or_spill(body, spill=spill, tool="edit")
         return ToolResult.text(
@@ -827,7 +887,7 @@ def grep_tool(
 ) -> AgentTool:
     async def execute(args: BaseModel, runtime: ToolRuntime) -> ToolResult:
         grep_args = cast(GrepArgs, args)
-        if blocked := workspace_integrity_refusal(environment):
+        if blocked := agentspace_integrity_refusal(environment):
             return blocked
         try:
             root = (
@@ -849,6 +909,10 @@ def grep_tool(
             "--no-require-git",
             "--glob",
             "!.git",
+            # ripgrep reports files in the order its threads finish; sorted, a replayed
+            # call answers the same way and a limit cuts at the same match.
+            "--sort",
+            "path",
             "--max-count",
             str(grep_args.limit + 1),
         ]
@@ -873,7 +937,7 @@ def grep_tool(
 
         try:
             async with scheduler.hold(PathAccess(path=str(root), kind="search")):
-                if blocked := workspace_integrity_refusal(environment):
+                if blocked := agentspace_integrity_refusal(environment):
                     output.abort()
                     return blocked
                 home, tmp = environment.prepare_process_directories()
@@ -901,7 +965,7 @@ def grep_tool(
                     )
                 )
             final = await output.finish()
-        except (OSError, PathRejected, WorkspaceQuotaExceeded) as exc:
+        except (OSError, PathRejected, AgentspaceQuotaExceeded) as exc:
             output.abort()
             return ToolResult.text(str(exc), is_error=True)
         except asyncio.CancelledError:
@@ -939,6 +1003,150 @@ def bash_declaration() -> ToolDeclaration:
     )
 
 
+_BASH_COMMAND_SEPARATORS = frozenset({";", ";;", "&&", "||", "|", "&", "(", ")", "\n"})
+#: Shell words after which the next word starts a command, not an operand.
+_BASH_COMMAND_INTRODUCERS = frozenset(
+    {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "time"}
+)
+#: Wrappers that run the word after their own options as the command (cd stays a builtin).
+_BASH_COMMAND_PREFIXES = frozenset({"command", "builtin"})
+#: Tokens that introduce a redirection; the word after them is not a command or cd target.
+_BASH_REDIRECTIONS = frozenset({"<", ">", ">>", "<<", "<<<", "<>", ">&", "<&", ">|", "&>", "&>>"})
+_BASH_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def _bash_tokens(command: str) -> list[str]:
+    """Split a command into shell words and control punctuation, without executing it.
+
+    ``shlex`` in POSIX mode splits quoted words but treats ``;``/``&&`` as ordinary
+    characters unless punctuation is asked for. This lexer keeps quotes and escapes,
+    emits the operators, and turns an unquoted newline into a command separator so
+    ``cd ..`` followed by a newline can never be read as one longer word.
+    """
+    normalized: list[str] = []
+    quote: str | None = None
+    escaped = False
+    for character in command:
+        if escaped:
+            normalized.append(character)
+            escaped = False
+            continue
+        if character == "\\" and quote != "'":
+            normalized.append(character)
+            escaped = True
+            continue
+        if quote is not None:
+            normalized.append(character)
+            if character == quote:
+                quote = None
+            continue
+        if character in {"'", '"'}:
+            quote = character
+            normalized.append(character)
+            continue
+        if character == "\n":
+            normalized.append(" ; ")
+            continue
+        normalized.append(character)
+    lexer = shlex.shlex("".join(normalized), posix=True, punctuation_chars=";&|()<>")
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    try:
+        return list(lexer)
+    except ValueError:
+        # An unterminated quote or escape is a shell syntax error; it cannot run a cd.
+        return []
+
+
+def _bash_workspace_escape_refusal(environment: ExecutionEnvironment, command: str) -> str | None:
+    """Refuse a ``cd``/``pushd`` that would leave the Agent Workspace root.
+
+    This is a behavioural recovery, not a sandbox: it reads the command text only, and
+    interpreters/wrappers outside this small set are deliberately out of scope. A
+    command that stays in the workspace is untouched; a stale absolute path, a ``..``
+    climb or ``cd -`` is refused with the current root named, because the model can then
+    retry with a relative path that exists in this Run's workspace.
+    """
+    tokens = _bash_tokens(command)
+    if not tokens:
+        return None
+    root = Path(environment.root).resolve()
+    expects_command = True
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token in _BASH_COMMAND_SEPARATORS:
+            expects_command = True
+            index += 1
+            continue
+        if expects_command and token in _BASH_COMMAND_INTRODUCERS:
+            expects_command = True
+            index += 1
+            continue
+        if expects_command and token in _BASH_REDIRECTIONS:
+            # ``> file`` before a command: the redirection target is not the command.
+            index += 2
+            continue
+        if expects_command and _BASH_ASSIGNMENT.match(token):
+            index += 1
+            continue
+        if expects_command and token in _BASH_COMMAND_PREFIXES:
+            index += 1
+            # ``command -p cd``: its own options are skipped, the next word is the command.
+            while index < len(tokens) and tokens[index].startswith("-"):
+                index += 1
+            continue
+        if expects_command and token in ("cd", "pushd"):
+            cursor = index + 1
+            target: str | None = None
+            after_double_dash = False
+            while cursor < len(tokens) and tokens[cursor] not in _BASH_COMMAND_SEPARATORS:
+                candidate = tokens[cursor]
+                if candidate in _BASH_REDIRECTIONS:
+                    cursor += 2
+                    continue
+                if candidate == "--" and not after_double_dash:
+                    after_double_dash = True
+                    cursor += 1
+                    continue
+                if candidate.startswith("-") and not after_double_dash:
+                    # cd/pushd options (-L, -P, -e, or a lone '-' for OLDPWD).
+                    if candidate == "-":
+                        target = candidate
+                        break
+                    cursor += 1
+                    continue
+                target = candidate
+                break
+            if target == "-":
+                return (
+                    f"bash refused: `{token} -` returns to OLDPWD, which is not necessarily "
+                    f"inside the current Agent Workspace root {root}. Use a relative path "
+                    "inside the workspace and run `pwd` to confirm where you are."
+                )
+            if target not in (None, ""):
+                resolved: Path | None = None
+                if not target.startswith(("~", "$")):
+                    path = Path(target)
+                    resolved = (path if path.is_absolute() else root / path).resolve(strict=False)
+                if resolved is None or not resolved.is_relative_to(root):
+                    return (
+                        f"bash refused: `{token} {target}` leaves the current Agent "
+                        f"Workspace root {root}. Commands run in that root; use a relative "
+                        "path inside the workspace and run `pwd` to confirm where you are."
+                    )
+            expects_command = False
+            index += 1
+            continue
+        if token in ("fi", "done", "esac", "}"):
+            expects_command = False
+            index += 1
+            continue
+        expects_command = False
+        index += 1
+    return None
+
+
 def bash_tool(
     environment: ExecutionEnvironment,
     scheduler: AccessScheduler,
@@ -947,8 +1155,10 @@ def bash_tool(
 ) -> AgentTool:
     async def execute(args: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = cast(BashArgs, args)
-        if blocked := workspace_integrity_refusal(environment):
+        if blocked := agentspace_integrity_refusal(environment):
             return blocked
+        if refused := _bash_workspace_escape_refusal(environment, args.command):
+            return ToolResult.text(refused, is_error=True)
         await runtime.emit_update(ToolResult.text("", subject=args.command))
         output = _streaming_output("bash", output_stage_factory)
         last_update = 0.0
@@ -962,13 +1172,13 @@ def bash_tool(
                 await runtime.emit_update(_stream_result("bash", snapshot, transient=True))
 
         try:
-            async with scheduler.hold(WorkspaceAccess()):
-                if blocked := workspace_integrity_refusal(environment):
+            async with scheduler.hold(AgentspaceAccess()):
+                if blocked := agentspace_integrity_refusal(environment):
                     output.abort()
                     return blocked
                 try:
                     home, tmp = environment.prepare_process_directories()
-                except (OSError, PathRejected, WorkspaceQuotaExceeded) as exc:
+                except (OSError, PathRejected, AgentspaceQuotaExceeded) as exc:
                     output.abort()
                     return ToolResult.text(str(exc), is_error=True)
                 try:
@@ -1174,7 +1384,7 @@ def _render_violations(violations: tuple[str, ...]) -> str:
     return ", ".join(shown)
 
 
-def workspace_integrity_refusal(environment: ExecutionEnvironment) -> ToolResult | None:
+def agentspace_integrity_refusal(environment: ExecutionEnvironment) -> ToolResult | None:
     """The refusal every tool gives while the workspace is latched, or None while it is sound."""
     violations = environment.integrity_violations
     quota_violation = environment.quota_violation
@@ -1213,7 +1423,7 @@ def find_tool(
 ) -> AgentTool:
     async def execute(args: BaseModel, runtime: ToolRuntime) -> ToolResult:
         find_args = cast(FindArgs, args)
-        if blocked := workspace_integrity_refusal(environment):
+        if blocked := agentspace_integrity_refusal(environment):
             return blocked
         try:
             root = (
@@ -1247,7 +1457,7 @@ def find_tool(
         collector = _NulPathCollector(root=root)
         try:
             async with scheduler.hold(PathAccess(path=str(root), kind="search")):
-                if blocked := workspace_integrity_refusal(environment):
+                if blocked := agentspace_integrity_refusal(environment):
                     return blocked
                 home, tmp = environment.prepare_process_directories()
                 completed = await environment.run(
@@ -1295,7 +1505,7 @@ def ls_declaration() -> ToolDeclaration:
 def ls_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) -> AgentTool:
     async def execute(args: BaseModel, runtime: ToolRuntime) -> ToolResult:
         ls_args = cast(LsArgs, args)
-        if blocked := workspace_integrity_refusal(environment):
+        if blocked := agentspace_integrity_refusal(environment):
             return blocked
         try:
             root = environment.root if ls_args.path == "." else environment.resolve(ls_args.path)
@@ -1304,10 +1514,10 @@ def ls_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) -> Ag
                     f"ls path is not a directory: {_escape_path(ls_args.path)}",
                     is_error=True,
                 )
-            relative = _workspace_relative_path(environment.root, root)
+            relative = _agentspace_relative_path(environment.root, root)
             await runtime.emit_update(ToolResult.text("", subject=_escape_path(relative)))
             async with scheduler.hold(PathAccess(path=str(root), kind="read")):
-                if blocked := workspace_integrity_refusal(environment):
+                if blocked := agentspace_integrity_refusal(environment):
                     return blocked
                 entries = environment.list_directory(root)
         except (PathRejected, OSError) as exc:
@@ -1619,32 +1829,32 @@ def _utf8_excerpt(text: str, *, preview: Literal["head", "tail"]) -> str:
     return "".join(kept)
 
 
-def _workspace_relative_path(root: Path, path: Path) -> str:
+def _agentspace_relative_path(root: Path, path: Path) -> str:
     relative = path.relative_to(root).as_posix()
     return relative or "."
 
 
-def _inventory_facts(root: object, path: object) -> WorkspaceInventoryFacts:
+def _inventory_facts(root: object, path: object) -> AgentspaceInventoryFacts:
     from pathlib import Path
 
     file_path = Path(path)  # type: ignore[arg-type]
     root_path = Path(root)  # type: ignore[arg-type]
     data = file_path.read_bytes()
-    record = WorkspacePathFact(
+    record = AgentspacePathFact(
         relative_path=str(file_path.relative_to(root_path)),
         entry_type="file",
         size_bytes=len(data),
         mode=file_path.stat().st_mode,
         content_digest=hashlib.sha256(data).hexdigest(),
     )
-    return WorkspaceInventoryFacts(upserts=(record,))
+    return AgentspaceInventoryFacts(upserts=(record,))
 
 
-def _scan_inventory(root: object) -> WorkspaceInventoryFacts:
+def _scan_inventory(root: object) -> AgentspaceInventoryFacts:
     from pathlib import Path
 
     root_path = Path(root)  # type: ignore[arg-type]
-    upserts: list[WorkspacePathFact] = []
+    upserts: list[AgentspacePathFact] = []
     for current, dirnames, filenames in os.walk(root_path):
         dirnames[:] = [name for name in dirnames if not (Path(current) / name).is_symlink()]
         for name in filenames:
@@ -1658,14 +1868,14 @@ def _scan_inventory(root: object) -> WorkspaceInventoryFacts:
             if not stat.S_ISREG(metadata.st_mode):
                 continue
             upserts.append(
-                WorkspacePathFact(
+                AgentspacePathFact(
                     relative_path=str(file_path.relative_to(root_path)),
                     entry_type="file",
                     size_bytes=metadata.st_size,
                     mode=metadata.st_mode,
                 )
             )
-    return WorkspaceInventoryFacts(upserts=tuple(upserts), replace_all=True)
+    return AgentspaceInventoryFacts(upserts=tuple(upserts), replace_all=True)
 
 
 def _paginate_lines(
@@ -1679,6 +1889,13 @@ def _paginate_lines(
     """Return one page whose complete continuation participates in its bounds."""
     lines = text.splitlines()
     start = (offset or 1) - 1
+    if offset is not None and start >= len(lines):
+        return (
+            f"[offset {offset} is past the end of {path!r}: the file has "
+            f"{len(lines)} line{'s' if len(lines) != 1 else ''}]",
+            "",
+            0,
+        )
     page_size = min(limit or TOOL_RESULT_MAX_LINES, TOOL_RESULT_MAX_LINES)
     end = min(start + page_size, len(lines))
 
@@ -1729,6 +1946,7 @@ __all__ = [
     "RenderedReadArgs",
     "ResourceReadRequest",
     "OutputStageFactory",
+    "PATH_MAX_CHARS",
     "ResourceReader",
     "SpillWriter",
     "WriteArgs",
@@ -1741,8 +1959,9 @@ __all__ = [
     "materialize_tool",
     "preview_or_spill",
     "read_tool",
+    "replace_agentspace_file",
     "spill_continuation",
     "within_result_bounds",
-    "workspace_integrity_refusal",
+    "agentspace_integrity_refusal",
     "write_tool",
 ]

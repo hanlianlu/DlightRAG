@@ -9,10 +9,15 @@ from pathlib import Path
 
 import pytest
 
-from dlightrag.engine.agent.environment import PathRejected, TrustExecutionAdapter
 from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
+from dlightrag.engine.agent.environment.errors import (
+    PathRejected,
+)
+from dlightrag.engine.agent.environment.execution import (
+    TrustExecutionAdapter,
+)
 from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment, ProcessChunk
-from dlightrag.engine.agent.environment.text import decode_workspace_text, encode_workspace_text
+from dlightrag.engine.agent.environment.text import decode_agentspace_text, encode_agentspace_text
 
 
 def test_rejects_absolute_parent_and_symlink_escape(tmp_path: Path) -> None:
@@ -90,23 +95,23 @@ def test_write_quota_uses_incremental_accounting(
     def fail_rescan() -> tuple[int, int]:
         raise AssertionError("ordinary writes must not rescan the workspace")
 
-    monkeypatch.setattr(env, "_scan_workspace_usage", fail_rescan)
+    monkeypatch.setattr(env, "_scan_agentspace_usage", fail_rescan)
     env.write_bytes(env.resolve("one.txt"), b"one")
     env.write_bytes(env.resolve("nested/two.txt"), b"two")
     assert (tmp_path / "nested" / "two.txt").read_bytes() == b"two"
 
 
 def test_utf8_and_bom_tagged_utf16_round_trip() -> None:
-    utf8 = decode_workspace_text("café\n".encode())
+    utf8 = decode_agentspace_text("café\n".encode())
     assert utf8.text == "café\n"
-    tagged = decode_workspace_text(b"\xff\xfeh\x00i\x00")
+    tagged = decode_agentspace_text(b"\xff\xfeh\x00i\x00")
     assert tagged.text == "hi"
     with pytest.raises(ValueError, match="not UTF-8"):
-        decode_workspace_text(b"\x80\x81not-utf8")
-    crlf = decode_workspace_text(b"a\r\nb\r\n")
+        decode_agentspace_text(b"\x80\x81not-utf8")
+    crlf = decode_agentspace_text(b"a\r\nb\r\n")
     assert crlf.newline == "\r\n"
     assert crlf.text == "a\nb\n"
-    assert encode_workspace_text(crlf, "a\nb\n") == b"a\r\nb\r\n"
+    assert encode_agentspace_text(crlf, "a\nb\n") == b"a\r\nb\r\n"
 
 
 def test_directory_listing_is_sorted_one_level(tmp_path: Path) -> None:

@@ -5,19 +5,21 @@ import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from dlightrag.engine.agent.environment import SearchToolchain
+from dlightrag.engine.agent.environment.toolchain import (
+    SearchToolchain,
+)
 from dlightrag.engine.agent.session.fold import PriorTurns, WorkingContextProjection
 from dlightrag.engine.agent.session.ids import EntryId, IntentId, OperationId, SessionId
 from dlightrag.engine.ai.messages import AssistantTurn
 from dlightrag.engine.ai.scheduler import ModelScheduler, model_call_scope
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.answer.evidence import EvidenceLedger
-from dlightrag.engine.answer.orchestration import AnswerOrchestrator
+from dlightrag.engine.answer.orchestration.orchestrator import AnswerOrchestrator
 from dlightrag.engine.answer.research.runtime import (
     FetchedResourceBuffer,
     run_child_session,
@@ -38,8 +40,8 @@ from dlightrag.engine.answer.tools.subagents import (
     subagent_tools,
 )
 from dlightrag.engine.runtime.coordinator import LeaseLostError, RunCancellationObserved
-from tests.in_memory_session_repository import InMemoryAgentSessionRepository
-from tests.tool_helpers import tool_runtime
+from tests.support.in_memory_session_repository import InMemoryAgentSessionRepository
+from tests.support.tool_helpers import tool_runtime
 from tests.unit.conftest import answer_image_policy, answer_model_profile
 
 
@@ -613,6 +615,255 @@ async def test_a_notified_result_is_not_sent_again_when_a_sibling_continues() ->
     assert await host.completed_dispatch_notifications(seen=seen) == ()
 
 
+class _Roster:
+    """The durable roster a Host persists to, settles through and reads back."""
+
+    def __init__(self) -> None:
+        self.rows: dict[str, dict[str, Any]] = {}
+
+    async def persist(self, **kwargs: Any) -> bool:
+        self.rows[kwargs["child_session_id"]] = {
+            "child_session_id": kwargs["child_session_id"],
+            "parent_call_id": kwargs["parent_call_id"],
+            "parent_intent_id": kwargs["parent_intent_id"],
+            "status": "running",
+            "objective": kwargs["objective"],
+            "context": kwargs["context_mode"],
+            "model_role": kwargs["model_role"],
+            "tools": kwargs["tools"],
+            "context_snapshot": kwargs["context_snapshot"],
+            "host_state": dict(kwargs["host_state"]),
+        }
+        return True
+
+    async def finish_child(self, **kwargs: Any) -> bool:
+        row = self.rows[kwargs["child_session_id"]]
+        row["status"] = kwargs["status"]
+        row["host_state"]["terminal_outcome"] = kwargs["outcome"]
+        return True
+
+    async def list_children(self, **_kwargs: Any) -> tuple[dict[str, Any], ...]:
+        return tuple(self.rows.values())
+
+    async def load_child(self, *, child_session_id: str, **_kwargs: Any) -> dict[str, Any] | None:
+        return self.rows.get(child_session_id)
+
+
+class _Fleet:
+    """A parent's Host over a roster, with children that settle when the test releases them."""
+
+    def __init__(self, *names: str, merge_evidence: Any = None) -> None:
+        self.names = names
+        self.release = {name: asyncio.Event() for name in names}
+        self.evidence_state = {
+            "contexts": {
+                "chunks": [{"chunk_id": "c1", "content": "finding"}],
+                "entities": [],
+                "relationships": [],
+            }
+        }
+        self.ids: dict[str, str] = {}
+        self.parent_id = SessionId.new()
+        self.run_id = SessionId.new().value
+        self.roster = _Roster()
+        self.merge_evidence = merge_evidence
+        self._start()
+
+    def _start(self) -> None:
+        self.host = SubagentHost(
+            parent_session_id=self.parent_id,
+            run_id=self.run_id,
+            owner_id="owner",
+            persist=self.roster.persist,
+            finish_child=self.roster.finish_child,
+            list_children=self.roster.list_children,
+            load_child=self.roster.load_child,
+            prepare_dispatch=_durable_dispatch,
+            run_child=self._run_child,
+            context_snapshot=_context_snapshot(self.parent_id),
+            merge_evidence=self.merge_evidence,
+        )
+        self.tools = {tool.name: tool for tool in subagent_tools(host=self.host)}
+
+    async def restart(self) -> None:
+        """A new process over the same roster, its running children rebuilt from their rows."""
+        await self.host.stop(cancel=False)
+        self._start()
+        await self.host.restore_pending()
+
+    async def _run_child(
+        self,
+        child_id: SessionId,
+        request: ChildRequest,
+        _call_id: str,
+        _snapshot: ChildContextSnapshot,
+    ) -> ChildOutcome:
+        await self.release[request.objective].wait()
+        return ChildOutcome(
+            status="succeeded",
+            summary=f"{request.objective} found it",
+            child_session_id=child_id.value,
+            evidence_state=self.evidence_state,
+        )
+
+    async def spawn(self, wake: Literal["all", "each"] = "all") -> None:
+        spawned = await self.tools["spawn_agent"].execute(
+            SpawnAgentInput(
+                children=tuple(ChildRequest(objective=name) for name in self.names), wake=wake
+            ),
+            tool_runtime(call_id="split", tool_name="spawn_agent"),
+        )
+        assert spawned.details is not None
+        self.ids = {
+            name: child["child_session_id"]
+            for name, child in zip(self.names, spawned.details["children"], strict=True)
+        }
+
+    async def settle(self, name: str) -> None:
+        self.release[name].set()
+        await self.host.tasks[self.ids[name]]
+
+    async def call(self, tool: str, name: str) -> Any:
+        return await self.tools[tool].execute(
+            ChildControlInput(child_session_id=self.ids[name]), tool_runtime(tool_name=tool)
+        )
+
+
+def _reported(result: Any) -> list[tuple[str, str]]:
+    """The (child id, status) pairs a tool result reports, in order."""
+    return [(child["child_session_id"], child["status"]) for child in result.details["children"]]
+
+
+async def test_wait_hands_over_what_a_sibling_settled_once_and_then_blocks_again() -> None:
+    merge_evidence = MagicMock(return_value=("[1] finding",))
+    fleet = _Fleet("main", "early", "late", merge_evidence=merge_evidence)
+    await fleet.spawn()
+    main, early, late = (fleet.ids[name] for name in fleet.names)
+
+    # A sibling settled while the parent was not waiting: the wait returns at once, with
+    # the waited child's state first and the sibling's result after it.
+    await fleet.settle("early")
+    first = await asyncio.wait_for(fleet.call("wait_subagent", "main"), timeout=2)
+    assert _reported(first) == [(main, "running"), (early, "succeeded")]
+    assert "early found it" in first.text_content and "[1] finding" in first.text_content
+    merge_evidence.assert_any_call(fleet.evidence_state, early, "split")
+
+    # The result came with that wait, so the next one blocks: the wake the settled sibling
+    # left behind brings nothing new.
+    second = asyncio.create_task(fleet.call("wait_subagent", "main"))
+    await asyncio.sleep(0.01)
+    assert not second.done()
+
+    # A sibling that settles meanwhile wakes it, and only that sibling comes with it.
+    await fleet.settle("late")
+    woken = await asyncio.wait_for(second, timeout=2)
+    assert _reported(woken) == [(main, "running"), (late, "succeeded")]
+    assert "early found it" not in woken.text_content
+
+    third = asyncio.create_task(fleet.call("wait_subagent", "main"))
+    await asyncio.sleep(0.01)
+    assert not third.done()
+
+    # The parent ends its turn once the waited child settles: nothing it was handed is
+    # sent again, and a result it asks for is still its to read.
+    await fleet.settle("main")
+    final = await asyncio.wait_for(third, timeout=2)
+    assert _reported(final) == [(main, "succeeded")]
+    assert await fleet.host.completed_dispatch_notifications(seen=set()) == ()
+    explicit = await fleet.call("subagent_status", "early")
+    assert "early found it" in explicit.text_content
+
+
+async def test_wait_hands_over_a_sibling_that_settled_with_the_waited_child() -> None:
+    fleet = _Fleet("main", "other")
+    await fleet.spawn()
+    main, other = fleet.ids["main"], fleet.ids["other"]
+
+    waiter = asyncio.create_task(fleet.call("wait_subagent", "main"))
+    await asyncio.sleep(0.01)
+    fleet.release["other"].set()
+    fleet.release["main"].set()
+    waited = await asyncio.wait_for(waiter, timeout=2)
+
+    # What the wait took from the roster reaches the parent in the same result, so the
+    # evidence it merged never arrives without the result it belongs to, and nothing is
+    # left to send when the parent ends its turn.
+    assert _reported(waited) == [(main, "succeeded"), (other, "succeeded")]
+    assert await fleet.host.completed_dispatch_notifications(seen=set()) == ()
+
+
+async def test_all_resumes_the_parent_once_every_child_has_settled() -> None:
+    fleet = _Fleet("first", "second")
+    await fleet.spawn()
+
+    await fleet.settle("first")
+    assert await fleet.host.completed_dispatch_notifications(seen=set()) == ()
+
+    await fleet.settle("second")
+    ((_notification_id, content),) = await fleet.host.completed_dispatch_notifications(seen=set())
+    assert "first found it" in content and "second found it" in content
+
+
+async def test_each_resumes_the_parent_as_children_settle_and_never_twice() -> None:
+    fleet = _Fleet("first", "second", "third")
+    await fleet.spawn(wake="each")
+    second, third = fleet.ids["second"], fleet.ids["third"]
+    seen: set[str] = set()
+
+    async def resumption() -> str | None:
+        """What the Run resumes the parent with next, taken as its park loop takes it."""
+        notifications = await fleet.host.completed_dispatch_notifications(seen=seen)
+        if not notifications:
+            return None
+        notification_id, content = notifications[0]
+        seen.add(notification_id)
+        fleet.host.note_notification_accepted(notification_id)
+        return content
+
+    assert await resumption() is None
+
+    # A child settles while two run: the parent is resumed with it and told who still runs.
+    await fleet.settle("first")
+    content = await resumption()
+    assert content is not None
+    assert "first found it" in content and f"Still running: {second}, {third}." in content
+    assert await resumption() is None
+
+    # The next one comes alone, with what is left running.
+    await fleet.settle("second")
+    content = await resumption()
+    assert content is not None
+    assert "second found it" in content and "first found it" not in content
+    assert f"Still running: {third}." in content
+
+    # The last one comes alone and leaves nothing running.
+    await fleet.settle("third")
+    content = await resumption()
+    assert content is not None
+    assert "third found it" in content and "second found it" not in content
+    assert "Still running" not in content
+    assert await resumption() is None
+
+
+async def test_a_restarted_host_does_not_take_an_accepted_each_notification_again() -> None:
+    fleet = _Fleet("first", "second")
+    await fleet.spawn(wake="each")
+    seen: set[str] = set()
+
+    await fleet.settle("first")
+    ((first_id, _content),) = await fleet.host.completed_dispatch_notifications(seen=seen)
+    seen.add(first_id)
+    fleet.host.note_notification_accepted(first_id)
+
+    # The accepted keys are the Session's; what the parent had read is the process's.
+    await fleet.restart()
+    assert await fleet.host.completed_dispatch_notifications(seen=seen) == ()
+
+    await fleet.settle("second")
+    ((second_id, content),) = await fleet.host.completed_dispatch_notifications(seen=seen)
+    assert second_id != first_id and "second found it" in content
+
+
 def test_parent_tools_include_spawn_and_child_omits_it() -> None:
     host = SubagentHost()
     parent = compose_research_tools(
@@ -639,6 +890,7 @@ def test_parent_tools_include_spawn_and_child_omits_it() -> None:
     controls = {
         "subagent_status",
         "wait_subagent",
+        "read_subagent",
         "cancel_subagent",
         "steer_subagent",
         "continue_subagent",
@@ -694,7 +946,13 @@ async def test_spawn_many_runs_children_in_parallel() -> None:
     await host.stop(cancel=False)
 
 
-async def test_async_spawn_persists_full_envelope_before_returning_handles() -> None:
+@pytest.mark.parametrize(
+    ("wake", "host_state"),
+    [("all", {"dispatch_version": 3}), ("each", {"dispatch_version": 3, "wake": "each"})],
+)
+async def test_async_spawn_persists_full_envelope_before_returning_handles(
+    wake: Literal["all", "each"], host_state: dict[str, Any]
+) -> None:
     release = asyncio.Event()
     persisted: list[dict[str, Any]] = []
 
@@ -729,7 +987,10 @@ async def test_async_spawn_persists_full_envelope_before_returning_handles() -> 
     )
     spawn = subagent_tools(host=host)[0]
     result = await spawn.execute(
-        _spawn_input("investigate"),
+        SpawnAgentInput(
+            children=(ChildRequest(objective="investigate"), ChildRequest(objective="compare")),
+            wake=wake,
+        ),
         tool_runtime(call_id="async-call", tool_name="spawn_agent"),
     )
 
@@ -742,6 +1003,9 @@ async def test_async_spawn_persists_full_envelope_before_returning_handles() -> 
     assert persisted[0]["objective"] == "investigate"
     assert persisted[0]["plan"] == {"schema_version": 2, "tools": []}
     assert persisted[0]["budget"] == {"provider_attempt_limit": 2}
+    # The choice is stored with every child, beside what the dispatch already kept, and
+    # the default adds nothing.
+    assert [call["host_state"] for call in persisted] == [host_state, host_state]
 
     release.set()
     waited = await subagent_tools(host=host)[2].execute(
@@ -901,12 +1165,13 @@ def test_child_contracts_keep_what_recovery_compares() -> None:
         "steer_subagent",
         "continue_subagent",
         "reply_subagent",
+        "read_subagent",
     }
     # A recovery compares replay policy, read-only, contract version and schema digest,
     # not a tool's wording.
     assert all(tool.contract_version == 5 for tool in tools.values())
     assert tools["spawn_agent"].input_schema_digest == (
-        "f8ffdb251a198b9ba42629109d6452975931ca7eed6e3ac899417ff2c3d9c938"
+        "551777a00855b67bd4d5b2cd886e22ea40aaec6cb0a364465f0baf87dcb401bc"
     )
 
 
@@ -1721,3 +1986,205 @@ async def test_parent_cancel_marks_the_child_cancelled() -> None:
             persist_child_runtime=AsyncMock(),
             claim_child=AsyncMock(return_value=1),
         )
+
+
+class _Controls:
+    """A parent's Host over a roster and the store's controls, which answer as scripted."""
+
+    def __init__(self, *children: str, other_parent: tuple[str, ...] = ()) -> None:
+        self.parent_id = SessionId.new()
+        self.rows = {
+            child: {"child_session_id": child, "parent_session_id": self.parent_id.value}
+            for child in children
+        }
+        self.rows.update(
+            {
+                child: {"child_session_id": child, "parent_session_id": SessionId.new().value}
+                for child in other_parent
+            }
+        )
+        self.receipt: dict[str, Any] = {"outcome": "queued"}
+        self.questions: list[dict[str, Any]] = []
+        self.guidance: dict[str, dict[str, Any]] = {}
+        self.stored: list[str] = []
+
+    async def list_children(self, **_kwargs: Any) -> tuple[dict[str, Any], ...]:
+        return tuple(self.rows.values())
+
+    async def load_child(self, *, child_session_id: str, **_kwargs: Any) -> dict[str, Any] | None:
+        return self.rows.get(child_session_id)
+
+    async def load_guidance(self, *, request_id: str, **_kwargs: Any) -> dict[str, Any] | None:
+        return self.guidance.get(request_id)
+
+    async def list_guidance(self, **_kwargs: Any) -> tuple[dict[str, Any], ...]:
+        return tuple(self.questions)
+
+    async def load_transcript(self, **_kwargs: Any) -> tuple[dict[str, Any], ...]:
+        return ()
+
+    async def control(self, **kwargs: Any) -> dict[str, Any]:
+        self.stored.append(kwargs.get("child_session_id") or kwargs["request_id"])
+        return self.receipt
+
+    def tool(self, name: str) -> Any:
+        host = SubagentHost(
+            parent_session_id=self.parent_id,
+            run_id=SessionId.new().value,
+            owner_id="owner",
+            list_children=self.list_children,
+            load_child=self.load_child,
+            load_transcript=self.load_transcript,
+            load_guidance=self.load_guidance,
+            list_guidance=self.list_guidance,
+            steer_child=self.control,
+            continue_child=self.control,
+            reply_guidance=self.control,
+        )
+        return next(tool for tool in subagent_tools(host=host) if tool.name == name)
+
+    async def call(self, name: str, target: str) -> Any:
+        tool = self.tool(name)
+        if name == "reply_subagent":
+            arguments = tool.input_model(request_id=target, content="use the filing")
+        elif name in {"steer_subagent", "continue_subagent"}:
+            arguments = tool.input_model(child_session_id=target, content="look again")
+        else:
+            arguments = tool.input_model(child_session_id=target)
+        return await tool.execute(arguments, tool_runtime(tool_name=name))
+
+
+_CHILD_TOOLS = [
+    "subagent_status",
+    "wait_subagent",
+    "cancel_subagent",
+    "steer_subagent",
+    "continue_subagent",
+    "read_subagent",
+]
+
+
+@pytest.mark.parametrize("name", _CHILD_TOOLS)
+async def test_a_child_id_the_run_never_issued_is_refused_with_the_ids_it_did(name: str) -> None:
+    controls = _Controls("child-a", "child-b", other_parent=("stranger",))
+
+    result = await controls.call(name, "child-x")
+
+    assert result.is_error
+    assert (
+        result.text_content
+        == "Unknown child session child-x. This Run's children: child-a, child-b."
+    )
+    assert controls.stored == []
+
+
+@pytest.mark.parametrize("name", _CHILD_TOOLS)
+async def test_a_run_without_children_says_where_a_child_id_comes_from(name: str) -> None:
+    result = await _Controls().call(name, "child-x")
+
+    assert result.is_error
+    assert result.text_content == (
+        "Unknown child session child-x. This Run has no children yet; "
+        "spawn_agent returns a child's id."
+    )
+
+
+async def test_the_refusal_lists_sixteen_children_and_counts_the_rest() -> None:
+    children = tuple(f"child-{number:02d}" for number in range(20))
+
+    result = await _Controls(*children).call("subagent_status", "child-x")
+
+    assert result.is_error
+    assert result.text_content == (
+        f"Unknown child session child-x. This Run's children: {', '.join(children[:16])} "
+        "and 4 more."
+    )
+
+
+async def test_a_host_without_a_roster_lists_the_children_it_started() -> None:
+    host = SubagentHost(
+        outcomes={"child-a": ChildOutcome(status="succeeded", summary="done")},
+        parent_call_ids={"child-a": "call", "child-b": "call"},
+    )
+    status = next(tool for tool in subagent_tools(host=host) if tool.name == "subagent_status")
+
+    result = await status.execute(
+        ChildControlInput(child_session_id="child-x"), tool_runtime(tool_name="subagent_status")
+    )
+
+    assert result.is_error
+    assert (
+        result.text_content
+        == "Unknown child session child-x. This Run's children: child-a, child-b."
+    )
+
+
+@pytest.mark.parametrize("name", ["steer_subagent", "continue_subagent"])
+async def test_a_child_the_store_does_not_know_is_refused_not_relayed(name: str) -> None:
+    controls = _Controls("child-a")
+    controls.receipt = {"outcome": "unknown_child"}
+
+    # Another parent's child is in the roster, so only the store can tell it is not ours.
+    controls.rows["child-b"] = {"child_session_id": "child-b", "parent_session_id": "elsewhere"}
+    result = await controls.call(name, "child-b")
+
+    assert controls.stored == ["child-b"]
+    assert result.is_error
+    assert result.text_content == "Unknown child session child-b. This Run's children: child-a."
+
+
+@pytest.mark.parametrize("name", ["steer_subagent", "continue_subagent"])
+async def test_a_known_child_still_gets_the_store_receipt(name: str) -> None:
+    controls = _Controls("child-a")
+    controls.receipt = {"outcome": "queued"}
+
+    result = await controls.call(name, "child-a")
+
+    assert not result.is_error
+    assert result.text_content == '{"outcome":"queued"}'
+
+
+async def test_a_reply_to_a_request_nobody_asked_is_refused_with_the_waiting_ones() -> None:
+    controls = _Controls("child-a")
+    controls.questions = [{"request_id": "req-1"}, {"request_id": "req-2"}]
+
+    result = await controls.call("reply_subagent", "req-x")
+
+    assert result.is_error
+    assert result.text_content == (
+        "Unknown guidance request req-x. Questions waiting for a reply: req-1, req-2."
+    )
+    assert controls.stored == []
+
+
+async def test_a_reply_with_no_question_waiting_says_so() -> None:
+    result = await _Controls("child-a").call("reply_subagent", "req-x")
+
+    assert result.is_error
+    assert result.text_content == (
+        "Unknown guidance request req-x. No child question is waiting for a reply."
+    )
+
+
+async def test_a_reply_the_store_does_not_know_is_refused_not_relayed() -> None:
+    controls = _Controls("child-a")
+    controls.guidance["req-1"] = {"request_id": "req-1", "status": "pending"}
+    controls.receipt = {"outcome": "unknown_request"}
+
+    result = await controls.call("reply_subagent", "req-1")
+
+    assert controls.stored == ["req-1"]
+    assert result.is_error
+    assert result.text_content.startswith("Unknown guidance request req-1.")
+
+
+async def test_replaying_a_reply_that_was_taken_returns_the_original_receipt() -> None:
+    controls = _Controls("child-a")
+    # The question is no longer pending, but the request is still the Run's.
+    controls.guidance["req-1"] = {"request_id": "req-1", "status": "replied"}
+    controls.receipt = {"outcome": "replied", "request_id": "req-1", "child_session_id": "child-a"}
+
+    result = await controls.call("reply_subagent", "req-1")
+
+    assert not result.is_error
+    assert '"outcome":"replied"' in result.text_content

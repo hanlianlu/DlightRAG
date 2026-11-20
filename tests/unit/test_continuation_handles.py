@@ -19,8 +19,8 @@ from dlightrag.engine.answer.continuation_handles import (
     session_notes_message,
     spill_handle,
 )
+from dlightrag.engine.runtime.agentspace import CommittedSpillRecord, SessionNoteRecord
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
-from dlightrag.engine.runtime.workspace import CommittedSpillRecord, SessionNoteRecord
 
 
 def _spill(
@@ -181,7 +181,7 @@ def test_the_reserved_directory_the_prompt_teaches_is_the_one_the_rule_reads() -
 def test_a_published_artifact_renders_the_handle_a_later_turn_reads_it_with() -> None:
     """One handle family: the address is the path hashed, so it exists before the row."""
     from dlightrag.engine.answer.publication import artifact_resource_id
-    from dlightrag.engine.runtime.workspace import RunArtifactRecord
+    from dlightrag.engine.runtime.agentspace import RunArtifactRecord
 
     record = RunArtifactRecord(
         relative_path="reports/analysis.md",
@@ -206,7 +206,7 @@ def test_every_product_is_taught_the_read_call() -> None:
     adopting Run never converts what it adopts, so `read` reaches every product.
     """
     from dlightrag.engine.answer.publication import artifact_read_call, artifact_resource_id
-    from dlightrag.engine.runtime.workspace import RunArtifactRecord
+    from dlightrag.engine.runtime.agentspace import RunArtifactRecord
 
     for path in ("reports/analysis.md", "reports/data.csv", "reports/model.xlsx"):
         assert artifact_read_call(path) == f"read(resource_id={artifact_resource_id(path)!r})"
@@ -226,7 +226,7 @@ def test_every_product_is_taught_the_read_call() -> None:
 
 def test_the_handle_list_reserves_a_share_for_each_non_evidence_class() -> None:
     """Spills keep their place, published products keep theirs, Evidence fills the rest."""
-    from dlightrag.engine.runtime.workspace import RunArtifactRecord
+    from dlightrag.engine.runtime.agentspace import RunArtifactRecord
 
     artifacts = tuple(
         RunArtifactRecord(

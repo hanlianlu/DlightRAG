@@ -20,8 +20,6 @@ from lightrag.utils_pipeline import normalize_document_file_path
 
 logger = logging.getLogger(__name__)
 
-UPLOADS_DIR_NAME = "__uploads__"
-REMOTE_INGEST_DIR_NAME = "__remote_ingest__"
 REMOTE_SOURCES_DIR_NAME = "__remote_sources__"
 LOCAL_SOURCES_DIR_NAME = "__local_sources__"
 #: Where a workspace's Run stages live in its corpus directory, one folder per Run.
@@ -39,14 +37,11 @@ def document_name(filename: str | Path) -> str:
 
 
 #: The folders a Workspace's corpus directory keeps beside its documents: LightRAG's
-#: parser archive, the kept copies of local and fetched sources, and staging folders
-#: earlier releases wrote.
+#: parser archive and the kept copies of local and fetched sources.
 _CORPUS_FOLDER_NAMES = frozenset(
     {
         PARSED_DIR_NAME,
         LOCAL_SOURCES_DIR_NAME,
-        UPLOADS_DIR_NAME,
-        REMOTE_INGEST_DIR_NAME,
         REMOTE_SOURCES_DIR_NAME,
     }
 )

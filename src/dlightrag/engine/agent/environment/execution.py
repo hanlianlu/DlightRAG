@@ -89,7 +89,7 @@ class TrustExecutionAdapter:
             raise RuntimeError("execution adapter is closed")
         environment = LocalExecutionEnvironment(
             workspace,
-            confinement=self._confinement.for_workspace(workspace, owner_id=owner_id),
+            confinement=self._confinement.for_agentspace(workspace, owner_id=owner_id),
         )
         self._environments.add(environment)
         return environment

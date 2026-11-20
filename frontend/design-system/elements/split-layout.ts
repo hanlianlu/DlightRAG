@@ -1,10 +1,12 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** Native split-layout behavior. Product state and persistence belong to adapters. */
 
-export type SplitOrientation = 'horizontal' | 'vertical';
-export type SplitPrimary = 'start' | 'end';
+import {isImeKey} from './ime.ts';
 
-export interface SplitPositionDetail {
+type SplitOrientation = 'horizontal' | 'vertical';
+type SplitPrimary = 'start' | 'end';
+
+interface SplitPositionDetail {
   readonly position: number;
 }
 
@@ -49,7 +51,7 @@ template.innerHTML = `
       min-inline-size: 0;
     }
     #divider {
-      background: var(--color-border-subtle, currentColor);
+      background: var(--color-border-subtle, rgb(120 113 108 / 16%));
       flex: 0 0 var(--split-divider-size, 1px);
       opacity: 1;
       outline: none;
@@ -80,10 +82,10 @@ template.innerHTML = `
     }
     :host(:not([disabled]):not([data-collapsed])) #divider:hover,
     :host(:not([disabled]):not([data-collapsed])) #divider:focus-visible {
-      background: var(--focus-ring-color, Highlight);
+      background: var(--focus-ring-color, rgb(210 182 97 / 64%));
     }
     :host(:not([disabled]):not([data-collapsed])) #divider:focus-visible {
-      box-shadow: 0 0 0 2px var(--focus-ring-color, Highlight);
+      box-shadow: 0 0 0 2px var(--focus-ring-color, rgb(210 182 97 / 64%));
     }
     @media (forced-colors: active) {
       #divider { background: CanvasText; }
@@ -106,15 +108,25 @@ export class DlSplitLayout extends HTMLElement {
   #dragStartCoordinate = 0;
   #dragStartSize = 0;
   #activePointerId: number | null = null;
+  /** What the panel was before it was collapsed, which Enter puts back (APG window splitter). */
+  #restoreSize: number | null = null;
 
   constructor() {
     super();
     const shadow = this.attachShadow({mode: 'open'});
     shadow.append(template.content.cloneNode(true));
-    this.#divider = shadow.querySelector<HTMLDivElement>('#divider')!;
+    const divider = shadow.querySelector<HTMLDivElement>('#divider');
+    // The template above is this file's own, so a miss is a mistake here, not a state to run in.
+    if (divider === null) throw new Error('dl-split-layout template has no #divider');
+    this.#divider = divider;
     this.#divider.addEventListener('pointerdown', this.#pointerDown);
     this.#divider.addEventListener('keydown', this.#keyDown);
     this.#divider.addEventListener('lostpointercapture', this.#lostPointerCapture);
+    // Double-clicking a sash asks for the panel's own default width, which the caller owns: VS Code
+    // learned to keep that apart from collapsing, and from the window's idea of a good width.
+    this.#divider.addEventListener('dblclick', () => {
+      this.dispatchEvent(new CustomEvent('dl-split-reset', {bubbles: true, composed: true}));
+    });
   }
 
   connectedCallback(): void {
@@ -187,14 +199,52 @@ export class DlSplitLayout extends HTMLElement {
     return Math.min(Math.max(value, this.min), this.#effectiveMaximum());
   }
 
-  #setInteractiveSize(value: number, eventName: 'dl-split-input' | 'dl-split-change'): void {
-    const position = Math.round(this.#normalize(value));
+  #setInteractiveSize(
+    value: number,
+    eventName: 'dl-split-input' | 'dl-split-change',
+    allowCollapsed = false,
+  ): void {
+    const position = Math.round(this.#normalize(value, allowCollapsed));
     this.size = position;
     this.dispatchEvent(new CustomEvent<SplitPositionDetail>(eventName, {
       bubbles: true,
       composed: true,
       detail: {position},
     }));
+  }
+
+  /**
+   * Where a divider being dragged settles, in the manner `react-resizable-panels` states it: a
+   * collapsible panel collapses when dragged past `min` by the threshold, and expands when dragged
+   * past the collapsed size by the same threshold. The two thresholds differ whenever the collapsed
+   * size is not zero, and the state a drag is in decides which one applies — so a panel held near
+   * the boundary does not flicker between the two, which is the hysteresis every snap needs.
+   */
+  #snapped(value: number): number {
+    const threshold = this.#collapseThreshold();
+    return this.size > 0
+      ? (value < this.min - threshold ? 0 : value)
+      : (value > threshold ? this.min : 0);
+  }
+
+  /** How far past the edge a drag has to go, half the gap by default, as the reference does. */
+  #collapseThreshold(): number {
+    const configured = Number.parseFloat(this.getAttribute('collapse-threshold') ?? '');
+    if (Number.isFinite(configured) && configured >= 0) return configured;
+    return this.min / 2;
+  }
+
+  /**
+   * Shut a panel the reader asked to shut, or restore it to the width it had before — what the
+   * APG window splitter pattern says Enter does, which is not the same as its smallest width.
+   */
+  #toggleCollapsed(): void {
+    if (this.size > 0) {
+      this.#restoreSize = this.size;
+      this.#setInteractiveSize(0, 'dl-split-change', true);
+      return;
+    }
+    this.#setInteractiveSize(this.#restoreSize ?? this.min, 'dl-split-change', true);
   }
 
   #sync(): void {
@@ -244,11 +294,14 @@ export class DlSplitLayout extends HTMLElement {
     this.#divider.removeEventListener('pointermove', this.#pointerMove);
     this.#divider.removeEventListener('pointerup', this.#pointerUp);
     this.#divider.removeEventListener('pointercancel', this.#pointerUp);
+    this.ownerDocument.removeEventListener('keydown', this.#escapeDrag, {capture: true});
     if (this.#divider.hasPointerCapture(pointerId)) {
       this.#divider.releasePointerCapture(pointerId);
     }
     if (commit && this.isConnected && !this.disabled) {
-      this.#setInteractiveSize(this.size, 'dl-split-change');
+      // Commit the state the drag ended in: a panel it took past the threshold stays shut, rather
+      // than being clamped back to its smallest width by the act of letting go.
+      this.#setInteractiveSize(this.size, 'dl-split-change', this.size <= 0);
     }
   }
 
@@ -266,6 +319,27 @@ export class DlSplitLayout extends HTMLElement {
     this.#divider.addEventListener('pointermove', this.#pointerMove);
     this.#divider.addEventListener('pointerup', this.#pointerUp);
     this.#divider.addEventListener('pointercancel', this.#pointerUp);
+    // A pointer does not focus the divider, so a key pressed during the drag goes to the page: listen
+    // for Escape there until the drag is over, in the capture phase, which puts it ahead of the panels'
+    // own handlers. A listener the page added to that phase earlier still goes first: an open popover
+    // takes the first Escape to close itself, and the drag the next.
+    this.ownerDocument.addEventListener('keydown', this.#escapeDrag, {capture: true});
+  };
+
+  /**
+   * Escape during a pointer drag: the width it started at, not the one it reached. The panels close
+   * themselves on Escape, from the page or from inside, so the key is spent here, before they see it.
+   * Cancelling is not committing: only the width drawn goes back, as `dl-split-input`, and no
+   * `dl-split-change` says the reader chose it. The width drawn can be a clamped one, and a clamp is
+   * not a preference.
+   */
+  readonly #escapeDrag = (event: KeyboardEvent): void => {
+    // An Escape that cancels an IME composition belongs to the composition.
+    if (event.key !== 'Escape' || event.defaultPrevented || isImeKey(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.#setInteractiveSize(this.#dragStartSize, 'dl-split-input', this.#dragStartSize <= 0);
+    this.#cancelDrag(false);
   };
 
   readonly #pointerMove = (event: PointerEvent): void => {
@@ -277,7 +351,7 @@ export class DlSplitLayout extends HTMLElement {
     const primaryDirection = this.primary === 'start' ? 1 : -1;
     const direction = primaryDirection * this.#writingDirection();
     const delta = (this.#coordinate(event) - this.#dragStartCoordinate) * direction;
-    this.#setInteractiveSize(this.#dragStartSize + delta, 'dl-split-input');
+    this.#setInteractiveSize(this.#snapped(this.#dragStartSize + delta), 'dl-split-input', true);
   };
 
   readonly #pointerUp = (event: PointerEvent): void => {
@@ -294,6 +368,11 @@ export class DlSplitLayout extends HTMLElement {
     const horizontal = this.orientation === 'horizontal';
     const decreasingKey = horizontal ? 'ArrowLeft' : 'ArrowUp';
     const increasingKey = horizontal ? 'ArrowRight' : 'ArrowDown';
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      this.#toggleCollapsed();
+      return;
+    }
     let next: number | null = null;
     if (event.key === 'Home') next = this.min;
     else if (event.key === 'End') {

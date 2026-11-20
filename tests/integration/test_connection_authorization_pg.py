@@ -11,7 +11,8 @@ import pytest
 from pydantic import SecretStr
 
 from dlightrag.adapters.postgres.connections import PGConnectionsStore
-from dlightrag.application.connections import ConnectionCommand, Connections, ConnectionsError
+from dlightrag.application.connections.models import ConnectionCommand, ConnectionsError
+from dlightrag.application.connections.service import Connections
 from dlightrag.engine.credential_cipher import CredentialCipher
 from tests.integration.run_runtime_pg_harness import isolated_run_runtime
 from tests.integration.test_connections_pg import FakeMcp, stored_catalogue
@@ -42,7 +43,7 @@ async def _authorizing_owner(prefix, server, *, override: str | None = _CALLBACK
     import httpx2
 
     from dlightrag.adapters.mcp.oauth import PersonalOAuthClient
-    from dlightrag.application.connections import ConnectionPolicy
+    from dlightrag.application.connections.policy import ConnectionPolicy
 
     async with isolated_run_runtime(prefix) as (_, pool):
         store = PGConnectionsStore(pool=pool)
@@ -130,11 +131,11 @@ async def test_authenticated_endpoint_candidate_keeps_old_live_until_discovery_c
         fail = False
         seen = []
 
-        async def discover(self, *, endpoint, bearer, policy):
-            self.seen.append((endpoint, bearer.get_secret_value() if bearer else None))
+        async def discover(self, *, endpoint, access, policy, **kwargs):
+            self.seen.append((endpoint, access.token.get_secret_value() if access else None))
             if self.fail:
                 raise ConnectionsError("fixture failure")
-            return await super().discover(endpoint=endpoint, bearer=bearer, policy=policy)
+            return await super().discover(endpoint=endpoint, access=access, policy=policy, **kwargs)
 
     async with isolated_run_runtime("authorization_candidate") as (_, pool):
         store = PGConnectionsStore(pool=pool)
@@ -189,7 +190,7 @@ async def test_sdk_flow_callback_other_worker_is_encrypted_owner_bound_and_once(
     import httpx2
 
     from dlightrag.adapters.mcp.oauth import PersonalOAuthClient
-    from dlightrag.application.connections import ConnectionPolicy
+    from dlightrag.application.connections.policy import ConnectionPolicy
     from tests.support.dns import public_dns
     from tests.unit.test_connection_oauth import FakeAuthorizationServer
 
@@ -349,7 +350,7 @@ async def test_authorization_failure_never_retires_enabled_head_and_requires_res
     import httpx2
 
     from dlightrag.adapters.mcp.oauth import PersonalOAuthClient
-    from dlightrag.application.connections import ConnectionPolicy
+    from dlightrag.application.connections.policy import ConnectionPolicy
     from tests.support.dns import public_dns
     from tests.unit.test_connection_oauth import FakeAuthorizationServer
 

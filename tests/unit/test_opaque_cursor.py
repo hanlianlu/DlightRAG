@@ -2,7 +2,9 @@
 """Shared opaque-cursor envelope and secret governance contracts."""
 
 import base64
+import datetime
 import hashlib
+from uuid import UUID
 
 import pytest
 
@@ -11,6 +13,9 @@ from dlightrag.application.opaque_cursor import (
     CursorSecretBox,
     OpaqueCursorEnvelope,
     OpaqueCursorError,
+    format_utc_timestamp,
+    parse_canonical_uuid,
+    parse_utc_timestamp,
 )
 
 
@@ -95,3 +100,39 @@ def test_envelope_rejects_cross_domain_replay_and_tamper() -> None:
             first.decode(forged)
     with pytest.raises(OpaqueCursorError):
         second.decode(token)
+
+
+def test_a_cursor_uuid_is_only_its_canonical_text() -> None:
+    canonical = "a1b2c3d4-5678-90ab-cdef-1234567890ab"
+
+    assert parse_canonical_uuid(canonical) == UUID(canonical)
+    for forged in (canonical.upper(), f"{{{canonical}}}", f"urn:uuid:{canonical}", "not-a-uuid", 7):
+        with pytest.raises(ValueError):
+            parse_canonical_uuid(forged)
+
+
+def test_a_cursor_timestamp_round_trips_as_utc_microseconds() -> None:
+    instant = datetime.datetime(2026, 3, 4, 5, 6, 7, 123456, tzinfo=datetime.UTC)
+    offset = datetime.timezone(datetime.timedelta(hours=2))
+
+    assert format_utc_timestamp(instant) == "2026-03-04T05:06:07.123456Z"
+    assert format_utc_timestamp(instant.astimezone(offset)) == "2026-03-04T05:06:07.123456Z"
+    assert parse_utc_timestamp("2026-03-04T05:06:07.123456Z") == instant
+    with pytest.raises(ValueError, match="timezone"):
+        format_utc_timestamp(datetime.datetime(2026, 3, 4, 5, 6, 7))
+
+
+@pytest.mark.parametrize(
+    "forged",
+    [
+        "2026-03-04T05:06:07.123456+00:00",
+        "2026-03-04T05:06:07.123456",
+        "2026-03-04T05:06:07Z",
+        "2026-03-04 05:06:07",
+        "not-a-timestamp",
+        1,
+    ],
+)
+def test_a_cursor_timestamp_is_only_the_canonical_text(forged: object) -> None:
+    with pytest.raises(ValueError):
+        parse_utc_timestamp(forged)

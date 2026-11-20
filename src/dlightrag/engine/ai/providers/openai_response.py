@@ -536,9 +536,7 @@ class _ResponseStreamAccumulator:
             "response.output_text.annotation.added",
             "response.reasoning_summary_part.added",
             "response.reasoning_summary_part.done",
-            "response.reasoning_summary_text.delta",
             "response.reasoning_summary_text.done",
-            "response.reasoning_text.delta",
             "response.reasoning_text.done",
             "response.refusal.delta",
             "response.refusal.done",
@@ -553,6 +551,7 @@ class _ResponseStreamAccumulator:
         self._added_items: dict[int, tuple[object, object]] = {}
         self._done_items: dict[int, dict[str, Any]] = {}
         self._incomplete_done_items: set[int] = set()
+        self._pending_reasoning: str | None = None
         self._terminal: Any | None = None
         self._validated = False
 
@@ -671,9 +670,25 @@ class _ResponseStreamAccumulator:
         if event_type == "response.output_item.done":
             self._accept_output_item(event, done=True)
             return None
+        if event_type in {
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_text.delta",
+        }:
+            delta = getattr(event, "delta", None)
+            if not isinstance(delta, str):
+                raise ResponseStatusError("Response reasoning delta is malformed")
+            if delta:
+                self._pending_reasoning = (self._pending_reasoning or "") + delta
+            return None
         if event_type in self._IGNORED_EVENTS:
             return None
         raise ResponseStatusError(f"unsupported Response stream event {event_type!r}")
+
+    def take_reasoning(self) -> str | None:
+        """Return and clear the reasoning text the last accepted event added, if any."""
+        reasoning = self._pending_reasoning
+        self._pending_reasoning = None
+        return reasoning
 
     def response(self) -> Any:
         """Return the one validated terminal Response, never partial event state."""
@@ -704,11 +719,16 @@ async def _response_events(
     client: Any,
     call_kwargs: dict[str, Any],
     accumulator: _ResponseStreamAccumulator,
+    *,
+    emit_reasoning: Callable[[str], Awaitable[None]] | None = None,
 ) -> AsyncGenerator[str]:
     stream = await client.responses.create(**call_kwargs, stream=True)
     async with closing_stream(stream):
         async for event in stream:
             delta = accumulator.accept(event)
+            reasoning = accumulator.take_reasoning()
+            if reasoning is not None and emit_reasoning is not None:
+                await emit_reasoning(reasoning)
             if delta is not None:
                 yield delta
         accumulator.response()
@@ -772,6 +792,7 @@ async def complete_response_tool_turn_streaming(
     *,
     tools: list[ToolDefinition],
     emit_text: Callable[[str], Awaitable[None]],
+    emit_reasoning: Callable[[str], Awaitable[None]] | None = None,
     tool_choice: ToolChoice,
     temperature: float | None,
     max_tokens: int | None,
@@ -791,7 +812,7 @@ async def complete_response_tool_turn_streaming(
         call_kwargs["tool_choice"] = tool_choice
         call_kwargs["parallel_tool_calls"] = True
     accumulator = _ResponseStreamAccumulator()
-    events = _response_events(client, call_kwargs, accumulator)
+    events = _response_events(client, call_kwargs, accumulator, emit_reasoning=emit_reasoning)
     async with aclosing(events):
         async for delta in events:
             await emit_text(delta)

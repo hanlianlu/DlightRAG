@@ -17,9 +17,15 @@ build/
 venv/
 ENV/
 
-# Local research and planning artifacts
+# Local planning artifacts
 /docs/plans/
-/docs/research/
+# Research notes are tracked (the write-ups); generated run artifacts under them are not:
+# JSONL evaluation runs, logs and screenshots are outputs, not notes.
+/docs/research/**
+!/docs/research/**/
+!/docs/research/**/*.md
+# Memory-pass eval runs quote real conversations: private, never committed.
+/docs/research/memory-pass-eval/runs/
 docs/superpowers/
 docs/upstream/
 superpowers/
@@ -40,7 +46,6 @@ Thumbs.db
 .env
 !.env.example
 .env.mineru
-!.env.mineru.example
 
 # Wizard backups (prerequisite_setup.py writes <file>.bak-<timestamp>)
 *.bak-*
@@ -79,3 +84,11 @@ coverage.xml
 
 # The chart renderer's resvg and font, installed by scripts/install-chart-tools.sh
 .chart-tools/
+# The skill demo writes its output beside whatever directory it is run from.
+model-output.json
+
+# Source maps for reported stacks: moved out of the served bundle by frontend/vite.config.ts.
+frontend/.sourcemaps/
+
+# Scratch work products of ad-hoc runs
+/tmp/

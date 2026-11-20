@@ -6,7 +6,12 @@ import uuid
 import pytest
 
 from dlightrag.adapters.postgres.connections import PGConnectionsStore
-from dlightrag.application.connections import ConnectionCommand, Connections, ConnectionsError
+from dlightrag.application.connections.models import (
+    ConnectionCommand,
+    ConnectionsError,
+    McpDiscovery,
+)
+from dlightrag.application.connections.service import Connections
 from dlightrag.engine.credential_cipher import CredentialCipher
 from tests.integration.run_runtime_pg_harness import drop_owned_database, isolated_run_runtime
 from tests.support.pg import PG_CONN_KWARGS, drop_scratch_database, notification_hub
@@ -16,10 +21,17 @@ class FakeMcp:
     async def call(self, **kwargs):
         raise AssertionError("Management must not dispatch")
 
-    async def discover(self, *, endpoint, bearer, policy):
-        return [
-            {"name": "read", "description": "Read a fixture", "input_schema": {"type": "object"}}
-        ]
+    async def discover(self, *, endpoint, access, policy, **kwargs):
+        return McpDiscovery(
+            tools=(
+                {
+                    "name": "read",
+                    "description": "Read a fixture",
+                    "input_schema": {"type": "object"},
+                },
+            ),
+            instructions=None,
+        )
 
 
 @pytest.mark.asyncio
@@ -125,9 +137,9 @@ async def test_bearer_encrypted_owner_bound_and_rotatable_without_echo():
     class AuthMcp(FakeMcp):
         observed = None
 
-        async def discover(self, *, endpoint, bearer, policy):
-            self.observed = bearer
-            return await super().discover(endpoint=endpoint, bearer=bearer, policy=policy)
+        async def discover(self, *, endpoint, access, policy, **kwargs):
+            self.observed = access.token if access is not None else None
+            return await super().discover(endpoint=endpoint, access=access, policy=policy, **kwargs)
 
     async with isolated_run_runtime("connection_secrets") as (_, pool):
         store = PGConnectionsStore(pool=pool)
@@ -190,13 +202,14 @@ async def test_bearer_encrypted_owner_bound_and_rotatable_without_echo():
 async def test_refresh_auto_admits_new_tools_and_preserves_last_good_on_fault():
     import asyncio
 
-    from dlightrag.application.connections import ConnectionPolicy
+    from dlightrag.application.connections.policy import ConnectionPolicy
 
     class ChangingMcp(FakeMcp):
         changed = False
 
         async def discover(self, **kwargs):
-            tools = await super().discover(**kwargs)
+            discovery = await super().discover(**kwargs)
+            tools = list(discovery.tools)
             if self.changed:
                 tools[0]["input_schema"] = {
                     "type": "object",
@@ -209,7 +222,7 @@ async def test_refresh_auto_admits_new_tools_and_preserves_last_good_on_fault():
                         "input_schema": {"type": "object"},
                     }
                 )
-            return tools
+            return McpDiscovery(tools=tuple(tools), instructions=discovery.instructions)
 
     async with (
         isolated_run_runtime("connection_refresh") as (_, pool),
@@ -267,7 +280,7 @@ async def test_refresh_auto_admits_new_tools_and_preserves_last_good_on_fault():
 
 @pytest.mark.asyncio
 async def test_expired_refresh_and_disabled_worker_cannot_publish():
-    from dlightrag.application.connections import ConnectionPolicy
+    from dlightrag.application.connections.policy import ConnectionPolicy
 
     async with isolated_run_runtime("connection_claims") as (_, pool):
         store = PGConnectionsStore(pool=pool)
@@ -318,7 +331,9 @@ async def test_bad_catalogue_preserves_entire_last_good_generation(bad):
         fault = False
 
         async def discover(self, **kwargs):
-            return bad if self.fault else await super().discover(**kwargs)
+            if self.fault:
+                return McpDiscovery(tools=tuple(bad), instructions=None)
+            return await super().discover(**kwargs)
 
     async with isolated_run_runtime("connection_catalogue") as (_, pool):
         store = PGConnectionsStore(pool=pool)
@@ -403,7 +418,7 @@ async def test_a_grant_whose_key_is_lost_needs_authorization_and_a_new_bearer_re
 async def test_expired_worker_loses_publication_to_new_claim():
     import asyncio
 
-    from dlightrag.application.connections import ConnectionPolicy
+    from dlightrag.application.connections.policy import ConnectionPolicy
 
     async with isolated_run_runtime("connection_expiry") as (_, pool):
         store = PGConnectionsStore(pool=pool)
@@ -442,8 +457,8 @@ async def test_next_refresh_counts_only_heads_a_background_claim_could_take():
     A disabled head is never refreshed in the background, and a head under a live claim, a
     refresh's or a pending authorization's, comes back through its holder's publication.
     """
-    from dlightrag.application.connections import ConnectionPolicy
     from dlightrag.application.connections.models import OAuthFlow
+    from dlightrag.application.connections.policy import ConnectionPolicy
 
     async with isolated_run_runtime("connection_schedule") as (_, pool):
         store = PGConnectionsStore(pool=pool)
@@ -604,3 +619,230 @@ async def test_revoke_erases_live_grant_and_delete_tombstones_only_this_owner():
         )
         assert deleted.connections == ()
         assert await service.read(owner_id="b") == other
+
+
+@pytest.mark.asyncio
+async def test_a_header_credential_and_stated_headers_round_trip_to_dispatch():
+    """The whole plane for one endpoint: two facts stored, both reconstructed at every request.
+
+    A header credential's name and prefix live inside the sealed envelope -- no column holds
+    them -- and a Connection's stated headers live on the head, unencrypted because they are not
+    secrets. This proves each survives storage, and that discovery is spoken to with both.
+    """
+    import json
+    from dataclasses import asdict
+
+    from pydantic import SecretStr
+
+    from tests.unit.test_connections_config import KEYRING
+
+    class RecordingMcp(FakeMcp):
+        seen = []
+
+        async def discover(self, *, endpoint, access, policy, **kwargs):
+            self.seen.append((access, kwargs))
+            return await super().discover(endpoint=endpoint, access=access, policy=policy, **kwargs)
+
+    async with isolated_run_runtime("connection_header_credential") as (_, pool):
+        store = PGConnectionsStore(pool=pool)
+        await store.initialize(validate_only=False)
+        mcp = RecordingMcp()
+        service = Connections(store=store, mcp=mcp, cipher=CredentialCipher(SecretStr(KEYRING)))
+        stated = (("X-Lark-MCP-Allowed-Tools", "create-doc,fetch-doc"),)
+        view = await service.change(
+            owner_id="a",
+            expected_revision="0",
+            command=ConnectionCommand(
+                kind="create",
+                label="Feishu/Lark",
+                endpoint="https://mcp.feishu.cn/mcp",
+                endpoint_headers=stated,
+            ),
+        )
+        identity = view.connections[0].connection_id
+        assert view.connections[0].endpoint_headers == stated
+
+        token = SecretStr("t-fixture-tenant-access-token")
+        view = await service.replace_header_credential(
+            owner_id="a",
+            connection_id=identity,
+            expected_revision=view.revision,
+            header="X-Lark-MCP-TAT",
+            prefix="",
+            token=token,
+        )
+        # The refresh the credential save asks for reads the endpoint with both facts.
+        sent, transport = mcp.seen[-1]
+        assert sent is not None and sent.token == token
+        assert sent.header == "X-Lark-MCP-TAT"
+        assert sent.prefix == ""
+        assert transport["endpoint_headers"] == stated
+        assert view.connections[0].authentication == "header"
+
+        # Neither the token nor the header it travels in reaches a redacted projection or the
+        # stored row: the name is part of the credential, so it is part of the ciphertext.
+        assert "t-fixture-tenant-access-token" not in json.dumps(asdict(view))
+        _, stored = await store.read("a")
+        assert "t-fixture-tenant-access-token" not in repr(stored)
+        assert "X-Lark-MCP-TAT" not in repr(stored)
+        assert stored[0].endpoint_headers == stated
+
+        # Stated headers are configuration, so they change without a new credential, and the
+        # form of every refusal is the Connections error the route already reports.
+        with pytest.raises(ConnectionsError) as refused:
+            await service.change(
+                owner_id="a",
+                expected_revision=view.revision,
+                command=ConnectionCommand(
+                    kind="edit",
+                    connection_id=identity,
+                    endpoint_headers=(("Authorization", "Bearer fixture"),),
+                ),
+            )
+        assert refused.value.status == 422
+        assert "fixture" not in str(refused.value)
+
+        view = await service.change(
+            owner_id="a",
+            expected_revision=view.revision,
+            command=ConnectionCommand(
+                kind="edit",
+                connection_id=identity,
+                endpoint_headers=(("X-Lark-MCP-Allowed-Tools", "fetch-doc"),),
+            ),
+        )
+        assert view.connections[0].endpoint_headers == (("X-Lark-MCP-Allowed-Tools", "fetch-doc"),)
+
+        # The credential's own header is refused as a stated header: the credential is applied
+        # last, and nothing may quietly overwrite it.
+        with pytest.raises(ConnectionsError) as collision:
+            await service.change(
+                owner_id="a",
+                expected_revision=view.revision,
+                command=ConnectionCommand(
+                    kind="edit",
+                    connection_id=identity,
+                    endpoint_headers=(("x-lark-mcp-tat", "fixture"),),
+                ),
+            )
+        assert collision.value.status == 422
+
+
+@pytest.mark.asyncio
+async def test_a_server_that_publishes_no_tools_says_so_instead_of_ready():
+    """An endpoint that answers with an empty catalogue is observed as offering nothing.
+
+    This is the shape a request header produces: a server whose tool allowlist is stated and
+    empty (or wrong) answers `tools/list` with nothing at all. `ready` would tell the owner the
+    Connection works while the Agent gets no tools from it, so the observation says what
+    happened, and the next discovery that finds tools says `ready` again.
+    """
+
+    class EmptyThenFull(FakeMcp):
+        empty = True
+
+        async def discover(self, **kwargs):
+            self.calls = getattr(self, "calls", 0) + 1
+            if self.empty:
+                return McpDiscovery(tools=(), instructions=None)
+            return await super().discover(**kwargs)
+
+    async with isolated_run_runtime("connection_no_tools") as (_, pool):
+        store = PGConnectionsStore(pool=pool)
+        await store.initialize(validate_only=False)
+        mcp = EmptyThenFull()
+        service = Connections(store=store, mcp=mcp, cipher=CredentialCipher(None))
+        view = await service.change(
+            owner_id="a",
+            expected_revision="0",
+            command=ConnectionCommand(
+                kind="create", label="Feishu/Lark", endpoint="https://mcp.feishu.cn/mcp"
+            ),
+        )
+        identity = view.connections[0].connection_id
+        view = await service.change(
+            owner_id="a",
+            expected_revision=view.revision,
+            command=ConnectionCommand(kind="probe", connection_id=identity),
+        )
+        assert view.connections[0].status == "no-tools"
+
+        mcp.empty = False
+        view = await service.change(
+            owner_id="a",
+            expected_revision=view.revision,
+            command=ConnectionCommand(kind="probe", connection_id=identity),
+        )
+        assert view.connections[0].status == "ready"
+
+
+@pytest.mark.asyncio
+async def test_every_path_that_publishes_a_catalogue_reports_an_empty_one_as_no_tools():
+    """The observation rule holds wherever a catalogue is published, not only on a refresh.
+
+    A credential save that carries an endpoint and an endpoint edit both publish what discovery
+    found. Each one that found nothing has to say so: `ready` would tell the owner the Connection
+    works while the Agent gets no tools from it.
+    """
+    from pydantic import SecretStr
+
+    from tests.unit.test_connections_config import KEYRING
+
+    class Nothing(FakeMcp):
+        async def discover(self, **kwargs):
+            return McpDiscovery(tools=(), instructions=None)
+
+    async with isolated_run_runtime("connection_empty_catalogue") as (_, pool):
+        store = PGConnectionsStore(pool=pool)
+        await store.initialize(validate_only=False)
+        service = Connections(
+            store=store, mcp=Nothing(), cipher=CredentialCipher(SecretStr(KEYRING))
+        )
+        view = await service.change(
+            owner_id="a",
+            expected_revision="0",
+            command=ConnectionCommand(
+                kind="create", label="Docs", endpoint="https://one.example/mcp"
+            ),
+        )
+        identity = view.connections[0].connection_id
+        for command in (
+            ConnectionCommand(kind="probe", connection_id=identity),
+            ConnectionCommand(kind="enable", connection_id=identity, consent_version=1),
+        ):
+            view = await service.change(
+                owner_id="a", expected_revision=view.revision, command=command
+            )
+        assert view.connections[0].status == "no-tools"
+
+        # A credential save that carries the endpoint publishes its own discovery, and an
+        # enabled Connection that now finds nothing is observed the same way.
+        view = await service.replace_bearer(
+            owner_id="a",
+            connection_id=identity,
+            bearer=SecretStr("fixture-token"),
+            expected_revision=view.revision,
+            endpoint="https://one.example/mcp",
+        )
+        assert view.connections[0].status == "no-tools"
+
+        # An endpoint edit of an unauthenticated Connection publishes the candidate it probed.
+        draft = await service.change(
+            owner_id="a",
+            expected_revision=view.revision,
+            command=ConnectionCommand(
+                kind="create", label="Other", endpoint="https://two.example/mcp"
+            ),
+        )
+        other = next(item for item in draft.connections if item.connection_id != identity)
+        edited = await service.change(
+            owner_id="a",
+            expected_revision=draft.revision,
+            command=ConnectionCommand(
+                kind="edit", connection_id=other.connection_id, endpoint="https://three.example/mcp"
+            ),
+        )
+        current = next(
+            item for item in edited.connections if item.connection_id == other.connection_id
+        )
+        assert current.status == "no-tools"

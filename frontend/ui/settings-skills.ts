@@ -25,6 +25,7 @@ import {LightElement} from '../lib/lit-host.ts';
 import shared from '../styles/settings-page.module.css';
 import styles from '../styles/settings-skills.module.css';
 import {modalResult} from './modal.ts';
+import {loadState} from './settings-parts.ts';
 import {reportSettingsSummary} from './settings-summary.ts';
 import {requestToast} from './toast-request.ts';
 
@@ -115,6 +116,7 @@ export class DlSettingsSkills extends LightElement {
   #gone(name: string): void {
     this.#drop(name);
     requestToast(this, {
+      tone: 'error',
       message: msg(str`${name} no longer exists, so it was removed from the list.`, {id: 'settings.skills.gone'}),
     });
   }
@@ -144,7 +146,12 @@ export class DlSettingsSkills extends LightElement {
     } catch (error) {
       if (signal.aborted) return;
       if (isGone(error)) this.#gone(skill.name);
-      else requestToast(this, {message: msg(str`Could not update ${skill.name}.`, {id: 'settings.skills.updateFailed'})});
+      else {
+        requestToast(this, {
+          tone: 'error',
+          message: msg(str`Could not update ${skill.name}.`, {id: 'settings.skills.updateFailed'}),
+        });
+      }
     } finally {
       if (!signal.aborted) {
         this.#pending.delete(skill.name);
@@ -175,7 +182,12 @@ export class DlSettingsSkills extends LightElement {
     } catch (error) {
       if (signal.aborted) return;
       if (isGone(error)) this.#gone(skill.name);
-      else requestToast(this, {message: msg(str`Could not delete ${skill.name}.`, {id: 'settings.skills.deleteFailed'})});
+      else {
+        requestToast(this, {
+          tone: 'error',
+          message: msg(str`Could not delete ${skill.name}.`, {id: 'settings.skills.deleteFailed'}),
+        });
+      }
     } finally {
       if (!signal.aborted) {
         this.#pending.delete(skill.name);
@@ -308,13 +320,14 @@ export class DlSettingsSkills extends LightElement {
 
   protected override render(): TemplateResult {
     return html`
-      ${this.skills ? this.#page(this.skills) : this.error ? html`
-        <div class=${shared.failed}>
-          <p class=${shared.note} role="alert">${msg('Could not load skills.', {id: 'settings.skills.loadFailed'})}</p>
-          <button type="button" class="dl-btn" @click=${() => { void this.#load(); }}>${
-            msg('Retry', {id: 'settings.skills.retry'})}</button>
-        </div>` : html`<p class=${shared.hint} role="status">${
-          msg('Loading skills…', {id: 'settings.skills.loading'})}</p>`}
+      ${this.skills ? this.#page(this.skills) : loadState({
+        host: this,
+        failed: this.error,
+        loading: msg('Loading skills…', {id: 'settings.skills.loading'}),
+        failure: msg('Could not load skills.', {id: 'settings.skills.loadFailed'}),
+        retry: msg('Retry', {id: 'settings.skills.retry'}),
+        onRetry: () => this.#load(),
+      })}
       <dialog id="skills-delete" class="confirm-dialog" aria-labelledby="skills-delete-title">
         <form method="dialog" novalidate>
           <h2 id="skills-delete-title">${this.deleting

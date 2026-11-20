@@ -33,20 +33,31 @@ from dlightrag.adapters.mcp.contracts import (
 )
 from dlightrag.adapters.mcp.errors import ToolRejection
 from dlightrag.adapters.validation_errors import invalid_fields
-from dlightrag.application import Application, ApplicationClosedError
-from dlightrag.application.access import (
+from dlightrag.application.access.control import (
     AccessAction,
     AccessDeniedError,
-    AccessGate,
-    NoQueryableWorkspacesError,
-    RequestScope,
-    WorkspaceRecord,
-    current_request_scope,
+)
+from dlightrag.application.access.principal import (
     owner_id_from_principal,
+)
+from dlightrag.application.access.scope import (
+    RequestScope,
+    current_request_scope,
     request_scope_context,
 )
-from dlightrag.application.config import DlightragConfig, get_config
-from dlightrag.application.corpus_admin import workspace_id_for_name, workspace_ids_for_names
+from dlightrag.application.access.workspaces import (
+    AccessGate,
+    NoQueryableWorkspacesError,
+    WorkspaceRecord,
+)
+from dlightrag.application.answer_runs.service import ActiveRunLimitError
+from dlightrag.application.application import Application, ApplicationClosedError
+from dlightrag.application.config.loading import get_config
+from dlightrag.application.config.sections import DlightragConfig
+from dlightrag.application.corpus_admin.service import (
+    workspace_id_for_name,
+    workspace_ids_for_names,
+)
 from dlightrag.application.errors import (
     ApplicationConflictError,
     ApplicationInputError,
@@ -205,6 +216,11 @@ class DlightRAGMCPServer(MCPServer):
             elif isinstance(inner, AnswerInputError):
                 logger.warning("MCP tool '%s' rejected: %s", name, inner)
                 text = f"Error [{inner.error_kind}]: {inner.public_message}"
+            elif isinstance(inner, ActiveRunLimitError):
+                # The caller's own limit: it names its kind as input rejections do, so an agent
+                # can wait for one of its runs to end instead of retrying at once.
+                logger.warning("MCP tool '%s' rejected: %s", name, inner)
+                text = f"Error [{inner.error_kind}]: {inner}"
             elif isinstance(inner, _REJECTIONS):
                 logger.warning("MCP tool '%s' rejected: %s", name, inner)
                 text = f"Error: {inner}"
@@ -312,7 +328,7 @@ mcp_app = DlightRAGMCPServer(
 
 
 def _normalize_workspace_argument(args: CreateWorkspaceInput) -> tuple[str, str]:
-    from dlightrag.application.corpus_admin import validate_workspace_name
+    from dlightrag.application.corpus_admin.service import validate_workspace_name
 
     label = validate_workspace_name(args.workspace)
     display_name = validate_workspace_name(args.display_name or label)

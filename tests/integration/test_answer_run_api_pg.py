@@ -13,6 +13,7 @@ database is never mutated. Connection settings come from the shared
 integration-test PostgreSQL environment; skipped if unavailable.
 """
 
+import asyncio
 import datetime
 import json
 import uuid
@@ -29,11 +30,20 @@ from httpx import ASGITransport, AsyncClient
 
 from dlightrag.adapters.http.rest.auth import get_current_user
 from dlightrag.adapters.http.server import create_app
-from dlightrag.adapters.postgres.runtime import PGRunBlobStore
+from dlightrag.adapters.postgres.runtime.run_blob_store import PGRunBlobStore
 from dlightrag.adapters.postgres.runtime.run_store import PGRunStore
-from dlightrag.application.access import UserContext, owner_id_from_user
-from dlightrag.application.answer_runs import AnswerService
-from dlightrag.application.config import DlightragConfig, set_config
+from dlightrag.application.access.principal import (
+    UserContext,
+    owner_id_from_user,
+)
+from dlightrag.application.answer_runs.service import AnswerService
+from dlightrag.application.config.loading import set_config
+from dlightrag.application.config.sections import DlightragConfig
+from dlightrag.application.policies.service import (
+    ACTIVE_ANSWER_RUNS,
+    AGENT_EFFORT_CEILING,
+    RuntimePolicies,
+)
 from dlightrag.application.runs import RunService
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
@@ -45,10 +55,19 @@ from dlightrag.engine.ai.settings import (
     ModelSettings,
 )
 from dlightrag.engine.answer.capabilities import AnswerCapabilities, RequestModelContext
+from dlightrag.engine.answer.errors import ACTIVE_RUN_LIMIT_MESSAGE
 from tests.support.agent_browser import never_registers
 from tests.support.application_double import application_double, delegate
 from tests.support.child_sessions import settle_child, spawn_child
 from tests.support.pg import PG_CONN_KWARGS, drop_database, skip_without_postgres
+from tests.support.session_entries import (
+    Entry,
+    answer,
+    question,
+    tool_result,
+    tool_use,
+    write_entries,
+)
 
 pytestmark = [
     pytest.mark.integration,
@@ -241,7 +260,9 @@ def _store_backed_application(
         model_invocation_fingerprint_for_role=_fingerprint,
         bind_research=bind_research,
         agent_may_register=never_registers,
+        policies=RuntimePolicies(store=store),
         child_roster_cursor_secret=b"answer-run-api-child-roster-test",
+        protected_skill_documents=lambda: frozenset(),
     )
     return application
 
@@ -691,3 +712,314 @@ async def test_every_roster_page_carries_the_same_child_timing(
     assert _instant(oldest["started_at"]) == opened
     assert oldest["finished_at"] is None
     assert oldest["pending_questions"] == 1
+
+
+async def test_every_read_of_a_child_names_the_message_it_answered_with_and_the_judgement_of_it(
+    client: AsyncClient, store: PGRunStore, pool: Any
+) -> None:
+    run_id = (await client.post("/answer", json={"query": "q"})).json()["run_id"]
+    owner = owner_id_from_user(_ANON)
+    claimed = await _claim(store, owner, run_id)
+    fenced = {
+        "owner_id": owner,
+        "run_id": run_id,
+        "worker_id": str(claimed.run.lease_owner),
+        "fencing_epoch": int(claimed.run.fencing_epoch),
+    }
+    judged, plain, working, continued = [await spawn_child(store, **fenced) for _ in range(4)]
+
+    async def wrote(child: Any, *entries: Entry) -> list[int]:
+        return await write_entries(
+            pool,
+            owner=owner,
+            session=child.child_session_id,
+            run_id=run_id,
+            entries=entries,
+        )
+
+    _, judged_tool_call, _, judged_answer = await wrote(
+        judged, question(), tool_use(), tool_result(), answer()
+    )
+    _, plain_answer = await wrote(plain, question(), answer())
+    await wrote(working, question(), tool_use())
+    # A Child told to go on after it answered is working again: it ended on a call to a tool.
+    await wrote(continued, question(), answer(), question("go on"), tool_use())
+
+    async def judge(
+        child: Any, sequence: int, value: str, *reasons: str, note: str | None = None
+    ) -> None:
+        kept = await store.put_answer_feedback(
+            owner_id=owner,
+            run_id=run_id,
+            agent=child.child_session_id,
+            sequence=sequence,
+            value=value,
+            reasons=reasons,
+            note=note,
+        )
+        assert kept is not None
+
+    async def paged() -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        cursor = None
+        while True:
+            params = {"limit": 1, **({"cursor": cursor} if cursor else {})}
+            page = (await client.get(f"/answer/{run_id}/children", params=params)).json()
+            rows += page["children"]
+            cursor = page["next_cursor"]
+            if cursor is None:
+                return rows
+
+    async def stated() -> dict[str, tuple[Any, Any]]:
+        """What each read of the Children says, which every other read must say as well."""
+        roster = (await client.get(f"/answer/{run_id}/children")).json()["children"]
+        by_child = {row["child_session_id"]: row for row in roster}
+        assert sorted(by_child) == sorted(
+            child.child_session_id for child in (judged, plain, working, continued)
+        )
+        assert sorted(await paged(), key=lambda row: row["child_session_id"]) == sorted(
+            roster, key=lambda row: row["child_session_id"]
+        )
+        for child_id, row in by_child.items():
+            observed = (await client.get(f"/answer/{run_id}/children/{child_id}")).json()
+            assert observed["child"] == row
+        listed = await store.list_child_sessions(owner_id=owner, run_id=run_id)
+        for row in listed:
+            kept = by_child[row["child_session_id"]]
+            judgement = row["feedback"]
+            assert row["result_sequence"] == kept["result_sequence"]
+            assert (judgement.payload() if judgement else None) == kept["feedback"]
+        return {
+            child_id: (row["result_sequence"], row["feedback"])
+            for child_id, row in by_child.items()
+        }
+
+    def expected(judgement: dict[str, Any] | None) -> dict[str, tuple[Any, Any]]:
+        return {
+            judged.child_session_id: (judged_answer, judgement),
+            plain.child_session_id: (plain_answer, None),
+            working.child_session_id: (None, None),
+            continued.child_session_id: (None, None),
+        }
+
+    # A Child that ended on a message with no tool call has answered, judged or not. One that
+    # ended on a call to a tool has not, though it answered before it was told to go on.
+    assert await stated() == expected(None)
+
+    # The judgement shown is the answer's own: another message of the same Child is not.
+    await judge(judged, judged_tool_call, "up")
+    assert await stated() == expected(None)
+    await judge(judged, judged_answer, "down", "off_topic", note="not what I asked")
+    given = {"value": "down", "reasons": ["off_topic"], "note": "not what I asked"}
+    assert await stated() == expected(given)
+
+    # A judgement is replaced whole, and one taken back is gone.
+    await judge(judged, judged_answer, "up")
+    assert await stated() == expected({"value": "up", "reasons": [], "note": None})
+    await store.delete_answer_feedback(
+        owner_id=owner, run_id=run_id, agent=judged.child_session_id, sequence=judged_answer
+    )
+    assert await stated() == expected(None)
+
+
+# ---------------------------------------------------------------------------
+# Runtime Policies: what an Answer is accepted under, and what it carries
+# ---------------------------------------------------------------------------
+
+_INTERN = UserContext(
+    user_id="intern",
+    auth_mode="jwt",
+    claims={"iss": "https://issuer.test", "email": "intern@example.com"},
+)
+_LEAD = UserContext(
+    user_id="lead",
+    auth_mode="jwt",
+    claims={"iss": "https://issuer.test", "email": "lead@example.com"},
+)
+_LOW_FOR_THE_INTERN = {
+    "default": "max",
+    "rules": [{"claim": "email", "value": "intern@example.com", "then": "low"}],
+}
+
+
+async def _administrator_writes(pool: Any, key: str, document: dict[str, Any]) -> None:
+    """What an administrator does on another process: a policy service over a store of its own."""
+    await RuntimePolicies(store=PGRunStore(pool=pool)).write(key, document, "admin")
+
+
+async def _submit(client: AsyncClient, query: str, *, key: str, **extra: Any) -> Any:
+    return await client.post(
+        "/answer", json={"query": query, **extra}, headers={"Idempotency-Key": key}
+    )
+
+
+async def test_an_owners_active_limit_is_enforced_per_owner_and_follows_the_administrator(
+    app: FastAPI, client: AsyncClient, pool: Any
+) -> None:
+    await _administrator_writes(pool, ACTIVE_ANSWER_RUNS, {"default": 2})
+    _as_user(app, _INTERN)
+
+    # Five submissions at once, through the real route and the real lane lock: two are
+    # accepted and three are told it is their own limit.
+    responses = await asyncio.gather(*(_submit(client, f"q{n}", key=f"key-{n}") for n in range(5)))
+
+    assert sorted(response.status_code for response in responses) == [202, 202, 429, 429, 429]
+    refused = next(response for response in responses if response.status_code == 429)
+    assert refused.json() == {
+        "detail": ACTIVE_RUN_LIMIT_MESSAGE,
+        "error_type": "unavailable",
+        "error_kind": "active_run_limit",
+    }
+    assert await pool.fetchval("SELECT count(*) FROM dlightrag_runs") == 2
+
+    # Another owner holds none, so it is not limited by this one's.
+    _as_user(app, _LEAD)
+    assert (await _submit(client, "mine", key="key-lead")).status_code == 202
+
+    # A retry of a key that was accepted is answered while its owner is at the limit.
+    _as_user(app, _INTERN)
+    accepted = next(
+        number for number, response in enumerate(responses) if response.status_code == 202
+    )
+    replay = await _submit(client, f"q{accepted}", key=f"key-{accepted}")
+    assert replay.status_code == 202
+    assert replay.json()["run_id"] == responses[accepted].json()["run_id"]
+
+    # The administrator raises the limit on another process, and the very next request meets it.
+    await _administrator_writes(pool, ACTIVE_ANSWER_RUNS, {"default": 3})
+    assert (await _submit(client, "one more", key="key-more")).status_code == 202
+    assert (await _submit(client, "and another", key="key-another")).status_code == 429
+
+    # A rule leaves one person without a limit while everyone else keeps it.
+    await _administrator_writes(
+        pool,
+        ACTIVE_ANSWER_RUNS,
+        {"default": 1, "rules": [{"claim": "email", "value": "intern@example.com", "then": None}]},
+    )
+    assert (await _submit(client, "free", key="key-free")).status_code == 202
+
+
+async def test_a_run_is_pinned_to_the_ceiling_it_was_accepted_under_and_a_replay_is_no_conflict(
+    app: FastAPI, client: AsyncClient, store: PGRunStore, pool: Any
+) -> None:
+    await _administrator_writes(pool, AGENT_EFFORT_CEILING, _LOW_FOR_THE_INTERN)
+    _as_user(app, _INTERN)
+    owner = owner_id_from_user(_INTERN)
+
+    async def stored(run_id: str) -> tuple[Any, Any]:
+        record = await store.get_run(owner_id=owner, run_id=run_id)
+        assert record is not None and record.prepared_input is not None
+        return record.prepared_input["effort"], record.prepared_input["effort_ceiling"]
+
+    first = await _submit(client, "q", key="key", effort="max")
+    run_id = first.json()["run_id"]
+    assert await stored(run_id) == ("max", "low"), "the choice is kept; the ceiling is pinned"
+
+    # The administrator lifts the ceiling. The same submission, retried, is the same Run - no
+    # conflict - and the Run keeps the ceiling it was accepted under.
+    await _administrator_writes(pool, AGENT_EFFORT_CEILING, {"default": "max"})
+    replay = await _submit(client, "q", key="key", effort="max")
+    assert (replay.status_code, replay.json()["run_id"]) == (202, run_id)
+    assert await stored(run_id) == ("max", "low")
+
+    # A submission after the change is accepted under the new ceiling.
+    later = await _submit(client, "q", key="another-key", effort="max")
+    assert await stored(later.json()["run_id"]) == ("max", "max")
+
+
+@pytest.mark.parametrize("continuation", ["follow-up", "fork"])
+async def test_a_continuation_is_pinned_to_the_ceiling_of_whoever_continues(
+    app: FastAPI, client: AsyncClient, store: PGRunStore, pool: Any, continuation: str
+) -> None:
+    _as_user(app, _INTERN)
+    owner = owner_id_from_user(_INTERN)
+    parent = (await _submit(client, "first", key="parent")).json()["run_id"]
+    claimed = await _claim(store, owner, parent)
+    await store.finish_success(
+        owner_id=owner,
+        run_id=parent,
+        worker_id=str(claimed.run.lease_owner),
+        fencing_epoch=int(claimed.run.fencing_epoch),
+        result={"answer": "done", "contexts": {"chunks": []}, "sources": []},
+    )
+    await _administrator_writes(pool, AGENT_EFFORT_CEILING, _LOW_FOR_THE_INTERN)
+
+    response = await client.post(f"/answer/{parent}/{continuation}", json={"content": "and then?"})
+
+    assert response.status_code == 202
+    record = await store.get_run(owner_id=owner, run_id=response.json()["run_id"])
+    assert record is not None and record.prepared_input is not None
+    assert record.prepared_input["effort_ceiling"] == "low"
+
+
+@pytest.mark.parametrize("key", [ACTIVE_ANSWER_RUNS, AGENT_EFFORT_CEILING])
+async def test_a_policy_that_cannot_be_read_refuses_a_new_submission_and_never_a_replay(
+    app: FastAPI, client: AsyncClient, pool: Any, key: str
+) -> None:
+    _as_user(app, _INTERN)
+    accepted = await _submit(client, "q", key="key")
+    await pool.execute(
+        "INSERT INTO dlightrag_runtime_policies (key, value, updated_by)"
+        " VALUES ($1, $2::jsonb, 'admin')",
+        key,
+        json.dumps({"default": "everything"}),
+    )
+
+    refused = await _submit(client, "another", key="another-key")
+    replay = await _submit(client, "q", key="key")
+
+    assert refused.status_code == 503
+    assert refused.json()["error_type"] == "unavailable"
+    assert "everything" not in refused.text
+    assert (replay.status_code, replay.json()["run_id"]) == (202, accepted.json()["run_id"])
+    assert await pool.fetchval("SELECT count(*) FROM dlightrag_runs") == 1
+
+
+async def test_a_browser_submission_is_accepted_under_the_readers_policies_in_its_own_transaction(
+    app: FastAPI, store: PGRunStore, pool: Any
+) -> None:
+    """The conversation, the Run and the turn are one transaction, and so is the count: a
+    submission refused at the limit leaves no conversation behind, and a retry at the limit is
+    answered with the turn it already made."""
+    from uuid import uuid7
+
+    from dlightrag.adapters.postgres.web.web_conversations import PGWebConversationStore
+    from dlightrag.application.answer_runs.service import ActiveRunLimitError
+    from dlightrag.application.web_conversations.service import WebConversationService
+
+    web = WebConversationService(
+        store=PGWebConversationStore(pool=pool, run_store=store),
+        answers=app.state.application.answers,
+        max_attachments=8,
+        cursor_secret=b"browser-policies-test",
+    )
+    await _administrator_writes(pool, AGENT_EFFORT_CEILING, _LOW_FOR_THE_INTERN)
+    await _administrator_writes(pool, ACTIVE_ANSWER_RUNS, {"default": 1})
+    submission_id = str(uuid7())
+
+    async def submit(submission: str, **extra: Any) -> Any:
+        return await web.start_answer(
+            _INTERN,
+            conversation_id=None,
+            submission_id=submission,
+            query="q",
+            workspaces=("default",),
+            **extra,
+        )
+
+    first = await submit(submission_id, effort="max")
+
+    assert first is not None
+    record = await store.get_run(owner_id=owner_id_from_user(_INTERN), run_id=first.run.run_id)
+    assert record is not None and record.prepared_input is not None
+    assert (record.prepared_input["effort"], record.prepared_input["effort_ceiling"]) == (
+        "max",
+        "low",
+    )
+    with pytest.raises(ActiveRunLimitError):
+        await submit(str(uuid7()))
+    assert await pool.fetchval("SELECT count(*) FROM dlightrag_runs") == 1
+    assert await pool.fetchval("SELECT count(*) FROM web_conversations") == 1
+    assert await pool.fetchval("SELECT count(*) FROM web_conversation_turns") == 1
+    again = await submit(submission_id, effort="max")
+    assert again is not None and again.run.run_id == first.run.run_id

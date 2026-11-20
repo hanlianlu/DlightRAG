@@ -35,8 +35,8 @@ from dlightrag.engine.answer.image_capability import (
 from dlightrag.engine.answer.images import AnswerImageBudget
 from dlightrag.engine.answer.mode import ResolvedMode, resource_role
 from dlightrag.engine.answer.model_runtime import AnswerModelRuntime
-from dlightrag.engine.answer.resources import ResourceInput, ResourceRegistry
 from dlightrag.engine.answer.resources.models import (
+    ResourceInput,
     ResourceManifestEntry,
     ResourceRegistryError,
 )
@@ -46,8 +46,11 @@ from dlightrag.engine.answer.resources.registry import (
     FetchedBytesSink,
     HostedExtract,
     PageRenderer,
+    ResourceRegistry,
 )
-from dlightrag.engine.answer.web_sources import WebSourceService
+from dlightrag.engine.answer.web_sources.service import (
+    WebSourceService,
+)
 from dlightrag.engine.public_http import fetch_public_http
 from dlightrag.engine.rag.corpus.sources.source_contract import safe_source_filename
 from dlightrag.engine.runtime.records import artifact_digest

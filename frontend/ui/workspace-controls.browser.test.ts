@@ -75,12 +75,9 @@ it('owns a native expanded trigger and closes after typed creation intent', asyn
   const scope = mountScope();
   await scope.updateComplete;
 
-  expect(customElements.get('workspace-scope')).to.equal(undefined);
-  expect(customElements.get('workspace-create')).to.equal(undefined);
-  expect(customElements.get('ingest-target')).to.equal(undefined);
   expect(scope.hasAttribute('role')).to.equal(false);
   expect(scope.hasAttribute('tabindex')).to.equal(false);
-  const trigger = buttonNamed(scope, 'Choose search workspaces')!;
+  const trigger = scope.querySelector<HTMLButtonElement>('#workspace-trigger')!;
   expect(trigger.getAttribute('aria-haspopup')).to.equal('dialog');
   expect(trigger.getAttribute('aria-expanded')).to.equal('false');
   expect(trigger.getAttribute('aria-controls')).to.equal('workspace-popover');
@@ -110,10 +107,70 @@ it('owns a native expanded trigger and closes after typed creation intent', asyn
   expect(document.activeElement).to.equal(trigger);
 });
 
+it('creates a workspace on Enter, and leaves the Enter of an IME composition to the composition', async () => {
+  const created: (string | null)[] = [];
+  window.fetch = async (_input, init) => {
+    created.push(new URLSearchParams(String(init?.body)).get('workspace_name'));
+    return Response.json({
+      workspace: 'research', display_name: 'Research', embedding_model: 'embed', changes: [...EVERY_CHANGE],
+    });
+  };
+  const scope = mountScope();
+  await scope.updateComplete;
+  scope.querySelector<HTMLButtonElement>('#workspace-trigger')?.click();
+  await scope.updateComplete;
+  const input = scope.querySelector<HTMLInputElement>('[aria-label="New workspace name"]')!;
+  input.value = 'yanjiu';
+  const enter = (init: KeyboardEventInit): KeyboardEvent => {
+    const event = new KeyboardEvent('keydown', {key: 'Enter', bubbles: true, cancelable: true, ...init});
+    input.dispatchEvent(event);
+    return event;
+  };
+
+  // Chromium marks the keys of a composition; WebKit sends them after it ended, as keyCode 229.
+  expect(enter({isComposing: true}).defaultPrevented, 'the Enter that commits a composition is left alone')
+    .to.equal(false);
+  expect(enter({keyCode: 229}).defaultPrevented).to.equal(false);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(created, 'no workspace is named for half a word').to.deep.equal([]);
+  expect(input.value).to.equal('yanjiu');
+  expect(input.disabled).to.equal(false);
+
+  // The Enter that follows the composition creates it.
+  expect(enter({}).defaultPrevented).to.equal(true);
+  await waitFor(() => created.length === 1);
+  expect(created).to.deep.equal(['yanjiu']);
+  await waitFor(() => workspaceStore.primary === 'research');
+});
+
+it('keeps focus in the new-workspace field for the arrows of an IME composition, and moves to the workspaces for the next', async () => {
+  const scope = mountScope();
+  await scope.updateComplete;
+  scope.querySelector<HTMLButtonElement>('#workspace-trigger')?.click();
+  await scope.updateComplete;
+  const input = scope.querySelector<HTMLInputElement>('[aria-label="New workspace name"]')!;
+  input.focus();
+  const arrow = (init: KeyboardEventInit): KeyboardEvent => {
+    const event = new KeyboardEvent('keydown', {key: 'ArrowUp', bubbles: true, cancelable: true, ...init});
+    input.dispatchEvent(event);
+    return event;
+  };
+
+  // Chromium marks the keys of a composition; WebKit sends them after it ended, as keyCode 229.
+  for (const init of [{isComposing: true}, {keyCode: 229}]) {
+    expect(arrow(init).defaultPrevented, 'the arrow that picks a candidate is left alone').to.equal(false);
+    expect(document.activeElement === input, 'and focus stays in the field').to.equal(true);
+  }
+
+  // The same arrow once the composition is over steps to the workspaces.
+  expect(arrow({}).defaultPrevented).to.equal(true);
+  expect(document.activeElement?.hasAttribute('data-workspace-choice')).to.equal(true);
+});
+
 it('closes on a click outside it and stays open for a click inside', async () => {
   const scope = mountScope();
   await scope.updateComplete;
-  const trigger = buttonNamed(scope, 'Choose search workspaces')!;
+  const trigger = scope.querySelector<HTMLButtonElement>('#workspace-trigger')!;
   const popover = scope.querySelector<HTMLElement>('#workspace-popover')!;
 
   trigger.click();
@@ -167,7 +224,7 @@ it('keeps submitted creation connected while its popover is dismissed', async ()
   };
   const scope = mountScope();
   await scope.updateComplete;
-  buttonNamed(scope, 'Choose search workspaces')?.click();
+  scope.querySelector<HTMLButtonElement>('#workspace-trigger')?.click();
   await scope.updateComplete;
   const input = scope.querySelector<HTMLInputElement>('[aria-label="New workspace name"]')!;
   input.value = 'Research';
@@ -202,7 +259,7 @@ it('aborts a submitted creation only when its Feature disconnects', async () => 
   });
   const scope = mountScope();
   await scope.updateComplete;
-  buttonNamed(scope, 'Choose search workspaces')?.click();
+  scope.querySelector<HTMLButtonElement>('#workspace-trigger')?.click();
   await scope.updateComplete;
   const input = scope.querySelector<HTMLInputElement>('[aria-label="New workspace name"]')!;
   input.value = 'Research';
@@ -228,7 +285,7 @@ it('reports a submitted creation failure after its popover is dismissed', async 
   const scope = mountScope();
   scope.addEventListener('dl-toast-request', (event) => { receipt = event.detail; });
   await scope.updateComplete;
-  buttonNamed(scope, 'Choose search workspaces')?.click();
+  scope.querySelector<HTMLButtonElement>('#workspace-trigger')?.click();
   await scope.updateComplete;
   const input = scope.querySelector<HTMLInputElement>('[aria-label="New workspace name"]')!;
   input.value = 'Research';
@@ -239,7 +296,7 @@ it('reports a submitted creation failure after its popover is dismissed', async 
   rejectCreate(new TypeError('network unavailable'));
   await waitFor(() => receipt !== null);
 
-  expect(receipt).to.deep.equal({message: 'Failed to create workspace'});
+  expect(receipt).to.deep.equal({tone: 'error', message: 'Failed to create workspace'});
   expect(scope.querySelector<HTMLElement>('[role="dialog"][aria-label="Workspaces"]')?.hidden)
     .to.equal(true);
 });
@@ -253,7 +310,7 @@ it('explains a refused workspace command instead of echoing the access rule', as
   const scope = mountScope();
   scope.addEventListener('dl-toast-request', (event) => { receipts.push(event.detail); });
   await scope.updateComplete;
-  buttonNamed(scope, 'Choose search workspaces')?.click();
+  scope.querySelector<HTMLButtonElement>('#workspace-trigger')?.click();
   await scope.updateComplete;
   const input = scope.querySelector<HTMLInputElement>('[aria-label="New workspace name"]')!;
   const create = scope.querySelector<HTMLButtonElement>('[aria-label="Create workspace"]')!;
@@ -261,7 +318,7 @@ it('explains a refused workspace command instead of echoing the access rule', as
   input.value = 'Research';
   create.click();
   await waitFor(() => receipts.length === 1);
-  expect(receipts[0]).to.deep.equal({message: 'You do not have permission to do that.'});
+  expect(receipts[0]).to.deep.equal({tone: 'error', message: 'You do not have permission to do that.'});
 
   status = 409;
   await waitFor(() => !create.disabled);
@@ -383,7 +440,7 @@ it('uses native dialog popover controls and restores ingest-trigger focus', asyn
 it('resets the search popover across reconnect and exposes no reset action', async () => {
   const scope = mountScope();
   await scope.updateComplete;
-  buttonNamed(scope, 'Choose search workspaces')!.click();
+  scope.querySelector<HTMLButtonElement>('#workspace-trigger')!.click();
   await scope.updateComplete;
   expect(scope.querySelector('[data-reset-workspace]')).to.equal(null);
   expect(scope.querySelector('dialog')).to.equal(null);
@@ -391,7 +448,7 @@ it('resets the search popover across reconnect and exposes no reset action', asy
   scope.remove();
   document.body.appendChild(scope);
   await scope.updateComplete;
-  const trigger = buttonNamed(scope, 'Choose search workspaces')!;
+  const trigger = scope.querySelector<HTMLButtonElement>('#workspace-trigger')!;
   const popover = scope.querySelector<HTMLElement>('[aria-label="Workspaces"]')!;
   expect(trigger.getAttribute('aria-expanded')).to.equal('false');
   expect(popover.hidden).to.equal(true);
@@ -431,6 +488,31 @@ it('resets ingest popover state and document listeners across reconnect', async 
     key: 'Escape', bubbles: true, cancelable: true,
   }));
   await waitFor(() => popover.hidden && document.activeElement === reconnectedTrigger);
+});
+
+it('resets the ingest popover when the Files panel stops showing it', async () => {
+  const ingest = document.createElement('dl-ingest-target') as DlIngestTarget;
+  ingest.active = true;
+  document.body.appendChild(ingest);
+  await ingest.updateComplete;
+  const trigger = () => ingest.querySelector<HTMLButtonElement>(
+    '[aria-label="Files in Default; choose file workspace"]',
+  )!;
+  const popover = () => ingest.querySelector<HTMLElement>(
+    '[role="dialog"][aria-label="Select ingest workspace"]',
+  )!;
+  trigger().click();
+  await ingest.updateComplete;
+  expect(trigger().getAttribute('aria-expanded')).to.equal('true');
+
+  // The panel closes with the popover open. The element stays connected; only the surface it
+  // belongs to goes away, and the reader who comes back does not find it open.
+  ingest.active = false;
+  await ingest.updateComplete;
+  ingest.active = true;
+  await ingest.updateComplete;
+  expect(trigger().getAttribute('aria-expanded')).to.equal('false');
+  expect(popover().hidden).to.equal(true);
 });
 
 it('restores the Files action focus when reset is cancelled', async () => {

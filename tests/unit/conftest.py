@@ -2,7 +2,9 @@
 """Unit-test fixtures; the root conftest isolates every suite from operator inputs."""
 
 import json
+import shutil
 from collections.abc import Callable, Generator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -22,6 +24,7 @@ from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from dlightrag.engine.agent.skills import builtin_skills_root
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.media import MODEL_IMAGE_MAX_PIXELS
 from dlightrag.engine.ai.providers.base import provider_usage_buckets
@@ -30,6 +33,39 @@ from dlightrag.engine.ai.telemetry import SPAN_TYPES
 from dlightrag.engine.answer.capabilities import AnswerCapabilities
 from dlightrag.engine.answer.image_capability import AnswerImageCapability
 from dlightrag.engine.answer.images import AnswerImagePolicy
+from tests.support.skills import sealed_skills_root
+
+
+@pytest.fixture(scope="session")
+def _builtins_with_sealed_report(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The packaged built-in Skills, and the neutral ``sealed-report`` Skill beside them.
+
+    One sealed artifact name has one gate, so a built-in that declares ``case.json`` too would be
+    refused beside the neutral Skill; the copy leaves out any that does.
+    """
+    root = tmp_path_factory.mktemp("builtin-skills")
+    for source in Path(str(builtin_skills_root())).iterdir():
+        hub = source / "SKILL.md"
+        if hub.is_file() and "sealed_artifact:" not in hub.read_text(encoding="utf-8"):
+            shutil.copytree(
+                source, root / source.name, ignore=shutil.ignore_patterns("__pycache__")
+            )
+    shutil.copytree(sealed_skills_root(), root, dirs_exist_ok=True)
+    return root
+
+
+@pytest.fixture
+def sealed_report_packaged(
+    monkeypatch: pytest.MonkeyPatch, _builtins_with_sealed_report: Path
+) -> None:
+    """Serve the neutral ``sealed-report`` Skill beside the built-ins a Run's catalog starts from.
+
+    The application composes its catalog from the package, so a test that derives what a Skill
+    declares about a Run (its attestation, its required reads) needs a package that holds one.
+    """
+    monkeypatch.setattr(
+        "dlightrag.application.skills.builtin_skills_root", lambda: _builtins_with_sealed_report
+    )
 
 
 def answer_image_policy(**overrides: int) -> AnswerImagePolicy:
@@ -211,3 +247,16 @@ def start_otlp_logs() -> Generator[Callable[..., OtlpLogs]]:
 
     yield start
     shutdown_log_export()
+
+
+@pytest.fixture
+def serve_oembed(monkeypatch: pytest.MonkeyPatch) -> Callable[[Any], Any]:
+    """Answer the playback resolver's oEmbed reads with a scripted fetch."""
+
+    def install(fetch: Any) -> Any:
+        monkeypatch.setattr(
+            "dlightrag.adapters.http.browser.video_playback.fetch_public_http", fetch
+        )
+        return fetch
+
+    return install

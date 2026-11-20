@@ -21,18 +21,16 @@ from dlightrag.adapters.mcp.server import (
     IdempotencyKeyParam,
     mcp_app,
 )
-from dlightrag.application.access import (
+from dlightrag.application.access.control import (
     AccessAction,
     AccessDeniedError,
     corpus_mutation_access_action,
 )
-from dlightrag.application.answer_runs import AnswerRequest as ServiceAnswerRequest
-from dlightrag.application.retrieval import (
-    MetadataFilter,
-    RetrievalOptions,
-    RetrieveProjection,
-    retrieval_response_payload,
+from dlightrag.application.access.scope import (
+    current_request_scope,
 )
+from dlightrag.application.answer_runs.service import AnswerRequest as ServiceAnswerRequest
+from dlightrag.application.retrieval.service import RetrieveProjection, retrieval_response_payload
 from dlightrag.application.runs import (
     RunView,
 )
@@ -40,6 +38,7 @@ from dlightrag.engine.answer.client_contracts import conversation_history_as_dic
 from dlightrag.engine.answer.mode import AnswerMode
 from dlightrag.engine.answer.resources.links import answer_link_resources
 from dlightrag.engine.answer.results import project_answer_result
+from dlightrag.engine.rag.retrieval.models import MetadataFilter, RetrievalOptions
 
 
 @mcp_app.tool(
@@ -96,7 +95,9 @@ async def answer_tool(
             default=None,
             description=(
                 "Agent effort for this answer's own answering agent. "
-                "Omit for the deployment's configured level."
+                "Omit for the deployment's configured level. It never runs above the "
+                "ceiling an administrator set for you; get_capabilities lists the levels "
+                "that apply."
             ),
         ),
     ] = None,
@@ -132,6 +133,7 @@ async def answer_tool(
         ),
         idempotency_key=args.idempotency_key,
         owner_id=mcp_server._owner_id(),
+        caller=current_request_scope(),
     )
     return mcp_server._run_descriptor(creation.run)
 
@@ -185,6 +187,7 @@ async def get_run_tool(
                 ),
                 run_id=record.run_id,
                 artifact_url_prefix=None,
+                mask_reader_text=application.skill_protection.mask,
             )
         else:
             result = dict(record.result)
@@ -288,6 +291,7 @@ async def _mcp_continuation(
     method = application.answers.fork if fork else application.answers.follow_up
     creation = await method(
         owner_id=owner_id,
+        caller=current_request_scope(),
         run_id=run_id,
         query=query,
         idempotency_key=idempotency_key,
@@ -382,6 +386,7 @@ async def list_answer_artifacts_tool(
         record.result,
         run_id=run_id,
         artifact_url_prefix=None,
+        mask_reader_text=application.skill_protection.mask,
     )
     return {
         "artifacts": projected["artifacts"],

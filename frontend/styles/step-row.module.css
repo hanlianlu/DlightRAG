@@ -1,0 +1,74 @@
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
+
+/* What the Run overview's findings and the traces dock's step search say the same way: a row's head
+ * (what the step did, and its time at the end), the verb and subject that say it, the muted figure
+ * and agent that tell when and who, and the tint and ring a pressable row takes. Both stylesheets
+ * compose these, so a finding and a matching step read as one kind of row. */
+
+@layer features {
+  .head {
+    align-items: baseline;
+    display: flex;
+    gap: var(--space-tight);
+    justify-content: space-between;
+    min-inline-size: 0;
+  }
+
+  .title {
+    align-items: baseline;
+    display: flex;
+    flex: 1;
+    flex-wrap: wrap;
+    gap: var(--space-inline);
+    min-inline-size: 0;
+  }
+
+  .verb {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-detail);
+    line-height: var(--line-height-control);
+    min-inline-size: 0;
+  }
+
+  .subject {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    min-inline-size: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* A time, a duration or a count: a figure that stays put as its digits change. */
+  .figure {
+    color: var(--color-text-muted);
+    flex: none;
+    font-size: var(--font-size-caption);
+    font-variant-numeric: tabular-nums;
+    line-height: var(--line-height-control);
+  }
+
+  .meta {
+    align-items: baseline;
+    display: flex;
+    gap: var(--space-tight);
+    min-inline-size: 0;
+  }
+
+  .agent {
+    color: var(--color-text-muted);
+    flex: none;
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+  }
+
+  .hoverTint:hover {
+    background: var(--color-bg-hover);
+  }
+
+  .focusRing:focus-visible {
+    outline: 2px solid var(--focus-ring-color);
+    outline-offset: -2px;
+  }
+}

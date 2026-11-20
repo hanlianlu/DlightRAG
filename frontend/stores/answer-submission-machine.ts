@@ -9,22 +9,23 @@ import {
 } from 'xstate';
 import type {AnswerSubmissionAdapter, AnswerSubmissionIntent} from '../api/answer-submission.ts';
 import {AnswerSubmissionError} from '../api/web-command-error.ts';
-import type {AcceptedAnswer} from '../api/conversations.ts';
+import type {AnswerSubmissionResponse} from '../api/conversations.ts';
 import type {AttachmentLease} from './attachment-store.ts';
 
-export type AnswerSubmissionEvent =
+type AnswerSubmissionEvent =
   | {type: 'RETRY'}
   | {type: 'EDIT'}
   | {type: 'DISCARD'}
   | {type: 'HANDOFF'};
 
-export type AnswerSubmissionStatus =
+type AnswerSubmissionStatus =
   | 'submitting'
   | 'reconciling'
   | 'editable'
   | 'retryable'
   | 'conflict'
   | 'accepted'
+  | 'delivered'
   | 'handedOff'
   | 'edited'
   | 'discarded';
@@ -36,7 +37,7 @@ interface MachineInput {
 }
 
 interface MachineContext extends MachineInput {
-  accepted: AcceptedAnswer | null;
+  outcome: AnswerSubmissionResponse | null;
   error: AnswerSubmissionError | null;
 }
 
@@ -46,15 +47,12 @@ function submissionError(value: unknown): AnswerSubmissionError {
     : new AnswerSubmissionError(0, 'ambiguous', '');
 }
 
-function actorError(event: unknown): AnswerSubmissionError {
-  return submissionError((event as {error?: unknown}).error);
-}
+// What an invoked request answered, handed to the guards and actions of the transition that has it. A guard
+// or an action declared by name sees only the machine's own events, so the transition says what to pass.
+const errorOf = ({event}: {event: {error: unknown}}) => ({error: event.error});
+const outputOf = ({event}: {event: {output: unknown}}) => ({output: event.output});
 
-function actorOutput(event: unknown): AcceptedAnswer | null {
-  return (event as {output?: AcceptedAnswer}).output ?? null;
-}
-
-export const answerSubmissionMachine = setup({
+const answerSubmissionMachine = setup({
   types: {
     context: {} as MachineContext,
     input: {} as MachineInput,
@@ -73,8 +71,8 @@ export const answerSubmissionMachine = setup({
   guards: {
     // Refused before acceptance. A 401 among them signs the whole page out (api/wire.ts),
     // so the shell, not this submission, offers the way back in.
-    editableFailure: ({event}) => {
-      const error = actorError(event);
+    editableFailure: (_, params: {error: unknown}) => {
+      const error = submissionError(params.error);
       return [
         'invalid_request',
         'attachment_rejected',
@@ -84,16 +82,22 @@ export const answerSubmissionMachine = setup({
         || error.status === 400 || error.status === 401 || error.status === 403
         || error.status === 413 || error.status === 422;
     },
-    conflictFailure: ({event}) => actorError(event).status === 409,
-    lookupMissing: ({event}) => actorError(event).status === 404,
-    lookupFound: ({event}) => actorOutput(event) !== null,
+    conflictFailure: (_, params: {error: unknown}) => submissionError(params.error).status === 409,
+    acceptedOutcome: (_, params: {output: unknown}) =>
+      (params.output as AnswerSubmissionResponse | null)?.kind === 'accepted',
+    deliveredOutcome: (_, params: {output: unknown}) => {
+      const outcome = params.output as AnswerSubmissionResponse | null;
+      return outcome !== null && outcome.kind !== 'accepted';
+    },
+    lookupFound: (_, params: {output: unknown}) => params.output !== null,
   },
   actions: {
     rememberError: assign({
-      error: ({event}) => actorError(event),
+      error: (_, params: {error: unknown}) => submissionError(params.error),
     }),
-    rememberAccepted: assign({
-      accepted: ({event}) => actorOutput(event),
+    rememberOutcome: assign({
+      outcome: (_, params: {output: unknown}) =>
+        (params.output ?? null) as AnswerSubmissionResponse | null,
       error: null,
     }),
     acceptLease: ({context}) => context.lease.accept(),
@@ -102,7 +106,7 @@ export const answerSubmissionMachine = setup({
   },
 }).createMachine({
   id: 'answerSubmission',
-  context: ({input}) => ({...input, accepted: null, error: null}),
+  context: ({input}) => ({...input, outcome: null, error: null}),
   initial: 'submitting',
   states: {
     submitting: {
@@ -110,11 +114,31 @@ export const answerSubmissionMachine = setup({
         id: 'post',
         src: 'post',
         input: ({context}) => context,
-        onDone: {target: 'accepted', actions: 'rememberAccepted'},
+        onDone: [
+          {
+            guard: {type: 'acceptedOutcome', params: outputOf},
+            target: 'accepted',
+            actions: {type: 'rememberOutcome', params: outputOf},
+          },
+          {
+            guard: {type: 'deliveredOutcome', params: outputOf},
+            target: 'delivered',
+            actions: {type: 'rememberOutcome', params: outputOf},
+          },
+          {target: 'accepted', actions: {type: 'rememberOutcome', params: outputOf}},
+        ],
         onError: [
-          {guard: 'editableFailure', target: 'editable', actions: 'rememberError'},
-          {guard: 'conflictFailure', target: 'conflict', actions: 'rememberError'},
-          {target: 'reconciling', actions: 'rememberError'},
+          {
+            guard: {type: 'editableFailure', params: errorOf},
+            target: 'editable',
+            actions: {type: 'rememberError', params: errorOf},
+          },
+          {
+            guard: {type: 'conflictFailure', params: errorOf},
+            target: 'conflict',
+            actions: {type: 'rememberError', params: errorOf},
+          },
+          {target: 'reconciling', actions: {type: 'rememberError', params: errorOf}},
         ],
       },
     },
@@ -124,19 +148,22 @@ export const answerSubmissionMachine = setup({
         src: 'lookup',
         input: ({context}) => context,
         onDone: [
-          {guard: 'lookupFound', target: 'accepted', actions: 'rememberAccepted'},
+          {
+            guard: {type: 'lookupFound', params: outputOf},
+            target: 'accepted',
+            actions: {type: 'rememberOutcome', params: outputOf},
+          },
           {target: 'retryable'},
         ],
-        onError: [
-          {guard: 'lookupMissing', target: 'retryable', actions: 'rememberError'},
-          {target: 'retryable', actions: 'rememberError'},
-        ],
+        // A lookup that found nothing and one that failed leave the reader the same choice.
+        onError: {target: 'retryable', actions: {type: 'rememberError', params: errorOf}},
       },
     },
     editable: {on: {EDIT: 'edited', DISCARD: 'discarded'}},
     retryable: {on: {RETRY: 'submitting', EDIT: 'edited', DISCARD: 'discarded'}},
     conflict: {on: {EDIT: 'edited', DISCARD: 'discarded'}},
     accepted: {on: {HANDOFF: 'handedOff'}},
+    delivered: {type: 'final', entry: 'acceptLease'},
     handedOff: {type: 'final', entry: 'acceptLease'},
     edited: {type: 'final', entry: 'restoreLease'},
     discarded: {type: 'final', entry: 'discardLease'},
@@ -149,7 +176,8 @@ export interface AnswerSubmissionSnapshot {
   readonly submissionId: string;
   readonly conversationId: string | null;
   readonly status: AnswerSubmissionStatus;
-  readonly accepted: AcceptedAnswer | null;
+  /** What the send produced: an accepted turn, or delivery to the Run already live. */
+  readonly outcome: AnswerSubmissionResponse | null;
   readonly error: AnswerSubmissionError | null;
 }
 
@@ -159,7 +187,7 @@ export function answerSubmissionSnapshot(actor: AnswerSubmissionActor): AnswerSu
     submissionId: snapshot.context.intent.submissionId,
     conversationId: snapshot.context.intent.conversationId,
     status: String(snapshot.value) as AnswerSubmissionStatus,
-    accepted: snapshot.context.accepted,
+    outcome: snapshot.context.outcome,
     error: snapshot.context.error,
   };
 }

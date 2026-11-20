@@ -8,8 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from dlightrag.adapters.http.browser.routes.workspaces import _default_workspace
-from dlightrag.application.config import DlightragConfig
-from dlightrag.application.config.sections import DeploymentSettings
+from dlightrag.application.config.sections import DeploymentSettings, DlightragConfig
 from tests.support.application_double import application_double
 
 

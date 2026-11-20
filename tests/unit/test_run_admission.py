@@ -19,11 +19,11 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from dlightrag.application.answer_runs import AnswerRequestError
-from dlightrag.application.corpus_admin import CorpusMutationInputError
+from dlightrag.application.answer_runs.service import AnswerRequestError
+from dlightrag.application.corpus_admin.errors import CorpusMutationInputError
 from dlightrag.application.corpus_admin.mutations import CorpusMutationService, UploadLimits
 from dlightrag.application.errors import ApplicationUnavailableError
-from dlightrag.application.retrieval import (
+from dlightrag.application.retrieval.service import (
     RetrievalInputError,
     RetrievalService,
     RetrievalSettings,
@@ -56,6 +56,7 @@ from dlightrag.engine.runtime.records import (
     RunAdmissionLimitExceededError as RuntimeRunAdmissionLimitExceededError,
 )
 from dlightrag.engine.runtime.records import RunCreation as RuntimeRunCreation
+from tests.support.callers import ANONYMOUS as _ANON
 from tests.unit.test_answer_service import _request as answer_request
 from tests.unit.test_answer_service import _service as answer_service
 
@@ -170,7 +171,9 @@ def _answer(store: _Store, scheduler: _Scheduler, _root: Path) -> Any:
 
 
 async def _submit_answer(service: Any, key: str | None) -> RunCreation:
-    return await service.create(request=answer_request(), owner_id=_OWNER, idempotency_key=key)
+    return await service.create(
+        request=answer_request(), owner_id=_OWNER, caller=_ANON, idempotency_key=key
+    )
 
 
 def _retrieval(store: _Store, scheduler: _Scheduler, _root: Path) -> RetrievalService:
@@ -499,6 +502,7 @@ async def test_a_linked_answer_acceptance_that_links_nothing_wakes_nothing(
         idempotency_key="key-1",
         idempotency_fingerprint="submission-fingerprint",
         acceptor=_NoConversation(),
+        caller=_ANON,
     )
 
     assert linked is None

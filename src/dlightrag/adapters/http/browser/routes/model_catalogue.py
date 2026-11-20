@@ -11,7 +11,7 @@ from dlightrag.adapters.http.model_catalogue import (
     normalize_if_match,
     read_catalogue,
 )
-from dlightrag.application.access import AccessAction
+from dlightrag.application.access.control import AccessAction
 
 router = APIRouter()
 

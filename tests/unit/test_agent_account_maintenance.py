@@ -11,7 +11,7 @@ from pydantic import SecretStr
 
 from dlightrag.application import agent_accounts
 from dlightrag.application.agent_accounts import AgentAccountMaintenance
-from dlightrag.engine.answer.agent_browser import (
+from dlightrag.engine.answer.agent_browser.accounts import (
     ACCOUNT_LABEL,
     StoredAgentAccount,
     generate_password,

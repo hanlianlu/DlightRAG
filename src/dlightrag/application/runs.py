@@ -22,6 +22,7 @@ from dlightrag.engine.runtime.records import (
     PreparedInputTooLargeError,
     PreparedRunEnvelope,
     RunAccessScope,
+    SessionWorkBusyError,
     require_prepared_input_bounds,
 )
 from dlightrag.engine.runtime.records import (
@@ -166,6 +167,22 @@ class RunEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class RunToolCall:
+    """One Tool call's full arguments, read from the Run's durable Session transcript.
+
+    A Run's event log names a call and settles its outcome, but carries only the Tool's bounded
+    subject; a reader that needs the command itself reads this record, joined to the event log by
+    ``call_id``. Arguments alone are not evidence a call happened -- the transcript also holds
+    calls the runtime refused -- so each one is trusted only where the event log shows the call
+    executed.
+    """
+
+    call_id: str
+    tool_name: str
+    arguments: Mapping[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
 class RunCancellation:
     """Caller-facing result of an owner-scoped cancellation request."""
 
@@ -289,11 +306,16 @@ class RunAdmission:
         accepted_input: Mapping[str, Any],
         supersedes_run_id: str | None = None,
         run_id: str | None = None,
+        active_run_limit: int | None = None,
     ) -> T:
         """Bound, admit, and accept one prepared submission, then wake the scheduler.
 
         An unkeyed submission is keyed by its own run id, which admission draws
-        unless the kind already staged work under one.
+        unless the kind already staged work under one. ``active_run_limit`` is how many
+        Answers the submitter may hold queued or running, this one included; the store
+        counts them under its acceptance lock, after a replay, and refuses with the
+        Engine's ``ActiveRunLimitExceededError``, which the Answer service names for its
+        callers. No other kind sets one.
         """
         try:
             require_prepared_input_bounds(payload)
@@ -317,6 +339,7 @@ class RunAdmission:
                         accepted_input=accepted_input,
                         retention_seconds=self.retention_seconds,
                         supersedes_run_id=supersedes_run_id,
+                        active_run_limit=active_run_limit,
                     ),
                     run_id=run_id,
                 )
@@ -333,12 +356,20 @@ class RunRepository(Protocol):
     async def get_run(self, *, owner_id: str, run_id: str) -> RuntimeRunRecord | None: ...
     async def get_run_global(self, *, run_id: str) -> RuntimeRunRecord | None: ...
     async def list_runs(
-        self, *, owner_id: str, after_run_id: str | None = None, limit: int = 50
+        self,
+        *,
+        owner_id: str,
+        after_run_id: str | None = None,
+        limit: int = 50,
+        newest_first: bool = False,
     ) -> tuple[RuntimeRunRecord, ...]: ...
     async def request_cancellation(
         self, *, owner_id: str, run_id: str
     ) -> RuntimeCancellationOutcome: ...
     async def resume_repair(self, *, owner_id: str, run_id: str) -> bool: ...
+    async def load_tool_call_arguments(
+        self, *, owner_id: str, run_id: str
+    ) -> tuple[RunToolCall, ...]: ...
 
 
 class RunScheduler(Protocol):
@@ -376,10 +407,18 @@ class RunService:
         return RunView.from_runtime(record) if record is not None else None
 
     async def list(
-        self, *, owner_id: str, after_run_id: str | None = None, limit: int = 50
+        self,
+        *,
+        owner_id: str,
+        after_run_id: str | None = None,
+        limit: int = 50,
+        newest_first: bool = False,
     ) -> tuple[RunView, ...]:
         records = await self._store.list_runs(
-            owner_id=owner_id, after_run_id=after_run_id, limit=limit
+            owner_id=owner_id,
+            after_run_id=after_run_id,
+            limit=limit,
+            newest_first=newest_first,
         )
         return tuple(RunView.from_runtime(record) for record in records)
 
@@ -404,6 +443,18 @@ class RunService:
                 wake()
         return resumed
 
+    async def load_tool_call_arguments(
+        self, *, owner_id: str, run_id: str
+    ) -> tuple[RunToolCall, ...]:
+        """The full arguments of every Tool call this Run's transcript recorded.
+
+        Owner-scoped and read-only: the caller joins these to the Run's event log by
+        ``call_id`` so a call the runtime never executed cannot become evidence. A run whose
+        transcript cannot be named answers empty, which the caller reads as a missing record
+        rather than as a call that did not happen.
+        """
+        return await self._store.load_tool_call_arguments(owner_id=owner_id, run_id=run_id)
+
     def subscribe(
         self, *, owner_id: str, run_id: str, after_sequence: int = 0
     ) -> AsyncIterator[RunEvent]:
@@ -426,6 +477,7 @@ __all__ = [
     "RunCancellation",
     "RunCancelledError",
     "RunAdmissionLimitExceededError",
+    "SessionWorkBusyError",
     "RunCreation",
     "RunEvent",
     "RunFailedError",
@@ -438,5 +490,6 @@ __all__ = [
     "RunScheduler",
     "RunService",
     "RunStatus",
+    "RunToolCall",
     "RunView",
 ]

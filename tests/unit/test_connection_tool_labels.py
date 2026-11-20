@@ -10,8 +10,8 @@ from typing import Any, cast
 
 import pytest
 
-from dlightrag.application.connections import Connections
 from dlightrag.application.connections.models import PinnedToolFact
+from dlightrag.application.connections.service import Connections
 from dlightrag.engine.credential_cipher import CredentialCipher
 
 

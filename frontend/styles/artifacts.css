@@ -25,10 +25,21 @@
     padding: var(--space-component);
 }
 
+/* The card is evidence beside the one control that opens it. The column takes whatever width is
+   left and wraps its evidence; the action keeps the width its label asks for. Without that split
+   the evidence supplies the row's flex base -- the attestation badge is a wrapping flex row, so
+   its single-line width is every unread path at once, longer than the card -- and the shrink it
+   forces lands on the control, inside a fixed-height box its wrapped label cannot fit. */
 .answer-artifact-card > div {
     display: flex;
+    flex: 1 1 0%;
     flex-direction: column;
     min-width: 0;
+}
+
+/* A control that opens the card is never the part that gives way to the evidence. */
+.answer-artifact-card > .dl-btn {
+    flex: none;
 }
 
 .answer-artifact-card span,
@@ -57,6 +68,119 @@
     padding: var(--space-component);
 }
 
+/* The attestation line: the Canvas header's status and the Answer's one delivery record share this
+   row. It draws nothing at all when the server derived no record, and `unknown` is never dressed as
+   a failure — the status word stays muted there, because records that cannot settle a question are
+   not a finding. */
+.artifact-attestation {
+    align-items: baseline;
+    color: var(--color-text-muted);
+    display: flex;
+    flex-wrap: wrap;
+    font-size: var(--font-size-caption);
+    gap: var(--space-tight);
+    margin: 0;
+    padding-top: var(--space-inline);
+}
+
+.artifact-attestation-status {
+    color: var(--color-text-primary);
+    font-weight: 600;
+}
+
+.artifact-attestation[data-attestation='attested'] .artifact-attestation-status {
+    color: var(--color-success);
+}
+
+.artifact-attestation[data-attestation='unknown'] .artifact-attestation-status {
+    color: var(--color-text-muted);
+    font-weight: 500;
+}
+
+.artifact-attestation-detail {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+/* One declared read the Run did not make, a line to itself: the lines name different files. */
+.artifact-attestation-unread {
+    flex-basis: 100%;
+}
+
+/* The Run's delivery record, drawn once under the files it covers. The server stamps one record on
+   every Artifact of a Run, so an in-card badge said one Run-level sentence once per file and its
+   evidence lines made every card tall. The files above are cards again, and the record speaks for
+   the Run here as one line: the verdict and one control, with the reason and the reads it skipped
+   folded behind it, and the line's text on the cards' own gutter. */
+.answer-artifact-record {
+    --record-mark-size: 5px;
+
+    border-top: 1px solid var(--color-divider);
+    margin-top: var(--space-component);
+    padding: var(--space-tight) var(--space-component) 0;
+}
+
+/* The line carries the record's own padding; the leading mark takes the dot's width without a gap. */
+.answer-artifact-record .artifact-attestation {
+    line-height: var(--line-height-control);
+    padding-top: 0;
+}
+
+.answer-artifact-record-mark {
+    align-self: center;
+    background: var(--color-text-subtle);
+    border-radius: var(--radius-circle);
+    block-size: var(--record-mark-size);
+    flex: none;
+    inline-size: var(--record-mark-size);
+}
+
+/* The status tone rules the badge already states hold for the record's line too; only the mark,
+   which the badge never had, says the same tone in its own ink. */
+.artifact-attestation[data-attestation='attested'] .answer-artifact-record-mark {
+    background: var(--color-success);
+}
+
+/* The record's line places the action and never shrinks it, so the record's words wrap around it;
+   the face is the design system's text action. */
+.answer-artifact-record-toggle {
+    flex: none;
+    margin-inline-start: auto;
+}
+
+/* A claimless record has no words before the control: it sits where they would. */
+.answer-artifact-record-toggle--solo {
+    margin-inline-start: 0;
+}
+
+/* The folded evidence: the reason, then the lines the badge drew, quieter and in one place under
+   the record. */
+.answer-artifact-record-evidence {
+    color: var(--color-text-muted);
+    display: flex;
+    flex-direction: column;
+    font-size: var(--font-size-caption);
+    gap: var(--space-inline);
+    line-height: var(--line-height-control);
+    padding: var(--space-tight) 0 0 calc(var(--record-mark-size) + var(--space-tight));
+}
+
+.answer-artifact-record-evidence[hidden] {
+    display: none;
+}
+
+/* The reason is the record's own sentence, not a paragraph of the Answer's prose. */
+.answer-artifact-record-reason {
+    margin: 0;
+}
+
+/* Forced colors drop the tone tints, so the decorative mark says it is a mark with system ink. */
+@media (forced-colors: active) {
+    .answer-artifact-record-mark {
+        background: CanvasText;
+    }
+}
+
 .answer-artifact-image {
     margin: var(--space-component) 0;
 }
@@ -79,6 +203,30 @@
     max-width: 100%;
 }
 
+/* The picture's caption is the sentence the Model wrote about it, beside the pixel size, which is
+   what a reader cannot get from looking at the picture. The image's alt names the file, so a broken
+   image and a screen reader are told what the bytes are rather than read a sentence twice. */
+.answer-artifact-image figcaption {
+    align-items: baseline;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-tight);
+    padding-top: var(--space-inline);
+}
+
+.answer-artifact-image-caption {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-caption);
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.answer-artifact-image-size {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    font-variant-numeric: tabular-nums;
+}
+
 .answer-evidence {
     margin-top: var(--space-related);
 }
@@ -88,16 +236,6 @@
     display: flex;
     flex-direction: column;
     flex-shrink: 0;
-}
-
-.answer-image-source {
-    background: transparent;
-    border: 0;
-    color: var(--color-accent-text);
-    cursor: pointer;
-    font: inherit;
-    font-size: var(--font-size-caption);
-    padding: var(--space-inline) 0;
 }
 
 /* Artifact Canvas */

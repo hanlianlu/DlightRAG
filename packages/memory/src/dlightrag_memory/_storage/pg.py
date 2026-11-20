@@ -1,10 +1,11 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """PostgreSQL adapter for the Memory facade.
 
-Owns its own schema, namespace, and migration registry: the package never
-shares DlightRAG's answer-run migrations or tables. Preferences are read as a
-standing set; facts are searched by three legs behind the neutral ports, and
-each leg returns only facts it has evidence for:
+Owns its own schema and namespace: the package never shares DlightRAG's
+tables or migration ledger. Preferences and
+experiences are read as a standing set; records of every kind are searched by
+three legs behind the neutral ports, and each leg returns only records it has
+evidence for:
 
 - exact:  ``normalized_body`` equality (Python-side NFKC normalization) on a
   unique index: an owner holds one active record per normalized body
@@ -48,10 +49,17 @@ from dlightrag_memory._storage.pg_bm25 import (
 )
 from dlightrag_memory.errors import MemoryWriteRejectedError
 from dlightrag_memory.models import (
+    MEMORY_KINDS,
+    MEMORY_OPERATION_ACTIONS,
+    MEMORY_ORIGIN_KINDS,
+    STANDING_KINDS,
+    MemoryKind,
     MemoryOperation,
     MemoryOperationReceipt,
+    MemoryOriginKind,
     MemoryProvenance,
     MemoryRecord,
+    MemoryRunChange,
 )
 from dlightrag_memory.normalize import normalized_body
 from dlightrag_memory.ports import (
@@ -99,7 +107,16 @@ class PGPool(Protocol):
     def acquire(self) -> Any: ...
 
 
-_RECORDS_TABLE = """
+def _sql_values(values: tuple[str, ...]) -> str:
+    """A check constraint's value list from a trusted closed tuple."""
+    return ", ".join(f"'{value}'" for value in values)
+
+
+_KIND_VALUES = _sql_values(MEMORY_KINDS)
+_ORIGIN_VALUES = _sql_values(MEMORY_ORIGIN_KINDS)
+_ACTION_VALUES = _sql_values(MEMORY_OPERATION_ACTIONS)
+
+_RECORDS_TABLE = f"""
 CREATE TABLE IF NOT EXISTS dlightrag_memory_records (
     owner_id             TEXT             NOT NULL,
     memory_id            UUID             NOT NULL,
@@ -116,19 +133,21 @@ CREATE TABLE IF NOT EXISTS dlightrag_memory_records (
     bm25_language        TEXT             NOT NULL DEFAULT 'simple',
     created_at           TIMESTAMPTZ      NOT NULL DEFAULT NOW(),
     updated_at           TIMESTAMPTZ      NOT NULL DEFAULT NOW(),
+    last_change_id       UUID,
+    quote                TEXT,
     PRIMARY KEY (owner_id, memory_id),
     CONSTRAINT dlightrag_memory_records_kind_check
-        CHECK (kind IN ('preference', 'fact')),
+        CHECK (kind IN ({_KIND_VALUES})),
     CONSTRAINT dlightrag_memory_records_origin_check
-        CHECK (origin_kind IN ('answer_run', 'management', 'mcp', 'undo')),
+        CHECK (origin_kind IN ({_ORIGIN_VALUES})),
     CONSTRAINT dlightrag_memory_records_status_check
         CHECK (status IN ('active', 'superseded', 'forgotten')),
     CONSTRAINT dlightrag_memory_records_body_check
         CHECK (char_length(body) BETWEEN 1 AND 500)
 )
-"""
+"""  # noqa: S608 - interpolates only closed literal tuples
 
-_OPERATIONS_TABLE = """
+_OPERATIONS_TABLE = f"""
 CREATE TABLE IF NOT EXISTS dlightrag_memory_operations (
     owner_id            TEXT        NOT NULL,
     change_id           UUID        NOT NULL,
@@ -144,11 +163,11 @@ CREATE TABLE IF NOT EXISTS dlightrag_memory_operations (
     PRIMARY KEY (owner_id, change_id),
     UNIQUE (owner_id, idempotency_key),
     CONSTRAINT dlightrag_memory_operations_action_check
-        CHECK (operation IN ('remember', 'forget', 'undo')),
+        CHECK (operation IN ({_ACTION_VALUES})),
     CONSTRAINT dlightrag_memory_operations_outcome_check
         CHECK (outcome IN ('changed', 'unchanged', 'conflict'))
 )
-"""
+"""  # noqa: S608 - interpolates only closed literal tuples
 
 _RECORD_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_dlightrag_memory_records_recall "
@@ -159,15 +178,20 @@ _RECORD_INDEXES = (
     # invariant every remember, re-file and undo relies on.
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_dlightrag_memory_records_active_body "
     "ON dlightrag_memory_records (owner_id, normalized_body) WHERE status = 'active'",
-    "DROP INDEX IF EXISTS idx_dlightrag_memory_records_exact",
     "CREATE INDEX IF NOT EXISTS idx_dlightrag_memory_records_purge "
     "ON dlightrag_memory_records (status, updated_at) "
     "WHERE status = 'superseded'",
+    # Undo addressed by record resolves the change behind its current form.
+    "CREATE INDEX IF NOT EXISTS idx_dlightrag_memory_records_last_change "
+    "ON dlightrag_memory_records (owner_id, last_change_id)",
+    # What one Run's writers left: only records a Run wrote carry the id, so the index holds those.
+    "CREATE INDEX IF NOT EXISTS idx_dlightrag_memory_records_run "
+    "ON dlightrag_memory_records (owner_id, run_id) WHERE run_id IS NOT NULL",
 )
 
 _RECORD_COLUMNS = """
 owner_id, memory_id, kind, body, normalized_body, origin_kind, origin_id, run_id,
-session_id, status, supersedes_id, embedding_fingerprint, created_at, updated_at
+session_id, status, supersedes_id, embedding_fingerprint, created_at, updated_at, quote
 """
 
 _OPERATION_INDEXES = (
@@ -235,7 +259,6 @@ class PostgresMemoryStore:
             await conn.execute(_LOCK_SCHEMA)
             try:
                 await conn.execute(_RECORDS_TABLE)
-                await conn.execute(_ADD_BM25_LANGUAGE)
                 await conn.execute(_OPERATIONS_TABLE)
                 for statement in (*_RECORD_INDEXES, *_OPERATION_INDEXES):
                     await conn.execute(statement)
@@ -279,14 +302,14 @@ class PostgresMemoryStore:
             by_table: dict[str, set[str]] = {}
             for row in columns:
                 by_table.setdefault(str(row["table_name"]), set()).add(str(row["column_name"]))
-            if "confidence" in by_table.get("dlightrag_memory_records", set()):
-                raise RuntimeError("Memory schema still contains the removed confidence column")
             required = {
                 "dlightrag_memory_records": {
                     "origin_kind",
                     "origin_id",
                     "normalized_body",
                     "bm25_language",
+                    "last_change_id",
+                    "quote",
                 },
                 "dlightrag_memory_operations": {
                     "change_id",
@@ -324,7 +347,7 @@ class PostgresMemoryStore:
         fingerprint = operation_fingerprint(operation)
         embedding = (
             await self._embedding(operation.body.strip())
-            if operation.action == "remember" and self._dense
+            if operation.action in ("remember", "fuse") and self._dense
             else None
         )
 
@@ -354,6 +377,13 @@ class PostgresMemoryStore:
                     receipt, before = await self._settle_forget(
                         conn, operation=operation, change_id=change_id
                     )
+                elif operation.action == "fuse":
+                    receipt, before = await self._settle_fuse(
+                        conn,
+                        operation=operation,
+                        change_id=change_id,
+                        embedding=embedding,
+                    )
                 else:
                     receipt, before = await self._settle_undo(
                         conn, operation=operation, change_id=change_id
@@ -370,7 +400,7 @@ class PostgresMemoryStore:
                     )
                     if used >= int(operation.mutation_limit or 0):
                         raise MemoryWriteRejectedError(
-                            "This Answer Run reached its Memory mutation limit."
+                            "This writer reached its Memory mutation limit."
                         )
 
                 await conn.execute(
@@ -484,8 +514,9 @@ class PostgresMemoryStore:
             supersedes_id=supersedes_id,
             created_at=now,
             updated_at=now,
+            quote=operation.quote,
         )
-        await _insert_record(self, conn, record=record, embedding=embedding)
+        await _insert_record(self, conn, record=record, embedding=embedding, change_id=change_id)
         return (
             operation_receipt(
                 operation,
@@ -548,6 +579,13 @@ class PostgresMemoryStore:
     ) -> tuple[MemoryOperationReceipt, tuple[MemoryRecord, ...]]:
         now = datetime.now(UTC)
         target_id = operation.target_change_id or ""
+        if not target_id:
+            # A caller holding a record rather than a change: the change to
+            # compensate is the one behind the record's current active form.
+            resolved = await _active_record_change(conn, operation)
+            if resolved is None:
+                return (operation_receipt(operation, change_id, "conflict", now=now), ())
+            target_id = resolved
         target = await conn.fetchrow(
             _SELECT_OPERATION_FOR_UPDATE,
             operation.owner_id,
@@ -576,6 +614,17 @@ class PostgresMemoryStore:
                     now=now,
                 ),
                 (),
+            )
+
+        if target_receipt.action == "fuse":
+            return await self._undo_fuse(
+                conn,
+                operation=operation,
+                change_id=change_id,
+                target_id=target_id,
+                target_receipt=target_receipt,
+                before=before,
+                now=now,
             )
 
         if target_receipt.action == "remember":
@@ -629,6 +678,7 @@ class PostgresMemoryStore:
                 await self._insert_restored(
                     conn,
                     operation=operation,
+                    change_id=change_id,
                     restorations=((restored, before[0].memory_id),),
                     now=now,
                 )
@@ -733,6 +783,7 @@ class PostgresMemoryStore:
         await self._insert_restored(
             conn,
             operation=operation,
+            change_id=change_id,
             restorations=tuple(
                 (record, old.memory_id)
                 for record, old in zip(restored_records, before, strict=True)
@@ -754,11 +805,174 @@ class PostgresMemoryStore:
             before,
         )
 
+    async def _settle_fuse(
+        self,
+        conn: PGConnection,
+        *,
+        operation: MemoryOperation,
+        change_id: str,
+        embedding: Vector | None,
+    ) -> tuple[MemoryOperationReceipt, tuple[MemoryRecord, ...]]:
+        """Replace several active records with one, atomically.
+
+        The text is the caller's: a pass's model or an owner worded it, and the
+        store only settles it. A set that is not entirely active is a conflict
+        rather than a partial merge, because a merge that silently drops a
+        source is how a memory disappears without anyone asking.
+        """
+        now = datetime.now(UTC)
+        body = operation.body.strip()
+        source_ids = operation.source_ids
+        rows = await conn.fetch(
+            _SELECT_IDS_FOR_UPDATE,
+            operation.owner_id,
+            [_uuid(source_id, label="memory_id") for source_id in source_ids],
+        )
+        by_id = {str(row["memory_id"]): _row(row) for row in rows}
+        sources = tuple(by_id.get(source_id) for source_id in source_ids)
+        if any(source is None or source.status != "active" for source in sources):
+            return (operation_receipt(operation, change_id, "conflict", body=body, now=now), ())
+        active_sources = tuple(source for source in sources if source is not None)
+        kinds: set[MemoryKind] = {source.kind for source in active_sources}
+        if operation.kind is not None:
+            kind: MemoryKind = operation.kind
+        elif len(kinds) == 1:
+            kind = next(iter(kinds))
+        else:
+            raise MemoryWriteRejectedError(
+                "A fuse of records of different kinds must say which kind the result is."
+            )
+        duplicate = await conn.fetchrow(
+            _SELECT_ACTIVE_NORMALIZED_FOR_UPDATE,
+            operation.owner_id,
+            normalized_body(body),
+        )
+        if duplicate is not None and str(duplicate["memory_id"]) not in set(source_ids):
+            return (operation_receipt(operation, change_id, "conflict", body=body, now=now), ())
+
+        # Sources retire first: the merged sentence may equal one of them, and
+        # one owner holds one active record per normalized body.
+        await conn.execute(
+            _MARK_SUPERSEDED_IDS,
+            operation.owner_id,
+            [_uuid(source_id, label="memory_id") for source_id in source_ids],
+            _uuid(change_id, label="change_id"),
+        )
+        memory_id = operation_record_id(operation.owner_id, change_id)
+        record = MemoryRecord(
+            owner_id=operation.owner_id,
+            memory_id=memory_id,
+            kind=kind,
+            body=body,
+            provenance=operation.provenance,
+            status="active",
+            supersedes_id=None,
+            created_at=now,
+            updated_at=now,
+            quote=operation.quote,
+        )
+        await _insert_record(self, conn, record=record, embedding=embedding, change_id=change_id)
+        return (
+            operation_receipt(
+                operation,
+                change_id,
+                "changed",
+                memory_ids=(memory_id, *source_ids),
+                kind=kind,
+                body=body,
+                now=now,
+            ),
+            active_sources,
+        )
+
+    async def _undo_fuse(
+        self,
+        conn: PGConnection,
+        *,
+        operation: MemoryOperation,
+        change_id: str,
+        target_id: str,
+        target_receipt: MemoryOperationReceipt,
+        before: tuple[MemoryRecord, ...],
+        now: datetime,
+    ) -> tuple[MemoryOperationReceipt, tuple[MemoryRecord, ...]]:
+        """Retire a merged record and bring its sources back as new records."""
+
+        def conflict() -> tuple[MemoryOperationReceipt, tuple[MemoryRecord, ...]]:
+            return (
+                operation_receipt(
+                    operation, change_id, "conflict", target_change_id=target_id, now=now
+                ),
+                (),
+            )
+
+        merged_id = target_receipt.memory_id or ""
+        if (
+            not before
+            or any(old.owner_id != operation.owner_id for old in before)
+            or tuple(old.memory_id for old in before) != target_receipt.memory_ids[1:]
+        ):
+            return conflict()
+        merged_row = await conn.fetchrow(
+            _SELECT_ONE_FOR_UPDATE,
+            operation.owner_id,
+            _uuid(merged_id, label="memory_id"),
+        )
+        if merged_row is None or str(merged_row["status"]) != "active":
+            return conflict()
+        merged = _row(merged_row)
+        if await _restores_an_active_body(
+            conn, operation.owner_id, before, replacing=merged.memory_id
+        ):
+            return conflict()
+        await conn.execute(
+            _MARK_SUPERSEDED,
+            operation.owner_id,
+            _uuid(merged_id, label="memory_id"),
+        )
+        restored = tuple(
+            replace(
+                old,
+                memory_id=operation_record_id(operation.owner_id, change_id, index=index),
+                provenance=operation.provenance,
+                status="active",
+                supersedes_id=merged_id,
+                created_at=now,
+                updated_at=now,
+            )
+            for index, old in enumerate(before)
+        )
+        await self._insert_restored(
+            conn,
+            operation=operation,
+            change_id=change_id,
+            restorations=tuple(
+                (record, old.memory_id) for record, old in zip(restored, before, strict=True)
+            ),
+            now=now,
+        )
+        first = restored[0]
+        return (
+            operation_receipt(
+                operation,
+                change_id,
+                "changed",
+                memory_ids=tuple(record.memory_id for record in restored),
+                kind=first.kind,
+                body=first.body,
+                supersedes_id=merged_id,
+                target_change_id=target_id,
+                now=now,
+            ),
+            (merged,),
+        )
+
     async def _insert_restored(
         self,
         conn: PGConnection,
         *,
         operation: MemoryOperation,
+        change_id: str,
         restorations: tuple[tuple[MemoryRecord, str], ...],
         now: datetime,
     ) -> None:
@@ -778,6 +992,7 @@ class PostgresMemoryStore:
             operation.provenance.origin_id,
             now,
             _restore_batch_json(restorations, language_of=self._languages.language_of),
+            _uuid(change_id, label="change_id"),
         )
         restored_ids = {str(row["memory_id"]) for row in restored_rows}
         if len(restored_rows) != len(restorations) or restored_ids != {
@@ -851,22 +1066,59 @@ class PostgresMemoryStore:
 
         return await self._write(operation)
 
-    async def list_preferences(self, *, owner_id: str, limit: int) -> tuple[MemoryRecord, ...]:
-        """The owner's active preferences, newest first."""
+    async def list_standing(
+        self, *, owner_id: str, limit: int
+    ) -> tuple[tuple[MemoryRecord, ...], int]:
+        """The newest active preferences and experiences, and how many there are."""
         cap = max(1, min(int(limit), 100))
 
-        async def operation(conn: PGConnection) -> tuple[MemoryRecord, ...]:
-            return tuple(_row(row) for row in await conn.fetch(_SELECT_PREFERENCES, owner_id, cap))
+        async def operation(conn: PGConnection) -> tuple[tuple[MemoryRecord, ...], int]:
+            rows = await conn.fetch(_SELECT_STANDING, owner_id, list(STANDING_KINDS), cap)
+            if rows:
+                return tuple(_row(row) for row in rows), int(rows[0]["standing_total"])
+            return (), 0
 
         return await self._read(operation)
 
-    async def search_facts(
-        self, *, owner_id: str, query: str, limit: int
-    ) -> tuple[SearchCandidate, ...]:
-        """Return the facts each leg has evidence for, in per-leg rank order.
+    async def list_session_records(
+        self, *, owner_id: str, session_id: str, origin_kind: MemoryOriginKind
+    ) -> tuple[MemoryRecord, ...]:
+        """The active records one origin wrote for one Session, newest first."""
 
-        Exact matches restate the query. Sparse keeps facts sharing a content
-        word with it (BM25 score above zero). Dense keeps facts at or above the
+        async def operation(conn: PGConnection) -> tuple[MemoryRecord, ...]:
+            rows = await conn.fetch(_SELECT_SESSION_RECORDS, owner_id, session_id, origin_kind)
+            return tuple(_row(row) for row in rows)
+
+        return await self._read(operation)
+
+    async def list_run_changes(self, *, owner_id: str, run_id: str) -> tuple[MemoryRunChange, ...]:
+        """The active records one Run's writers left, oldest first, each with its change."""
+
+        async def operation(conn: PGConnection) -> tuple[MemoryRunChange, ...]:
+            rows = await conn.fetch(_SELECT_RUN_CHANGES, owner_id, run_id, _RUN_CHANGES_LIMIT)
+            return tuple(
+                MemoryRunChange(
+                    record=_row(row),
+                    change_id=str(row["change_id"]),
+                    # A fuse is its own operation; a remember that names a predecessor corrects it.
+                    action=(
+                        "fuse"
+                        if str(row["change_operation"]) == "fuse"
+                        else "update"
+                        if row["supersedes_id"] is not None
+                        else "add"
+                    ),
+                )
+                for row in rows
+            )
+
+        return await self._read(operation)
+
+    async def search(self, *, owner_id: str, query: str, limit: int) -> tuple[SearchCandidate, ...]:
+        """Return the records of every kind each leg has evidence for, in per-leg rank order.
+
+        Exact matches restate the query. Sparse keeps records sharing a content
+        word with it (BM25 score above zero). Dense keeps records at or above the
         embedder's relevance floor. The query is embedded before a connection
         is held, under its own deadline. The façade fuses the legs.
         """
@@ -884,7 +1136,7 @@ class PostgresMemoryStore:
             # Chinese question naming Python still meets an English fact.
             sparse: list[SearchCandidate] = []
             text = bm25_query_text(query)
-            for row in await conn.fetch(_OWNER_FACT_LANGUAGES, owner_id):
+            for row in await conn.fetch(_OWNER_LANGUAGES, owner_id):
                 language = str(row["bm25_language"])
                 if language not in self._bm25_languages:
                     continue
@@ -924,7 +1176,7 @@ class PostgresMemoryStore:
                 return await self._query_embedding(query)
         except TimeoutError:
             _logger.warning(
-                "Profile Memory query embedding exceeded %ss; facts are matched by their words",
+                "Profile Memory query embedding exceeded %ss; records are matched by their words",
                 _QUERY_EMBEDDING_DEADLINE_SECONDS,
             )
             return None
@@ -944,6 +1196,25 @@ class PostgresMemoryStore:
     async def _read(self, operation: Any) -> Any:
         async with await self._acquire_context() as conn:
             return await operation(conn)
+
+
+async def _active_record_change(conn: PGConnection, operation: MemoryOperation) -> str | None:
+    """The change behind one active record's current form, named by id or exact body."""
+    if operation.memory_id:
+        row = await conn.fetchrow(
+            _SELECT_ACTIVE_LAST_CHANGE_BY_ID,
+            operation.owner_id,
+            _uuid(operation.memory_id, label="memory_id"),
+        )
+    else:
+        row = await conn.fetchrow(
+            _SELECT_ACTIVE_LAST_CHANGE_BY_BODY,
+            operation.owner_id,
+            normalized_body(operation.body),
+        )
+    if row is None or row["last_change_id"] is None:
+        return None
+    return str(row["last_change_id"])
 
 
 async def _restores_an_active_body(
@@ -973,15 +1244,13 @@ async def _insert_record(
     *,
     record: MemoryRecord,
     embedding: Vector | None,
+    change_id: str,
 ) -> None:
+    params = _insert_params(store, record=record, change_id=change_id)
     if embedding is None:
-        inserted = await conn.fetchval(_INSERT, *_insert_params(store, record=record))
+        inserted = await conn.fetchval(_INSERT, *params)
     else:
-        inserted = await conn.fetchval(
-            _INSERT_WITH_EMBEDDING,
-            *_insert_params(store, record=record),
-            _vector_text(embedding),
-        )
+        inserted = await conn.fetchval(_INSERT_WITH_EMBEDDING, *params, _vector_text(embedding))
     if inserted is None:
         # An idempotency key reused after its journal row aged out derives an
         # id another record already holds; never report its body as stored.
@@ -1035,6 +1304,7 @@ def _record_json(record: MemoryRecord) -> dict[str, Any]:
         "memory_id": record.memory_id,
         "owner_id": record.owner_id,
         "provenance": _provenance_json(record.provenance),
+        "quote": record.quote,
         "status": record.status,
         "supersedes_id": record.supersedes_id,
         "updated_at": None if record.updated_at is None else record.updated_at.isoformat(),
@@ -1056,6 +1326,7 @@ def _records_json(value: Any) -> tuple[MemoryRecord, ...]:
             ),
             created_at=_datetime_value(row.get("created_at")),
             updated_at=_datetime_value(row.get("updated_at")),
+            quote=str(row["quote"]) if row.get("quote") is not None else None,
         )
         for row in rows
     )
@@ -1104,7 +1375,9 @@ def _command_count(tag: Any) -> int:
     return int(str(tag).rsplit(" ", 1)[-1])
 
 
-def _insert_params(store: PostgresMemoryStore, *, record: MemoryRecord) -> tuple[Any, ...]:
+def _insert_params(
+    store: PostgresMemoryStore, *, record: MemoryRecord, change_id: str
+) -> tuple[Any, ...]:
     return (
         record.owner_id,
         _uuid(record.memory_id, label="memory_id"),
@@ -1121,6 +1394,8 @@ def _insert_params(store: PostgresMemoryStore, *, record: MemoryRecord) -> tuple
         record.created_at,
         record.updated_at,
         store._languages.language_of(record.body),  # noqa: SLF001
+        _uuid(change_id, label="change_id"),
+        record.quote,
     )
 
 
@@ -1136,6 +1411,7 @@ def _restore_batch_json(
                 "kind": record.kind,
                 "memory_id": record.memory_id,
                 "normalized_body": normalized_body(record.body),
+                "quote": record.quote,
                 "run_id": record.provenance.run_id,
                 "session_id": record.provenance.session_id,
                 "source_id": source_id,
@@ -1158,25 +1434,19 @@ def _embedding_index_sql() -> str:
     )
 
 
-# Rows written before the language label existed are indexed under simple.
-_ADD_BM25_LANGUAGE = (
-    "ALTER TABLE dlightrag_memory_records "
-    "ADD COLUMN IF NOT EXISTS bm25_language TEXT NOT NULL DEFAULT 'simple'"
-)
-
-_OWNER_FACT_LANGUAGES = """
+_OWNER_LANGUAGES = """
 SELECT DISTINCT bm25_language
 FROM dlightrag_memory_records
-WHERE owner_id = $1 AND status = 'active' AND kind = 'fact'
+WHERE owner_id = $1 AND status = 'active'
 """
 
 _INSERT = """
 INSERT INTO dlightrag_memory_records (
     owner_id, memory_id, kind, body, normalized_body, origin_kind, origin_id, run_id,
     session_id, status, supersedes_id, embedding_fingerprint, created_at, updated_at,
-    bm25_language
+    bm25_language, last_change_id, quote
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 ON CONFLICT (owner_id, memory_id) DO NOTHING
 RETURNING memory_id
 """
@@ -1185,9 +1455,9 @@ _INSERT_WITH_EMBEDDING = """
 INSERT INTO dlightrag_memory_records (
     owner_id, memory_id, kind, body, normalized_body, origin_kind, origin_id, run_id,
     session_id, status, supersedes_id, embedding_fingerprint, embedding, created_at, updated_at,
-    bm25_language
+    bm25_language, last_change_id, quote
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $16::halfvec, $13, $14, $15)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $18::halfvec, $13, $14, $15, $16, $17)
 ON CONFLICT (owner_id, memory_id) DO NOTHING
 RETURNING memory_id
 """
@@ -1266,7 +1536,7 @@ _INSERT_RESTORED_BATCH = """
 INSERT INTO dlightrag_memory_records (
     owner_id, memory_id, kind, body, normalized_body, origin_kind, origin_id, run_id,
     session_id, status, supersedes_id, embedding_fingerprint, created_at, updated_at,
-    bm25_language
+    bm25_language, last_change_id, quote
 )
 SELECT
     $1,
@@ -1283,7 +1553,9 @@ SELECT
     NULL,
     $4,
     $4,
-    record->>'bm25_language'
+    record->>'bm25_language',
+    $6::uuid,
+    record->>'quote'
 FROM jsonb_array_elements($5::jsonb) AS record
 ON CONFLICT (owner_id, memory_id) DO NOTHING
 RETURNING memory_id
@@ -1296,7 +1568,7 @@ _INSERT_RESTORED_BATCH_WITH_EMBEDDING = """
 INSERT INTO dlightrag_memory_records (
     owner_id, memory_id, kind, body, normalized_body, origin_kind, origin_id, run_id,
     session_id, status, supersedes_id, embedding_fingerprint, embedding, created_at, updated_at,
-    bm25_language
+    bm25_language, last_change_id, quote
 )
 SELECT
     $1,
@@ -1314,7 +1586,9 @@ SELECT
     source.embedding,
     $4,
     $4,
-    record->>'bm25_language'
+    record->>'bm25_language',
+    $6::uuid,
+    record->>'quote'
 FROM jsonb_array_elements($5::jsonb) AS record
 LEFT JOIN dlightrag_memory_records AS source
     ON source.owner_id = $1 AND source.memory_id = (record->>'source_id')::uuid
@@ -1335,6 +1609,25 @@ WHERE owner_id = $1 AND status = 'active'
 
 _CLEAR_OPERATIONS = "DELETE FROM dlightrag_memory_operations WHERE owner_id = $1"
 _CLEAR_RECORDS = "DELETE FROM dlightrag_memory_records WHERE owner_id = $1"
+
+# A fuse's sources name the operation that retired them, as the merged record does.
+_MARK_SUPERSEDED_IDS = """
+UPDATE dlightrag_memory_records
+SET status = 'superseded', updated_at = NOW(), last_change_id = $3
+WHERE owner_id = $1 AND memory_id = ANY($2::uuid[]) AND status = 'active'
+"""
+
+_SELECT_ACTIVE_LAST_CHANGE_BY_ID = """
+SELECT last_change_id FROM dlightrag_memory_records
+WHERE owner_id = $1 AND memory_id = $2 AND status = 'active'
+FOR UPDATE
+"""
+
+_SELECT_ACTIVE_LAST_CHANGE_BY_BODY = """
+SELECT last_change_id FROM dlightrag_memory_records
+WHERE owner_id = $1 AND normalized_body = $2 AND status = 'active'
+FOR UPDATE
+"""
 
 _MARK_SUPERSEDED = """
 UPDATE dlightrag_memory_records
@@ -1385,25 +1678,54 @@ DELETE FROM dlightrag_memory_operations
 WHERE created_at < $1
 """
 
-_SELECT_PREFERENCES = f"""
+# The window count runs before LIMIT, so one statement says how many stand.
+_SELECT_STANDING = f"""
+SELECT {_RECORD_COLUMNS}, COUNT(*) OVER () AS standing_total
+FROM dlightrag_memory_records
+WHERE owner_id = $1 AND status = 'active' AND kind = ANY($2::text[])
+ORDER BY updated_at DESC, memory_id DESC
+LIMIT $3
+"""  # noqa: S608 - interpolates only the trusted _RECORD_COLUMNS constant
+
+# A bound, not a page: one Run's writers leave a handful (the Agent's mutation limit is ten, a pass
+# adds at most five), so the read stops here only if something upstream has gone wrong.
+_RUN_CHANGES_LIMIT = 100
+
+# The journal row behind each record's current form says what made it: records made by an undo are
+# left out, because an undo of an undo is refused and the record is the owner's own restoring.
+_SELECT_RUN_CHANGES = """
+SELECT record.owner_id, record.memory_id, record.kind, record.body, record.origin_kind,
+       record.origin_id, record.run_id, record.session_id, record.status, record.supersedes_id,
+       record.created_at, record.updated_at, record.quote,
+       record.last_change_id AS change_id, change.operation AS change_operation
+FROM dlightrag_memory_records AS record
+JOIN dlightrag_memory_operations AS change
+  ON change.owner_id = record.owner_id AND change.change_id = record.last_change_id
+WHERE record.owner_id = $1 AND record.run_id = $2 AND record.status = 'active'
+  AND record.origin_kind IN ('answer_run', 'session_pass')
+  AND change.operation IN ('remember', 'fuse')
+ORDER BY record.created_at, record.memory_id
+LIMIT $3
+"""
+
+_SELECT_SESSION_RECORDS = f"""
 SELECT {_RECORD_COLUMNS}
 FROM dlightrag_memory_records
-WHERE owner_id = $1 AND status = 'active' AND kind = 'preference'
+WHERE owner_id = $1 AND status = 'active' AND session_id = $2 AND origin_kind = $3
 ORDER BY updated_at DESC, memory_id DESC
-LIMIT $2
 """  # noqa: S608 - interpolates only the trusted _RECORD_COLUMNS constant
 
 _SEARCH_EXACT = f"""
 SELECT {_RECORD_COLUMNS}
 FROM dlightrag_memory_records
-WHERE owner_id = $1 AND status = 'active' AND kind = 'fact' AND normalized_body = $2
+WHERE owner_id = $1 AND status = 'active' AND normalized_body = $2
 LIMIT $3
 """  # noqa: S608 - interpolates only the trusted _RECORD_COLUMNS constant
 
 _SEARCH_DENSE = f"""
 SELECT {_RECORD_COLUMNS}, 1 - (embedding <=> $3::halfvec) AS score
 FROM dlightrag_memory_records
-WHERE owner_id = $1 AND status = 'active' AND kind = 'fact'
+WHERE owner_id = $1 AND status = 'active'
   AND embedding_fingerprint = $2
   AND embedding IS NOT NULL
 ORDER BY embedding <=> $3::halfvec
@@ -1434,6 +1756,7 @@ def _row(row: Any) -> MemoryRecord:
         supersedes_id=str(row["supersedes_id"]) if row["supersedes_id"] is not None else None,
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        quote=str(row["quote"]) if row["quote"] is not None else None,
     )
 
 

@@ -8,7 +8,7 @@ import math
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import Any, Literal, get_args
+from typing import Any, Literal
 
 from PIL import Image
 
@@ -27,9 +27,6 @@ DocumentEmbeddingFallbackReason = Literal[
     "image_rejected",
     "fused_provider_failed",
 ]
-DOCUMENT_EMBEDDING_FALLBACK_REASONS: tuple[DocumentEmbeddingFallbackReason, ...] = get_args(
-    DocumentEmbeddingFallbackReason
-)
 
 # Let a near-complete decode return its PIL resource without materially delaying cancellation.
 _IMAGE_OPEN_CLEANUP_TIMEOUT_SECONDS = 0.1

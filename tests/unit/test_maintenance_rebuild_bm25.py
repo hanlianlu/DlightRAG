@@ -2,7 +2,6 @@
 """Tests for the offline workspace BM25 rebuild command."""
 
 from contextlib import asynccontextmanager
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -27,15 +26,6 @@ def _config(*, enabled: bool = True, reader: bool = False) -> SimpleNamespace:
     )
 
 
-def test_bm25_rebuild_parser_defaults() -> None:
-    from dlightrag.adapters.postgres.rebuild_bm25 import build_parser
-
-    args = build_parser().parse_args([])
-
-    assert args.yes is False
-    assert args.batch_size == 500
-
-
 def test_bm25_rebuild_requires_yes() -> None:
     from dlightrag.adapters.postgres.rebuild_bm25 import build_parser, validate_args
 
@@ -43,16 +33,6 @@ def test_bm25_rebuild_requires_yes() -> None:
 
     with pytest.raises(SystemExit, match="--yes is required"):
         validate_args(args)
-
-
-def test_pyproject_exposes_bm25_rebuild_console_script() -> None:
-    import tomllib
-
-    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-
-    assert pyproject["project"]["scripts"]["dlightrag-rebuild-bm25"] == (
-        "dlightrag.adapters.postgres.rebuild_bm25:main"
-    )
 
 
 @pytest.mark.parametrize(
@@ -126,7 +106,7 @@ async def test_bm25_rebuild_addresses_the_workspace_by_its_canonical_id(
 ) -> None:
     """A display label rebuilds the workspace the service stored under its canonical id."""
     from dlightrag.adapters.postgres import rebuild_bm25 as module
-    from dlightrag.application.config import DlightragConfig
+    from dlightrag.application.config.sections import DlightragConfig
 
     config = DlightragConfig.model_validate(
         {

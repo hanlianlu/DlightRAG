@@ -30,13 +30,15 @@ from dlightrag.adapters.postgres.runtime.run_store import (
 from dlightrag.adapters.postgres.web.web_conversations import (
     PGWebConversationStore,
 )
-from dlightrag.application.web_conversations import (
+from dlightrag.application.web_conversations.models import (
     STEERING_MESSAGES_PER_TURN,
     ConversationCursor,
     ConversationHistoryPageRequest,
     ConversationPageRequest,
     ConversationSubmissionConflict,
+    LinkedTurn,
 )
+from dlightrag.engine.answer.feedback import Judgement
 from dlightrag.engine.answer.runs.envelope import accepted_input_envelope
 from dlightrag.engine.runtime.records import (
     IdempotencyKeyConflict,
@@ -54,7 +56,17 @@ from tests.support.pg import (
     PG_CONN_KWARGS,
     delete_runs,
     drop_database,
+    ensure_agent_session,
+    release_session_work,
     skip_without_postgres,
+)
+from tests.support.session_entries import (
+    Entry,
+    answer,
+    question,
+    tool_result,
+    tool_use,
+    write_entries,
 )
 
 pytestmark = [
@@ -277,6 +289,8 @@ async def _submit(
     references: list[PendingArtifactReference] | None = None,
     idempotency_fingerprint: str | None = None,
     create_conversation: bool = False,
+    pool: Any | None = None,
+    release_admission: bool = False,
 ):
     effective_request = {
         **(request if request is not None else _request()),
@@ -288,7 +302,7 @@ async def _submit(
         if idempotency_fingerprint is not None
         else run_request_fingerprint(effective_request)
     )
-    return await store.create_answer_turn(
+    created = await store.create_answer_turn(
         principal_id=owner,
         conversation_id=conversation_id,
         submission_id=effective_submission_id,
@@ -304,10 +318,19 @@ async def _submit(
         title_hint="why",
         create_conversation=create_conversation,
     )
+    if created is not None and release_admission:
+        assert pool is not None, "a released admission needs the pool the release runs on"
+        async with pool.acquire() as conn:
+            await release_session_work(conn, owner_id=owner, run_id=created.turn.answer_run_id)
+    return created
 
 
 async def _finish(pool: Any, run_id: str, *, status: str, error: str | None = None) -> None:
-    """Drive one run to a terminal state the way its worker eventually would."""
+    """Drive one run to a terminal state the way its worker eventually would.
+
+    The terminal transition also releases the Session work slot the Run was admitted under, so a
+    fixture that settles its turn may submit the next one under the real admission fence.
+    """
     async with pool.acquire() as conn:
         await conn.execute(
             "UPDATE dlightrag_runs "
@@ -320,6 +343,7 @@ async def _finish(pool: Any, run_id: str, *, status: str, error: str | None = No
             status,
             error,
         )
+        await release_session_work(conn, owner_id=_OWNER, run_id=run_id)
 
 
 async def _backdate_finish(pool: Any, run_id: str, *, days: int) -> None:
@@ -506,14 +530,6 @@ async def test_forked_conversation_maps_to_a_new_lane_in_the_parent_session(
     pool: Any,
 ) -> None:
     parent_conversation = await _conversation(store)
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "INSERT INTO dlightrag_agent_sessions"
-            " (owner_id, session_id, lease_run_id, commit_sequence, fencing_epoch)"
-            " VALUES ($1, $2, $2, 0, 1)",
-            _OWNER,
-            uuid.UUID(parent_conversation),
-        )
     parent_seed = await store.submission_seed(_OWNER, parent_conversation, attachment_limit=0)
     assert parent_seed is not None
     parent = parent_seed.head
@@ -555,7 +571,7 @@ async def test_forked_conversation_maps_to_a_new_lane_in_the_parent_session(
 
 
 async def test_submission_seed_names_the_conversations_newest_turn_as_parent(
-    store: PGWebConversationStore,
+    store: PGWebConversationStore, pool: Any
 ) -> None:
     """A composer submission follows the newest turn, which is what lineage records.
 
@@ -563,7 +579,13 @@ async def test_submission_seed_names_the_conversations_newest_turn_as_parent(
     pinned: an order other than newest-first would still leave every other test green.
     """
     conversation_id = await _conversation(store)
-    first = await _submit(store, conversation_id, submission_id=str(uuid.uuid4()))
+    first = await _submit(
+        store,
+        conversation_id,
+        submission_id=str(uuid.uuid4()),
+        pool=pool,
+        release_admission=True,
+    )
     assert first is not None
     empty = await store.submission_seed(_OWNER, conversation_id, attachment_limit=0)
     assert empty is not None
@@ -989,7 +1011,9 @@ async def test_a_snapshot_projects_each_turn_from_its_run(
     store: PGWebConversationStore, pool: Any
 ) -> None:
     conversation_id = await _conversation(store)
-    pending = await _submit(store, conversation_id, request=_request("first"))
+    pending = await _submit(
+        store, conversation_id, request=_request("first"), pool=pool, release_admission=True
+    )
     done = await _submit(store, conversation_id, request=_request("second"))
     assert pending is not None and done is not None
     await _finish(pool, done.turn.answer_run_id, status="succeeded")
@@ -1034,7 +1058,9 @@ async def test_a_turn_carries_the_users_steering_in_order_and_only_that(
     store: PGWebConversationStore, pool: Any
 ) -> None:
     conversation_id = await _conversation(store)
-    steered = await _submit(store, conversation_id, request=_request("first"))
+    steered = await _submit(
+        store, conversation_id, request=_request("first"), pool=pool, release_admission=True
+    )
     plain = await _submit(store, conversation_id, request=_request("second"))
     assert steered is not None and plain is not None
     run_id = steered.turn.answer_run_id
@@ -1075,11 +1101,13 @@ async def test_a_turn_carries_only_the_newest_steering_up_to_the_cap(
 
 
 async def test_a_turn_counts_the_child_sessions_its_run_spawned(
-    store: PGWebConversationStore, runs: FingerprintingRunStore
+    store: PGWebConversationStore, runs: FingerprintingRunStore, pool: Any
 ) -> None:
     conversation_id = await _conversation(store)
     plain, two, one = [
-        await _submit(store, conversation_id, request=_request(query))
+        await _submit(
+            store, conversation_id, request=_request(query), pool=pool, release_admission=True
+        )
         for query in ("plain", "two", "one")
     ]
     assert plain is not None and two is not None and one is not None
@@ -1113,6 +1141,88 @@ async def test_a_turn_counts_the_child_sessions_its_run_spawned(
         assert found is not None and found.child_count == expected
         replayed = await store.find_answer_turn_by_submission(_OWNER, creation.turn.submission_id)
         assert replayed is not None and replayed.turn.child_count == expected
+
+
+async def test_a_turn_names_the_message_its_run_answered_with_and_the_owners_judgement_of_it(
+    store: PGWebConversationStore, runs: FingerprintingRunStore, pool: Any
+) -> None:
+    conversation_id = await _conversation(store)
+    created = [
+        await _submit(
+            store, conversation_id, request=_request(query), pool=pool, release_admission=True
+        )
+        for query in ("judged", "unjudged", "said nothing", "still working", "just asked")
+    ]
+    turns = [creation.turn for creation in created if creation is not None]
+    assert len(turns) == len(created)
+    judged, unjudged, silent, working, asked = turns
+
+    # One Session holds every Run of the conversation; each Run numbers on from the one before.
+    async def wrote(turn: LinkedTurn, *entries: Entry) -> list[int]:
+        return await write_entries(
+            pool,
+            owner=_OWNER,
+            session=conversation_id,
+            run_id=turn.answer_run_id,
+            entries=entries,
+        )
+
+    _, _, _, answered = await wrote(judged, question(), tool_use(), tool_result(), answer())
+    _, tool_call, _, unjudged_answer = await wrote(
+        unjudged, question(), tool_use(), tool_result(), answer()
+    )
+    await wrote(silent, question(), answer("  \n"))
+    await wrote(working, question(), tool_use("let me look"))
+    await wrote(asked, question())
+
+    async def judge(
+        turn: LinkedTurn, sequence: int, value: str, *reasons: str, note: str | None = None
+    ) -> None:
+        kept = await runs.put_answer_feedback(
+            owner_id=_OWNER,
+            run_id=turn.answer_run_id,
+            agent="main",
+            sequence=sequence,
+            value=value,
+            reasons=reasons,
+            note=note,
+        )
+        assert kept is not None
+
+    async def seen() -> list[tuple[int | None, Judgement | None]]:
+        """What the history page says of each turn, which the other two reads must agree with."""
+        page = await store.history_page(
+            _OWNER, conversation_id, page=ConversationHistoryPageRequest(limit=_MAX_TURNS)
+        )
+        assert page is not None
+        said = [(turn.answer_sequence, turn.feedback) for turn in page.turns]
+        for turn, expected in zip(turns, said, strict=True):
+            by_run = await store.find_turn_by_run(_OWNER, turn.answer_run_id)
+            replayed = await store.find_answer_turn_by_submission(_OWNER, turn.submission_id)
+            assert by_run is not None and replayed is not None
+            assert (by_run.answer_sequence, by_run.feedback) == expected
+            assert (replayed.turn.answer_sequence, replayed.turn.feedback) == expected
+        return said
+
+    # A message the agent ended on is the answer, judged or not. A Run that said nothing, ended on a
+    # call to a tool, or has said nothing yet has none, though the Session holds the answers of the
+    # Runs before it.
+    nothing = (None, None)
+    assert await seen() == [(answered, None), (unjudged_answer, None), nothing, nothing, nothing]
+
+    # Only the answer's own judgement is shown: another message of the Run that was judged is not.
+    await judge(judged, answered, "down", "unsupported", "too_verbose", note="no source")
+    await judge(unjudged, tool_call, "up")
+    given = Judgement(value="down", reasons=("unsupported", "too_verbose"), note="no source")
+    assert await seen() == [(answered, given), (unjudged_answer, None), nothing, nothing, nothing]
+
+    # A judgement is replaced whole, and one taken back is gone.
+    await judge(judged, answered, "up")
+    assert (await seen())[0] == (answered, Judgement(value="up", reasons=(), note=None))
+    await runs.delete_answer_feedback(
+        owner_id=_OWNER, run_id=judged.answer_run_id, agent="main", sequence=answered
+    )
+    assert (await seen())[0] == (answered, None)
 
 
 async def test_a_run_is_only_findable_by_its_owner(store: PGWebConversationStore) -> None:
@@ -1350,7 +1460,7 @@ async def test_ten_thousand_linked_runs_delete_with_a_bounded_client_working_set
     assert metrics.max_fetched_rows == batch_size
     assert metrics.outer_transactions == 1
     assert metrics.savepoints == batch_count
-    assert metrics.queries == (5 * batch_count) + 4
+    assert metrics.queries == (5 * batch_count) + 5
     assert await _count(pool, "web_conversations") == 0
     assert await _count(pool, "web_conversation_turns") == 0
     assert await _count(pool, "dlightrag_runs") == 0
@@ -1477,7 +1587,8 @@ async def test_failure_after_multiple_batches_rolls_back_runs_blobs_sessions_and
     assert await _count(pool, "dlightrag_answer_run_artifacts") == total
     assert await _count(pool, "dlightrag_blobs") == total
     assert await _count(pool, "dlightrag_answer_run_routing") == total
-    assert await _count(pool, "dlightrag_agent_sessions") == total
+    # The conversation carries its own Session beside the hand-built per-run ones.
+    assert await _count(pool, "dlightrag_agent_sessions") == total + 1
 
 
 async def test_a_shared_fork_session_is_cleaned_only_after_its_final_routing_reference(
@@ -1485,16 +1596,10 @@ async def test_a_shared_fork_session_is_cleaned_only_after_its_final_routing_ref
     pool: Any,
 ) -> None:
     parent_conversation = await _conversation(store)
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "INSERT INTO dlightrag_agent_sessions"
-            " (owner_id, session_id, lease_run_id, commit_sequence, fencing_epoch)"
-            " VALUES ($1, $2, $2, 0, 1)",
-            _OWNER,
-            uuid.UUID(parent_conversation),
-        )
     parent_creation = await _submit(store, parent_conversation)
     assert parent_creation is not None
+    # A Session admits one live Run: settle the parent's turn before the fork's turn is admitted.
+    await _finish(pool, parent_creation.turn.answer_run_id, status="succeeded")
     fork_conversation = str(uuid.uuid4())
     fork_lane = str(uuid.uuid4())
     request = {
@@ -1534,13 +1639,12 @@ async def test_a_shared_fork_session_is_cleaned_only_after_its_final_routing_ref
 
 async def _session_with_entries(conn: Any, session_id: str, *, entries: int) -> None:
     """Store an Agent Session holding a chain of Entries, as its Runs would leave it."""
-    await conn.execute(
-        "INSERT INTO dlightrag_agent_sessions"
-        " (owner_id, session_id, lease_run_id, commit_sequence, last_sequence, fencing_epoch)"
-        " VALUES ($1, $2, $2, $3, $3, 1)",
-        _OWNER,
-        uuid.UUID(session_id),
-        entries,
+    await ensure_agent_session(
+        conn,
+        owner_id=_OWNER,
+        session_id=session_id,
+        commit_sequence=entries,
+        last_sequence=entries,
     )
     parent: uuid.UUID | None = None
     for sequence in range(1, entries + 1):
@@ -1566,7 +1670,7 @@ async def test_deleting_every_conversation_deletes_each_unreferenced_session(
     with_run, without_run = await _conversation(store), await _conversation(store)
     deleted = [with_run, without_run]
     kept = await _conversation(store)
-    assert await _submit(store, with_run) is not None
+    assert await _submit(store, with_run, pool=pool, release_admission=True) is not None
     async with pool.acquire() as conn:
         for conversation_id in (*deleted, kept):
             await _session_with_entries(conn, conversation_id, entries=2)
@@ -1603,15 +1707,6 @@ async def test_a_successful_linked_run_prunes_after_the_retention_floor(
     conversation_id = await _conversation(store)
     creation = await _submit(store, conversation_id)
     assert creation is not None
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "INSERT INTO dlightrag_agent_sessions"
-            " (owner_id, session_id, lease_run_id, commit_sequence, fencing_epoch)"
-            " VALUES ($1, $2, $3, 0, 1)",
-            _OWNER,
-            uuid.UUID(conversation_id),
-            uuid.UUID(creation.turn.answer_run_id),
-        )
     await _finish(pool, creation.turn.answer_run_id, status="succeeded")
     await _backdate_finish(pool, creation.turn.answer_run_id, days=370)
 
@@ -1641,6 +1736,12 @@ async def test_empty_conversation_rebases_to_a_fresh_main_lane_after_session_ret
         await conn.execute(
             "UPDATE web_conversations SET agent_lane_id = 'expired-branch'"
             " WHERE principal_id = $1 AND conversation_id = $2",
+            _OWNER,
+            uuid.UUID(conversation_id),
+        )
+        # Retention dropped the Session: the empty conversation rebases to a main lane.
+        await conn.execute(
+            "DELETE FROM dlightrag_agent_sessions WHERE owner_id = $1 AND session_id = $2",
             _OWNER,
             uuid.UUID(conversation_id),
         )
@@ -1674,13 +1775,6 @@ async def test_session_delete_wins_race_before_empty_conversation_acceptance(
         await conn.execute(
             "UPDATE web_conversations SET agent_lane_id = 'expired-branch'"
             " WHERE principal_id = $1 AND conversation_id = $2",
-            _OWNER,
-            uuid.UUID(conversation_id),
-        )
-        await conn.execute(
-            "INSERT INTO dlightrag_agent_sessions"
-            " (owner_id, session_id, lease_run_id, commit_sequence, fencing_epoch)"
-            " VALUES ($1, $2, $2, 0, 1)",
             _OWNER,
             uuid.UUID(conversation_id),
         )
@@ -1833,7 +1927,7 @@ async def test_the_accepted_envelope_survives_the_terminal_transition(
     assert envelope["attachments"][0]["filename"] == "chart.png"
 
 
-async def test_submission_seed_keeps_first_attachment_ordinals_and_skips_incomplete_legacy_rows(
+async def test_submission_seed_keeps_first_attachment_ordinals(
     store: PGWebConversationStore,
     pool: Any,
 ) -> None:
@@ -1876,24 +1970,6 @@ async def test_submission_seed_keeps_first_attachment_ordinals_and_skips_incompl
     assert seed is not None
     assert [item.source_ordinal for item in seed.attachments] == [0, 1]
 
-    legacy = await _submit(store, conversation_id, request=_request("legacy"))
-    assert legacy is not None
-    await _finish(pool, legacy.turn.answer_run_id, status="succeeded")
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE dlightrag_runs "
-            "SET accepted_input_json = jsonb_set(accepted_input_json, '{attachments}', $2::jsonb) "
-            "WHERE owner_id = $1 AND run_id = $3::uuid",
-            _OWNER,
-            '[{"ordinal": 0, "filename": "legacy.txt", "mime_type": "text/plain"}]',
-            uuid.UUID(legacy.turn.answer_run_id),
-        )
-
-    complete_seed = await store.submission_seed(_OWNER, conversation_id, attachment_limit=6)
-    assert complete_seed is not None
-    assert [item.source_ordinal for item in complete_seed.attachments] == [0, 1, 2]
-    assert all(item.digest != "None" for item in complete_seed.attachments)
-
 
 async def test_an_empty_conversation_is_reclaimed_after_its_turns_age_out(
     store: PGWebConversationStore, runs: FingerprintingRunStore, pool: Any
@@ -1923,11 +1999,17 @@ async def test_a_conversation_with_live_turns_is_never_reclaimed(
 
 
 async def test_205_turn_keyset_traversal_is_stable_across_a_concurrent_append(
-    store: PGWebConversationStore,
+    store: PGWebConversationStore, pool: Any
 ) -> None:
     conversation_id = await _conversation(store)
     for number in range(1, 206):
-        created = await _submit(store, conversation_id, request=_request(f"turn {number}"))
+        created = await _submit(
+            store,
+            conversation_id,
+            request=_request(f"turn {number}"),
+            pool=pool,
+            release_admission=True,
+        )
         assert created is not None
 
     page = await store.history_page(
@@ -1941,7 +2023,13 @@ async def test_205_turn_keyset_traversal_is_stable_across_a_concurrent_append(
     seen = [turn.turn_number for turn in page.turns]
     cursor = page.next_cursor
 
-    appended = await _submit(store, conversation_id, request=_request("concurrent append"))
+    appended = await _submit(
+        store,
+        conversation_id,
+        request=_request("concurrent append"),
+        pool=pool,
+        release_admission=True,
+    )
     assert appended is not None and appended.turn.turn_number == 206
     while cursor is not None:
         page = await store.history_page(
@@ -1970,6 +2058,7 @@ async def test_older_turns_remain_durable_and_keyset_reachable(
             "agent_session_id": conversation_id,
         }
         submission_id = str(uuid.uuid4())
+        run_id = str(uuid.uuid7())
         await store.create_answer_turn(
             principal_id=_OWNER,
             conversation_id=conversation_id,
@@ -1980,9 +2069,11 @@ async def test_older_turns_remain_durable_and_keyset_reachable(
                 submission_id=submission_id,
                 fingerprint=run_request_fingerprint(request),
             ),
-            run_id=str(uuid.uuid7()),
+            run_id=run_id,
             title_hint="why",
         )
+        async with pool.acquire() as conn:
+            await release_session_work(conn, owner_id=_OWNER, run_id=run_id)
 
     assert await _count(pool, "web_conversation_turns") == 3
     assert await _count(pool, "dlightrag_runs") == 3

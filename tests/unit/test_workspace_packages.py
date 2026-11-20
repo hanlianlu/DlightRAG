@@ -6,26 +6,23 @@ import io
 import subprocess
 import sys
 import tarfile
+import tomllib
 import zipfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from tests.support.report_examples import examples
 
 _REPO = Path(__file__).resolve().parents[2]
-_VERSION = "2.0.0"
-_BATTERIES = (
-    "aiofiles>=24.1.0",
-    "aiobotocore>=3.9.0",
-    "anthropic>=1.0.0",
-    "azure-storage-blob>=12.28.0",
-    "botocore>=1.43.3",
-    "google-genai>=2.19.0",
-    "json-repair>=0.62.0",
-    "lightrag-hku>=1.5.7",
-    "lingua-language-detector>=2.2.0",
-    "openai>=2.54.0",
+_PROJECT = tomllib.loads((_REPO / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+_VERSION = _PROJECT["version"]
+#: The root wheel's third-party requirements, as pyproject states them.
+_BATTERIES = tuple(
+    requirement
+    for requirement in _PROJECT["dependencies"]
+    if not requirement.startswith("dlightrag-")
 )
 _ROOT_REQUIRES = (
     f"dlightrag-memory=={_VERSION}",
@@ -48,9 +45,7 @@ _OBSERVABILITY_SDIST_STACK = {
 }
 
 
-@pytest.mark.parametrize(
-    "package_name", ["dlightrag", "dlightrag_memory", "dlightrag_observability"]
-)
+@pytest.mark.parametrize("package_name", ["dlightrag", "dlightrag_memory"])
 def test_workspace_package_root_imports(package_name: str) -> None:
     importlib.import_module(package_name)
 
@@ -215,6 +210,13 @@ def _write_workspace_artifacts(
     )
     _write_wheel(
         tmp_path,
+        distribution="dlightrag-mineru",
+        package="dlightrag_mineru",
+        requires=(),
+        version=memory_version,
+    )
+    _write_wheel(
+        tmp_path,
         distribution="dlightrag-observability",
         package="dlightrag_observability",
         requires=(),
@@ -245,7 +247,7 @@ def _verify_wheels(
     )
 
 
-def test_workspace_wheel_verifier_accepts_the_workspace_packages(tmp_path: Path) -> None:
+def test_workspace_wheel_verifier_accepts_root_and_memory(tmp_path: Path) -> None:
     _write_workspace_artifacts(tmp_path)
 
     completed = _verify_wheels(tmp_path)
@@ -259,7 +261,8 @@ def test_workspace_wheel_verifier_requires_the_stack_in_the_observability_sdist(
     """The stack reaches a distributable only through the source distribution.
 
     A command that cannot find `compose.yaml` fails rather than degrading, so an sdist
-    that lost the stack is a deployment that cannot start it.
+    that lost the stack is a deployment that cannot start it — which is what this holds
+    out, one member at a time.
     """
     stack = dict(_OBSERVABILITY_SDIST_STACK)
     del stack["stack/collector.yaml"]
@@ -349,6 +352,33 @@ def test_workspace_wheel_verifier_rejects_answer_import_of_postgres_adapter(
     assert "forbidden import dlightrag.adapters.postgres" in completed.stderr
 
 
+def test_workspace_wheel_verifier_lets_a_wildcard_ignore_cover_nested_modules(
+    tmp_path: Path,
+) -> None:
+    _write_workspace_artifacts(
+        tmp_path,
+        root_additional_sources={"adapters/postgres/core/_errors.py": "import asyncpg\n"},
+    )
+
+    completed = _verify_wheels(tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_workspace_wheel_verifier_still_refuses_a_module_outside_the_wildcard_ignore(
+    tmp_path: Path,
+) -> None:
+    _write_workspace_artifacts(
+        tmp_path,
+        root_additional_sources={"engine/rag/example.py": "import asyncpg\n"},
+    )
+
+    completed = _verify_wheels(tmp_path)
+
+    assert completed.returncode == 1
+    assert "forbidden import asyncpg in dlightrag/engine/rag/example.py" in completed.stderr
+
+
 @pytest.mark.parametrize(
     "config_source",
     ["import dlightrag.engine.answer\n", "from dlightrag.engine import answer\n"],
@@ -423,7 +453,7 @@ def test_workspace_wheel_verifier_requires_lockstep_memory_pin(tmp_path: Path) -
     _write_workspace_artifacts(
         tmp_path,
         root_requires=(
-            "dlightrag-memory>=2.0.0",
+            f"dlightrag-memory>={_VERSION}",
             f"dlightrag-observability=={_VERSION}",
             *_BATTERIES,
         ),
@@ -432,7 +462,7 @@ def test_workspace_wheel_verifier_requires_lockstep_memory_pin(tmp_path: Path) -
     completed = _verify_wheels(tmp_path)
 
     assert completed.returncode == 1
-    assert "dependency must be pinned as dlightrag-memory==2.0.0" in completed.stderr
+    assert f"dependency must be pinned as dlightrag-memory=={_VERSION}" in completed.stderr
 
 
 def test_workspace_wheel_verifier_requires_batteries_in_wheel_metadata(tmp_path: Path) -> None:
@@ -457,40 +487,26 @@ def test_workspace_wheel_verifier_rejects_corrupt_sdist(tmp_path: Path) -> None:
     assert "workspace wheel verification failed" in completed.stderr
 
 
-def test_workspace_wheel_verifier_requires_legal_files(tmp_path: Path) -> None:
-    _write_workspace_artifacts(tmp_path, root_include_legal=False)
+@pytest.mark.parametrize(
+    ("without", "message"),
+    [
+        ({"root_include_legal": False}, "LICENSE and NOTICE"),
+        ({"root_include_model_catalog": False}, "model_catalog.json"),
+        ({"root_include_builtin_skill_creator": False}, "built-in skill-creator SKILL.md"),
+        ({"root_include_builtin_skill_council": False}, "built-in council SKILL.md"),
+        ({"root_include_frontend": False}, "generated frontend"),
+    ],
+    ids=["legal-files", "model-catalog", "skill-creator", "skill-council", "frontend"],
+)
+def test_workspace_wheel_verifier_requires_each_shipped_root_file(
+    tmp_path: Path, without: dict[str, Any], message: str
+) -> None:
+    _write_workspace_artifacts(tmp_path, **without)
 
     completed = _verify_wheels(tmp_path)
 
     assert completed.returncode == 1
-    assert "LICENSE and NOTICE" in completed.stderr
-
-
-def test_workspace_wheel_verifier_requires_root_model_catalog(tmp_path: Path) -> None:
-    _write_workspace_artifacts(tmp_path, root_include_model_catalog=False)
-
-    completed = _verify_wheels(tmp_path)
-
-    assert completed.returncode == 1
-    assert "model_catalog.json" in completed.stderr
-
-
-def test_workspace_wheel_verifier_requires_builtin_skill_creator(tmp_path: Path) -> None:
-    _write_workspace_artifacts(tmp_path, root_include_builtin_skill_creator=False)
-
-    completed = _verify_wheels(tmp_path)
-
-    assert completed.returncode == 1
-    assert "built-in skill-creator SKILL.md" in completed.stderr
-
-
-def test_workspace_wheel_verifier_requires_builtin_skill_council(tmp_path: Path) -> None:
-    _write_workspace_artifacts(tmp_path, root_include_builtin_skill_council=False)
-
-    completed = _verify_wheels(tmp_path)
-
-    assert completed.returncode == 1
-    assert "built-in council SKILL.md" in completed.stderr
+    assert message in completed.stderr
 
 
 def test_workspace_wheel_verifier_requires_every_interactive_html_example_in_the_wheel(
@@ -525,12 +541,3 @@ def test_workspace_wheel_verifier_rejects_unexpected_root_extras(tmp_path: Path)
 
     assert completed.returncode == 1
     assert "expected extras" in completed.stderr
-
-
-def test_workspace_wheel_verifier_requires_root_frontend(tmp_path: Path) -> None:
-    _write_workspace_artifacts(tmp_path, root_include_frontend=False)
-
-    completed = _verify_wheels(tmp_path)
-
-    assert completed.returncode == 1
-    assert "generated frontend" in completed.stderr

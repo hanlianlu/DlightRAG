@@ -152,7 +152,9 @@ def test_echarts_is_inlined_exactly_once(build) -> None:
     document = build(report(chart("a"), chart("b"))).document
 
     assert document.count(marker) == 1
-    assert document.count("<script") == len(re.findall(r"</script>", document)) == 2 + 2
+    # Two head scripts (ECharts and the runtime), the fragment the report carries, and one JSON
+    # block per chart.
+    assert document.count("<script") == len(re.findall(r"</script>", document)) == 2 + 1 + 2
 
 
 def test_an_end_tag_inside_inlined_text_cannot_end_its_script(
@@ -193,6 +195,38 @@ def test_an_english_report_is_marked_english(build) -> None:
     assert '<html lang="en">' in document
 
 
+def test_a_declared_language_tag_is_written_and_read_back(build, check) -> None:
+    """Any BCP-47 tag is declared on the document and `check` rebuilds it from that declaration."""
+    built = build(report(chart()), "--lang", "ja-JP")
+
+    assert '<html lang="ja-JP">' in built.document
+    result = check(built.path)
+    assert result.code == 0, result.err
+    assert "is the toolkit's report" in result.out
+
+
+def test_an_invalid_language_tag_is_refused(build) -> None:
+    with pytest.raises(SystemExit):
+        build(report(chart()), "--lang", "english!")
+
+
+def test_a_declared_language_overrides_what_the_fragment_looks_like(build) -> None:
+    """A caller that knows the reader declares the language; the fragment's own words do not decide.
+
+    A case projected for a Chinese reader is one page of Chinese chrome around quoted English prose,
+    so the Han share is low and the inference would mark an English page. `--lang zh-CN` is the
+    caller's answer: the document, the runtime's labels and the previews follow the reader.
+    """
+    english_body = (
+        '<header class="report-head"><h1>Volvo — annual review</h1>'
+        '<p class="lede">HOLD at 17% confidence; the model value is 15.83 a share</p></header>'
+        + '<section class="kpis"><div class="kpi"><b>17.0%</b><span>信心</span></div></section>'
+        + chart(option={**_OPTION, "title": {"text": "价格与价值", "subtext": "单位：瑞典克朗/股"}})
+    )
+    assert '<html lang="zh-CN">' in build(english_body, "--lang", "zh-CN").document
+    assert '<html lang="en">' in build(report(chart()), "--lang", "en").document
+
+
 def test_a_report_over_the_artifact_limit_is_refused(
     build, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -220,7 +254,207 @@ def test_the_toolkit_adds_no_footer_credit_watermark_or_timestamp(build, example
     assert not re.search(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}", chrome)
 
 
+# ---- the source the report carries ---------------------------------------------------------------
+
+
+@pytest.fixture
+def extract(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+    """Run ``html-report source``, with the outcome shaped like a build's."""
+
+    def run(report: Path, out: str | Path = "-") -> Build:
+        target = tmp_path / "src.html" if str(out) == "-" else Path(out)
+        code = html_report.main(["source", str(report), str(out)])
+        captured = capsys.readouterr()
+        return Build(code, captured.out, captured.err, target)
+
+    return run
+
+
+def test_source_writes_back_the_fragment_the_report_was_built_from(
+    build, extract, tmp_path
+) -> None:
+    fragment = report(_REGION, chart(filters=["region"]))
+    built = build(fragment)
+    out = tmp_path / "report.src.html"
+
+    result = extract(built.path, out)
+
+    assert result.code == 0, result.err
+    # The fragment holds JSON blocks, so their end tags are the case a naive carrier would break on.
+    assert "</script>" in fragment
+    assert out.read_text(encoding="utf-8") == fragment
+    assert "7432" not in result.out  # the summary is bytes, not the fragment
+
+
+def test_the_report_rebuilt_from_its_own_source_is_the_same_document(
+    build, extract, tmp_path
+) -> None:
+    built = build(report(_REGION, chart(filters=["region"])), "--title", "销售报告")
+    out = tmp_path / "report.src.html"
+    extract(built.path, out)
+
+    again = build(out.read_text(encoding="utf-8"), "--title", "销售报告")
+
+    assert again.document == built.document
+    assert again.document.count('id="report-source"') == 1
+
+
+def test_source_writes_to_standard_output_when_the_path_is_a_dash(build, extract) -> None:
+    fragment = report(chart())
+
+    result = extract(build(fragment).path, "-")
+
+    assert result.code == 0, result.err
+    assert result.out == fragment
+
+
+def test_source_says_which_title_the_report_was_built_with(build, extract, tmp_path) -> None:
+    built = build(report(chart()), "--title", "用我的标题")
+
+    assert "用我的标题" in extract(built.path, tmp_path / "s.html").err
+
+
+def test_error_a_document_that_carries_no_source(build, extract, tmp_path) -> None:
+    built = build(report(chart()))
+    stripped = re.sub(
+        r'<script type="application/json" id="report-source">.*?</script>',
+        "",
+        built.document,
+        flags=re.DOTALL,
+    )
+    assert stripped != built.document
+    path = tmp_path / "stripped.html"
+    path.write_text(stripped, encoding="utf-8")
+
+    failed(extract(path, tmp_path / "s.html"), "carries no report-source block", "not in it")
+
+
+@pytest.mark.parametrize(
+    ("change", "needle"),
+    [
+        ('"sha256": "', '"sha256": "0'),
+        ('"format": 1', '"format": 2'),
+        ('"codec": "zlib+base64"', '"codec": "lzma"'),
+        ('"source": "', '"source": "!!'),
+    ],
+)
+def test_error_a_source_block_this_build_cannot_trust(
+    build, extract, tmp_path, change: str, needle: str
+) -> None:
+    built = build(report(chart()))
+    assert change in built.document, change
+    path = tmp_path / "tampered.html"
+    path.write_text(built.document.replace(change, needle, 1), encoding="utf-8")
+
+    failed(extract(path, tmp_path / "s.html"), "report-source block")
+
+
+# ---- check: the finished report ----------------------------------------------------------------
+
+
+def refused(result: Build, *needles: str) -> None:
+    """A ``check`` refusal: exit 1, a named reason, and no rewrite of the report."""
+    assert result.code == 1, result.out
+    assert result.errors, result.err
+    for needle in needles:
+        assert needle in "\n".join(result.errors), f"{needle!r} not in {result.errors}"
+
+
+@pytest.fixture
+def check(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+    """Run ``html-report check``, with the outcome shaped like a build's."""
+
+    def run(report: Path) -> Build:
+        code = html_report.main(["check", str(report)])
+        captured = capsys.readouterr()
+        return Build(code, captured.out, captured.err, report)
+
+    return run
+
+
+def test_check_passes_a_report_built_from_its_fragment(build, check) -> None:
+    built = build(report(chart()))
+
+    result = check(built.path)
+
+    assert result.code == 0, result.err
+    assert "is the toolkit's report (1 charts, 0 slicers, 1 page)" in result.out
+
+
+def test_check_refuses_a_hand_written_page(tmp_path: Path, check) -> None:
+    page = tmp_path / "report.html"
+    page.write_text("<html><body><h1>Hand written</h1><svg></svg></body></html>", encoding="utf-8")
+
+    refused(check(page), "carries no report-source block")
+
+
+def test_check_refuses_a_report_edited_after_the_build(build, check) -> None:
+    built = build(report(chart()))
+    built.path.write_text(built.document + "\n<!-- patched -->", encoding="utf-8")
+
+    refused(check(built.path), "edited after it was built")
+
+
+def test_check_accepts_a_report_built_with_a_declared_language(build, check) -> None:
+    """The declared language is what the document says about itself, so `check` reads it back.
+
+    A Chinese page around quoted English prose infers `en` from its Han share; a rebuild that
+    ignored the page's own `<html lang>` would report it as edited after a legitimate build.
+    """
+    built = build(
+        '<header class="report-head"><h1>Sales</h1></header>'
+        + '<p class="note">quoted English prose, as sources carry it</p>'
+        + chart(),
+        "--lang",
+        "zh-CN",
+    )
+    assert '<html lang="zh-CN">' in built.document
+
+    result = check(built.path)
+
+    assert result.code == 0, result.err
+    assert "is the toolkit's report" in result.out
+
+
+def test_check_refuses_a_report_with_no_chart(build, check) -> None:
+    built = build(report("<p>No chart.</p>"))
+
+    refused(check(built.path), "carries no chart")
+
+
+def test_build_warns_when_the_fragment_declares_no_chart(build) -> None:
+    """A chartless fragment is legitimate, so build warns; the Skill's check is what refuses it."""
+    result = build(report("<p>No chart.</p>"))
+
+    assert result.code == 0, result.err
+    warned(result, "declares no chart")
+
+
 # ---- --preview ---------------------------------------------------------------------------------
+
+
+def test_a_missing_rasteriser_skips_previews_without_losing_the_report(
+    build: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The report is the deliverable and the preview is an aid: the aid may fail, the report ships.
+
+    A machine without resvg lost the entire document -- the rasteriser runs after every chart has
+    been drawn, so the traceback took the report with it even though the report needs no rasteriser.
+    This test does not require png tools: it makes them fail on purpose.
+    """
+    folder = tmp_path / "preview"
+
+    def no_rasteriser(*_args: Any, **_kwargs: Any) -> str:
+        raise echarts_render.RenderError("resvg is not on PATH; scripts/install-chart-tools.sh")
+
+    monkeypatch.setattr(echarts_render, "rasterize", no_rasteriser)
+
+    result = build(report(chart("sales")), "--preview", str(folder))
+
+    assert result.code == 0, result.err
+    assert "previews skipped" in result.err
+    assert result.path.exists()  # the report is written; only the previews were skipped
+    assert result.path.stat().st_size > 0
 
 
 def test_preview_writes_each_chart_at_360_and_900(build, tmp_path: Path) -> None:
@@ -404,6 +638,86 @@ def test_error_a_slicer_field_that_no_filtered_chart_has(build) -> None:
     )
 
 
+# ---- every chart says what it does about a slicer that could narrow it ---------------------------
+
+
+def test_error_a_chart_that_neither_lists_nor_exempts_a_slicer_whose_field_it_draws(build) -> None:
+    """The omission the contract exists for: the chart draws "region" and says nothing about it."""
+    result = build(report(_REGION, chart()))
+
+    failed(
+        result,
+        'chart "sales"',
+        'field "region"',
+        'slicer "region"',
+        '"filters" does not list it',
+        '"unfiltered": ["region"]',
+    )
+    assert re.search(r'chart "sales" \(line \d+\)', "\n".join(result.errors)), result.errors
+
+
+def test_a_chart_that_lists_the_slicer_or_names_it_unfiltered_builds(build) -> None:
+    obeying = chart("trend", filters=["region"])
+    listed = build(report(_REGION, obeying, chart("mix", filters=["region"])))
+    exempt = build(report(_REGION, obeying, chart("mix", unfiltered=["region"])))
+    written = build(report(_REGION, obeying, chart("mix", unfiltered={"region": "全国口径"})))
+
+    assert [listed.code, exempt.code, written.code] == [0, 0, 0]
+    assert listed.warnings == [] and exempt.warnings == [] and written.warnings == []
+
+
+def test_no_obligation_when_the_rows_carry_no_field_the_slicer_filters(build) -> None:
+    """A chart aggregated before it was written down owes the slicer nothing: there is no field."""
+    totals = {
+        **_OPTION,
+        "dataset": {"source": [{"quarter": "2023Q1", "revenue": 18}]},
+        "series": [{"type": "bar", "encode": {"x": "quarter", "y": "revenue"}}],
+    }
+
+    result = build(
+        report(_REGION, chart("trend", filters=["region"]), chart("totals", option=totals))
+    )
+
+    assert result.code == 0, result.err
+    assert result.warnings == []
+
+
+def test_a_slicer_inside_a_page_reaches_only_that_page(build) -> None:
+    """A control inside a page cannot be worked from another, so a chart there owes it nothing."""
+    same = build(
+        report(
+            f'<section data-page="trend">{_REGION}{chart()}</section>',
+            '<section data-page="detail"><table></table></section>',
+        )
+    )
+    failed(same, 'chart "sales"', '"filters" does not list it')
+
+    other = build(
+        report(
+            f'<section data-page="trend">{_REGION}{chart("trend", filters=["region"])}</section>',
+            f'<section data-page="detail">{chart("detail")}</section>',
+        )
+    )
+    assert other.code == 0, other.err
+    assert other.warnings == []
+
+
+@pytest.mark.parametrize(
+    ("block", "needle"),
+    [
+        ({"unfiltered": ["region"], "filters": ["region"]}, 'both "filters" and "unfiltered"'),
+        ({"unfiltered": ["nowhere"]}, "no slicer declares it"),
+        ({"unfiltered": ["metric"]}, "could never have reached it"),
+        ({"unfiltered": "region"}, "must be a list of slicer ids"),
+        ({"unfiltered": {"region": "  "}}, "must say something"),
+    ],
+)
+def test_error_an_unfiltered_entry_that_says_nothing_useful(
+    build, block: dict[str, Any], needle: str
+) -> None:
+    failed(build(report(_REGION, _METRIC, chart(**block))), 'chart "sales"', needle)
+
+
 @pytest.mark.parametrize(
     ("series", "needle"),
     [
@@ -499,6 +813,22 @@ def test_error_a_script_calls_what_the_sandbox_refuses(build, call: str) -> None
         build(report(chart(), f"<script>\nReport.ready(() => {{ {call}; }});\n</script>")),
         "which the sandbox refuses",
     )
+
+
+def test_a_longer_word_that_ends_in_a_refused_call_is_the_authors_own_function(build) -> None:
+    """`prefetch(` is not `fetch(` and `retrieval()` is not `eval(`: the refusal starts at a name."""
+    result = build(
+        report(
+            chart(),
+            "<script>\n"
+            "function prefetch(id) { return id; }\n"
+            "function retrieval() { return prefetch(1); }\n"
+            "Report.ready(() => { retrieval(); });\n"
+            "</script>",
+        )
+    )
+
+    assert result.code == 0, result.err
 
 
 def test_error_an_unknown_palette(build) -> None:
@@ -746,24 +1076,57 @@ def test_a_slicer_is_in_use_when_a_chart_lists_it_its_token_is_written_or_a_scri
     assert build(report(*parts)).warnings == []
 
 
-def test_the_help_states_the_slider_and_token_rules(capsys: pytest.CaptureFixture[str]) -> None:
-    with pytest.raises(SystemExit):
-        html_report.main(["build", "--help"])
-    text = " ".join(capsys.readouterr().out.split())
+def test_warning_a_listed_slicer_that_moves_no_row_the_chart_draws(build) -> None:
+    """The one value the slicer offers is the one every row already has: nothing can move."""
+    option = {
+        **_OPTION,
+        "dataset": {"source": [{"region": "华东", "quarter": "2023Q1", "revenue": 10}]},
+        "series": [{"type": "bar", "encode": {"x": "quarter", "y": "revenue"}}],
+    }
 
-    for rule in (
-        "data-min, data-max, data-step (numbers), data-value (default: data-min), data-unit",
-        "Report.slicer(ID).value() returns it, .set(n) clamps to min..max and snaps to the step",
-        "a + before a positive number when data-min is below zero",
-        "min -1, step 0.25, unit pp shows 0.5 as +0.50pp",
-        "once per animation frame at most, with the latest value",
-        'do not list it in "filters"',
-        "{ID} in any string of a chart's option, except the rows (dataset, a series' data)",
-        'a filter\'s chosen value (several joined by 、 or ", "; nothing chosen: 全部 or All',
-        "A {name} that is no slicer id stays as written",
-        "or an author script names its id in quotes",
-    ):
-        assert rule in text, rule
+    warned(
+        build(report(_REGION, chart(option=option, filters=["region"]))),
+        'chart "sales" lists "region"',
+        "draws the same",
+        'drop it from "filters"',
+    )
+
+
+def test_no_warning_when_the_filter_moves_a_row_the_chart_draws(build) -> None:
+    option = {**_OPTION, "series": [{"type": "bar", "encode": {"x": "quarter", "y": "revenue"}}]}
+
+    assert build(report(_REGION, chart(option=option, filters=["region"]))).warnings == []
+
+
+@pytest.mark.parametrize(
+    ("state", "name"),
+    [
+        (None, "sales-900.png"),
+        ({"region": "华东"}, "sales-900@region=华东.png"),
+        ({"region": ["华东", "华北"]}, "sales-900@region=华东+华北.png"),
+        ({"metric": "销售额"}, "sales-900@metric=销售额.png"),
+        ({"region": "2023 Q1/华东"}, "sales-900@region=2023_Q1_华东.png"),
+    ],
+)
+def test_a_preview_is_named_for_the_state_it_was_drawn_in(
+    state: dict[str, Any] | None, name: str
+) -> None:
+    assert html_report._preview_name({"id": "sales", "width": 900, "state": state}) == name
+
+
+def test_preview_draws_each_chart_again_at_a_non_default_slicer_state(
+    build, tmp_path: Path
+) -> None:
+    require_png_tools()
+    folder = tmp_path / "preview"
+    result = build(report(_REGION, chart(filters=["region"])), "--preview", str(folder))
+
+    assert result.code == 0, result.err
+    assert sorted(p.name for p in folder.iterdir()) == [
+        "sales-360.png",
+        "sales-900.png",
+        "sales-900@region=华东.png",
+    ]
 
 
 def test_warnings_do_not_fail_the_build_and_are_counted_in_the_summary(build) -> None:

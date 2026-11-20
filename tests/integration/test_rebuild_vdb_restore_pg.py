@@ -111,8 +111,9 @@ async def writer() -> AsyncIterator[_Writer]:
     await skip_without_postgres()
     from dlightrag.adapters.postgres.core._pool import pg_pool
     from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
-    from dlightrag.application.config import DlightragConfig, set_config
-    from dlightrag.application.settings import rag_settings
+    from dlightrag.application.config.loading import set_config
+    from dlightrag.application.config.sections import DlightragConfig
+    from dlightrag.application.settings.projections import rag_settings
     from dlightrag.engine.ai.settings import EmbeddingSettings, ModelRoleSettings, ModelSettings
     from dlightrag.engine.rag.workspace.ports import CorpusRuntimeModels
 

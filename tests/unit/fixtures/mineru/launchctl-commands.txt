@@ -1,0 +1,4 @@
+bootout gui/501/com.hanlianlyu.dlightrag.mineru-api
+bootout gui/501/com.hanlianlyu.dlightrag.mineru-gradio
+bootstrap gui/501 __LAUNCHD_HOME__/Library/LaunchAgents/com.hanlianlyu.dlightrag.mineru-api.plist
+bootstrap gui/501 __LAUNCHD_HOME__/Library/LaunchAgents/com.hanlianlyu.dlightrag.mineru-gradio.plist

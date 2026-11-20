@@ -7,7 +7,10 @@ from typing import Any
 
 import pytest
 
-from dlightrag.application.corpus_admin import ingest_kwargs_from_spec, ingest_spec_from_payload
+from dlightrag.application.corpus_admin.service import (
+    ingest_kwargs_from_spec,
+    ingest_spec_from_payload,
+)
 
 # Load scripts/cli.py as a module (it's a script, not a package)
 _cli_path = Path(__file__).resolve().parents[2] / "scripts" / "cli.py"

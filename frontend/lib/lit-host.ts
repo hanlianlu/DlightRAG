@@ -2,7 +2,6 @@
 
 import {updateWhenLocaleChanges} from '@lit/localize';
 import {LitElement, type ReactiveController, type ReactiveControllerHost} from 'lit';
-import type {SubscribableStore} from '../stores/base.ts';
 
 /**
  * Lit host that renders into itself instead of a shadow root.
@@ -21,7 +20,9 @@ export abstract class LightElement extends LitElement {
 
     constructor() {
         super();
-        // Every light element draws words, so none may stay behind when the language changes.
+        // Every light element draws words, so none may stay behind when the language
+        // changes. A redraw only helps if the state it draws holds sources
+        // (`LocalizedText`) rather than words resolved in an earlier language.
         updateWhenLocaleChanges(this);
         // Not connected yet, so nothing may start: the signal is spent until the first connect.
         this.#lifetime.abort();
@@ -53,27 +54,65 @@ export abstract class LightElement extends LitElement {
     }
 }
 
-/** Re-renders its host from the focused domain stores it actually reads. */
+/** Anything a view can follow for change: it takes a handler and returns the way to stop. */
+interface Subscribable {
+  subscribe(handler: () => void): () => void;
+}
+
+function sameStores(left: readonly Subscribable[], right: readonly Subscribable[]): boolean {
+  return left.length === right.length && left.every((store, index) => store === right[index]);
+}
+
+/**
+ * Re-renders its host from the stores it reads.
+ *
+ * The stores come from a function and not from a list, because a Feature is built before its
+ * `handles` are set: the bag a parent passes by property replaces the default one after the
+ * constructor has run. The controller asks for the stores when the host connects and again at each
+ * update, and follows the ones it is given then. A bag that is replaced is followed from the render
+ * its replacement causes, and the bag it replaced is let go.
+ */
 export class StoreController implements ReactiveController {
-    readonly #host: ReactiveControllerHost;
-    readonly #stores: readonly SubscribableStore[];
-    #release: (() => void)[] = [];
+  readonly #host: ReactiveControllerHost;
+  readonly #stores: () => readonly Subscribable[];
+  #followed: readonly Subscribable[] = [];
+  #release: (() => void)[] = [];
+  #connected = false;
 
-    constructor(host: ReactiveControllerHost, ...stores: SubscribableStore[]) {
-        this.#host = host;
-        this.#stores = stores;
-        host.addController(this);
-    }
+  constructor(host: ReactiveControllerHost, stores: () => readonly Subscribable[]) {
+    this.#host = host;
+    this.#stores = stores;
+    host.addController(this);
+  }
 
-    hostConnected(): void {
-        const rerender = (): void => { this.#host.requestUpdate(); };
-        this.#release = this.#stores.map((store) => store.subscribe(rerender));
-    }
+  hostConnected(): void {
+    this.#connected = true;
+    this.#follow(this.#stores());
+  }
 
-    hostDisconnected(): void {
-        for (const release of this.#release) release();
-        this.#release = [];
-    }
+  hostUpdate(): void {
+    if (!this.#connected) return;
+    const stores = this.#stores();
+    if (!sameStores(this.#followed, stores)) this.#follow(stores);
+  }
+
+  hostDisconnected(): void {
+    this.#connected = false;
+    this.#unfollow();
+  }
+
+  #follow(stores: readonly Subscribable[]): void {
+    this.#unfollow();
+    const rerender = (): void => { this.#host.requestUpdate(); };
+    this.#followed = [...stores];
+    this.#release = stores.map((store) => store.subscribe(rerender));
+  }
+
+  #unfollow(): void {
+    for (const release of this.#release) release();
+    this.#release = [];
+    this.#followed = [];
+  }
 }
 
 /**

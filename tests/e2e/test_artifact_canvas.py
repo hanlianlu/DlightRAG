@@ -40,28 +40,7 @@ def _artifact_wire(*, presentation: str, media_type: str, filename: str) -> dict
         "download_url": f"{base}?download=1",
         "presentation_url": f"{base}/presentation",
         "issue": None,
-    }
-
-
-def _artifact_domain(*, presentation: str, media_type: str, filename: str) -> dict[str, object]:
-    """Artifact descriptor in camelCase domain shape, consumed raw by the canvas element."""
-    base = f"/web/api/answer/{_RUN_ID}/artifacts/{_RESOURCE_ID}"
-    return {
-        "resourceId": _RESOURCE_ID,
-        "mediaType": media_type,
-        "label": "Quarterly report",
-        "filename": filename,
-        "byteSize": 512,
-        "digest": "a" * 64,
-        "presentation": presentation,
-        "status": "available",
-        "uri": f"dlightrag://answer/{_RUN_ID}/artifacts/{_RESOURCE_ID}",
-        "width": None,
-        "height": None,
-        "dataUrl": base,
-        "downloadUrl": f"{base}?download=1",
-        "presentationUrl": f"{base}/presentation",
-        "issue": None,
+        "attestation": None,
     }
 
 
@@ -121,7 +100,14 @@ def _install_history(page: Page, presentation: dict[str, object]) -> None:
             route.fulfill(json={"items": [_CONVERSATION], "next_cursor": None})
             return
         if path == f"/web/api/conversations/{_CONVERSATION_ID}/history":
-            route.fulfill(json={"conversation": _CONVERSATION, "turns": [_turn(presentation)]})
+            route.fulfill(
+                json={
+                    "conversation": _CONVERSATION,
+                    "turns": [_turn(presentation)],
+                    "commands": [],
+                    "next_cursor": None,
+                }
+            )
             return
         route.continue_()
 
@@ -176,7 +162,9 @@ def test_finalized_answer_preserves_citation_context_in_browser(page: Page) -> N
     from dlightrag.adapters.http.browser.answer_events import render_done_event
     from dlightrag.engine.answer.citations.finalization import finalize_answer
     from dlightrag.engine.answer.results import store_answer_result
-    from dlightrag.engine.rag.retrieval import RetrievalContexts
+    from dlightrag.engine.rag.retrieval.results import (
+        RetrievalContexts,
+    )
 
     answer = (
         "Read `values[9]`. Literal \\[2] remains text. Evidence [2-1].\n\n"
@@ -281,7 +269,7 @@ def test_markdown_artifact_uses_the_general_artifact_canvas(page: Page) -> None:
         presentation_route,
     )
     _open_ready_page(page)
-    page.get_by_role("button", name="Open Artifact").click()
+    page.get_by_role("button", name="Open file").click()
 
     canvas = page.locator("#artifact-canvas")
     page.wait_for_function(
@@ -334,7 +322,7 @@ def test_mobile_artifact_canvas_is_full_bleed_and_restores_focus(
     conversations_close = page.get_by_role("button", name="Close conversations")
     if conversations_close.is_visible():
         conversations_close.click()
-    opener = page.get_by_role("button", name="Open Artifact")
+    opener = page.get_by_role("button", name="Open file")
     opener.click()
 
     canvas = page.locator("#artifact-canvas.open")
@@ -356,7 +344,7 @@ def test_mobile_artifact_canvas_is_full_bleed_and_restores_focus(
     assert details["topmost"] is True, details
     assert details["overflow"] <= 1, details
 
-    close = canvas.get_by_role("button", name="Close Artifact")
+    close = canvas.get_by_role("button", name="Close file")
     download = canvas.get_by_role("link", name="Download", exact=True)
     for control in (close, download):
         box = control.bounding_box()
@@ -372,7 +360,7 @@ def test_mobile_artifact_canvas_is_full_bleed_and_restores_focus(
     close.click()
     page.wait_for_function(
         "!document.getElementById('artifact-canvas')?.classList.contains('open')"
-        " && document.activeElement?.textContent?.includes('Open Artifact')"
+        " && document.activeElement?.textContent?.includes('Open file')"
     )
     assert opener.evaluate("element => document.activeElement === element")
 
@@ -427,7 +415,7 @@ def test_markdown_artifact_citation_opens_its_source_beside_the_canvas(page: Pag
         ),
     )
     _open_ready_page(page)
-    page.get_by_role("button", name="Open Artifact").click()
+    page.get_by_role("button", name="Open file").click()
     citation = page.locator("#artifact-canvas .citation-badge[data-ref='1'][data-chunk='1']")
     citation.wait_for(timeout=10000)
 
@@ -483,7 +471,7 @@ def test_desktop_conversation_area_dismisses_a_lone_artifact_canvas(page: Page) 
         ),
     )
     _open_ready_page(page)
-    page.get_by_role("button", name="Open Artifact").click()
+    page.get_by_role("button", name="Open file").click()
     page.get_by_text("Report body.").wait_for(timeout=10000)
     assert page.locator("#panel").get_attribute("data-panel-kind") is None
 
@@ -632,7 +620,7 @@ def test_active_html_is_sandboxed_and_destroyed_on_close(page: Page) -> None:
     page.route(f"**/web/api/answer/{_RUN_ID}/artifacts/{_RESOURCE_ID}", artifact_data)
     page.route("**://network.invalid/**", network_probe)
     _open_ready_page(page)
-    page.get_by_role("button", name="Open Artifact").click()
+    page.get_by_role("button", name="Open file").click()
 
     canvas = page.locator("#artifact-canvas")
     iframe = canvas.locator("dl-active-artifact-frame").locator("iframe")
@@ -673,4 +661,4 @@ def test_active_html_is_sandboxed_and_destroyed_on_close(page: Page) -> None:
     assert page.locator("dl-active-artifact-frame iframe").count() == 0
     # The canvas also restores focus in the frame after it closes, so wait for the contract
     # instead of racing the frame that performs it.
-    expect(page.get_by_role("button", name="Open Artifact")).to_be_focused()
+    expect(page.get_by_role("button", name="Open file")).to_be_focused()

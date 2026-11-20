@@ -11,7 +11,9 @@ from dlightrag.engine.answer.citations.finalization import finalize_answer
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.images import AnswerImageBudget
 from dlightrag.engine.answer.tools.web_search import web_context_rows
-from dlightrag.engine.answer.web_sources import WebSearchHit
+from dlightrag.engine.answer.web_sources.contracts import (
+    WebSearchHit,
+)
 
 
 def _corpus_row(
@@ -505,7 +507,9 @@ def test_visual_evidence_renders_nothing_without_a_budgeted_image() -> None:
 
 
 def test_an_incremental_batch_states_the_graph_once_and_never_again() -> None:
-    from dlightrag.engine.rag.retrieval import RetrievalContexts
+    from dlightrag.engine.rag.retrieval.results import (
+        RetrievalContexts,
+    )
 
     ledger = EvidenceLedger()
     ledger.add_contexts(

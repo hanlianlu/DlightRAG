@@ -1,0 +1,109 @@
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
+
+@layer features {
+.live {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-tight);
+    padding: var(--space-inline);
+}
+
+.status {
+    align-items: center;
+    color: var(--color-text-secondary);
+    display: flex;
+    font-size: var(--font-size-detail);
+    gap: var(--space-tight);
+    margin: 0;
+}
+
+.dot {
+    color: var(--color-accent-indicator);
+    display: inline-flex;
+}
+
+.stage {
+    align-items: center;
+    background: var(--color-bg-subtle);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-docked);
+    display: flex;
+    justify-content: center;
+    min-height: 12rem;
+    overflow: auto;
+}
+
+.stage:focus-visible {
+    outline: 2px solid var(--focus-ring-color);
+    outline-offset: 2px;
+}
+
+.frame {
+    display: block;
+    height: auto;
+    max-width: 100%;
+}
+
+/* The Run's own last picture, shown where a frame would be when nothing is attached: a
+   quieter stage than a live one, with the words that say what it is. */
+.lastFrame {
+    align-items: center;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-tight);
+    margin: 0;
+    opacity: 0.85;
+    padding: var(--space-inline);
+}
+
+.note {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-detail);
+    margin: 0;
+    padding: var(--space-inline);
+    text-align: center;
+}
+
+.controls {
+    display: flex;
+    gap: var(--space-tight);
+}
+
+.action {
+    background: var(--color-action-bg);
+    border: 1px solid var(--color-action-border);
+    border-radius: var(--radius-control);
+    color: var(--color-text-primary);
+    cursor: pointer;
+    font: inherit;
+    padding: var(--space-tight) var(--space-inline);
+}
+
+.action:disabled {
+    cursor: default;
+    opacity: 0.5;
+}
+
+.notice {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-detail);
+    margin: 0;
+}
+
+.navigate {
+    display: flex;
+    gap: var(--space-tight);
+}
+
+.url {
+    background: var(--color-control-surface);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-control);
+    color: var(--color-text-primary);
+    flex: 1;
+    font: inherit;
+    min-width: 0;
+    padding: var(--space-tight);
+}
+
+}

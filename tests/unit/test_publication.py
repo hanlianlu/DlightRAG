@@ -3,16 +3,23 @@
 
 import asyncio
 import base64
+import gzip
 import hashlib
+import io
+import lzma
+import tarfile
 import threading
 import xml.etree.ElementTree as ET
+import zipfile
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 
 import pypdfium2 as pdfium
 import pytest
 from PIL import Image
 
+from dlightrag.engine.agent.tools.contracts import DeclaredSource
 from dlightrag.engine.answer.publication import (
     ArtifactAttachment,
     ArtifactValidationError,
@@ -24,6 +31,7 @@ from dlightrag.engine.answer.publication import (
     validate_publication,
 )
 from dlightrag.engine.answer.results import answer_parts_from_markdown
+from tests.support.office import minimal_docx
 
 
 def _attachment(root: Path, path: str, *, label: str = "") -> ArtifactAttachment:
@@ -794,6 +802,55 @@ def test_reference_style_dependencies_publish_but_examples_do_not(tmp_path: Path
     assert len([part for part in parts if part["type"] == "artifact"]) == 1
 
 
+def test_a_binary_root_carries_the_files_it_declares_as_its_sources(tmp_path: Path) -> None:
+    """A product that cannot link to what made it declares it, and it publishes with it."""
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "report.docx").write_bytes(minimal_docx())
+    (root / "build.py").write_text("print('build')\n", encoding="utf-8")
+    (root / "data.csv").write_text("value\n1\n", encoding="utf-8")
+    attachment = prepare_artifact_attachment(
+        root, path="report.docx", sources=["build.py", "data.csv"]
+    )
+
+    plan = validate_publication(
+        root, answer="[Report](artifact:report.docx)", attachments=(attachment,)
+    )
+
+    assert plan.outcome == {"status": "complete", "issues": []}
+    assert [item.relative_path for item in plan.artifacts] == [
+        "report.docx",
+        "build.py",
+        "data.csv",
+    ]
+    # The relation is recorded on the product, so reopening it returns what rebuilds it.
+    assert plan.sources_by_root == {
+        artifact_resource_id("report.docx"): (
+            DeclaredSource("build.py", artifact_resource_id("build.py")),
+            DeclaredSource("data.csv", artifact_resource_id("data.csv")),
+        )
+    }
+    # Only the root is placed for the reader; its sources are carried, not delivered.
+    placed = [
+        part
+        for part in plan.descriptors
+        if part["resource_id"] == artifact_resource_id("report.docx")
+    ]
+    assert len(placed) == 1
+
+
+def test_a_declared_source_that_is_missing_refuses_the_attachment(tmp_path: Path) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "report.md").write_text("# Report", encoding="utf-8")
+
+    with pytest.raises(ArtifactValidationError) as raised:
+        prepare_artifact_attachment(root, path="report.md", sources=["nowhere.py"])
+
+    assert raised.value.kind == "missing_file"
+    assert "nowhere.py" in raised.value.description
+
+
 def test_multiple_artifacts_with_report_like_names_are_independent(tmp_path: Path) -> None:
     root = tmp_path / "artifacts"
     root.mkdir()
@@ -1124,3 +1181,170 @@ def test_unsafe_inventory_binds_actual_references_without_changing_examples(tmp_
 )
 def test_answer_emptiness_uses_visible_markdown_semantics(answer: str, empty: bool) -> None:
     assert is_empty_answer(answer=answer, has_artifacts=False) is empty
+
+
+def test_a_skill_document_is_never_published(tmp_path: Path) -> None:
+    """A Run publishes what it produced, not the material it reasoned with (ADR 0046).
+
+    Checked on bytes, so a rename does not launder it, and checked at both places a file
+    can become publishable: as an attached root, and as a dependency a root links to.
+    """
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    document = b"# A Skill\n\nWhat the author wrote.\n"
+    digest = hashlib.sha256(document).hexdigest()
+    (root / "engine.py").write_bytes(document)
+    (root / "note.md").write_text(
+        "The numbers.\n\n[Engine](artifact:engine.py)\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ArtifactValidationError) as raised:
+        prepare_artifact_attachment(root, path="engine.py", protected_digests={digest})
+    assert raised.value.kind == "protected_content"
+
+    plan = validate_publication(
+        root,
+        answer="Done. [Note](artifact:note.md)",
+        attachments=(_attachment(root, "note.md"),),
+        protected_digests={digest},
+    )
+
+    assert plan.outcome["status"] == "partial"
+    assert [issue.kind for issue in plan.issues] == ["protected_content"]
+    # The note itself is still published: only the Skill's own document is withheld.
+    assert [item.relative_path for item in plan.artifacts] == ["note.md"]
+
+
+def test_an_unprotected_file_is_published_as_usual(tmp_path: Path) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "note.md").write_text("The numbers.", encoding="utf-8")
+
+    plan = validate_publication(
+        root,
+        answer="Done. [Note](artifact:note.md)",
+        attachments=(_attachment(root, "note.md"),),
+        protected_digests={hashlib.sha256(b"something else").hexdigest()},
+    )
+
+    assert plan.outcome["status"] == "complete"
+
+
+@pytest.mark.parametrize(
+    ("name", "build"),
+    [
+        ("kit.zip", lambda doc: _zip_bytes({"engine.py": doc, "note.md": b"fine"})),
+        (
+            "kit.docx",
+            lambda doc: _zip_bytes({"word/engine.py": doc, "[Content_Types].xml": b"<Types/>"}),
+        ),
+        ("kit.tar", lambda doc: _tar_bytes(doc)),
+        ("kit.tgz", lambda doc: gzip.compress(_tar_bytes(doc))),
+        ("kit.tar.xz", lambda doc: lzma.compress(_tar_bytes(doc))),
+        ("engine.py.gz", gzip.compress),
+        ("renamed.bin", lambda doc: _zip_bytes({"engine.py": doc})),
+    ],
+)
+def test_a_protected_document_inside_a_container_is_refused(
+    tmp_path: Path, name: str, build: Any
+) -> None:
+    """The delivery archive is the case the rule exists for, so its members are documents too.
+
+    A name says what a file claims to be, and the outer bytes are the container's, not the
+    document's: digesting only those would leave every one of these open.
+    """
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    document = b"# engine\nprint('skill code')\n"
+    (root / name).write_bytes(build(document))
+
+    with pytest.raises(ArtifactValidationError) as raised:
+        prepare_artifact_attachment(
+            root, path=name, protected_digests={hashlib.sha256(document).hexdigest()}
+        )
+
+    assert raised.value.kind == "protected_content"
+
+
+@pytest.mark.parametrize(
+    ("name", "build"),
+    [
+        ("clean.zip", lambda: _zip_bytes({"ledger.json": b'{"a": 1}', "note.md": b"fine"})),
+        ("clean.tar.gz", lambda: gzip.compress(_tar_bytes(b"a spreadsheet row", "ledger.csv"))),
+        ("plain.csv.gz", lambda: gzip.compress(b"a spreadsheet row")),
+    ],
+)
+def test_a_container_without_a_protected_member_is_delivered(
+    tmp_path: Path, name: str, build: Any
+) -> None:
+    """The rule is about a Skill's documents, not a ban on archives."""
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / name).write_bytes(build())
+
+    attachment = prepare_artifact_attachment(
+        root, path=name, protected_digests={hashlib.sha256(b"the skill's own bytes").hexdigest()}
+    )
+
+    assert attachment.relative_path == name
+
+
+def test_a_protected_document_as_a_linked_dependency_is_refused(tmp_path: Path) -> None:
+    """A dependency never passes through the tool, so the boundary refuses it too."""
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    document = b"# engine\n"
+    digest = hashlib.sha256(document).hexdigest()
+    (root / "delivery.zip").write_bytes(_zip_bytes({"engine.py": document}))
+    (root / "note.md").write_text("See [kit](artifact:delivery.zip).\n", encoding="utf-8")
+
+    plan = validate_publication(
+        root,
+        answer="[Note](artifact:note.md)",
+        attachments=(_attachment(root, "note.md"),),
+        protected_digests={digest},
+    )
+
+    assert plan.outcome["status"] == "partial"
+    assert [issue.kind for issue in plan.issues] == ["protected_content"]
+    assert [item.relative_path for item in plan.artifacts] == ["note.md"]
+
+
+def _zip_bytes(members: dict[str, bytes]) -> bytes:
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name, content in members.items():
+            archive.writestr(name, content)
+    return buffer.getvalue()
+
+
+def _tar_bytes(content: bytes, name: str = "engine.py") -> bytes:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as archive:
+        info = tarfile.TarInfo(name)
+        info.size = len(content)
+        archive.addfile(info, io.BytesIO(content))
+    return buffer.getvalue()
+
+
+def test_the_real_skill_library_reaches_the_publication_gate(tmp_path: Path) -> None:
+    """End to end through the real catalog: a built-in document copied out is refused.
+
+    The unit tests above hand the set in, so they would all pass with the wiring cut. This one
+    reads the shipped Skills, as a Run does, and connects what they protect to the boundary.
+    """
+    from dlightrag.engine.agent.skills import SkillCatalog, builtin_skills_root
+
+    catalog = SkillCatalog.discover(builtin_root=builtin_skills_root())
+    document = builtin_skills_root().joinpath("charts", "SKILL.md").read_bytes()
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "skill.md").write_bytes(document)
+    (root / "kit.zip").write_bytes(_zip_bytes({"charts/SKILL.md": document}))
+
+    for name in ("skill.md", "kit.zip"):
+        with pytest.raises(ArtifactValidationError) as raised:
+            prepare_artifact_attachment(
+                root, path=name, protected_digests=catalog.protected_digests()
+            )
+        assert raised.value.kind == "protected_content"

@@ -3,8 +3,9 @@
 
 import {msg} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
-import {icon} from '../design-system/index.ts';
-import {focusedElement, raise, tabbables, wrapTabFocus} from '../lib/dom.ts';
+import {icon, isImeKey} from '../design-system/index.ts';
+import {raise, tabbables, wrapTabFocus} from '../lib/dom.ts';
+import {FocusReturn} from '../lib/focus-return.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {safeImageSrc} from '../lib/urls.ts';
 import lightboxStyles from '../styles/lightbox.module.css';
@@ -31,8 +32,7 @@ export class DlImageLightbox extends LightElement {
   declare current: string;
   declare gallery: readonly string[];
 
-  #returnFocus: HTMLElement | null = null;
-  #focusGeneration = 0;
+  readonly #focus = new FocusReturn();
 
   constructor() {
     super();
@@ -53,7 +53,7 @@ export class DlImageLightbox extends LightElement {
   }
 
   override disconnectedCallback(): void {
-    this.#focusGeneration += 1;
+    this.#focus.invalidate();
     super.disconnectedCallback();
   }
 
@@ -65,11 +65,11 @@ export class DlImageLightbox extends LightElement {
   ): Promise<void> {
     const current = safeImageSrc(src);
     if (!current) return;
-    this.#focusGeneration += 1;
+    this.#focus.invalidate();
     const safeGallery = [...new Set(gallery.map(safeImageSrc).filter(Boolean))];
     this.gallery = safeGallery.includes(current) ? safeGallery : [current, ...safeGallery];
     this.current = current;
-    this.#returnFocus = returnFocus ?? focusedElement();
+    this.#focus.remember(returnFocus);
     this.openState = true;
     this.#syncHost();
     this.#publishState();
@@ -79,18 +79,12 @@ export class DlImageLightbox extends LightElement {
 
   close(): void {
     if (!this.openState) return;
-    const focusGeneration = ++this.#focusGeneration;
     this.openState = false;
     this.current = '';
     this.gallery = [];
     this.#syncHost();
     this.#publishState();
-    const returnFocus = this.#returnFocus;
-    this.#returnFocus = null;
-    window.requestAnimationFrame(() => {
-      if (focusGeneration !== this.#focusGeneration || this.openState) return;
-      returnFocus?.focus();
-    });
+    this.#focus.restore(() => this.openState);
   }
 
   protected override updated(): void {
@@ -141,8 +135,9 @@ export class DlImageLightbox extends LightElement {
   #keydown = (event: KeyboardEvent): void => {
     if (!this.openState) return;
     if (event.key === 'Escape') {
-      // Native dialogs opened above the viewer own Escape while they are active.
-      if (document.querySelector('dialog[open]')) return;
+      // An Escape that cancels an IME composition belongs to the composition. Native dialogs opened
+      // above the viewer own Escape while they are active.
+      if (isImeKey(event) || document.querySelector('dialog[open]')) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       this.close();

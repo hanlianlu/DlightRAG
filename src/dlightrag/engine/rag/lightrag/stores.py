@@ -25,7 +25,10 @@ expected. The host contract guard provides runtime contract checks.
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
-from dlightrag.engine.rag.retrieval import MetadataFilter, MetadataScope
+from dlightrag.engine.rag.retrieval.models import (
+    MetadataFilter,
+    MetadataScope,
+)
 from dlightrag.engine.rag.retrieval.ports import ChunkVectorStore, CorpusChunkStore
 
 UNFUSED_VECTOR_STORAGE = (

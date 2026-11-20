@@ -18,16 +18,17 @@ class DecodedText:
     encoding: str
     newline: str
     mixed_newlines: bool
+    bom: bytes = b""
 
 
-def decode_workspace_text(data: bytes) -> DecodedText:
+def decode_agentspace_text(data: bytes) -> DecodedText:
     """Decode UTF-8 or BOM-tagged UTF-16. Refuse charset guessing."""
     if data.startswith(_UTF16_LE):
-        return _from_decoded(data.decode("utf-16-le").lstrip("\ufeff"), "utf-16-le")
+        return _from_decoded(data.decode("utf-16-le").lstrip("\ufeff"), "utf-16-le", bom=_UTF16_LE)
     if data.startswith(_UTF16_BE):
-        return _from_decoded(data.decode("utf-16-be").lstrip("\ufeff"), "utf-16-be")
+        return _from_decoded(data.decode("utf-16-be").lstrip("\ufeff"), "utf-16-be", bom=_UTF16_BE)
     if data.startswith(_UTF8_BOM):
-        return _from_decoded(data.decode("utf-8-sig"), "utf-8-sig")
+        return _from_decoded(data.decode("utf-8-sig"), "utf-8", bom=_UTF8_BOM)
     try:
         return _from_decoded(data.decode("utf-8"), "utf-8")
     except UnicodeDecodeError as exc:
@@ -36,17 +37,17 @@ def decode_workspace_text(data: bytes) -> DecodedText:
         ) from exc
 
 
-def encode_workspace_text(decoded: DecodedText, text: str) -> bytes:
+def encode_agentspace_text(decoded: DecodedText, text: str) -> bytes:
     """Restore the original encoding and newline style."""
     body = text
     if decoded.newline == "\r\n":
         body = text.replace("\n", "\r\n")
     elif decoded.newline == "\r":
         body = text.replace("\n", "\r")
-    return body.encode(decoded.encoding)
+    return decoded.bom + body.encode(decoded.encoding)
 
 
-def _from_decoded(text: str, encoding: str) -> DecodedText:
+def _from_decoded(text: str, encoding: str, *, bom: bytes = b"") -> DecodedText:
     crlf = text.count("\r\n")
     stripped = text.replace("\r\n", "")
     cr = stripped.count("\r")
@@ -61,7 +62,9 @@ def _from_decoded(text: str, encoding: str) -> DecodedText:
     else:
         newline = "\n"
         presented = text.replace("\r\n", "\n").replace("\r", "\n")
-    return DecodedText(text=presented, encoding=encoding, newline=newline, mixed_newlines=mixed)
+    return DecodedText(
+        text=presented, encoding=encoding, newline=newline, mixed_newlines=mixed, bom=bom
+    )
 
 
-__all__ = ["DecodedText", "decode_workspace_text", "encode_workspace_text"]
+__all__ = ["DecodedText", "decode_agentspace_text", "encode_agentspace_text"]

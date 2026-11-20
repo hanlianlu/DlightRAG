@@ -9,19 +9,35 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from dlightrag.application.application import Application, _ApplicationComponents
-from dlightrag.application.config import DlightragConfig, get_config
+from dlightrag.application.config.loading import get_config
+from dlightrag.application.config.sections import DlightragConfig
 from dlightrag.application.opaque_cursor import CursorSecretBox
-from dlightrag.application.skills import skill_read_layers, skill_roots, skills_bundle_factory
-from dlightrag.engine.agent.environment import confinement_state
+from dlightrag.application.skills import (
+    SkillProtection,
+    skill_read_layers,
+    skill_roots,
+    skills_bundle_factory,
+)
 from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
+from dlightrag.engine.agent.environment.execution import (
+    confinement_state,
+)
 from dlightrag.engine.agent.environment.toolchain import SearchToolchain
 from dlightrag.engine.ai.embedding import MultimodalEmbedder
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.telemetry import SPAN_TYPES, Telemetry
-from dlightrag.engine.runtime.workspace import SessionNotesLimits
+from dlightrag.engine.runtime.agentspace import SessionNotesLimits
 
 if TYPE_CHECKING:
-    from dlightrag.engine.answer.agent_browser import AgentMailbox
+    from dlightrag_memory.postgres import PostgresMemoryStore
+
+    from dlightrag.adapters.postgres.runtime.run_store import PGRunStore
+    from dlightrag.application.memory.service import MemoryService
+    from dlightrag.application.memory.session_pass import SessionMemoryPassRunner
+    from dlightrag.application.runs import RunService
+    from dlightrag.engine.answer.agent_browser.mailbox import (
+        AgentMailbox,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +56,20 @@ def _memory_embedder(
     from dlightrag.engine.ai.embedding import create_embedding_model
 
     return create_embedding_model(config.models.embedding, scheduler=scheduler, telemetry=telemetry)
+
+
+class _GoalRoundCanceller:
+    """The narrow runtime action a Web pause receives: cancel one owner-scoped Run.
+
+    The Web service knows a live Run's ``continuation_kind`` from its own read; this adapter is
+    the only thing it can do about one, so the conversation layer never receives the Run service.
+    """
+
+    def __init__(self, runs: RunService) -> None:
+        self._runs = runs
+
+    async def cancel(self, *, owner_id: str, run_id: str) -> object:
+        return await self._runs.cancel(owner_id=owner_id, run_id=run_id)
 
 
 def _actionable_error(exc: Exception) -> str:
@@ -152,6 +182,56 @@ def _agent_mailbox(config: DlightragConfig) -> AgentMailbox | None:
     )
 
 
+def _session_memory_passes(
+    config: DlightragConfig,
+    *,
+    run_store: PGRunStore,
+    memory_store: PostgresMemoryStore,
+    memory: MemoryService,
+    scheduler: ModelScheduler,
+    telemetry: Telemetry,
+) -> SessionMemoryPassRunner | None:
+    """The Session Memory Pass runner (ADR 0045), or None when the deployment turns it off.
+
+    The pass calls the `query` role's model at `memory_consolidation.reasoning`.
+    """
+    settings = config.answer.agent.memory_consolidation
+    if not settings.enabled:
+        return None
+    import uuid
+
+    from dlightrag_memory import Memory
+
+    from dlightrag.application.memory.session_pass import (
+        SessionMemoryPass,
+        SessionMemoryPassRunner,
+        SessionPassSettings,
+    )
+    from dlightrag.application.settings.projections import model_settings_for_role
+    from dlightrag.engine.ai.completion import CompletionModel
+
+    session_pass = SessionMemoryPass(
+        memory=Memory(memory_store),
+        store=run_store,
+        gate=memory,
+        # The pass sets its own reasoning level, not the query role's, which serve other work;
+        # the model profile still clamps a level it does not support at call time.
+        model=CompletionModel(
+            model_settings_for_role(config, "query").model_copy(
+                update={"reasoning": settings.reasoning}
+            ),
+            scheduler=scheduler,
+            telemetry=telemetry,
+        ),
+        settings=SessionPassSettings(
+            max_batch_tokens=settings.max_batch_tokens,
+            session_record_limit=settings.session_record_limit,
+        ),
+        holder=f"session-pass-{uuid.uuid4().hex}",
+    )
+    return SessionMemoryPassRunner(session_pass=session_pass, store=run_store)
+
+
 def _compose(config: DlightragConfig) -> _ApplicationComponents:
     """Construct this process's collaborators from one resolved configuration."""
     from dlightrag_memory.postgres import PostgresMemoryStore
@@ -164,40 +244,52 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         PGAgentAccountSettingsStore,
         PGAgentAccountStore,
     )
+    from dlightrag.adapters.postgres.answer.goals import PGAnswerGoalStore
     from dlightrag.adapters.postgres.answer.memory_settings import PGMemorySettingsStore
     from dlightrag.adapters.postgres.connections import PGConnectionsStore
-    from dlightrag.adapters.postgres.corpus.corpus import PGReadinessProbe, build_pg_corpus_backend
+    from dlightrag.adapters.postgres.corpus.corpus import (
+        PGReadinessProbe,
+        build_pg_corpus_backend,
+    )
     from dlightrag.adapters.postgres.corpus.file_panel import PGFilePanelStore
     from dlightrag.adapters.postgres.corpus.pg_metadata_index import PGMetadataIndex
     from dlightrag.adapters.postgres.corpus.pg_metadata_search import PGMetadataSearchStore
     from dlightrag.adapters.postgres.corpus.workspaces import PGWorkspaceRegistry
+    from dlightrag.adapters.postgres.corpus_mutations import build_corpus_mutations
     from dlightrag.adapters.postgres.model_catalogue import PGModelCatalogueStore
-    from dlightrag.adapters.postgres.runtime import PGRunBlobStore, PGRunStore
+    from dlightrag.adapters.postgres.runtime.run_blob_store import PGRunBlobStore
+    from dlightrag.adapters.postgres.runtime.run_store import PGRunStore
     from dlightrag.adapters.postgres.web.web_conversations import PGWebConversationStore
-    from dlightrag.application.access import access_control_from_settings
-    from dlightrag.application.agent_accounts import AgentAccountMaintenance, AgentAccounts
-    from dlightrag.application.answer_runs import AnswerService
-    from dlightrag.application.connections import Connections
-    from dlightrag.application.corpus_admin import (
-        CorpusAdmin,
-        CorpusMutationExecutor,
-        CorpusMutationService,
-        UploadLimits,
+    from dlightrag.application.access.control import (
+        access_control_from_settings,
     )
+    from dlightrag.application.agent_accounts import AgentAccountMaintenance, AgentAccounts
+    from dlightrag.application.answer.goal_rounds import GoalRoundDriver
+    from dlightrag.application.answer.queued_turns import QueuedTurnDriver
+    from dlightrag.application.answer_runs.service import AnswerService
+    from dlightrag.application.connections.service import Connections
     from dlightrag.application.corpus_admin.mutations import (
+        CorpusMutationExecutor,
         CorpusStageReclaimer,
         validate_corpus_mutation_prepared_input,
     )
+    from dlightrag.application.corpus_admin.service import CorpusAdmin
     from dlightrag.application.health import ApplicationHealth
-    from dlightrag.application.memory import MemoryService
-    from dlightrag.application.model_catalogue import ModelCatalogueAdmin
-    from dlightrag.application.retrieval import RetrievalExecutor, RetrievalService
+    from dlightrag.application.live_browser.service import LiveBrowserService
+    from dlightrag.application.memory.service import MemoryService
+    from dlightrag.application.model_catalogue.service import ModelCatalogueAdmin
+    from dlightrag.application.policies.service import (
+        RuntimePolicies,
+    )
+    from dlightrag.application.privacy import Privacy
     from dlightrag.application.retrieval._answer_projection import (
         AnswerQueryImagePreparer,
         project_answer_retrieval,
     )
+    from dlightrag.application.retrieval.execution import RetrievalExecutor
+    from dlightrag.application.retrieval.service import RetrievalService
     from dlightrag.application.runs import RunService
-    from dlightrag.application.settings import (
+    from dlightrag.application.settings.projections import (
         access_settings,
         agent_browser_settings,
         answer_capability_settings,
@@ -205,13 +297,14 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         answer_model_runtime_settings,
         answer_resource_settings,
         corpus_admin_settings,
+        live_preview_settings,
         model_profile_for_role,
         model_settings_for_role,
         rag_settings,
         rerank_scoring_model_settings,
         retrieval_settings,
     )
-    from dlightrag.application.web_conversations import WebConversationService
+    from dlightrag.application.web_conversations.service import WebConversationService
     from dlightrag.engine.ai.catalog import (
         MODEL_CATALOGUE,
         catalogue_overlay_revision,
@@ -231,18 +324,22 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     )
     from dlightrag.engine.ai.telemetry import safe_log_text
     from dlightrag.engine.ai.vision import ModelImageCapabilities
-    from dlightrag.engine.answer.agent_browser import (
+    from dlightrag.engine.answer.agent_browser.accounts import (
         AgentAccountsBinding,
-        AgentBrowserBinding,
         has_mailbox,
     )
+    from dlightrag.engine.answer.agent_browser.contracts import (
+        AgentBrowserBinding,
+    )
+    from dlightrag.engine.answer.agentspace import agentspace_reclaimer
     from dlightrag.engine.answer.capabilities import (
         AnswerCapabilityCoordinator,
         AnswerCapabilityView,
     )
-    from dlightrag.engine.answer.execution import AnswerExecutor, AnswerResourceResolver
+    from dlightrag.engine.answer.execution.executor import AnswerExecutor
+    from dlightrag.engine.answer.execution.resources import AnswerResourceResolver
+    from dlightrag.engine.answer.goal_service import AnswerGoalService
     from dlightrag.engine.answer.model_runtime import AnswerModelRuntime
-    from dlightrag.engine.answer.workspace import agent_workspace_reclaimer
     from dlightrag.engine.credential_cipher import KEYRING_FILE, deployment_cipher
     from dlightrag.engine.dependencies import DependencyComponent
     from dlightrag.engine.rag.corpus.downloads import SourceDownloadService
@@ -256,9 +353,9 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
     from dlightrag.engine.runtime.contracts import RunKind
     from dlightrag.engine.runtime.coordinator import (
+        RunAgentspaceReclaimer,
         RunCoordinator,
         RunExecutor,
-        RunWorkspaceReclaimer,
     )
     from dlightrag.engine.runtime.errors import IncompatibleActiveRunError, RunExecutionError
 
@@ -439,12 +536,16 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
 
     run_blob_store = PGRunBlobStore()
     run_store = PGRunStore(
-        retention_seconds=run_retention_seconds,
         query_max_nonterminal_runs=config.runtime.query.max_nonterminal_runs,
         corpus_mutation_max_nonterminal_runs=(config.runtime.corpus_mutation.max_nonterminal_runs),
         promotion_doc_threshold=config.corpus.promotion.doc_threshold,
         promotion_chunk_threshold=config.corpus.promotion.chunk_threshold,
     )
+    # An administrator's settings are kept in the Run store's schema, which every process shares,
+    # and each request reads them afresh.
+    policies = RuntimePolicies(store=run_store)
+    # An owner's Conversation Contribution lives in the same schema, one row per owner who chose.
+    privacy = Privacy(store=run_store)
     memory_embedder = _memory_embedder(config, scheduler=scheduler, telemetry=telemetry)
     memory_store = PostgresMemoryStore(
         pool_factory=_operational_pool_factory(),
@@ -452,9 +553,12 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         languages=ProfileBM25Languages(config.corpus.retrieval.bm25_profiles),
     )
     memory_settings = PGMemorySettingsStore()
+    goal_service = AnswerGoalService(store=PGAnswerGoalStore())
     memory = MemoryService(
         memory_store,
         settings_store=memory_settings,
+        # Turning memory back on restarts every Session, which the Run store keeps.
+        sessions=run_store,
         superseded_retention_days=config.runtime.run_retention_days,
         # Stable across workers sharing the operational database. Cursors
         # carry no authorization state and expire on credential rotation.
@@ -473,9 +577,13 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     )
     # One key ring seals Connection credentials and Agent Account passwords alike.
     cipher = deployment_cipher(config.working_dir_path / KEYRING_FILE, create=not config.is_reader)
+    personal_mcp = PersonalMcpClient()
     connections = Connections(
         store=PGConnectionsStore(),
-        mcp=PersonalMcpClient(),
+        mcp=personal_mcp,
+        # The same bounded transport serves on-demand resource reads; it is a separate
+        # port so a deployment without it advertises no resource tools.
+        resources=personal_mcp,
         oauth=PersonalOAuthClient(),
         policy=config.answer.agent.connections,
         cipher=cipher,
@@ -490,19 +598,28 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         browser_settings is not None and config.answer.agent.browser.account_registration
     )
     agent_browser = None
+    live_sessions = None
     if browser_settings is not None:
         # Playwright loads only where an Agent Browser is configured.
-        from dlightrag.adapters.agent_browser import PooledBrowserProvider
+        from dlightrag.adapters.agent_browser.live import (
+            LiveBrowserSessions,
+        )
+        from dlightrag.adapters.agent_browser.pool import (
+            PooledBrowserProvider,
+        )
         from dlightrag.adapters.postgres.runtime.browser_leases import PGAgentBrowserLeaseStore
 
+        browser_leases = PGAgentBrowserLeaseStore()
+        browser_provider = PooledBrowserProvider(
+            endpoints=browser_settings.endpoints,
+            headed_endpoints=browser_settings.headed_endpoints,
+            egress_proxy=browser_settings.egress_proxy,
+            chromium_sandbox=browser_settings.chromium_sandbox,
+            connect_timeout_seconds=browser_settings.connect_timeout_seconds,
+            leases=browser_leases,
+        )
         agent_browser = AgentBrowserBinding(
-            PooledBrowserProvider(
-                endpoints=browser_settings.endpoints,
-                egress_proxy=browser_settings.egress_proxy,
-                chromium_sandbox=browser_settings.chromium_sandbox,
-                connect_timeout_seconds=browser_settings.connect_timeout_seconds,
-                leases=PGAgentBrowserLeaseStore(),
-            ),
+            browser_provider,
             browser_settings,
             AgentAccountsBinding(
                 agent_account_store,
@@ -511,6 +628,15 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
                 registration_allowed=registration_allowed,
             ),
         )
+        # The live preview of a leased page, watched and co-driven over the Web surface. It
+        # leases nothing itself: it shows the page a Run already holds, and ends with it,
+        # so the pool tells it when a lease goes away rather than leaving a session open.
+        live_sessions = LiveBrowserSessions(
+            provider=browser_provider,
+            leases=browser_leases,
+            settings=live_preview_settings(config),
+        )
+        browser_provider.on_retire(live_sessions.retired)
 
     accounts = None if agent_browser is None else agent_browser.accounts
     agent_accounts = AgentAccounts(
@@ -526,6 +652,11 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         registration_allowed=registration_allowed,
         mailbox=has_mailbox(accounts),
     )
+
+    skills_factory = skills_bundle_factory(config, ensure_dirs=True)
+    # One process-wide content fingerprint index: every reader-facing surface asks it
+    # whether a passage is a protected Skill document's own text (ADR 0061).
+    skill_protection = SkillProtection(skills_factory)
 
     answer_executor = AnswerExecutor(
         store=run_store,
@@ -550,10 +681,18 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         search_toolchain=search_toolchain,
         working_dir=config.deployment.working_dir,
         memory_store=memory_store,
+        goal_service=goal_service,
         memory_recall_enabled=memory.recall_enabled,
         memory_capability_current=memory.capability_current,
         connection_tool_resolver=connections.restore_research,
-        skills_bundle_factory=skills_bundle_factory(config, ensure_dirs=True),
+        connection_resource_operations=connections,
+        skills_bundle_factory=skills_factory,
+        # Lazy, so the index is built by the first reader projection (a conversation page, an
+        # answer stream or a publication) rather than on every process start; the value
+        # resolves through SkillProtection's own revalidation, so a Skill installed later is
+        # covered without a restart. Publication asks the prose-only index: executable kit
+        # strings are engine output on a case/page, not reader-facing Skill prose.
+        protected_index=lambda: skill_protection.publication_index,
         browser=agent_browser,
         on_dependency_unavailable=health.mark_component_degraded,
         on_dependency_recovered=health.mark_component_healthy,
@@ -571,8 +710,8 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         "answer": answer_executor,
         "retrieval": retrieval_executor,
     }
-    workspace_reclaimers: list[RunWorkspaceReclaimer] = []
-    agent_reclaimer = agent_workspace_reclaimer(
+    workspace_reclaimers: list[RunAgentspaceReclaimer] = []
+    agent_reclaimer = agentspace_reclaimer(
         execution_environment=config.answer.agent.execution_environment,
         workspace_root=config.answer.agent.workspace_root,
     )
@@ -618,6 +757,14 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
                     "drain or owner-cancel them before deployment"
                 ) from exc
 
+    session_memory_passes = _session_memory_passes(
+        config,
+        run_store=run_store,
+        memory_store=memory_store,
+        memory=memory,
+        scheduler=scheduler,
+        telemetry=telemetry,
+    )
     coordinator = RunCoordinator(
         store=run_store,
         executors=executors,
@@ -625,27 +772,26 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         corpus_mutation_worker_concurrency=(config.runtime.corpus_mutation.worker_concurrency),
         workspace_reclaimers=workspace_reclaimers,
     )
+    if session_memory_passes is not None:
+        coordinator.observe_settled(session_memory_passes.run_settled)
     retrieval.bind_runtime(store=run_store, coordinator=coordinator)
 
-    corpus_mutations = CorpusMutationService(
-        source_root=config.input_dir_path,
-        corpus_root=config.corpus_dir_path,
+    corpus_mutations = build_corpus_mutations(
+        config=config,
         store=run_store,
-        coordinator=coordinator,
-        upload_limits=UploadLimits(
-            file_bytes=config.corpus.ingestion.max_upload_bytes,
-            request_bytes=config.max_upload_batch_bytes,
-        ),
-        # A reader registers no corpus-mutation executor, so it refuses writes at
-        # acceptance rather than staging bytes for a Run it can never execute.
         workspace_exists=corpora.workspace_exists,
-        writable=not config.is_reader,
-        default_workspace=default_workspace,
+        coordinator=coordinator,
     )
+    cancelled_observers: list[Any] = [corpus_mutations.discard_cancelled_run]
+
+    async def _run_cancelled(view: Any) -> None:
+        for observer in tuple(cancelled_observers):
+            await observer(view)
+
     runs = RunService(
         store=run_store,
         scheduler=coordinator,
-        on_cancelled=corpus_mutations.discard_cancelled_run,
+        on_cancelled=_run_cancelled,
     )
 
     async def _cancel_local(owner: str, run_id: str) -> None:
@@ -669,13 +815,27 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         research_tool_declarations=answer_executor.research_tool_declarations,
         memory_capability=memory.execution_capability,
         agent_may_register=agent_accounts.may_register,
+        policies=policies,
         bind_research=connections.bind_research,
         # Stable across workers sharing the operational database. Cursors
         # carry no authorization state and expire on credential rotation.
         child_roster_cursor_secret=cursor_secrets.derive("dlightrag-child-roster-cursor"),
+        protected_skill_documents=skill_protection.documents,
+        protected_text=skill_protection.mask,
         run_retention_seconds=run_retention_seconds,
     )
+    # The live preview exists wherever the Web surface does; without an Agent Browser it
+    # answers `not_configured` and still serves the screenshots a Run stored earlier.
+    live_browser = LiveBrowserService(sessions=live_sessions, runs=answers)
     web_store = PGWebConversationStore(run_store=run_store)
+    # The driver and the Web conversations need each other: a round becomes a conversation
+    # turn, and a human resume asks the driver to start its round. The driver is created first
+    # and receives the conversations through its binding, so neither constructor closes a cycle.
+    goal_rounds = GoalRoundDriver(
+        goals=goal_service,
+        answers=answers,
+        runs=runs,
+    )
     web_conversations = WebConversationService(
         store=web_store,
         answers=answers,
@@ -683,7 +843,26 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         # Stable across workers sharing the operational database. Cursors
         # carry no authorization state and naturally expire on credential rotation.
         cursor_secret=cursor_secrets.derive("dlightrag-web-conversation-cursor"),
+        goals=goal_service,
+        goal_rounds=goal_rounds,
+        goal_round_canceller=_GoalRoundCanceller(runs),
+        workspace_heads=agent_reclaimer,
     )
+    goal_rounds.bind_round_turns(web_conversations)
+    # One settlement observer, ordered: the reader's queued messages are delivered first and
+    # the goal round driver then decides whether a round may follow. Two observers would race
+    # for the same lane; see ADR 0071.
+    queued_turns = QueuedTurnDriver(
+        turns=web_conversations,
+        runs=runs,
+        goal_rounds=goal_rounds,
+    )
+    # The goal driver requests its next round as a next-turn continuation; this is the one
+    # delivery path that admits it, so a continued goal moves immediately while a human send
+    # still keeps the Session first.
+    goal_rounds.bind_pending_delivery(queued_turns.deliver_pending_goal_round)
+    coordinator.observe_settled(queued_turns.run_settled)
+    cancelled_observers.append(queued_turns.run_cancelled)
     MODEL_CATALOGUE.replace_startup(startup_catalogue)
 
     return _ApplicationComponents(
@@ -706,18 +885,34 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         validate_active_runs=validate_active_runs,
         corpora=corpora,
         access_control=access_control,
+        policies=policies,
+        privacy=privacy,
         corpus_mutations=corpus_mutations,
         retrieval=retrieval,
         runs=runs,
         answers=answers,
+        goals=goal_service,
+        skill_protection=skill_protection,
+        live_browser=live_browser,
         memory=memory,
         memory_store=memory_store,
         memory_embedder=memory_embedder,
         web_conversations=web_conversations,
         search_toolchain=search_toolchain,
+        # Active goals are taken up automatically at startup; ``deployment.goal_recovery`` decides
+        # whether this process is the one that scans (the MCP service sets it false).
+        recover_goal_rounds=goal_rounds.resume_after_restart,
         initialize_process=_initialize_process,
         close_agent_execution=answer_executor.aclose,
         close_process=_close_process,
+        **(
+            {
+                "start_session_memory_passes": session_memory_passes.start,
+                "close_session_memory_passes": session_memory_passes.aclose,
+            }
+            if session_memory_passes is not None
+            else {}
+        ),
     )
 
 

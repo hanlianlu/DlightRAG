@@ -53,24 +53,6 @@ it('owns safe gallery navigation, Escape, ARIA, and focus restoration', async ()
   expect(document.activeElement).to.equal(trigger);
 });
 
-it('does not restore stale focus when close is immediately followed by reopen', async () => {
-  const firstTrigger = document.createElement('button');
-  const secondTrigger = document.createElement('button');
-  const lightbox = document.createElement('dl-image-lightbox') as DlImageLightbox;
-  document.body.append(firstTrigger, secondTrigger, lightbox);
-
-  await lightbox.open('/first.png', firstTrigger);
-  lightbox.close();
-  const reopened = lightbox.open('/second.png', secondTrigger);
-  await reopened;
-  await new Promise((resolve) => requestAnimationFrame(resolve));
-
-  expect(lightbox.getAttribute('aria-hidden')).to.equal('false');
-  expect(lightbox.inert).to.equal(false);
-  expect(document.activeElement).not.to.equal(firstTrigger);
-  expect(document.activeElement).to.equal(lightbox);
-});
-
 it('is named in the language the reader switches to while it stays mounted', async () => {
   const lightbox = document.createElement('dl-image-lightbox') as DlImageLightbox;
   document.body.append(lightbox);

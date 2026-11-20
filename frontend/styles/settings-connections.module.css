@@ -224,16 +224,6 @@
     min-height: var(--size-button);
   }
 
-  /* The provider's link is a control of its own, so its box is as tall as a button's. It takes
-   * Accent text, underlined: the browser's default blue is unreadable on the dark theme. */
-  .continue {
-    align-items: center;
-    color: var(--color-accent-text);
-    display: inline-flex;
-    min-height: var(--size-button);
-    text-decoration: underline;
-  }
-
   /* What deleting does on the left and the one way to do it on the right (a danger row), set off from
    * the fields above it. */
   .deleteRow {
@@ -270,7 +260,35 @@
     flex: 1 1 12rem;
   }
 
-  /* ── Authentication ── */
+  /* ── Stated endpoint headers ── */
+
+  /* What an endpoint needs stated is configuration, so it sits below the credential in a block
+   * of its own, set off from the fields above it: it is not how a caller proves who they are. */
+  .headerSection {
+    border-top: 1px solid var(--color-border-subtle);
+    padding-top: var(--space-component);
+  }
+
+  /* One stated header: its name, its value, and the way to drop it. */
+  .headerRow {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-tight);
+    min-width: 0;
+  }
+
+  .headerName {
+    flex: 1 1 9rem;
+    width: auto;
+  }
+
+  .headerValue {
+    flex: 2 1 12rem;
+    width: auto;
+  }
+
+  /* ── Credential ── */
 
   .segmented {
     border: 1px solid var(--color-border-strong);
@@ -278,9 +296,79 @@
     display: grid;
     grid-auto-columns: 1fr;
     grid-auto-flow: column;
-    max-width: 19rem;
+
+    /* Three tiers: nothing, one static token, or the provider's grant. */
+    max-width: 18rem;
     min-width: 0;
     overflow: hidden;
+  }
+
+  /* Where a static token travels: the default, or a header of the reader's own. */
+  .transportChoices {
+    display: grid;
+    gap: var(--space-inline);
+  }
+
+  .transportChoice {
+    align-items: center;
+    display: flex;
+    font-size: var(--font-size-detail);
+    gap: var(--space-inline);
+    min-height: var(--size-button);
+  }
+
+  /* The credential's own line in the request header table: read-only, and the only place a
+   * reader who reloaded the page can see which header the stored credential travels in. */
+  .credentialRow {
+    align-items: center;
+    background: var(--color-bg-subtle);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-control);
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-tight);
+    min-height: var(--size-button);
+    padding-block: var(--space-inline);
+    padding-inline: var(--space-tight);
+  }
+
+  .tag {
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-pill);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    padding-inline: var(--space-inline);
+  }
+
+  .credentialName {
+    font-family: SFMono-Regular, Consolas, monospace;
+    font-size: var(--font-size-caption);
+    overflow-wrap: anywhere;
+  }
+
+  .credentialValue {
+    color: var(--color-text-muted);
+    letter-spacing: 0.12em;
+  }
+
+  .credentialOwn {
+    color: var(--color-text-muted);
+    flex: 1;
+    font-size: var(--font-size-caption);
+    text-align: end;
+  }
+
+  .credentialOwn a {
+    color: var(--color-accent-text);
+  }
+
+  .inputInvalid {
+    border-color: var(--color-danger);
+  }
+
+  .collisionNote {
+    color: var(--color-danger);
+    font-size: var(--font-size-caption);
   }
 
   .segment {

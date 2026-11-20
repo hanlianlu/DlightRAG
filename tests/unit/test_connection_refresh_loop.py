@@ -11,7 +11,8 @@ from typing import Any, cast
 
 import pytest
 
-from dlightrag.application.connections import ConnectionPolicy, Connections
+from dlightrag.application.connections.policy import ConnectionPolicy
+from dlightrag.application.connections.service import Connections
 from dlightrag.engine.credential_cipher import CredentialCipher
 
 

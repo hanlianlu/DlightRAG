@@ -442,8 +442,9 @@ async def _close_stream(stream: object) -> None:
 class CompletionOutput(str):
     """Completion text with optional observability metadata.
 
-    The value behaves as a plain string for existing callers while allowing
-    providers to attach token usage, cost, and normalized stop-reason metadata.
+    The value is a plain string for every caller that reads only the text, LightRAG's
+    model function among them, while a provider attaches token usage, cost, and the
+    normalized stop reason for the adapters that read those.
     """
 
     usage_details: dict[str, int] | None
@@ -547,18 +548,21 @@ class CompletionProvider(ABC):
         *,
         tools: list[ToolDefinition],
         emit_text: Callable[[str], Awaitable[None]],
+        emit_reasoning: Callable[[str], Awaitable[None]] | None = None,
         tool_choice: ToolChoice = "auto",
         temperature: float | None = None,
         max_tokens: int | None = None,
         model_kwargs: dict[str, Any] | None = None,
     ) -> AssistantTurn:
-        """Complete one tool-capable turn, publishing provider text deltas when supported.
+        """Complete one tool-capable turn, publishing provider deltas when supported.
 
         The provider must return the same text that its callbacks concatenate. The
         default deliberately emits nothing, preserving a truthful non-streaming
-        fallback for providers without a normalized tool-turn stream.
+        fallback for providers without a normalized tool-turn stream. ``emit_reasoning``
+        receives the provider's own reasoning deltas; a fallback that cannot stream them
+        ignores it rather than replaying the finished turn's reasoning as if it streamed.
         """
-        del emit_text
+        del emit_text, emit_reasoning
         return await self.complete_tool_turn(
             messages,
             model,

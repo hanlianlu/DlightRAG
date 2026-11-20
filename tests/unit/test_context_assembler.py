@@ -10,7 +10,7 @@ from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ModelProfile
 from dlightrag.engine.ai.tokens import estimate_messages_tokens
 from dlightrag.engine.answer.errors import AnswerInputOverflowError
 from dlightrag.engine.answer.evidence import EvidenceLedger
-from dlightrag.engine.answer.execution import research_history_input_measure
+from dlightrag.engine.answer.execution.acceptance import research_history_input_measure
 from dlightrag.engine.answer.images import AnswerImageBudget
 from dlightrag.engine.answer.memory import reserved_auto_recall_text
 from dlightrag.engine.answer.research.context import ContextAssembler
@@ -199,9 +199,8 @@ async def test_history_contribution_preserves_roles_and_precedes_current_questio
 async def test_the_transcript_states_the_question_once_and_the_runs_material_follows() -> None:
     """A Run's question is its own User Entry in the fold; only its material is new.
 
-    The question block used to lead the request, in front of a Session fold that
-    already held the same question: every follow-up Run's first request diverged from
-    the previous Run's right after the system prompt, and sent its question twice.
+    The request states the question once: it sits in the Session fold, not in front of
+    it, so a follow-up Run's first request keeps the previous Run's prefix.
     """
     picture = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}
     assembler = ContextAssembler(
@@ -458,7 +457,9 @@ def test_research_seed_measure_carries_the_connection_sentence_its_run_sends() -
     """Acceptance measures the first request a Run sends, Connection sentence included."""
     from pydantic import BaseModel
 
-    from dlightrag.engine.agent.tools import ToolDeclaration
+    from dlightrag.engine.agent.tools.contracts import (
+        ToolDeclaration,
+    )
 
     class Arguments(BaseModel):
         query: str
@@ -646,7 +647,7 @@ async def test_evidence_images_stay_after_the_transcript() -> None:
 
 
 async def test_session_notes_are_stated_once_after_the_transcript() -> None:
-    from dlightrag.engine.runtime.workspace import SessionNoteRecord
+    from dlightrag.engine.runtime.agentspace import SessionNoteRecord
 
     notes = (SessionNoteRecord(relative_path="notes/plan.md", content=b"x" * 12),)
     assembler = ContextAssembler(
@@ -699,3 +700,31 @@ async def test_a_run_with_nothing_bound_says_nothing_about_memory() -> None:
     )
     assert "At the start of this Run" not in str(messages)
     assert "carried" not in str(messages).lower()
+
+
+async def test_a_repair_envelope_is_request_only_and_restates_the_question() -> None:
+    assembler = _assembler([])
+    before = await assembler.control_turn(
+        evidence=EvidenceLedger(),
+        working=WorkingContextProjection(),
+    )
+
+    envelope = assembler.repair_messages(("not read: references/gate-audit.md",))
+
+    assert assembler.repair_messages(()) == []
+    assert len(envelope) == 1
+    assert envelope[0]["role"] == "user"
+    text = envelope[0]["content"]
+    assert "[internal repair request — not a new user turn]" in text
+    assert "The user's request: What changed?" in text
+    assert "not read: references/gate-audit.md" in text
+    assert "These findings are requirements" in text
+    assert "run the verifier" in text
+    assert "write the final answer for the user" in text
+    assert "Do not mention this check" in text
+
+    after = await assembler.control_turn(
+        evidence=EvidenceLedger(),
+        working=WorkingContextProjection(),
+    )
+    assert after == before

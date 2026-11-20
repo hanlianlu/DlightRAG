@@ -10,6 +10,7 @@ keys, retention, and concurrency live in the PostgreSQL integration suite.
 import asyncio
 import datetime
 import json
+from collections.abc import AsyncIterator
 from dataclasses import replace
 from functools import partial
 from types import SimpleNamespace
@@ -27,41 +28,57 @@ from dlightrag.adapters.http.browser.routes import chat as chat_routes
 from dlightrag.adapters.http.browser.routes import conversations as conversation_routes
 from dlightrag.adapters.http.browser.run_resources import image_rewrites
 from dlightrag.adapters.http.server import create_app
-from dlightrag.adapters.http.streaming.answer_stream import follow_run_frames
-from dlightrag.application import ApplicationClosedError
-from dlightrag.application.access import owner_id_from_user
-from dlightrag.application.answer_runs import (
-    ActivityPage,
-    AnswerConnectionsChangedError,
+from dlightrag.adapters.http.streaming.answer_stream import follow_frames
+from dlightrag.application.access.principal import (
+    owner_id_from_user,
+)
+from dlightrag.application.answer_runs.child_roster import (
     ChildRosterCursor,
     ChildRosterCursorCodec,
     ChildRosterPage,
     ChildRosterPageRequest,
+)
+from dlightrag.application.answer_runs.service import (
+    ActiveRunLimitError,
+    ActivityPage,
+    AnswerConnectionsChangedError,
+    AnswerRequestError,
     RunResourceDescriptor,
 )
-from dlightrag.application.config import DlightragConfig
+from dlightrag.application.application import ApplicationClosedError
+from dlightrag.application.config.sections import DlightragConfig
+from dlightrag.application.policies.service import (
+    PolicyUnreadableError,
+)
 from dlightrag.application.runs import (
     IdempotencyKeyConflict,
     RunAdmissionLimitExceededError,
     RunEvent,
 )
-from dlightrag.application.web_conversations import (
+from dlightrag.application.web_conversations.models import (
     CarriedAttachment,
     ConversationHead,
     ConversationHistoryPage,
     ConversationSubmissionConflict,
     SubmissionSeed,
-    WebConversationService,
     WebConversationUnavailableError,
 )
+from dlightrag.application.web_conversations.service import (
+    WebAnswerSubmission,
+    WebConversationService,
+)
 from dlightrag.engine.answer.errors import (
+    ACTIVE_RUN_LIMIT_MESSAGE,
     CurrentImagePayloadError,
     UnsupportedAnswerModeError,
     UnsupportedResourceCapabilityError,
 )
+from dlightrag.engine.answer.feedback import AnswerFeedback, Judgement
 from tests.support.application_double import application_double
+from tests.support.callers import signed_in
 from tests.unit.conftest import answer_capabilities
 from tests.unit.web.answer_run_fixtures import (
+    NOW,
     RUN_ID,
     SUBMISSION_ID,
     TURN_ID,
@@ -120,12 +137,21 @@ def service(application: Any) -> Any:
     return created
 
 
+async def _event_log(*events: RunEvent) -> AsyncIterator[RunEvent]:
+    """One Run's durable event replay, as the Artifact projections read it back."""
+    for event in events:
+        yield event
+
+
 @pytest.fixture
 def application(test_config: DlightragConfig) -> Any:
     """The strict Application double the Web answer-run routes reach."""
     created = application_double(test_config)
     created.runs.get.return_value = answer_run()
     created.runs.list.return_value = (answer_run(),)
+    # The Artifact surfaces derive their attestation by replaying the Run's own durable
+    # events; a double that leaves this unconfigured hands the derivation an awaitable.
+    created.runs.subscribe.return_value = _event_log()
     answers = created.answers
     answers.capabilities.return_value = answer_capabilities()
     answers.steer.return_value = SimpleNamespace(run_id=RUN_ID, control_sequence=1, kind="steer")
@@ -134,6 +160,8 @@ def application(test_config: DlightragConfig) -> Any:
     answers.observe_child.return_value = None
     answers.control_child.return_value = None
     answers.reply_to_child.return_value = None
+    # Answer feedback is offered, as in a deployment whose policy nobody has edited.
+    created.policies.value_for.return_value = True
     created.corpora.alist_workspace_records.return_value = [{"workspace": "default"}]
     return created
 
@@ -349,7 +377,7 @@ async def test_service_replays_before_preparing_resolved_run_input() -> None:
         workspaces=["default"],
     )
 
-    assert submission is not None
+    assert isinstance(submission, WebAnswerSubmission)
     assert submission.run.status == "running"
     assert answers.prepared == []
     store.create_answer_turn.assert_not_awaited()
@@ -444,6 +472,7 @@ async def test_a_composer_submission_records_lineage_and_keeps_its_own_parameter
         ),
         parent_run_id=RUN_ID,
     )
+    store.live_answer_run.return_value = None
     store.create_answer_turn.return_value = answer_turn_creation(conversation_id=_CID)
     answers = FakeAnswers()
     service = WebConversationService(
@@ -534,7 +563,7 @@ async def test_first_submission_uses_one_stable_server_conversation_and_atomic_s
         workspaces=["default"],
     )
 
-    assert submission is not None
+    assert isinstance(submission, WebAnswerSubmission)
     generated_id = submission.conversation.conversation_id
     assert generated_id
     store.submission_seed.assert_not_awaited()
@@ -574,7 +603,7 @@ async def test_replaying_first_submission_returns_its_created_conversation_befor
         workspaces=["default"],
     )
 
-    assert submission is not None
+    assert isinstance(submission, WebAnswerSubmission)
     assert (
         submission.conversation.conversation_id
         == (store.replay_answer_turn.await_args.kwargs["conversation_id"])
@@ -835,10 +864,121 @@ async def test_a_fork_at_the_admission_limit_says_so(client: AsyncClient, servic
     }
 
 
+@pytest.mark.parametrize(
+    ("path", "operation", "body"),
+    [
+        ("/web/api/answer", "start_answer", _BODY),
+        (
+            f"/web/api/answer/{RUN_ID}/fork",
+            "fork_answer",
+            {"content": "What next?", "submission_id": SUBMISSION_ID},
+        ),
+    ],
+    ids=["submit", "fork"],
+)
+async def test_the_readers_own_limit_is_a_429_the_browser_retries_with_its_draft_kept(
+    client: AsyncClient, service: Any, path: str, operation: str, body: dict[str, Any]
+) -> None:
+    """The command kind stays the retryable one, which the browser answers by keeping the draft
+    and offering Retry; the status and the error kind say the limit is the reader's own."""
+    getattr(service, operation).side_effect = ActiveRunLimitError(2)
+
+    response = await client.post(path, json=body)
+
+    assert response.status_code == 429
+    assert response.json() == {
+        "kind": "service_unavailable",
+        "message": ACTIVE_RUN_LIMIT_MESSAGE,
+        "error_kind": "active_run_limit",
+    }
+
+
+@pytest.mark.parametrize(
+    ("path", "operation", "body"),
+    [
+        ("/web/api/answer", "start_answer", _BODY),
+        (
+            f"/web/api/answer/{RUN_ID}/fork",
+            "fork_answer",
+            {"content": "What next?", "submission_id": SUBMISSION_ID},
+        ),
+    ],
+    ids=["submit", "fork"],
+)
+async def test_a_policy_that_cannot_be_read_refuses_the_command_without_naming_it(
+    client: AsyncClient, service: Any, path: str, operation: str, body: dict[str, Any]
+) -> None:
+    getattr(service, operation).side_effect = PolicyUnreadableError(
+        "The stored 'agent_effort_ceiling' runtime policy no longer fits its document (default)"
+    )
+
+    response = await client.post(path, json=body)
+
+    assert response.status_code == 503
+    assert response.json()["kind"] == "service_unavailable"
+    assert "agent_effort_ceiling" not in response.text
+
+
+async def test_the_service_accepts_a_submission_and_a_fork_for_the_reader_who_made_it() -> None:
+    reader = signed_in("intern@example.com")
+    store = AsyncMock()
+    store.replay_answer_turn.return_value = None
+    store.submission_seed.return_value = SubmissionSeed(
+        head=ConversationHead(
+            principal_id=owner_id_from_user(reader),
+            conversation_id=_CID,
+            agent_session_id=_CID,
+            agent_lane_id="main",
+            content_revision=1,
+            title="Conversation",
+            created_at=NOW,
+            updated_at=NOW,
+        )
+    )
+    store.find_turn_by_run.return_value = linked_turn(
+        answer_run(status="succeeded"), conversation_id=_CID
+    )
+    store.create_answer_turn.return_value = answer_turn_creation(conversation_id=_CID)
+    store.live_answer_run.return_value = None
+    answers = FakeAnswers()
+    service = WebConversationService(
+        store=store,
+        answers=answers,
+        max_attachments=6,
+        cursor_secret=b"web-answer-runs-cursor-test",
+    )
+
+    await service.start_answer(
+        reader,
+        conversation_id=_CID,
+        submission_id=SUBMISSION_ID,
+        query="What changed?",
+        workspaces=["default"],
+    )
+    forked_answers = AsyncMock()
+    forked_answers.continuation_request.return_value = SimpleNamespace()
+    forked_service = WebConversationService(
+        store=store,
+        answers=forked_answers,
+        max_attachments=6,
+        cursor_secret=b"web-answer-runs-cursor-test",
+    )
+    await forked_service.fork_answer(
+        reader,
+        parent_run_id=RUN_ID,
+        submission_id=SUBMISSION_ID,
+        query="What next?",
+        authorized_workspaces=("default",),
+    )
+
+    assert answers.callers == [reader]
+    assert forked_answers.accept.await_args.kwargs["caller"] == reader
+
+
 async def test_an_invalid_request_is_an_editable_command_failure(
     client: AsyncClient, service: Any
 ) -> None:
-    from dlightrag.application.answer_runs import AnswerRequestError
+    from dlightrag.application.answer_runs.service import AnswerRequestError
 
     service.start_answer.side_effect = AnswerRequestError(
         "at least one canonical workspace is required"
@@ -934,22 +1074,18 @@ async def test_an_empty_question_is_rejected_before_acceptance(
 # ---------------------------------------------------------------------------
 
 
-async def test_web_projects_steer_and_child_roster(client: AsyncClient, application: Any) -> None:
-    steered = await client.post(
-        f"/web/api/answer/{RUN_ID}/steer", json={"content": "Focus on risks"}
-    )
-    assert steered.status_code == 202
-    assert steered.json()["control_sequence"] == 1
-
+async def test_web_projects_child_roster(client: AsyncClient) -> None:
     children = await client.get(f"/web/api/answer/{RUN_ID}/children")
     assert children.status_code == 200
     assert children.json() == {
         "run_id": RUN_ID,
+        # The Run's own row: where it stands, and the clock its agent row draws.
         "run_status": "queued",
+        "run_started_at": None,
+        "run_finished_at": None,
         "children": [],
         "next_cursor": None,
     }
-    application.answers.steer.assert_awaited_once()
 
 
 @pytest.mark.parametrize("status", ["queued", "running", "succeeded", "failed", "cancelled"])
@@ -1127,6 +1263,208 @@ async def test_web_transcript_page_of_an_unknown_child_is_not_found(
     assert response.status_code == 404
 
 
+_FEEDBACK_URL = f"/web/api/answer/{RUN_ID}/feedback"
+_JUDGEMENT = {"agent": "main", "sequence": 7, "value": "down", "reasons": ["off_topic"]}
+
+
+def _judgement(**overrides: Any) -> AnswerFeedback:
+    return AnswerFeedback(
+        **{
+            "agent": "main",
+            "sequence": 7,
+            "value": "down",
+            "reasons": ("unsupported", "off_topic"),
+            "note": "no source",
+            "updated_at": NOW + datetime.timedelta(hours=9, minutes=30),
+            **overrides,
+        }
+    )
+
+
+async def test_web_keeps_a_judgement_and_states_it_back(
+    client: AsyncClient, application: Any
+) -> None:
+    application.answers.record_feedback.return_value = _judgement()
+
+    response = await client.put(
+        _FEEDBACK_URL,
+        json={**_JUDGEMENT, "reasons": ["off_topic", "unsupported"], "note": "  no source  "},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "run_id": RUN_ID,
+        "agent": "main",
+        "sequence": 7,
+        "value": "down",
+        "reasons": ["unsupported", "off_topic"],
+        "note": "no source",
+        "updated_at": "2026-08-12T09:30:00Z",
+    }
+    assert application.answers.record_feedback.await_args.kwargs == {
+        "owner_id": _ANONYMOUS,
+        "run_id": RUN_ID,
+        "agent": "main",
+        "sequence": 7,
+        "value": "down",
+        "reasons": ["off_topic", "unsupported"],
+        "note": "no source",
+    }
+
+
+async def test_web_lists_the_judgements_given_to_a_run(
+    client: AsyncClient, application: Any
+) -> None:
+    application.answers.answer_feedback.return_value = (
+        _judgement(sequence=2, value="up", reasons=(), note=None),
+        _judgement(),
+    )
+
+    response = await client.get(_FEEDBACK_URL)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "run_id": RUN_ID,
+        "enabled": True,
+        "feedback": [
+            {
+                "agent": "main",
+                "sequence": 2,
+                "value": "up",
+                "reasons": [],
+                "note": None,
+                "updated_at": "2026-08-12T09:30:00Z",
+            },
+            {
+                "agent": "main",
+                "sequence": 7,
+                "value": "down",
+                "reasons": ["unsupported", "off_topic"],
+                "note": "no source",
+                "updated_at": "2026-08-12T09:30:00Z",
+            },
+        ],
+    }
+    application.answers.answer_feedback.assert_awaited_once_with(owner_id=_ANONYMOUS, run_id=RUN_ID)
+
+
+async def test_web_retracts_a_judgement_without_a_body_whether_or_not_it_was_given(
+    client: AsyncClient, application: Any
+) -> None:
+    response = await client.delete(_FEEDBACK_URL, params={"agent": "main", "sequence": 7})
+
+    assert response.status_code == 204
+    assert response.content == b""
+    application.answers.retract_feedback.assert_awaited_once_with(
+        owner_id=_ANONYMOUS, run_id=RUN_ID, agent="main", sequence=7
+    )
+
+
+@pytest.mark.parametrize(
+    ("method", "params", "body"),
+    [
+        ("PUT", None, _JUDGEMENT),
+        ("DELETE", {"agent": "main", "sequence": 7}, None),
+        ("GET", None, None),
+    ],
+)
+async def test_web_feedback_of_a_run_the_reader_does_not_own_is_not_found(
+    client: AsyncClient,
+    service: Any,
+    application: Any,
+    method: str,
+    params: dict[str, Any] | None,
+    body: dict[str, Any] | None,
+) -> None:
+    service.turn_for_run.return_value = None
+
+    response = await client.request(method, _FEEDBACK_URL, params=params, json=body)
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Answer run not found"
+    application.policies.value_for.assert_not_awaited()
+    application.answers.record_feedback.assert_not_awaited()
+    application.answers.retract_feedback.assert_not_awaited()
+    application.answers.answer_feedback.assert_not_awaited()
+
+
+async def test_web_feedback_of_a_run_the_service_does_not_know_is_not_found(
+    client: AsyncClient, application: Any
+) -> None:
+    application.answers.answer_feedback.return_value = None
+
+    response = await client.get(_FEEDBACK_URL)
+
+    assert response.status_code == 404
+
+
+async def test_web_judgement_that_cannot_be_kept_is_a_422_and_a_missing_message_a_404(
+    client: AsyncClient, application: Any
+) -> None:
+    application.answers.record_feedback.side_effect = AnswerRequestError(
+        "a thumbs-down needs at least one reason or a note"
+    )
+    refused = await client.put(_FEEDBACK_URL, json={**_JUDGEMENT, "reasons": []})
+
+    application.answers.record_feedback.side_effect = None
+    application.answers.record_feedback.return_value = None
+    missing = await client.put(_FEEDBACK_URL, json=_JUDGEMENT)
+
+    assert refused.status_code == 422
+    assert refused.json() == {
+        "detail": "a thumbs-down needs at least one reason or a note",
+        "error_type": "validation",
+    }
+    assert missing.status_code == 404
+    assert missing.json()["detail"] == "Answer message not found"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {**_JUDGEMENT, "value": "sideways"},
+        {**_JUDGEMENT, "sequence": 0},
+        {**_JUDGEMENT, "sequence": 2**63},
+        {**_JUDGEMENT, "agent": ""},
+        {**_JUDGEMENT, "agent": "a" * 37},
+        {**_JUDGEMENT, "reasons": ["off_topic"] * 6},
+        {**_JUDGEMENT, "note": "x" * 2001},
+        {**_JUDGEMENT, "extra": True},
+        {key: value for key, value in _JUDGEMENT.items() if key != "agent"},
+    ],
+    ids=[
+        "a value that is no thumb",
+        "no first message",
+        "a message beyond any Session",
+        "no agent",
+        "an agent too long to be an id",
+        "more reasons than are offered",
+        "a note over the limit",
+        "a field the wire does not have",
+        "no agent named",
+    ],
+)
+async def test_web_judgement_with_a_shape_the_wire_does_not_have_keeps_nothing(
+    client: AsyncClient, application: Any, body: dict[str, Any]
+) -> None:
+    response = await client.put(_FEEDBACK_URL, json=body)
+
+    assert response.status_code == 422
+    application.answers.record_feedback.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "params", [{"agent": "main"}, {"sequence": 7}, {"agent": "", "sequence": 7}]
+)
+async def test_web_retraction_names_the_message_it_takes_back(
+    client: AsyncClient, application: Any, params: dict[str, Any]
+) -> None:
+    response = await client.delete(_FEEDBACK_URL, params=params)
+
+    assert response.status_code == 422
+    application.answers.retract_feedback.assert_not_awaited()
+
+
 async def test_web_child_control_terminal_is_conflict(
     client: AsyncClient, application: Any
 ) -> None:
@@ -1189,6 +1527,34 @@ async def test_status_projects_the_linked_turn_at_the_common_run_url(
     assert body["answer_run_id"] == RUN_ID
     assert body["status"] == "queued"
     assert body["user_text"] == "What changed?"
+
+
+async def test_the_roster_states_the_runs_own_row_like_every_child_row(
+    client: AsyncClient, service: Any
+) -> None:
+    """The main agent's row is drawn from the Run's own facts, not invented ones.
+
+    A queued Run has not started, a live one has not finished, and a settled one
+    carries both — so a client draws the agent that ran with the same facts, from
+    the same page, it draws the children with.
+    """
+    queued = await client.get(f"/web/api/answer/{RUN_ID}/children")
+
+    assert queued.status_code == 200
+    assert queued.json()["run_status"] == "queued"
+    assert queued.json()["run_started_at"] is None
+    assert queued.json()["run_finished_at"] is None
+
+    service.turn_for_run.return_value = linked_turn(
+        answer_run(status="succeeded", result=stored_result())
+    )
+    settled = await client.get(f"/web/api/answer/{RUN_ID}/children")
+
+    assert settled.status_code == 200
+    body = settled.json()
+    assert body["run_status"] == "succeeded"
+    assert datetime.datetime.fromisoformat(body["run_started_at"]) == NOW
+    assert datetime.datetime.fromisoformat(body["run_finished_at"]) == NOW
 
 
 @pytest.mark.parametrize(
@@ -1560,7 +1926,7 @@ async def _frames(events: list[RunEvent]) -> list[str]:
         for event in events:
             yield event
 
-    return [frame async for frame in follow_run_frames(_iterate(), browser_frame)]
+    return [frame async for frame in follow_frames(_iterate(), browser_frame)]
 
 
 async def test_every_frame_carries_its_durable_sequence_as_the_sse_id() -> None:
@@ -1590,7 +1956,7 @@ async def test_every_frame_carries_its_durable_sequence_as_the_sse_id() -> None:
     ]
 
 
-def test_memory_operation_frame_is_allowlisted_and_marks_only_live_events() -> None:
+async def test_memory_operation_frame_is_allowlisted_and_marks_only_live_events() -> None:
     payload = {
         "operation": "remember",
         "outcome": "changed",
@@ -1599,8 +1965,8 @@ def test_memory_operation_frame_is_allowlisted_and_marks_only_live_events() -> N
         "body": "Use Chinese.",
         "owner_id": "must-not-leak",
     }
-    replay = browser_frame(_event(4, "memory_operation_settled", payload), live_after=4)
-    live = browser_frame(_event(5, "memory_operation_settled", payload), live_after=4)
+    replay = await browser_frame(_event(4, "memory_operation_settled", payload), live_after=4)
+    live = await browser_frame(_event(5, "memory_operation_settled", payload), live_after=4)
 
     replay_payload = json.loads(replay.split("data: ", 1)[1].strip())
     live_payload = json.loads(live.split("data: ", 1)[1].strip())
@@ -1645,9 +2011,7 @@ async def test_tool_label_is_resolved_for_a_pinned_connection_tool_only() -> Non
 
         return [
             frame
-            async for frame in follow_run_frames(
-                _iterate(), partial(browser_frame, tool_labels=labels)
-            )
+            async for frame in follow_frames(_iterate(), partial(browser_frame, tool_labels=labels))
         ]
 
     events = [
@@ -1681,7 +2045,7 @@ async def test_a_replayed_tool_start_says_how_long_it_has_already_run() -> None:
     event's commit to this replay), and a live start carries none.
     """
     committed = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=12)
-    replay = browser_frame(
+    replay = await browser_frame(
         RunEvent(
             sequence=4,
             event_type="tool_start",
@@ -1690,7 +2054,7 @@ async def test_a_replayed_tool_start_says_how_long_it_has_already_run() -> None:
         ),
         live_after=9,
     )
-    live = browser_frame(
+    live = await browser_frame(
         RunEvent(
             sequence=10,
             event_type="tool_start",
@@ -1777,11 +2141,11 @@ def test_the_done_event_is_derived_from_the_canonical_result() -> None:
     assert done.presentation.evidence_images[0].url.startswith("/web/api/images/default/chunk-1")
 
 
-def test_a_cancelled_run_carries_no_answer() -> None:
+async def test_a_cancelled_run_carries_no_answer() -> None:
     done = render_done_event(
         {"status": "cancelled"}, downloadable_workspaces=None, visual_workspaces=None
     )
-    frame = browser_frame(_event(1, "done", {"status": "cancelled"}))
+    frame = await browser_frame(_event(1, "done", {"status": "cancelled"}))
 
     assert done.status == "cancelled"
     assert done.presentation is None
@@ -1810,6 +2174,117 @@ async def test_the_live_done_frame_and_the_history_carry_one_presentation_wire(
     assert presentation["parts"][0]["artifact"] is None
 
 
+@pytest.mark.usefixtures("sealed_report_packaged")
+async def test_watching_an_answer_finish_stamps_the_record_reopening_it_would(
+    client: AsyncClient, service: Any, application: Any
+) -> None:
+    """The live terminal frame carries the Artifact attestation the stored read carries.
+
+    The record is derived from the Run's own durable events in both cases, so this asserts the two
+    routes reach one derivation rather than that they happen to agree. The events here are the
+    positive finding -- a Skill that declares a verifier, loaded, with no recorded command naming
+    it -- because a double that skipped the derivation would still produce an unattested record by
+    default and a parity assertion alone could not tell the two apart.
+    """
+    load_skill = "sealed-report"
+    result = _with_artifact(stored_result(), answer="[Report][r]\n\n[r]: artifact:report.md")
+    result["artifact_bindings"] = {"artifact:report.md": _REPORT_RESOURCE}
+    service.turn_for_run.return_value = linked_turn(answer_run(status="succeeded", result=result))
+
+    async def _events(**_kwargs: Any):
+        yield _event(1, "tool_start", {"tool_name": "load_skill", "call_id": "c1"})
+        yield _event(
+            2,
+            "tool_progress",
+            {"tool_name": "load_skill", "call_id": "c1", "object_label": load_skill},
+        )
+        yield _event(
+            3, "tool_end", {"tool_name": "load_skill", "call_id": "c1", "outcome": "succeeded"}
+        )
+        yield _event(4, "done", {"status": "succeeded", "result": result})
+
+    application.runs.subscribe.side_effect = _events
+    # The events route resolves pinned Connection tool labels once per subscription, beside the
+    # other read-time projections.
+    application.connections.pinned_tool_labels.return_value = {}
+
+    status = await client.get(f"/web/api/runs/{RUN_ID}")
+    live = await client.get(f"/web/api/runs/{RUN_ID}/events")
+
+    record = status.json()["presentation"]["artifacts"][0]["attestation"]
+    assert record["status"] == "unattested"
+    assert record["reason"] == "skill_loaded_without_verifier"
+    assert record["skill"] == load_skill
+
+    frame = next(
+        json.loads(chunk.split("data: ", 1)[1].strip())
+        for chunk in live.text.split("\n\n")
+        if "event: done" in chunk
+    )["presentation"]
+    assert frame["artifacts"][0]["attestation"] == record
+    # The inline placement carries the same record, so the badge a reader sees beside the image
+    # and the one beside the Artifact card cannot disagree.
+    inline = next(part for part in frame["parts"] if part["type"] == "artifact")
+    assert inline["artifact"]["attestation"] == record
+
+
+async def test_a_skill_that_declares_no_verifier_draws_nothing_on_every_surface(
+    client: AsyncClient, service: Any, application: Any
+) -> None:
+    """``interactive-html`` ships no verifier, so its Artifacts carry no record at all.
+
+    The reason is not suppressed from the vocabulary -- the derivation still names it -- but no
+    browser surface publishes it, so a reader is never told a file failed a gate that was never
+    declared. This is the shape the reported Answer had: an HTML report and a photograph, both
+    labelled "Not attested" for a Skill that promises no verification.
+    """
+    result = _with_artifact(stored_result(), answer="See the report.")
+    service.turn_for_run.return_value = linked_turn(answer_run(status="succeeded", result=result))
+
+    # The Run read every document the Skill requires, so the only absent fact is a verifier.
+    reads = ("SKILL.md", "references/example-brief.html", "references/fragment.md")
+
+    async def _events(**_kwargs: Any):
+        sequence = 0
+        for index, path in enumerate(reads, start=1):
+            call = {"tool_name": "load_skill", "call_id": f"c{index}"}
+            progress = {
+                **call,
+                "object_label": "interactive-html",
+                "skill_path": path,
+                "skill_window_start": 0,
+                "skill_window_end": 10,
+                "skill_document_chars": 10,
+            }
+            for kind, payload in (
+                ("tool_start", call),
+                ("tool_progress", progress),
+                ("tool_end", {**call, "outcome": "succeeded"}),
+            ):
+                sequence += 1
+                yield _event(sequence, kind, payload)
+        yield _event(sequence + 1, "done", {"status": "succeeded", "result": result})
+
+    # Three routes replay these records, so the double hands each of them a fresh replay.
+    application.runs.subscribe.side_effect = lambda **_kwargs: _events()
+    application.connections.pinned_tool_labels.return_value = {}
+
+    status = await client.get(f"/web/api/runs/{RUN_ID}")
+    assert status.json()["presentation"]["artifacts"][0]["attestation"] is None
+
+    # The live frame draws nothing either: the suppression is one rule in the derivation, so the
+    # frame a reader watches and the page they reload cannot disagree about whether there was a
+    # finding. That the two routes derive from one entry point is pinned beside this test, by
+    # ``test_watching_an_answer_finish_stamps_the_record_reopening_it_would``.
+    live = await client.get(f"/web/api/runs/{RUN_ID}/events")
+    frame = next(
+        json.loads(chunk.split("data: ", 1)[1].strip())
+        for chunk in live.text.split("\n\n")
+        if "event: done" in chunk
+    )["presentation"]
+    assert frame["artifacts"][0]["attestation"] is None
+
+
 # ---------------------------------------------------------------------------
 # Turn projection
 # ---------------------------------------------------------------------------
@@ -1823,27 +2298,6 @@ def test_a_turn_carries_the_steering_its_run_received_in_order() -> None:
     )
 
     assert turn.steering_messages == ["shorter", "in Chinese"]
-
-
-def test_a_turn_never_projects_contexts_it_does_not_draw(monkeypatch) -> None:
-    """The history page draws the answer and its sources; retrieval contexts never reach it."""
-    result = {
-        "answer": "Nothing to see here.",
-        "sources": [],
-        "contexts": {
-            "chunks": [{"chunk_id": "c1", "content": "an unused passage", "metadata": {}}],
-            "entities": [],
-            "relationships": [],
-        },
-    }
-    monkeypatch.setattr(
-        "dlightrag.engine.answer.results.project_contexts_for_client",
-        lambda *args, **kwargs: pytest.fail("a turn projected contexts it does not draw"),
-    )
-
-    turn = project_conversation_turn(linked_turn(answer_run(status="succeeded", result=result)))
-
-    assert turn.assistant_text == "Nothing to see here."
 
 
 @pytest.mark.parametrize("status", ["queued", "running"])
@@ -1868,12 +2322,55 @@ def test_a_pending_turn_reports_a_requested_cancellation() -> None:
     assert turn.cancel_requested is True
 
 
+def test_a_turn_never_pays_the_gate_for_contexts_it_does_not_draw() -> None:
+    """The history page draws the answer and its sources; retrieval contexts never reach it."""
+    result = {
+        "answer": "Nothing protected here.",
+        "sources": [],
+        "contexts": {
+            "chunks": [{"chunk_id": "c1", "content": "an unused passage", "metadata": {}}],
+            "entities": [],
+            "relationships": [],
+        },
+    }
+    masked: list[str] = []
+
+    def mask(text: str) -> str:
+        masked.append(text)
+        return text
+
+    turn = project_conversation_turn(
+        linked_turn(answer_run(status="succeeded", result=result)),
+        mask_reader_text=mask,
+    )
+
+    assert turn.assistant_text == "Nothing protected here."
+    assert set(masked) == {"Nothing protected here."}
+
+
 def test_a_turn_carries_the_number_of_children_its_run_spawned() -> None:
     spawned = project_conversation_turn(linked_turn(answer_run(status="succeeded"), child_count=3))
     plain = project_conversation_turn(linked_turn(answer_run(status="succeeded")))
 
     assert spawned.model_dump(mode="json")["child_count"] == 3
     assert plain.model_dump(mode="json")["child_count"] == 0
+
+
+def test_a_turn_names_the_message_it_answered_with_and_the_owners_judgement_of_it() -> None:
+    """The client reads both as keys that are always there, null while there is nothing to say."""
+    settled = linked_turn(answer_run(status="succeeded"))
+    judged = Judgement(value="down", reasons=("unsupported", "too_verbose"), note="no source")
+
+    answered = project_conversation_turn(replace(settled, answer_sequence=7, feedback=judged))
+    unjudged = project_conversation_turn(replace(settled, answer_sequence=7))
+    unanswered = project_conversation_turn(linked_turn(answer_run(status="running")))
+
+    wire = [turn.model_dump(mode="json") for turn in (answered, unjudged, unanswered)]
+    assert [(turn["answer_sequence"], turn["feedback"]) for turn in wire] == [
+        (7, {"value": "down", "reasons": ["unsupported", "too_verbose"], "note": "no source"}),
+        (7, None),
+        (None, None),
+    ]
 
 
 def test_a_failed_turn_stays_visible_with_its_public_error() -> None:
@@ -2011,7 +2508,7 @@ async def test_every_projection_of_one_answer_carries_the_same_image_address() -
     )
     service.run_external_sources.return_value = {stored_url: "res-view-1"}
 
-    frame = browser_frame(
+    frame = await browser_frame(
         _event(
             1,
             "done",
@@ -2071,6 +2568,7 @@ async def test_history_attachments_load_from_the_run_that_accepted_them() -> Non
     )
     store.replay_answer_turn.return_value = None
     store.create_answer_turn.return_value = None
+    store.live_answer_run.return_value = None
     answers = FakeAnswers(
         {
             (origin_run_id, 3): input_artifact(

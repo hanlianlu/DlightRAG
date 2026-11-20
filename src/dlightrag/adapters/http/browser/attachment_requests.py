@@ -4,7 +4,7 @@
 import asyncio
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import HTTPException, Request
@@ -47,6 +47,7 @@ class ParsedWebAnswerRequest:
     mode: str | None = None
     requested_skill: str | None = None
     effort: AnswerEffort | None = None
+    delivery: Literal["queue", "steer"] | None = None
 
 
 def _optional_uuid(value: Any) -> UUID | None:
@@ -60,6 +61,16 @@ def _optional_skill(value: Any) -> str | None:
     if value in (None, ""):
         return None
     return str(value).strip()
+
+
+def _optional_delivery(value: Any) -> Literal["queue", "steer"] | None:
+    """Read the caller's delivery preference; the server refuses nothing it cannot honour."""
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    if text in ("queue", "steer"):
+        return text
+    raise HTTPException(status_code=422, detail="Invalid delivery")
 
 
 def _optional_mode(value: Any) -> AnswerMode | None:
@@ -107,6 +118,7 @@ async def parse_web_answer_request(
             mode=body.mode,
             requested_skill=_optional_skill(body.requested_skill),
             effort=body.effort,
+            delivery=body.delivery,
         )
 
     try:
@@ -182,6 +194,7 @@ async def parse_web_answer_request(
                 mode=_optional_mode(form.get("mode")),
                 requested_skill=_optional_skill(form.get("requested_skill")),
                 effort=normalize_answer_effort(form.get("effort")),
+                delivery=_optional_delivery(form.get("delivery")),
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -194,6 +207,7 @@ async def parse_web_answer_request(
             mode=body.mode,
             requested_skill=body.requested_skill,
             effort=body.effort,
+            delivery=body.delivery,
         )
     finally:
         await form.close()

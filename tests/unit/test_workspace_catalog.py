@@ -3,11 +3,10 @@
 
 import pytest
 
-from dlightrag.application.corpus_admin import (
+from dlightrag.application.corpus_admin.file_panel import FilePanelCursor, FilePanelCursorCodec
+from dlightrag.application.corpus_admin.workspace_catalog import (
     WORKSPACE_CATALOG_PAGE_DEFAULT_LIMIT,
     WORKSPACE_CATALOG_PAGE_MAX_LIMIT,
-    FilePanelCursor,
-    FilePanelCursorCodec,
     WorkspaceCatalogCursor,
     WorkspaceCatalogCursorCodec,
     WorkspaceCatalogCursorError,

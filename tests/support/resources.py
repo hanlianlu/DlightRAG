@@ -13,12 +13,17 @@ from typing import Any
 from docx import Document
 from PIL import Image
 
-from dlightrag.engine.agent.environment import AccessScheduler
-from dlightrag.engine.agent.tools import AgentTool, ToolResult
+from dlightrag.engine.agent.environment.access import (
+    AccessScheduler,
+)
+from dlightrag.engine.agent.tools.contracts import (
+    AgentTool,
+    ToolResult,
+)
 from dlightrag.engine.agent.tools.files import PreparedImageAttachment, read_tool, view_tool
 from dlightrag.engine.ai.media import decode_image_base64
 from dlightrag.engine.answer.tools.resources import make_resource_reader, make_resource_viewer
-from tests.tool_helpers import tool_runtime
+from tests.support.tool_helpers import tool_runtime
 from tests.unit.conftest import answer_image_policy
 
 

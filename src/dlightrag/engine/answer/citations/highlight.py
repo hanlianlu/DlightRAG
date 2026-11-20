@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from dlightrag.engine.ai.concurrency import bounded_map
 from dlightrag.engine.answer.citations.contracts import HighlightSource
-from dlightrag.engine.answer.prompts import (
+from dlightrag.engine.answer.prompts.highlight import (
     HIGHLIGHT_BATCH_USER_PROMPT,
     HIGHLIGHT_SYSTEM_PROMPT,
 )

@@ -20,7 +20,13 @@ from dlightrag.engine.dependencies import (
     dependency_component_from_checkpoint,
     next_dependency_retry,
 )
-from dlightrag.engine.rag.retrieval import MetadataFilter, RetrievalOptions, RetrievalResult
+from dlightrag.engine.rag.retrieval.models import (
+    MetadataFilter,
+    RetrievalOptions,
+)
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalResult,
+)
 from dlightrag.engine.runtime.coordinator import (
     LeaseLostError,
     RunCancellationObserved,

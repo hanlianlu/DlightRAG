@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from dlightrag.adapters.http.application import get_application
-from dlightrag.application.config import ServiceRole
+from dlightrag.application.config.sections import ServiceRole
 from dlightrag.application.health import ApplicationHealth
 
 router = APIRouter()

@@ -1,0 +1,14 @@
+[Unit]
+Description=DlightRAG MinerU API sidecar
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=__PROJECT_ROOT__
+Environment=MINERU_ENV_FILE=__LAUNCHD_HOME__/.env.mineru
+ExecStart=__PROGRAM__
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

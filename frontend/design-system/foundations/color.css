@@ -27,10 +27,35 @@
   --color-red-700: #b91c1c;
   --color-green-400: #4ade80;
   --color-green-700: #15803d;
-  --color-text-primary: var(--color-stone-100);
-  --color-text-secondary: var(--color-stone-200);
-  --color-text-tertiary: var(--color-stone-300);
-  --color-text-muted: var(--color-stone-400);
+
+  /* The reading ladder, one family for both polarities: each name is the APCA
+     level the step measures on its theme's page (--color-bg-base), which is the
+     claim `frontend/tokens/ramp.test.ts` recomputes. Tailwind's stone steps are
+     tuned for surfaces and land badly as text — on the dark page at |Lc| 100.6 /
+     91.1 / 80.5 / 54.0, the top two above APCA's dark-mode maximum (|Lc| 90, where
+     the luminance step at a glyph's edge starts to glare) and the caption below
+     its content minimum (|Lc| 60, which WCAG 2's 4.5:1 cannot see because that
+     formula overstates contrast for light-on-dark); on the light page at 99.3 /
+     96.3, which is one ink for two roles. Hence one measured step per level, warm
+     like stone. Dark takes 90/82/75/60 under the ceiling; light takes
+     100/92/87/80, where near-black ink is what paper wants and there is no
+     ceiling to respect. */
+  --color-ink-60: #b3aea9;
+  --color-ink-75: #ccc9c6;
+  --color-ink-80: #57534e;
+  --color-ink-82: #d8d6d4;
+  --color-ink-87: #44403c;
+  --color-ink-90: #e5e3e1;
+  --color-ink-92: #363330;
+  --color-ink-100: #1c1917;
+  --color-text-primary: var(--color-ink-90);
+  --color-text-secondary: var(--color-ink-82);
+  --color-text-tertiary: var(--color-ink-75);
+  --color-text-muted: var(--color-ink-60);
+
+  /* Not reading roles: Subtle marks a control held to the 3:1 non-text floor and
+     Dim colours a disabled one, so both stay on the stone step that floor was
+     measured against. */
   --color-text-subtle: var(--color-stone-500);
   --color-text-dim: var(--color-stone-600);
   --color-bg-base: var(--color-stone-950);
@@ -46,7 +71,6 @@
   --color-danger: var(--color-red-400);
   --color-danger-surface: rgb(248 113 113 / 15%);
   --color-success: var(--color-green-400);
-  --color-success-surface: rgb(74 222 128 / 15%);
   --color-accent-text: var(--color-gold-200);
   --color-accent-indicator: rgb(210 182 97 / 72%);
   --color-accent-border-strong: rgb(210 182 97 / 40%);
@@ -100,15 +124,20 @@
 :root[data-color-mode='light'] {
   color-scheme: light;
 
-  --color-text-primary: var(--color-stone-900);
-  --color-text-secondary: var(--color-stone-800);
-  --color-text-tertiary: var(--color-stone-700);
-  --color-text-muted: var(--color-stone-600);
+  /* The same ladder and the same rule, opposite polarity: no ceiling, so the four
+     reading roles take 100/92/87/80. The surfaces also sit two steps apart instead
+     of three, so a role measured on the page is still in band on the brightest
+     panel — the old span cost 21 |Lc| between the page and an elevated card and
+     left Muted at 58.8, under the 60 a caption needs; this one costs 11. */
+  --color-text-primary: var(--color-ink-100);
+  --color-text-secondary: var(--color-ink-92);
+  --color-text-tertiary: var(--color-ink-87);
+  --color-text-muted: var(--color-ink-80);
   --color-text-subtle: var(--color-stone-500);
   --color-text-dim: var(--color-stone-400);
   --color-bg-base: var(--color-stone-50);
-  --color-bg-surface: var(--color-stone-200);
-  --color-bg-elevated: var(--color-stone-300);
+  --color-bg-surface: var(--color-stone-100);
+  --color-bg-elevated: var(--color-stone-200);
   --color-bg-subtle: #fff;
   --color-bg-hover: rgb(68 64 60 / 8%);
   --color-accent-hover: rgb(126 108 55 / 11%);
@@ -120,7 +149,6 @@
   --color-danger-bg: var(--color-red-700);
   --color-danger-surface: rgb(185 28 28 / 14%);
   --color-success: var(--color-green-700);
-  --color-success-surface: rgb(21 128 61 / 14%);
   --color-on-danger: #fff;
   --color-accent-text: var(--color-gold-500);
   --color-accent-indicator: rgb(126 108 55 / 78%);

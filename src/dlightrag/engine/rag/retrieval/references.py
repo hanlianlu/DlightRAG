@@ -3,7 +3,9 @@
 
 from typing import Any
 
-from dlightrag.engine.rag.retrieval import RetrievalContexts
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalContexts,
+)
 
 
 def tag_context_workspace(contexts: RetrievalContexts, workspace: str) -> None:

@@ -4,7 +4,10 @@
 from pydantic import BaseModel, ConfigDict, Field
 
 from dlightrag.engine.agent.session.plan import AgentRunPlan
-from dlightrag.engine.agent.tools import AgentTool, ToolResult
+from dlightrag.engine.agent.tools.contracts import (
+    AgentTool,
+    ToolResult,
+)
 
 
 class SearchArgs(BaseModel):

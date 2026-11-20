@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from urllib.parse import parse_qs, urlsplit, urlunsplit
@@ -23,7 +24,7 @@ from pydantic import AnyHttpUrl, SecretStr
 
 from dlightrag.application.connections.client_metadata import CLIENT_NAME, client_metadata_url
 from dlightrag.application.connections.models import ConnectionsError, OAuthResult
-from dlightrag.application.connections.policy import ConnectionPolicy
+from dlightrag.application.connections.policy import ConnectionPolicy, StatedHeaders
 from dlightrag.engine.network_admission import _normalize_host_patterns, _resolve_public_target
 
 from .personal_http import (
@@ -31,7 +32,10 @@ from .personal_http import (
     PersonalMcpClient,
     _AdmittedTransport,
     _protect_sdk_logs,
+    oauth_failure_category,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class _FlowTokenStorage(TokenStorage):
@@ -183,6 +187,7 @@ class PersonalOAuthClient:
         redirect: Callable[[str], Awaitable[None]],
         callback: Callable[[], Awaitable[SecretStr]],
         save: Callable[[SecretStr], Awaitable[None]],
+        endpoint_headers: StatedHeaders = (),
     ) -> OAuthResult:
         storage = _FlowTokenStorage(save)
         redirected = False
@@ -244,8 +249,12 @@ class PersonalOAuthClient:
             callback_handler=sdk_callback,
         )
         try:
-            tools = await self._mcp.discover_authorized(
-                endpoint=endpoint, bearer=None, policy=policy, auth=provider
+            discovered = await self._mcp.discover_authorized(
+                endpoint=endpoint,
+                access=None,
+                policy=policy,
+                auth=provider,
+                endpoint_headers=endpoint_headers,
             )
             if storage.tokens is None or not redirected:
                 raise ConnectionsError("Server did not complete SDK OAuth authorization", 401)
@@ -271,17 +280,31 @@ class PersonalOAuthClient:
                 )
                 if value
             )
-            encoded_tools = json.dumps(tools)
+            encoded_tools = json.dumps(discovered.tools)
             for value in redactions:
                 encoded_tools = encoded_tools.replace(json.dumps(value)[1:-1], "[redacted]")
+            # The server's guidance is remote-authored text like a catalogue's descriptions:
+            # it may quote the flow's own credentials, and none of them survive into a prompt.
+            instructions = discovered.instructions
+            if instructions is not None:
+                for value in redactions:
+                    # Both the raw and the JSON-escaped spelling, the way the catalogue
+                    # redaction does it: a token quoted inside JSON in plain text is still
+                    # the credential.
+                    instructions = instructions.replace(value, "[redacted]")
+                    instructions = instructions.replace(json.dumps(value)[1:-1], "[redacted]")
             return OAuthResult(
                 SecretStr(json.dumps(raw)),
                 tuple(sorted(set((storage.tokens.scope or "").split()))),
                 json.loads(encoded_tools),
+                instructions=instructions,
             )
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
+            # Every way out of here says what it was; a silent failure is the one thing an
+            # operator cannot act on, and this is where the SDK's own error surfaces.
+            logger.warning("OAuth authorization failed: %s", oauth_failure_category(exc))
             raise ConnectionsError(
                 "OAuth authorization failed; restart from Settings", 401
             ) from None

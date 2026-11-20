@@ -3,7 +3,9 @@
 /** Pure state machine for the compact per-run tool trace shown while a turn
  *  runs and re-inspectable afterwards in the tab that watched it settle. Rows are
  *  a live affordance: they are never stored with the turn, so a reload or another
- *  browser reads the answer without them.
+ *  browser reads the answer without them. While the turn works they are one
+ *  process group: a line that names what the Run is doing, how many calls it has
+ *  made, and how long it has been at it, which opens on the rows.
  *
  *  The clock is a parameter, never a global read: a row is stamped when the
  *  viewer observes its start, so the fold stays deterministic and testable
@@ -24,6 +26,13 @@ export interface ToolRow {
   readonly startedAt: number | null;
   /** Server-measured wall time, present only once the call settled. */
   readonly durationMs: number | null;
+  /** This call's 1-based place in the turn's trace, so the process group states how many calls
+   *  the turn made even after older rows have fallen off the capped list. Absent only on a row
+   *  a caller built by hand. */
+  readonly ordinal?: number;
+  /** Monotonic milliseconds when this viewer saw the trace's first call start; every row of one
+   *  turn carries it, so a capped list still times the whole group. */
+  readonly traceStartedAt?: number | null;
 }
 
 export interface ToolEventPayload {
@@ -37,7 +46,10 @@ export interface ToolEventPayload {
   elapsed_ms?: number;
 }
 
-export const MAX_TOOL_ROWS = 5;
+/** The Tool rows a live turn keeps before the oldest fall out. Enough that the process block's own
+ *  scroll holds the turn's calls, not only the newest few; the count and the clock outlive the rows
+ *  a run longer than this drops, and the Inspector keeps the whole record. */
+export const MAX_TOOL_ROWS = 200;
 
 export function applyToolEvent(
   rows: readonly ToolRow[],
@@ -68,6 +80,11 @@ export function applyToolEvent(
       state: 'running',
       startedAt: now - runningFor,
       durationMs: null,
+      // The count and the group's clock outlive the rows the capped list drops, so each row
+      // carries them: the newest row states how many calls the trace has seen, and when the
+      // first of them began.
+      ordinal: (rows[rows.length - 1]?.ordinal ?? rows.length) + 1,
+      traceStartedAt: rows[0]?.traceStartedAt ?? now - runningFor,
     };
     return [...rows, row].slice(-MAX_TOOL_ROWS);
   }
@@ -118,4 +135,46 @@ export function toolRowText(row: ToolRow): string {
 export function toolStatusText(rows: readonly ToolRow[]): string {
   const row = rows[rows.length - 1];
   return row ? toolRowText(row) : '';
+}
+
+/** What a live turn's process group states in one line, before a component applies the words.
+ *
+ *  The newest call names what the turn is doing ("Searching the web"), the count is every call
+ *  the viewer has seen rather than the rows the capped list still holds, and the clock runs from
+ *  the first call the viewer saw, so both outlive the rows that fell off the list. Before the
+ *  first call there is only the server's phase to name, and neither a count nor a clock. Null
+ *  when there is nothing to say at all.
+ *
+ *  Wordless: `verb` carries its catalog `verbId` (or is a server label, which needs none), so a
+ *  component resolves it and a language change redraws the line. */
+export interface ProcessGroupSummary {
+  /** The newest call's own words: a server label, or the tool verb the client named it with. */
+  readonly verb: string;
+  /** The catalog id for `verb`, null when `verb` is a server label or a prettified name. */
+  readonly verbId: string | null;
+  /** The server phase, present only while no call has landed yet. */
+  readonly phase: string | null;
+  /** How many calls this viewer has seen this turn; 0 while only a phase names the work. */
+  readonly count: number;
+  /** Viewer-clock milliseconds since the first call; null before one, or when unmeasured. */
+  readonly durationMs: number | null;
+}
+
+export function processGroupSummary(
+  rows: readonly ToolRow[],
+  phase: string | null,
+  now: number,
+): ProcessGroupSummary | null {
+  const newest = rows[rows.length - 1];
+  if (newest === undefined) {
+    return phase === null ? null : {verb: '', verbId: null, phase, count: 0, durationMs: null};
+  }
+  const startedAt = typeof newest.traceStartedAt === 'number' ? newest.traceStartedAt : null;
+  return {
+    verb: newest.label ?? newest.verb,
+    verbId: newest.label === null ? newest.verbId : null,
+    phase: null,
+    count: newest.ordinal ?? rows.length,
+    durationMs: startedAt === null ? null : Math.max(0, now - startedAt),
+  };
 }

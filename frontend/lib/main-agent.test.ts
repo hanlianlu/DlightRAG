@@ -4,13 +4,16 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type {AnswerPresentation} from '../api/conversations.ts';
 import type {ChatTurnView} from './chat-views.ts';
-import {MAIN_AGENT, mainAgentStatus} from './main-agent.ts';
+import {MAIN_AGENT} from './agent-id.ts';
+import {mainAgentStatus} from './main-agent.ts';
 
 function turn(extra: Partial<ChatTurnView> = {}): ChatTurnView {
   return {
     id: 'turn-1', userText: 'What changed?', userAttachments: [], runId: 'run-1', state: 'succeeded',
-    streamText: '', presentation: null, usage: {}, error: '', progress: '', liveStatus: '',
-    sawChildren: false, cancelRequested: false, steeringMessages: [], toolRows: [], ...extra,
+    streamText: '',
+    processEntries: [],
+    presentation: null, usage: {}, error: null, activity: null,
+    cancelRequested: false, steeringMessages: [], toolRows: [], answerSequence: null, feedback: null, ...extra,
   };
 }
 
@@ -40,8 +43,25 @@ test('a Run that is still going is running, whichever way its stream stands', ()
   assert.equal(mainAgentStatus(undefined).status, 'running');
 });
 
+test('the main agent\'s row is the Run\'s own row, or none before the roster states it', () => {
+  const stated = mainAgentStatus(turn(), {
+    status: 'running',
+    startedAt: '2026-01-01T00:00:00Z',
+    finishedAt: null,
+  });
+  // Where it stands and how long it has run come from the Run's own row, the same
+  // facts a child's row carries. Nothing here guesses either.
+  assert.equal(stated.status, 'running');
+  assert.equal(stated.startedAt, '2026-01-01T00:00:00Z');
+  assert.equal(stated.finishedAt, null);
+  // Before a page arrives, the turn still says the words and whether it settled.
+  assert.equal(mainAgentStatus(turn({state: 'succeeded'})).status, 'succeeded');
+  assert.equal(mainAgentStatus(turn({state: 'succeeded'})).startedAt, null);
+  assert.equal(mainAgentStatus(undefined).status, 'running');
+});
+
 test('a Run that failed says why in place of an answer, and one that was cancelled says nothing', () => {
-  assert.equal(mainAgentStatus(turn({state: 'failed', error: 'Service error.'})).summary, 'Service error.');
+  assert.equal(mainAgentStatus(turn({state: 'failed', error: {source: 'Service error.', id: null}})).summary, 'Service error.');
   const stopped = mainAgentStatus(turn({state: 'cancelled'}));
   assert.equal(stopped.status, 'cancelled');
   assert.equal(stopped.summary, null);

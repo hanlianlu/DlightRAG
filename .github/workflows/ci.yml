@@ -21,13 +21,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           enable-cache: true
-          python-version: "3.14.7"
+          python-version: "3.14.10"
       - uses: actions/setup-node@v7
         with:
-          node-version: "26"
+          node-version: "26.13.1"
           cache: npm
           cache-dependency-path: |
             frontend/package-lock.json
@@ -39,7 +39,7 @@ jobs:
       - run: make typecheck
       - run: make architecture-check
       - run: make shellcheck-all
-      - run: make release-check
+      - run: make platform-check
       - run: make frontend-install
       - run: npx playwright install --with-deps chromium
         working-directory: frontend
@@ -47,30 +47,90 @@ jobs:
       - run: make frontend-lint
       - run: make frontend-test
       - run: make frontend-browser-test
+      # The design-system suite on the engines Safari and Firefox users run.
+      - run: npx playwright install --with-deps firefox webkit
+        working-directory: frontend
+      - run: make frontend-browser-cross-engine-test
       - run: make workspace-wheels
       - run: make frontend-audit
-      # The chart and report tests rasterize with the image's resvg and Noto Sans SC, at the
+      # The chart and report tests rasterize with the image's resvg and font set, at the
       # Dockerfile's pins; they fail, not skip, when either is missing.
-      - name: Install the chart renderer's resvg and font
+      - name: Install the chart renderer's resvg and fonts
         run: |
           scripts/install-chart-tools.sh "$RUNNER_TEMP/chart-tools"
           echo "$RUNNER_TEMP/chart-tools/bin" >> "$GITHUB_PATH"
-          echo "ECHARTS_RENDER_FONT_DIR=$RUNNER_TEMP/chart-tools/fonts/noto-sans-sc" >> "$GITHUB_ENV"
+          echo "FONTS_DIR=$RUNNER_TEMP/chart-tools/fonts/dlightrag" >> "$GITHUB_ENV"
       - run: make chart-render-test
       - run: make test-unit
+
 
   browser-e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # One test of the mocked suite, the Connections authorization journey, runs against the real
+    # PostgreSQL store and skips without it, and the job refuses a skip. The server is the integration
+    # job's: the image built from postgres/.
+    env:
+      # Built in this job from postgres/. The repository ships as a repository, so CI and
+      # a deployment build the same image locally and nothing is pulled from a registry.
+      POSTGRES_IMAGE: dlightrag-postgres:pg18
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: dlightrag
+      PGPASSWORD: dlightrag
+      PGDATABASE: dlightrag
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build the PostgreSQL image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: postgres/
+          load: true
+          tags: dlightrag-postgres:pg18
+          cache-from: type=gha,scope=postgres
+          cache-to: type=gha,mode=max,scope=postgres
+      - name: Start clean PostgreSQL
+        run: |
+          docker run --detach --name dlightrag-ci-postgres \
+            --publish 5432:5432 \
+            --env POSTGRES_DB=dlightrag \
+            --env POSTGRES_USER=dlightrag \
+            --env POSTGRES_PASSWORD=dlightrag \
+            --health-cmd "pg_isready -U dlightrag -d dlightrag" \
+            --health-interval 15s \
+            --health-timeout 10s \
+            --health-retries 10 \
+            "$POSTGRES_IMAGE" \
+            postgres -c shared_preload_libraries=pg_textsearch,pg_jieba
+          for _ in {1..120}; do
+            if ! status="$(
+              docker inspect \
+                --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' \
+                dlightrag-ci-postgres 2>/dev/null
+            )"; then
+              echo "PostgreSQL container disappeared during startup" >&2
+              break
+            fi
+            if [ "$status" = "running healthy" ]; then
+              exit 0
+            fi
+            case "$status" in
+              exited*|dead*|*unhealthy)
+                break
+                ;;
+            esac
+            sleep 1
+          done
+          docker logs dlightrag-ci-postgres || true
+          exit 1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           enable-cache: true
-          python-version: "3.14.7"
+          python-version: "3.14.10"
       - uses: actions/setup-node@v7
         with:
-          node-version: "26"
+          node-version: "26.13.1"
           cache: npm
           cache-dependency-path: |
             frontend/package-lock.json
@@ -109,11 +169,16 @@ jobs:
           if-no-files-found: warn
           include-hidden-files: true
           retention-days: 14
+      - name: Remove PostgreSQL container
+        if: always()
+        run: docker rm --force dlightrag-ci-postgres 2>/dev/null || true
 
   integration:
     runs-on: ubuntu-latest
     env:
-      POSTGRES_IMAGE: ghcr.io/${{ github.repository_owner }}/dlightrag-postgres@sha256:15f4dcf1bb294adc8b8c368776d7040efc730a1c25d82f8f72bbb61b181e66df
+      # Built in this job from postgres/. The repository ships as a repository, so CI and
+      # a deployment build the same image locally and nothing is pulled from a registry.
+      POSTGRES_IMAGE: dlightrag-postgres:pg18
       PGHOST: localhost
       PGPORT: 5432
       PGUSER: dlightrag
@@ -121,10 +186,19 @@ jobs:
       PGDATABASE: dlightrag
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build the PostgreSQL image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: postgres/
+          load: true
+          tags: dlightrag-postgres:pg18
+          cache-from: type=gha,scope=postgres
+          cache-to: type=gha,mode=max,scope=postgres
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           enable-cache: true
-          python-version: "3.14.7"
+          python-version: "3.14.10"
       - name: Start clean PostgreSQL
         run: |
           docker run --detach --name dlightrag-ci-postgres \
@@ -178,8 +252,19 @@ jobs:
           tests/integration/test_answer_runs_pg.py
           tests/integration/test_answer_run_api_pg.py
           tests/integration/test_answer_run_coordinator_pg.py
+          tests/integration/test_answer_workspace_continuity_pg.py
           tests/integration/test_run_lease_renewal_pg.py
+          tests/integration/test_answer_feedback_pg.py
+          tests/integration/test_call_provenance_pg.py
+          tests/integration/test_runtime_policies_pg.py
+          tests/integration/test_privacy_settings_pg.py
+          tests/integration/test_privacy_web_pg.py
+          tests/integration/test_memory_web_pg.py
+          tests/integration/test_export_traces_pg.py
+          tests/integration/test_evidence_compaction_pg.py
           tests/integration/test_memory_pg.py
+          tests/integration/test_memory_run_changes_pg.py
+          tests/integration/test_session_memory_pass_pg.py
           tests/integration/test_run_cancellation_pg.py
           tests/integration/test_pg_storage.py
           tests/integration/test_retrieval_runs_pg.py
@@ -191,6 +276,8 @@ jobs:
           tests/integration/test_resource_review_regressions_pg.py
           tests/integration/test_resource_lineage_pg.py
           tests/integration/test_web_answer_runs_pg.py
+          tests/integration/test_web_run_activity_pg.py
+          tests/integration/test_web_conversations_pg.py
           tests/integration/test_connections_pg.py
           tests/integration/test_connections_web_pg.py
           tests/integration/test_connection_authorization_pg.py
@@ -201,12 +288,14 @@ jobs:
           tests/integration/test_development_reset_pg.py
           tests/integration/test_metadata_scope_pg.py
           tests/integration/test_model_catalogue_pg.py
+          tests/integration/test_owner_data_pg.py
           tests/integration/test_partition_foundation_pg.py
           tests/integration/test_pg_notifications_pg.py
           tests/integration/test_promotion_foundation_pg.py
           tests/integration/test_promotion_worker_pg.py
           tests/integration/test_reader_role_pg.py
           tests/integration/test_rebuild_vdb_restore_pg.py
+          tests/integration/test_format_routes_pg.py
           -q --tb=short --junitxml=.test-results/postgres.xml
       - name: Reject skipped PostgreSQL integration tests
         run: >-

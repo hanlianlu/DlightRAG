@@ -22,7 +22,7 @@ from dlightrag.adapters.postgres.answer.agent_accounts import (
     PGAgentAccountSettingsStore,
     PGAgentAccountStore,
 )
-from dlightrag.engine.answer.agent_browser import (
+from dlightrag.engine.answer.agent_browser.accounts import (
     ACCOUNT_LABEL,
     AgentAccountsBinding,
     RunAgentAccounts,
@@ -112,7 +112,9 @@ def sealed(
 async def row_of(pool: Any, owner: str, site: str) -> Any:
     async with pool.acquire() as conn:
         return await conn.fetchrow(
-            "SELECT * FROM dlightrag_agent_accounts WHERE owner_id = $1 AND site = $2", owner, site
+            "SELECT * FROM dlightrag_agent_accounts WHERE owner_id = $1 AND site = $2",
+            owner,
+            site,
         )
 
 

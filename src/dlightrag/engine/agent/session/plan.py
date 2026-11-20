@@ -8,8 +8,7 @@ from hashlib import sha256
 from typing import Any
 
 from dlightrag.engine.agent.session.effects import ReplayPolicy, canonical_json
-from dlightrag.engine.agent.tools.contracts import ToolDeclaration
-from dlightrag.engine.ai.tokens import estimate_tokens
+from dlightrag.engine.agent.tools.contracts import ToolDeclaration, declaration_tokens
 
 AGENT_RUN_PLAN_SCHEMA_VERSION = 2
 
@@ -193,8 +192,7 @@ class AgentRunPlan:
 
     @property
     def tool_schema_tokens(self) -> int:
-        definitions = [tool.definition for tool in self.tools]
-        return estimate_tokens(canonical_json(definitions))
+        return declaration_tokens(tool.definition for tool in self.tools)
 
 
 __all__ = [

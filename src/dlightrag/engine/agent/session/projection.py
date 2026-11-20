@@ -70,9 +70,8 @@ class CompactionSummary:
             raise ValueError("compaction summary is not canonical JSON") from exc
         if not isinstance(payload, dict):
             raise ValueError("compaction summary must be a JSON object")
-        # Decoded exactly as ``canonical_json`` encodes it: a summary that lacks a field
-        # was written by an older release, whose database is reset rather than read
-        # with defaults standing in.
+        # Decoded exactly as ``canonical_json`` encodes it: a summary missing a field is
+        # refused, never read with defaults standing in.
         if set(payload) != set(COMPACTION_SUMMARY_FIELDS):
             raise ValueError(
                 f"compaction summary fields {sorted(payload)} are not "

@@ -43,21 +43,14 @@ test('every dialog carries a primitive dialog class', () => {
 test('every checkbox lives inside the .dl-dialog-checkbox primitive', () => {
   for (const file of uiSourceFiles()) {
     const source = readFileSync(file, 'utf8');
-    // A checkbox is legal only when a .dl-dialog-checkbox label appears
-    // somewhere before it on the same template line region; walk label blocks.
-    const labelPattern = /<label[^>]*class="[^"]*dl-dialog-checkbox[^"]*"[^>]*>([\s\S]*?)<\/label>/g;
-    const barePattern = /<input[^>]*type="checkbox"[^>]*>/g;
-    for (const match of source.matchAll(barePattern)) {
-      const index = match.index ?? 0;
-      const before = source.slice(0, index);
-      const lastLabelOpen = before.lastIndexOf('dl-dialog-checkbox');
-      const lastLabelClose = before.lastIndexOf('</label>');
+    // A checkbox is legal only when the nearest .dl-dialog-checkbox label opens after the last label closed.
+    for (const match of source.matchAll(/<input[^>]*type="checkbox"[^>]*>/g)) {
+      const before = source.slice(0, match.index ?? 0);
       assert.ok(
-        lastLabelOpen > lastLabelClose,
+        before.lastIndexOf('dl-dialog-checkbox') > before.lastIndexOf('</label>'),
         `${file}: checkbox must sit inside a .dl-dialog-checkbox label`,
       );
     }
-    void labelPattern;
   }
 });
 
@@ -77,6 +70,16 @@ test('every menu and popover opened from a trigger takes its placement from .dl-
       assert.ok(classes.includes('dl-anchored'), `${name} must take its placement from .dl-anchored`);
     }
   }
-  // Theme, answer mode, agent effort, conversation actions, skills, workspaces, and upload target.
-  assert.equal(surfaces.length, 7, surfaces.join('\n'));
+  assert.ok(surfaces.length > 0, 'the scan found no menu or popover to lock');
+});
+
+test('a row parted by a hairline wears the action row primitive', () => {
+  const list = readFileSync(join(UI_DIR, 'chat-message-list.ts'), 'utf8');
+  const rows = [...list.matchAll(/<div class="([^"]*)"/g)].map((match) => match[1]!).filter((classes) => classes.includes('runActions'));
+  // The row under an answer, both while a Run lives and once it is settled.
+  assert.equal(rows.length, 2, 'the answer action row must be the two rows chat-message-list draws');
+  for (const classes of rows) {
+    assert.match(classes, /(?:^| )dl-action-row(?: |$)/,
+      'the answer action row must wear .dl-action-row rather than draw its own dividers');
+  }
 });

@@ -37,9 +37,12 @@ from dlightrag.engine.answer.compaction import (
     CompactionUnavailable,
     parse_compaction_summary,
 )
-from dlightrag.engine.answer.continuation_handles import MAX_NAMED_SESSION_NOTES, MAX_SPILL_HANDLES
-from dlightrag.engine.answer.fast import FastSessionHost
-from tests.in_memory_session_repository import MemoryAgentSessionRepository
+from dlightrag.engine.answer.continuation_handles import (
+    MAX_NAMED_SESSION_NOTES,
+    MAX_SPILL_HANDLES,
+)
+from dlightrag.engine.answer.fast.session_host import FastSessionHost
+from tests.support.in_memory_session_repository import MemoryAgentSessionRepository
 
 
 def test_compaction_summary_parser_preserves_typed_sections() -> None:

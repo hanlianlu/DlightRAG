@@ -11,8 +11,10 @@ from dlightrag.engine.ai.reasoning import (
     ReasoningConfigurationError,
     ReasoningLevels,
     ReasoningProfile,
+    best_effort_reasoning_profile,
     cheapest_supported_reasoning,
     reasoning_request_kwargs,
+    request_under_ceiling,
     resolve_reasoning,
 )
 from dlightrag.engine.ai.settings import ModelRoleSettings, ModelSettings
@@ -70,6 +72,66 @@ def test_compaction_selects_cheapest_supported_control() -> None:
     assert cheapest_supported_reasoning(None) is None
 
 
+def test_a_ceiling_at_the_top_of_the_ladder_asks_for_nothing_different() -> None:
+    for requested in (None, "off", "low", "max"):
+        assert request_under_ceiling(_profile(), requested, "max") == requested  # type: ignore[arg-type]
+
+
+def test_a_request_that_resolves_at_or_below_the_ceiling_is_kept() -> None:
+    profile = _profile(low="low", medium=None, high="high")
+
+    assert request_under_ceiling(profile, "low", "high") == "low"
+    assert request_under_ceiling(profile, "high", "high") == "high"
+    # `minimal` rounds up to `low`, which is under the ceiling; the request stays as it was.
+    assert request_under_ceiling(profile, "minimal", "high") == "minimal"
+    # `off` is the explicit request it is everywhere; no ceiling ever raises or lowers it.
+    assert request_under_ceiling(profile, "off", "low") == "off"
+
+
+def test_a_request_above_the_ceiling_is_lowered_to_the_highest_level_at_or_below_it() -> None:
+    profile = _profile(minimal="minimal", low="low", medium=None, high="high", xhigh="xhigh")
+
+    assert request_under_ceiling(profile, "max", "high") == "high"
+    assert request_under_ceiling(profile, "xhigh", "high") == "high"
+    # The ladder has no `medium`: the highest level at or below it is `low`, though
+    # `resolve_reasoning` would have rounded a request for `medium` up to `high`.
+    assert resolve_reasoning(profile, "medium").effective == "high"  # type: ignore[union-attr]
+    assert request_under_ceiling(profile, "high", "medium") == "low"
+    assert request_under_ceiling(profile, "max", "low") == "low"
+
+
+def test_a_request_that_rounds_across_the_ceiling_is_lowered_too() -> None:
+    profile = _profile(low="low", medium=None, high="high", max=None)
+
+    # `medium` is under a `medium` ceiling as asked, but resolves to `high`, above it.
+    assert resolve_reasoning(profile, "medium").effective == "high"  # type: ignore[union-attr]
+    assert request_under_ceiling(profile, "medium", "medium") == "low"
+
+
+def test_a_model_left_on_its_own_level_is_asked_for_the_ceiling_when_one_binds() -> None:
+    profile = _profile(low="low", high="high", max="max")
+
+    assert request_under_ceiling(profile, None, "max") is None
+    assert request_under_ceiling(profile, None, "high") == "high"
+    assert request_under_ceiling(profile, None, "low") == "low"
+
+
+def test_a_model_that_offers_nothing_under_the_ceiling_is_asked_for_its_lowest_level() -> None:
+    profile = _profile(off="none", low=None, medium=None, high="high", max="max")
+
+    assert request_under_ceiling(profile, "max", "low") == "high"
+    assert request_under_ceiling(profile, None, "low") == "high"
+    assert resolve_reasoning(profile, "high").effective == "high"  # type: ignore[union-attr]
+
+
+def test_a_request_the_profile_cannot_resolve_is_left_to_fail_where_it_always_did() -> None:
+    assert request_under_ceiling(None, "max", "low") == "max"
+    assert request_under_ceiling(_profile(off=None), "off", "low") == "off"
+    nothing = _profile(off="none", low=None, high=None, max=None)
+    assert request_under_ceiling(nothing, "max", "low") == "max"
+    assert request_under_ceiling(nothing, None, "low") is None
+
+
 @pytest.mark.parametrize(
     ("format", "level", "expected"),
     [
@@ -122,6 +184,26 @@ def test_gemini_reasoning_is_an_interactions_thinking_level_with_its_summary() -
 def test_a_gemini_profile_names_only_interactions_thinking_levels(levels: dict[str, str]) -> None:
     with pytest.raises(ValueError, match="gemini reasoning maps levels"):
         _profile(format="gemini", **{"off": None, "max": None, **levels})  # type: ignore[arg-type]
+
+
+def test_a_catalogued_gemini_profile_may_map_xhigh() -> None:
+    profile = _profile(format="gemini", off=None, medium="medium", xhigh="xhigh", max=None)
+
+    resolved = resolve_reasoning(profile, "max")
+
+    assert reasoning_request_kwargs(resolved, api_family="interactions") == {
+        "thinking_level": "xhigh",
+        "thinking_summaries": "auto",
+    }
+
+
+def test_an_uncatalogued_gemini_model_is_never_asked_for_xhigh() -> None:
+    profile = best_effort_reasoning_profile("gemini")
+
+    assert profile.levels.xhigh is None and profile.levels.max is None
+    assert reasoning_request_kwargs(
+        resolve_reasoning(profile, "xhigh"), api_family="interactions"
+    ) == {"thinking_level": "high", "thinking_summaries": "auto"}
 
 
 def test_openrouter_off_can_map_to_a_native_effort_value() -> None:

@@ -13,10 +13,12 @@ const css = readFileSync(
 );
 const semantics = css.slice(css.indexOf('  --color-text-primary'));
 
-/** Declared ramp steps, keyed by hex: #7e6c37 -> gold-400. */
+/** Declared ramp steps, keyed by name: gold-400 -> #7e6c37. Keyed by name, not
+ * by value: a measured ladder step may legitimately land on a ramp value, and the
+ * dark ladder's ink-80 is the light ladder's stone-600. */
 const ramps = new Map(
     [...css.matchAll(/--color-([a-z]+-\d+):\s*(#[0-9a-f]{6});/g)]
-        .map((match) => [match[2], match[1]]),
+        .map((match) => [match[1], match[2]]),
 );
 
 /** The light overrides live in their own block; everything before it is dark. */
@@ -30,7 +32,7 @@ function stepLuminance(theme: 'dark' | 'light', name: string): {step: string; va
     const reference = new RegExp(`--${name}:\\s*var\\(--color-([\\w-]+)\\)`).exec(themeBlock(theme));
     assert.ok(reference, `--${name} is not a ramp reference in the ${theme} block`);
     const step = reference[1];
-    const hex = [...ramps].find(([, declared]) => declared === step)?.[0];
+    const hex = ramps.get(step);
     assert.ok(hex, `${step} is not a declared ramp step`);
     const linear = [1, 3, 5]
         .map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
@@ -63,12 +65,9 @@ for (const [theme, direction] of [['dark', 1], ['light', -1]] as const) {
 
 // Muted is the faintest role that clears AA for small text on every surface, so
 // a caption that takes it reads anywhere. Subtle, one step below, is held only to
-// the non-text floor: small labels had drifted onto it and read at 3.65:1 on a
-// panel. Accent text is the gold for text, so it takes the text floor too: in
-// Mineral Light it had been gold-400 at 85% and read 2.78:1 on an elevated
-// surface. The Primary accent marks things, such as a link's underline or a
-// check, and like Subtle is held to the non-text floor; gold text had drifted
-// onto it and read 3.45:1 on an elevated surface.
+// the non-text floor. Accent text is the gold for text, so it takes the text floor
+// too. The Primary accent marks things, such as a link's underline or a check, and
+// like Subtle is held to the non-text floor.
 const contrastFloors = [
     ['color-text-primary', 4.5],
     ['color-text-secondary', 4.5],
@@ -127,7 +126,7 @@ test('only a disabled control is coloured Dim', () => {
 // stone. Only white belongs to no ramp and stays spelled out.
 test('colours outside the ramps are only ever white', () => {
     const triples = new Set(
-        [...ramps.keys()].map((hex) => [1, 3, 5]
+        [...ramps.values()].map((hex) => [1, 3, 5]
             .map((i) => parseInt(hex.slice(i, i + 2), 16)).join(', ')),
     );
     const strays = [
@@ -139,4 +138,116 @@ test('colours outside the ramps are only ever white', () => {
     ].filter((colour) => !['#fff', '#ffffff', 'rgb(255, 255, 255)', 'rgb(0, 0, 0)'].includes(colour));
 
     assert.deepEqual([...new Set(strays)], []);
+});
+
+// APCA-W3 (SAPC): the polarity-aware contrast model WCAG 3 is moving to, and the
+// one that can say "too much" as well as "too little" — WCAG 2's ratio is
+// symmetric, so it reads white-on-black and black-on-white the same and sees
+// nothing wrong with either at 18:1. Constants are the published ones.
+function luminanceOf(hex: string): number {
+    const channel = (value: number): number => {
+        const c = value / 255;
+        return c >= 0.04045 ? ((c + 0.055) / 1.055) ** 2.4 : c / 12.92;
+    };
+    const [r, g, b] = [1, 3, 5].map((i) => channel(parseInt(hex.slice(i, i + 2), 16)));
+    return 0.2126729 * r + 0.7151522 * g + 0.072175 * b;
+}
+
+function apca(text: string, background: string): number {
+    // biome-ignore lint/suspicious/noApproximativeNumericConstant: 1.414 is APCA-W3's published blkClmp exponent, not the square root of two
+    const clamp = (y: number): number => (y < 0.022 ? y + (0.022 - y) ** 1.414 : y);
+    const yText = clamp(luminanceOf(text));
+    const yBackground = clamp(luminanceOf(background));
+    if (yBackground > yText) {
+        const sapc = (yBackground ** 0.56 - yText ** 0.57) * 1.14;
+        return sapc < 0.1 ? 0 : (sapc - 0.027) * 100;
+    }
+    const sapc = (yBackground ** 0.65 - yText ** 0.62) * 1.14;
+    return sapc > -0.1 ? 0 : (sapc + 0.027) * 100;
+}
+
+/** `--color-<name>` as the hex it resolves to in a theme block. */
+function resolved(theme: 'dark' | 'light', name: string): string {
+    const reference = new RegExp(`--${name}:\\s*var\\(--color-([\\w-]+)\\)`).exec(themeBlock(theme));
+    assert.ok(reference, `--${name} is not a reference in the ${theme} block`);
+    const hex = ramps.get(reference[1]);
+    assert.ok(hex, `${reference[1]} is not a declared step`);
+    return hex;
+}
+
+const darkBase = resolved('dark', 'color-bg-base');
+
+// Each theme's ladder names are claims: ink-75 is the step that measures |Lc| 75
+// on that theme's page. The two ladders differ because the polarities do — the
+// dark one is capped at 90, the light one is not — but the rule, and this test,
+// are the same in both.
+const readingLadders = {
+    dark: [
+        ['color-text-primary', 90],
+        ['color-text-secondary', 82],
+        ['color-text-tertiary', 75],
+        ['color-text-muted', 60],
+    ],
+    light: [
+        ['color-text-primary', 100],
+        ['color-text-secondary', 92],
+        ['color-text-tertiary', 87],
+        ['color-text-muted', 80],
+    ],
+} as const;
+
+for (const theme of ['dark', 'light'] as const) {
+    test(`the ${theme} reading ladder measures to the level each name states`, () => {
+        const page = resolved(theme, 'color-bg-base');
+        for (const [role, level] of readingLadders[theme]) {
+            const reference = new RegExp(`--${role}:\\s*var\\(--color-ink-(\\d+)\\)`).exec(
+                themeBlock(theme),
+            );
+            assert.ok(reference, `--${role} is not on the ink ladder in ${theme}`);
+            assert.equal(
+                Number(reference[1]),
+                level,
+                `--${role} names a level it does not target`,
+            );
+            const measured = Math.abs(apca(resolved(theme, role), page));
+            assert.ok(
+                Math.abs(measured - level) <= 2,
+                `--${role} (ink-${level}) measures |Lc| ${measured.toFixed(1)} on the page`,
+            );
+        }
+    });
+}
+
+// Lc 90 is the published maximum for light-on-dark text: past it the luminance
+// step at a glyph's edge is what reads as glare, which is exactly the complaint a
+// brighter value invites. Nothing in the dark reading ladder may go above it, the
+// roles must stay in rank order, and the quietest one must still be readable.
+test('dark text stays under the dark-mode ceiling and in rank order', () => {
+    const levels = readingLadders.dark.map(([role]) =>
+        Math.abs(apca(resolved('dark', role), darkBase)),
+    );
+    assert.ok(levels[0] <= 90, `the brightest reading role is at |Lc| ${levels[0].toFixed(1)}`);
+    assert.deepEqual(
+        [...levels].sort((first, second) => second - first),
+        levels,
+        'the ladder is out of rank order',
+    );
+    assert.ok(levels[3] >= 60, `the quietest reading role is at |Lc| ${levels[3].toFixed(1)}`);
+});
+
+// The light theme has no ceiling, so what it owes instead is a surface ramp tight
+// enough to keep the quiet end readable on the brightest panel: stone-50/200/300
+// cost 21 |Lc| between the page and an elevated card and left Muted at 58.8, under
+// the 60 a caption needs. The surfaces now sit two steps apart, and this is the
+// assertion that holds them there.
+test('light text keeps its rank and stays readable on the brightest panel', () => {
+    const levels = readingLadders.light.map(([role]) =>
+        Math.abs(apca(resolved('light', role), resolved('light', 'color-bg-elevated'))),
+    );
+    assert.deepEqual(
+        [...levels].sort((first, second) => second - first),
+        levels,
+        'the ladder is out of rank order on an elevated surface',
+    );
+    assert.ok(levels[3] >= 60, `the quietest reading role is at |Lc| ${levels[3].toFixed(1)} there`);
 });

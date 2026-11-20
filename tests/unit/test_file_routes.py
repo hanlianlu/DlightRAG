@@ -10,9 +10,10 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from dlightrag.adapters.http.server import create_app
-from dlightrag.application.access import AccessDeniedError
-from dlightrag.application.config import DlightragConfig, set_config
-from dlightrag.application.corpus_admin import (
+from dlightrag.application.access.control import AccessDeniedError
+from dlightrag.application.config.loading import set_config
+from dlightrag.application.config.sections import DlightragConfig
+from dlightrag.application.corpus_admin.errors import (
     LocalDownloadTarget,
     RedirectDownloadTarget,
     SourceDownloadInvalidError,

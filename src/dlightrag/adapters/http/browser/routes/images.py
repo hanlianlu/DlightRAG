@@ -6,8 +6,11 @@ from fastapi.responses import Response
 
 from dlightrag.adapters.http.browser.deps import enforce_web_access, get_application
 from dlightrag.adapters.http.visual_asset_delivery import visual_asset_response
-from dlightrag.application.access import AccessAction
-from dlightrag.application.corpus_admin import VisualAssetSize, workspace_id_for_name
+from dlightrag.application.access.control import AccessAction
+from dlightrag.application.corpus_admin.service import workspace_id_for_name
+from dlightrag.engine.rag.corpus.contracts import (
+    VisualAssetSize,
+)
 
 router = APIRouter()
 

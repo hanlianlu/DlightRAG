@@ -1,0 +1,540 @@
+# Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
+"""Claim-bound PostgreSQL workspace epoch, inventory, and spill digests."""
+
+from __future__ import annotations
+
+import uuid
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
+from typing import Any
+
+from dlightrag.adapters.postgres.core._operations import ConnectionPool
+from dlightrag.adapters.postgres.core._pool import pg_pool
+from dlightrag.adapters.postgres.runtime._lease import hold_run_lease
+from dlightrag.engine.runtime.agentspace import (
+    DEFAULT_SESSION_NOTES_LIMITS,
+    SESSION_NOTES_BUDGET_REFUSED,
+    SESSION_NOTES_LEASE_LOST,
+    AgentspaceSnapshotRecord,
+    CommittedSpillRecord,
+    HandoffCommit,
+    HandoffConflict,
+    HandoffLeaseLost,
+    HandoffResult,
+    RunArtifactRecord,
+    SessionAgentspaceHeadRecord,
+    SessionNoteRecord,
+    SessionNotesLimits,
+    SessionNotesPromotion,
+    _validate_spill_page_limit,
+    note_digest,
+    select_promotable_session_notes,
+    validate_note_path,
+)
+from dlightrag.engine.runtime.settlements import InventoryPathRecord
+
+# An inventory write is two statements whatever the file count. A bash settlement
+# rescans the whole workspace and writes it while the Run and Session rows are
+# locked, so the write deletes only the paths that went away and rewrites only the
+# rows whose observation changed; an unchanged file costs no new row version.
+_DELETE_INVENTORY_PATHS = """
+DELETE FROM dlightrag_answer_workspace_inventory
+WHERE owner_id = $1 AND run_id = $2 AND relative_path = ANY($3::text[])
+"""
+
+_DELETE_INVENTORY_EXCEPT = """
+DELETE FROM dlightrag_answer_workspace_inventory AS inventory
+WHERE inventory.owner_id = $1 AND inventory.run_id = $2
+  AND NOT EXISTS (
+      SELECT 1 FROM unnest($3::text[]) AS kept(relative_path)
+      WHERE kept.relative_path = inventory.relative_path
+  )
+"""
+
+_UPSERT_INVENTORY = """
+INSERT INTO dlightrag_answer_workspace_inventory AS inventory (
+    owner_id, run_id, relative_path, entry_type, mode, size_bytes, content_digest
+)
+SELECT $1, $2, observed.relative_path, observed.entry_type, observed.mode,
+       observed.size_bytes, observed.content_digest
+FROM unnest($3::text[], $4::text[], $5::integer[], $6::bigint[], $7::text[])
+    AS observed(relative_path, entry_type, mode, size_bytes, content_digest)
+ON CONFLICT (owner_id, run_id, relative_path) DO UPDATE SET
+    entry_type = EXCLUDED.entry_type,
+    mode = EXCLUDED.mode,
+    size_bytes = EXCLUDED.size_bytes,
+    content_digest = EXCLUDED.content_digest
+WHERE (inventory.entry_type, inventory.mode, inventory.size_bytes, inventory.content_digest)
+    IS DISTINCT FROM
+    (EXCLUDED.entry_type, EXCLUDED.mode, EXCLUDED.size_bytes, EXCLUDED.content_digest)
+"""
+
+#: Serializes same-Session promotions. The row locks below cover the notes that
+#: exist, not the notes that do not, so two Runs of one Session could each admit a note
+#: against a plane neither had seen the other's: the Session row is the one lock they
+#: share. A Session with no row yet (a bind-time migration into a brand-new Session)
+#: has nothing to serialize against, and its write is refused by the note table's own
+#: foreign key instead.
+_LOCK_SESSION_FOR_NOTES = """
+SELECT 1
+FROM dlightrag_agent_sessions
+WHERE owner_id = $1 AND session_id = $2::text::uuid
+FOR UPDATE
+"""
+
+
+class PGAgentspaceStore:
+    """Fenced workspace metadata for one claimed run."""
+
+    def __init__(
+        self,
+        *,
+        pool: ConnectionPool | None = None,
+        owner_id: str,
+        run_id: uuid.UUID,
+        worker_id: str,
+        lease_owner: str,
+        fencing_epoch: int,
+    ) -> None:
+        self._pool = pool
+        self._owner_id = owner_id
+        self._run_id = run_id
+        self._worker_id = worker_id
+        self._lease_owner = lease_owner
+        self._fencing_epoch = fencing_epoch
+
+    @asynccontextmanager
+    async def _connection(self) -> AsyncIterator[Any]:
+        pool = self._pool if self._pool is not None else await pg_pool.get()
+        async with pool.acquire() as conn:
+            yield conn
+
+    async def _hold_lease(self, conn: Any) -> bool:
+        return await hold_run_lease(
+            conn, self._owner_id, self._run_id, self._lease_owner, self._fencing_epoch
+        )
+
+    async def handoff_epoch(
+        self,
+        *,
+        expected_epoch: int | None,
+        destination_epoch: int,
+        inventory: Sequence[InventoryPathRecord],
+    ) -> HandoffResult:
+        if destination_epoch < 1:
+            raise ValueError("destination epoch must be positive")
+        async with self._connection() as conn:
+            async with conn.transaction():
+                if not await self._hold_lease(conn):
+                    return HandoffLeaseLost()
+                current = await conn.fetchval(
+                    "SELECT agent_workspace_epoch FROM dlightrag_runs"
+                    " WHERE owner_id = $1 AND run_id = $2 FOR UPDATE",
+                    self._owner_id,
+                    self._run_id,
+                )
+                current_epoch = int(current) if current is not None else None
+                if current_epoch != expected_epoch:
+                    return HandoffConflict(
+                        expected_epoch=expected_epoch, current_epoch=current_epoch
+                    )
+                updated = await conn.fetchval(
+                    "UPDATE dlightrag_runs SET agent_workspace_epoch = $3, updated_at = NOW()"
+                    " WHERE owner_id = $1 AND run_id = $2"
+                    " AND agent_workspace_epoch IS NOT DISTINCT FROM $4"
+                    " RETURNING agent_workspace_epoch",
+                    self._owner_id,
+                    self._run_id,
+                    destination_epoch,
+                    expected_epoch,
+                )
+                if updated is None:
+                    return HandoffLeaseLost()
+                await write_inventory(
+                    conn, self._owner_id, self._run_id, upserts=inventory, replace_all=True
+                )
+                return HandoffCommit(workspace_epoch=int(updated))
+
+    async def load_inventory(self) -> tuple[InventoryPathRecord, ...]:
+        return await load_run_inventory(
+            owner_id=self._owner_id, run_id=self._run_id, pool=self._pool
+        )
+
+    async def load_session_snapshot_run_ids(self, *, session_id: str) -> tuple[str, ...]:
+        """Every Run whose workspace snapshot this Session still keeps."""
+        async with self._connection() as conn:
+            rows = await conn.fetch(
+                "SELECT run_id::text AS run_id"
+                " FROM dlightrag_session_workspace_snapshots"
+                " WHERE owner_id = $1 AND session_id = $2::text::uuid",
+                self._owner_id,
+                session_id,
+            )
+        return tuple(str(row["run_id"]) for row in rows)
+
+    async def load_session_agentspace_head(
+        self, *, session_id: str, lane_id: str = "main"
+    ) -> SessionAgentspaceHeadRecord | None:
+        """One branch's committed workspace pointer, read under this claim's owner."""
+        async with self._connection() as conn:
+            row = await conn.fetchrow(
+                "SELECT session_id::text AS session_id, lane_id, head_run_id::text AS head_run_id,"
+                "       manifest_digest, revision, committed_at"
+                " FROM dlightrag_session_workspace_heads"
+                " WHERE owner_id = $1 AND session_id = $2::text::uuid AND lane_id = $3",
+                self._owner_id,
+                session_id,
+                lane_id,
+            )
+        if row is None:
+            return None
+        return SessionAgentspaceHeadRecord(
+            session_id=str(row["session_id"]),
+            lane_id=str(row["lane_id"]),
+            head_run_id=str(row["head_run_id"]),
+            manifest_digest=str(row["manifest_digest"]),
+            revision=int(row["revision"]),
+            committed_at=row["committed_at"],
+        )
+
+    async def load_run_agentspace_snapshot(self, *, run_id: str) -> AgentspaceSnapshotRecord | None:
+        """One settled Run's snapshot, which a fork seeds its private epoch from."""
+        async with self._connection() as conn:
+            row = await conn.fetchrow(
+                "SELECT session_id::text AS session_id, run_id::text AS run_id,"
+                "       parent_run_id::text AS parent_run_id, manifest_digest"
+                " FROM dlightrag_session_workspace_snapshots"
+                " WHERE owner_id = $1 AND run_id = $2::text::uuid",
+                self._owner_id,
+                run_id,
+            )
+        if row is None:
+            return None
+        return AgentspaceSnapshotRecord(
+            session_id=str(row["session_id"]),
+            run_id=str(row["run_id"]),
+            parent_run_id=(str(row["parent_run_id"]) if row["parent_run_id"] is not None else None),
+            manifest_digest=str(row["manifest_digest"]),
+        )
+
+    async def load_run_artifacts(self) -> tuple[RunArtifactRecord, ...]:
+        """Read this Run's attached Artifact roots, ordered by path.
+
+        The rows are this Run's own settlement records, so the read is claim-local like
+        the Inventory and the committed spills beside it: a summary names what this Run
+        attached, and the address it renders is the published version's.
+        """
+        return await load_run_artifacts(
+            owner_id=self._owner_id, run_id=self._run_id, pool=self._pool
+        )
+
+    async def load_session_notes(self, *, session_id: str) -> tuple[SessionNoteRecord, ...]:
+        """Read one Session's notes without needing a live claim.
+
+        Memory belongs to the Session, so the read is not fenced by this Run's lease:
+        a recovered attempt reads the same plane a fresh one would, and a Session whose
+        plane is unreadable is the caller's degradation to record, not an error here.
+        """
+        return await load_session_notes(
+            owner_id=self._owner_id, session_id=session_id, pool=self._pool
+        )
+
+    async def promote_session_notes(
+        self,
+        *,
+        session_id: str,
+        upserts: Sequence[SessionNoteRecord],
+        deletes: Sequence[str] = (),
+        limits: SessionNotesLimits = DEFAULT_SESSION_NOTES_LIMITS,
+    ) -> SessionNotesPromotion:
+        """Promote notes under this Run's lease, refusing what the plane cannot hold.
+
+        The plane's budget is the Session's — and configurable — so admission is decided
+        inside the same transaction that reads it: a note that does not fit is refused
+        for that note alone, and nothing older is evicted to make room.
+        """
+        refused_paths = tuple(
+            note.relative_path for note in upserts if not validate_note_path(note.relative_path)
+        )
+        admissible = tuple(note for note in upserts if validate_note_path(note.relative_path))
+        async with self._connection() as conn:
+            async with conn.transaction():
+                if not await self._hold_lease(conn):
+                    return SessionNotesPromotion(degraded_reason=SESSION_NOTES_LEASE_LOST)
+                await conn.fetchval(_LOCK_SESSION_FOR_NOTES, self._owner_id, session_id)
+                rows = await conn.fetch(
+                    "SELECT relative_path, size_bytes FROM dlightrag_answer_session_notes"
+                    " WHERE owner_id = $1 AND session_id = $2::uuid FOR UPDATE",
+                    self._owner_id,
+                    session_id,
+                )
+                existing = {str(row["relative_path"]): int(row["size_bytes"]) for row in rows}
+                admitted, over_budget = select_promotable_session_notes(
+                    existing=existing,
+                    upserts=admissible,
+                    deletes=deletes,
+                    limits=limits,
+                )
+                deleted = 0
+                for path in deletes:
+                    if path not in existing:
+                        continue
+                    await conn.execute(
+                        "DELETE FROM dlightrag_answer_session_notes"
+                        " WHERE owner_id = $1 AND session_id = $2::uuid AND relative_path = $3",
+                        self._owner_id,
+                        session_id,
+                        path,
+                    )
+                    deleted += 1
+                for note in admitted:
+                    await conn.execute(
+                        "INSERT INTO dlightrag_answer_session_notes ("
+                        " owner_id, session_id, relative_path, size_bytes, content_digest,"
+                        " content, revision, written_by_run_id, updated_at)"
+                        " VALUES ($1, $2::uuid, $3, $4, $5, $6, 1, $7, NOW())"
+                        " ON CONFLICT (owner_id, session_id, relative_path) DO UPDATE SET"
+                        " size_bytes = EXCLUDED.size_bytes,"
+                        " content_digest = EXCLUDED.content_digest,"
+                        " content = EXCLUDED.content,"
+                        " revision = dlightrag_answer_session_notes.revision + 1,"
+                        " written_by_run_id = EXCLUDED.written_by_run_id,"
+                        " updated_at = NOW()",
+                        self._owner_id,
+                        session_id,
+                        note.relative_path,
+                        len(note.content),
+                        note_digest(note.content),
+                        note.content,
+                        self._run_id,
+                    )
+        refused = (*refused_paths, *over_budget)
+        return SessionNotesPromotion(
+            promoted=len(admitted),
+            deleted=deleted,
+            refused_paths=refused,
+            degraded_reason=(SESSION_NOTES_BUDGET_REFUSED if refused else None),
+        )
+
+    async def load_spills_page(
+        self, *, after_resource_id: str | None, limit: int
+    ) -> tuple[CommittedSpillRecord, ...]:
+        _validate_spill_page_limit(limit)
+        async with self._connection() as conn:
+            if after_resource_id is None:
+                rows = await conn.fetch(
+                    "SELECT resource_id, content_digest, size_bytes, session_id::text,"
+                    " intent_id::text FROM dlightrag_answer_committed_spills"
+                    " WHERE owner_id = $1 AND run_id = $2"
+                    " ORDER BY resource_id LIMIT $3",
+                    self._owner_id,
+                    self._run_id,
+                    limit,
+                )
+            else:
+                rows = await conn.fetch(
+                    "SELECT resource_id, content_digest, size_bytes, session_id::text,"
+                    " intent_id::text FROM dlightrag_answer_committed_spills"
+                    " WHERE owner_id = $1 AND run_id = $2 AND resource_id > $3"
+                    " ORDER BY resource_id LIMIT $4",
+                    self._owner_id,
+                    self._run_id,
+                    after_resource_id,
+                    limit,
+                )
+        return tuple(
+            CommittedSpillRecord(
+                resource_id=str(row["resource_id"]),
+                content_digest=str(row["content_digest"]),
+                size_bytes=int(row["size_bytes"]),
+                session_id=str(row["session_id"]),
+                intent_id=str(row["intent_id"]),
+            )
+            for row in rows
+        )
+
+    async def load_recent_spills(self, *, limit: int) -> tuple[CommittedSpillRecord, ...]:
+        _validate_spill_page_limit(limit)
+        async with self._connection() as conn:
+            rows = await conn.fetch(
+                "SELECT resource_id, content_digest, size_bytes, session_id::text,"
+                " intent_id::text FROM dlightrag_answer_committed_spills"
+                " WHERE owner_id = $1 AND run_id = $2"
+                " ORDER BY intent_id DESC, resource_id DESC LIMIT $3",
+                self._owner_id,
+                self._run_id,
+                limit,
+            )
+        return tuple(
+            CommittedSpillRecord(
+                resource_id=str(row["resource_id"]),
+                content_digest=str(row["content_digest"]),
+                size_bytes=int(row["size_bytes"]),
+                session_id=str(row["session_id"]),
+                intent_id=str(row["intent_id"]),
+            )
+            for row in rows
+        )
+
+
+async def write_inventory(
+    conn: Any,
+    owner_id: str,
+    run_id: uuid.UUID,
+    *,
+    upserts: Sequence[InventoryPathRecord],
+    deletes: Sequence[str] = (),
+    replace_all: bool = False,
+) -> None:
+    """Apply one inventory observation inside the caller's fenced transaction.
+
+    ``replace_all`` makes ``upserts`` the whole inventory: every other path is
+    removed. Otherwise ``deletes`` are removed first and ``upserts`` applied after,
+    so a path both deleted and observed stays. A path observed twice keeps its last
+    observation.
+    """
+    observed = {record.relative_path: record for record in upserts}
+    if replace_all:
+        await conn.execute(_DELETE_INVENTORY_EXCEPT, owner_id, run_id, list(observed))
+    elif deletes:
+        await conn.execute(_DELETE_INVENTORY_PATHS, owner_id, run_id, list(deletes))
+    if not observed:
+        return
+    records = list(observed.values())
+    await conn.execute(
+        _UPSERT_INVENTORY,
+        owner_id,
+        run_id,
+        [record.relative_path for record in records],
+        [record.entry_type for record in records],
+        [record.mode for record in records],
+        [record.size_bytes for record in records],
+        [record.content_digest for record in records],
+    )
+
+
+async def load_run_artifacts(
+    *,
+    owner_id: str,
+    run_id: uuid.UUID,
+    pool: ConnectionPool | None = None,
+) -> tuple[RunArtifactRecord, ...]:
+    """Read one Run's attached Artifact roots without a live claim."""
+    connection_pool = pool if pool is not None else await pg_pool.get()
+    async with connection_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT relative_path, label, size_bytes, content_digest, presentation"
+            " FROM dlightrag_answer_artifact_attachments"
+            " WHERE owner_id = $1 AND run_id = $2"
+            " ORDER BY relative_path",
+            owner_id,
+            run_id,
+        )
+    return tuple(
+        RunArtifactRecord(
+            relative_path=str(row["relative_path"]),
+            label=str(row["label"]),
+            size_bytes=int(row["size_bytes"]),
+            content_digest=str(row["content_digest"]),
+            presentation=str(row["presentation"]),
+        )
+        for row in rows
+    )
+
+
+async def load_session_notes(
+    *,
+    owner_id: str,
+    session_id: str,
+    pool: ConnectionPool | None = None,
+) -> tuple[SessionNoteRecord, ...]:
+    """Read one Agent Session's notes, by path, without a live claim."""
+    connection_pool = pool if pool is not None else await pg_pool.get()
+    async with connection_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT relative_path, content FROM dlightrag_answer_session_notes"
+            " WHERE owner_id = $1 AND session_id = $2::uuid"
+            " ORDER BY relative_path",
+            owner_id,
+            session_id,
+        )
+    return tuple(
+        SessionNoteRecord(relative_path=str(row["relative_path"]), content=bytes(row["content"]))
+        for row in rows
+    )
+
+
+async def load_run_inventory(
+    *,
+    owner_id: str,
+    run_id: uuid.UUID,
+    pool: ConnectionPool | None = None,
+) -> tuple[InventoryPathRecord, ...]:
+    """Read one Run's Workspace Inventory without a live claim."""
+    connection_pool = pool if pool is not None else await pg_pool.get()
+    async with connection_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT relative_path, entry_type, mode, size_bytes, content_digest"
+            " FROM dlightrag_answer_workspace_inventory"
+            " WHERE owner_id = $1 AND run_id = $2"
+            " ORDER BY relative_path",
+            owner_id,
+            run_id,
+        )
+    return tuple(_inventory_row(row) for row in rows)
+
+
+def _inventory_row(row: Any) -> InventoryPathRecord:
+    return InventoryPathRecord(
+        relative_path=str(row["relative_path"]),
+        entry_type=str(row["entry_type"]),
+        mode=int(row["mode"]) if row["mode"] is not None else None,
+        size_bytes=int(row["size_bytes"]),
+        content_digest=str(row["content_digest"]) if row["content_digest"] is not None else None,
+    )
+
+
+async def write_committed_spill(
+    conn: Any, owner_id: str, run_id: uuid.UUID, spill: CommittedSpillRecord
+) -> None:
+    """Record one committed spill inside the caller's fenced transaction.
+
+    A spill committed again keeps its first intent: the intent is what orders the
+    newest-first read.
+    """
+    await conn.execute(
+        "INSERT INTO dlightrag_answer_committed_spills ("
+        " owner_id, run_id, resource_id, content_digest, size_bytes, session_id, intent_id)"
+        " VALUES ($1, $2, $3, $4, $5, $6::uuid, $7::uuid)"
+        " ON CONFLICT (owner_id, run_id, resource_id) DO UPDATE SET"
+        " content_digest = EXCLUDED.content_digest, size_bytes = EXCLUDED.size_bytes",
+        owner_id,
+        run_id,
+        spill.resource_id,
+        spill.content_digest,
+        spill.size_bytes,
+        spill.session_id,
+        spill.intent_id,
+    )
+    await conn.execute(
+        "INSERT INTO dlightrag_answer_resources ("
+        " owner_id, run_id, resource_id, kind, safe_name, media_type, capabilities,"
+        " session_id, intent_id)"
+        " VALUES ($1, $2, $3, 'committed_spill', $3, 'text/plain', '{}'::jsonb, $4::uuid, $5::uuid)"
+        " ON CONFLICT (owner_id, run_id, resource_id) DO NOTHING",
+        owner_id,
+        run_id,
+        spill.resource_id,
+        spill.session_id,
+        spill.intent_id,
+    )
+
+
+__all__ = [
+    "PGAgentspaceStore",
+    "load_run_artifacts",
+    "load_run_inventory",
+    "load_session_notes",
+    "write_committed_spill",
+    "write_inventory",
+]

@@ -16,7 +16,10 @@ from docx import Document
 
 from dlightrag.engine.answer.resources import converters
 from dlightrag.engine.answer.resources.converters import ConversionLimitError, convert_resource
-from dlightrag.engine.answer.resources.docx_assets import AssetBindingError, docx_asset_occurrences
+from dlightrag.engine.answer.resources.docx_assets import (
+    AssetBindingError,
+    docx_asset_occurrences,
+)
 from dlightrag.engine.answer.resources.models import ResourceInput
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
@@ -65,7 +68,7 @@ async def test_unified_docx_gold_and_adopted_inventory(fixtures, name, monkeypat
             effects[-1].content, {e.resource_id: e.content for e in effects[:-1]}
         )
         assert snapshot.converter == "firecrawl-anydoc"
-        assert snapshot.converter_version == "0.2.4"
+        assert snapshot.converter_version == "0.2.5"
         assert snapshot.input_digest == hashlib.sha256(data).hexdigest()
         assert snapshot.fallback_reason is None
         assert snapshot.extraction_status == (

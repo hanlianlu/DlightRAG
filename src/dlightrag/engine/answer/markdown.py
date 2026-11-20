@@ -7,6 +7,8 @@ HTML rendering, highlighting and sanitizing remain the browser adapter's work.
 """
 
 import re
+from collections.abc import Callable
+from html import unescape
 
 from linkify_it import LinkifyIt
 from markdown_it import MarkdownIt
@@ -268,3 +270,31 @@ def link_targets(answer: str) -> list[str]:
                 if href.startswith(("http://", "https://")):
                     targets.setdefault(href, None)
     return list(targets)
+
+
+_MARKUP_TAG = re.compile(r"<[^>]{0,4096}>")
+
+
+def rendered_text(answer: str) -> str:
+    """The words a reader of the rendered answer sees, with its markup removed.
+
+    A content gate has to read what the reader reads. A reproduction can be split into
+    Markdown links or emphasis so that the source text holds no long run while the rendered
+    paragraph is the document word for word, so the answer is rendered and its tags are
+    dropped before the gate decides.
+    """
+    return unescape(_MARKUP_TAG.sub("", answer_markdown().render(answer))).strip()
+
+
+def mask_markdown(answer: str, mask: Callable[[str], str], placeholder: str) -> str:
+    """Mask one Markdown answer, falling back to the placeholder when its rendering leaks.
+
+    The mask works on the source text and the reader sees the rendered text; where the two
+    disagree — a run broken by link syntax in the source and whole on the page — there is no
+    span to replace in the source, so the answer is withheld rather than shipped.
+    """
+    masked = mask(answer)
+    rendered = rendered_text(masked)
+    if mask(rendered) != rendered:
+        return placeholder
+    return masked

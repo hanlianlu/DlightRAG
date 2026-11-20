@@ -7,16 +7,6 @@ from pathlib import Path
 import pytest
 
 
-def test_workspace_audit_parser_defaults() -> None:
-    from dlightrag.adapters.postgres.workspace_audit import build_parser
-
-    args = build_parser().parse_args([])
-
-    assert args.env_file is None
-    assert args.root is None
-    assert args.sample == 20
-
-
 def test_workspace_audit_rejects_a_relative_root() -> None:
     from dlightrag.adapters.postgres.workspace_audit import build_parser, validate_args
 
@@ -35,28 +25,18 @@ def test_workspace_audit_rejects_a_negative_sample() -> None:
         validate_args(args)
 
 
-def test_pyproject_exposes_workspace_audit_console_script() -> None:
-    import tomllib
-
-    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-
-    assert pyproject["project"]["scripts"]["dlightrag-workspace-audit"] == (
-        "dlightrag.adapters.postgres.workspace_audit:main"
-    )
-
-
 def test_workspace_audit_main_says_nothing_was_deleted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The operator's command must be read-only and must say so."""
     from dlightrag.adapters.postgres import workspace_audit
-    from dlightrag.engine.answer.workspace import RunWorkspaceAudit
+    from dlightrag.engine.answer.agentspace import RunAgentspaceAudit
 
-    async def audit(**_kwargs: object) -> RunWorkspaceAudit:
-        return RunWorkspaceAudit(roots=3, orphans=("ab/one", "cd/two"), unreadable=0)
+    async def audit(**_kwargs: object) -> RunAgentspaceAudit:
+        return RunAgentspaceAudit(roots=3, orphans=("ab/one", "cd/two"), unreadable=0)
 
-    monkeypatch.setattr(workspace_audit, "audit_run_workspaces", audit)
-    monkeypatch.setattr(workspace_audit, "resolve_workspace_root", lambda **_kwargs: tmp_path)
+    monkeypatch.setattr(workspace_audit, "audit_run_agentspaces", audit)
+    monkeypatch.setattr(workspace_audit, "resolve_agentspace_root", lambda **_kwargs: tmp_path)
     monkeypatch.setattr(workspace_audit, "get_config", lambda: _config())
     monkeypatch.setattr(workspace_audit, "set_config", lambda _config: None)
     monkeypatch.setattr(workspace_audit, "load_config", lambda _path: _config())

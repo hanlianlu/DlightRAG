@@ -87,8 +87,8 @@ DEFAULT_API_URL = "http://127.0.0.1:8000"
 #: The one TTL variable the stack's `.env` carries, and the retention the CLI
 #: states when nobody has set it. `apply_retention` owns the tables the collector
 #: cannot reach from that variable — a table a signal creates with its first
-#: write — so it reads the same statement rather than carrying a second copy of
-#: it that can drift.
+#: write, and the sessions table — so it reads the same statement rather than
+#: carrying a second copy of it that can drift.
 RETENTION_VARIABLE = "HYPERDX_OTEL_EXPORTER_TABLES_TTL"
 DEFAULT_RETENTION_DAYS = 7
 
@@ -253,24 +253,25 @@ def clickhouse_query(statement: str, *, port: int = _DEFAULT_CH_PORT, timeout: f
 #: The tables whose retention this command owns, and the clocks a TTL can key on,
 #: the newest schema's name first. The collector's single
 #: `HYPERDX_OTEL_EXPORTER_TABLES_TTL` covers the tables that exist when it starts;
-#: a table a signal creates with its first write is this command's.
+#: a table a signal creates with its first write — and the sessions table, which
+#: the plan wants shorter than the rest — is this command's.
 _TELEMETRY_TABLES = (
     "SELECT name FROM system.tables"
     " WHERE database = 'default' AND engine LIKE '%MergeTree%'"
-    " AND startsWith(name, 'otel_')"
+    " AND (startsWith(name, 'otel_') OR name = 'hyperdx_sessions')"
     " ORDER BY name"
 )
 
 _TELEMETRY_TIME_COLUMNS = (
     "SELECT table, name FROM system.columns"
     " WHERE database = 'default' AND startsWith(type, 'DateTime')"
-    " AND startsWith(table, 'otel_')"
+    " AND (startsWith(table, 'otel_') OR table = 'hyperdx_sessions')"
     " ORDER BY table, position"
 )
 
 #: The column names a TTL is known to key on, best first. `Timestamp` is what the
-#: collector's tables call it; `TimestampTime` is what ClickStack's newer schema
-#: calls the same thing.
+#: collector's tables call it; `TimestampTime` is what the sessions table's newer
+#: schema calls the same thing.
 _TIME_COLUMNS = ("Timestamp", "TimestampTime", "TimeUnix", "Start")
 
 #: The shape of a name this command pastes into DDL. ClickHouse's own catalog
@@ -437,6 +438,10 @@ def apply_retention(retention: Retention, *, port: int = _DEFAULT_CH_PORT) -> st
         report += f"; no time column to key on {', '.join(skipped)}"
     if refused:
         report += f"; not altering {', '.join(refused)} (its name is not an identifier)"
+    if "hyperdx_sessions" not in tables:
+        # Replay is the one signal whose table arrives with its first export, and
+        # an operator asking why it is missing should be told it is not there yet.
+        report += "; waiting for hyperdx_sessions (no replay exported yet)"
     return report
 
 

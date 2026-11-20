@@ -47,8 +47,16 @@ class SessionEntry:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class UserMessageEntry(SessionEntry):
+    """One message that replays to the model as any user message does.
+
+    ``origin`` says where it came from when that was not the owner: ``child_notification`` marks
+    a Child's settled result or guidance question that the Run handed its own agent as the next
+    input, so a reader that wants only the owner's words (the Session Memory Pass) can skip it.
+    """
+
     content: JsonValue
     acceptance_id: str | None = None
+    origin: Literal["child_notification"] | None = None
 
     entry_type: ClassVar[str] = "user_message"
 
@@ -56,6 +64,8 @@ class UserMessageEntry(SessionEntry):
         payload: dict[str, Any] = {"content": self.content}
         if self.acceptance_id is not None:
             payload["acceptance_id"] = self.acceptance_id
+        if self.origin is not None:
+            payload["origin"] = self.origin
         return payload
 
 
@@ -64,7 +74,7 @@ class AssistantMessageEntry(SessionEntry):
     """One complete validated provider response; partial streams are never durable.
 
     ``call`` is the model, parameters, prompt digests and timings the response was made with
-    (ADR 0041). It is written in the entry's own transaction, and is absent on an entry written
+    (ADR 0043). It is written in the entry's own transaction, and is absent on an entry written
     before it existed, on one whose model call left no record, and on one a recovery wrote from
     a result whose call was gone with its process.
     """
@@ -141,7 +151,7 @@ class ToolResultMessageEntry(SessionEntry):
             raise ValueError("executable ToolResult provenance must be complete")
 
     def canonical_payload(self) -> JsonValue:
-        return {
+        payload: dict[str, Any] = {
             "intent_id": self.intent_id.value if self.intent_id is not None else None,
             "source_index": self.source_index,
             "tool_name": self.result.tool_name,
@@ -155,6 +165,11 @@ class ToolResultMessageEntry(SessionEntry):
             "attempt_id": self.attempt_id.value if self.attempt_id is not None else None,
             "effective_input_digest": self.effective_input_digest,
         }
+        # Absent rather than null on a call no Tool reported facts for, so the payload a
+        # reader parses is the payload an older writer wrote.
+        if self.result.facts is not None:
+            payload["facts"] = self.result.facts
+        return payload
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -176,11 +191,42 @@ class ControlMessageEntry(SessionEntry):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class DeliveryWarningEntry(SessionEntry):
+    """One pre-delivery warning: what the reader's record would say if the Run stopped now.
+
+    It is internal evidence, not a human instruction: the runtime appends it after a final
+    response is proposed, so the model can correct the record before the operation completes.
+    """
+
+    operation_id: str
+    attempt: int
+    findings: tuple[str, ...]
+
+    entry_type: ClassVar[str] = "delivery_warning"
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if not self.operation_id:
+            raise ValueError("Delivery warning identity cannot be empty")
+        if self.attempt < 1:
+            raise ValueError("Delivery warning attempt must be positive")
+        if not self.findings:
+            raise ValueError("Delivery warning must carry findings")
+
+    def canonical_payload(self) -> JsonValue:
+        return {
+            "operation_id": self.operation_id,
+            "attempt": self.attempt,
+            "findings": list(self.findings),
+        }
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class CompactionEntry(SessionEntry):
     """One branch-local immutable context projection checkpoint.
 
     ``call`` is the model, parameters, prompt digests and timings of the call that wrote its
-    summary (ADR 0041), absent where the entry predates it or that call left no record.
+    summary (ADR 0043), absent where the entry predates it or that call left no record.
     """
 
     projection_id: ProjectionId
@@ -237,6 +283,7 @@ type SessionEntryKind = (
     | AssistantMessageEntry
     | ToolResultMessageEntry
     | ControlMessageEntry
+    | DeliveryWarningEntry
     | CompactionEntry
 )
 
@@ -247,6 +294,7 @@ ENTRY_TYPE_TO_CLASS: dict[str, type[SessionEntry]] = {
         AssistantMessageEntry,
         ToolResultMessageEntry,
         ControlMessageEntry,
+        DeliveryWarningEntry,
         CompactionEntry,
     )
 }
@@ -270,10 +318,14 @@ def decode_entry_payload(
         "parent_entry_id": parent_entry_id,
     }
     if entry_type == "user_message":
+        origin = payload.get("origin")
+        if origin not in (None, "child_notification"):
+            raise ValueError(f"unknown UserMessage origin: {origin}")
         return UserMessageEntry(
             **common,
             content=payload["content"],
             acceptance_id=(str(payload["acceptance_id"]) if payload.get("acceptance_id") else None),
+            origin=origin,
         )
     if entry_type == "assistant_message":
         calls = tuple(
@@ -309,6 +361,7 @@ def decode_entry_payload(
                 parts=decode_tool_content(payload["content"]),
                 details=None,
                 cached=bool(payload.get("cached") or False),
+                facts=payload.get("facts"),
             ),
             contract_version=int(payload["contract_version"]),
             input_schema_digest=str(payload["input_schema_digest"]),
@@ -323,6 +376,13 @@ def decode_entry_payload(
             **common,
             control_id=str(payload["control_id"]),
             content=payload["content"],
+        )
+    if entry_type == "delivery_warning":
+        return DeliveryWarningEntry(
+            **common,
+            operation_id=str(payload["operation_id"]),
+            attempt=int(payload["attempt"]),
+            findings=tuple(str(item) for item in payload.get("findings") or ()),
         )
     if entry_type == "compaction":
         return CompactionEntry(
@@ -353,6 +413,7 @@ __all__ = [
     "AssistantMessageEntry",
     "CompactionEntry",
     "ControlMessageEntry",
+    "DeliveryWarningEntry",
     "SessionEntry",
     "SessionEntryKind",
     "ToolResultMessageEntry",

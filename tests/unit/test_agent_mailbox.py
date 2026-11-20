@@ -12,12 +12,16 @@ import pytest
 from pydantic import SecretStr
 
 from dlightrag.adapters.agent_mailbox import S3AgentMailbox
-from dlightrag.engine.answer.agent_browser import (
-    PASSWORD_MASK,
-    AgentMailboxError,
-    FilledPasswords,
+from dlightrag.engine.answer.agent_browser.accounts import (
     generate_password,
+)
+from dlightrag.engine.answer.agent_browser.mailbox import (
+    AgentMailboxError,
     summarize_mail,
+)
+from dlightrag.engine.answer.agent_browser.passwords import (
+    PASSWORD_MASK,
+    FilledPasswords,
 )
 from tests.support.loopback import bypass_proxies
 from tests.support.s3 import StoredObject, s3_stub
@@ -106,9 +110,11 @@ def test_codes_are_the_tokens_that_look_like_one_and_never_more_than_five() -> N
         "pin 12 or 123456789, 482913 and ABC-123, K9F2X7 then AB12CD34 ok 111111 222222 333333 done"
     )
 
-    codes = summarized(message(body)).codes
+    summary = summarized(message(body))
 
-    assert codes == ("482913", "ABC-123", "K9F2X7", "AB12CD34", "111111")
+    assert summary.codes == ("482913", "ABC-123", "K9F2X7", "AB12CD34", "111111")
+    # The codes past the cap are reported, as the links past theirs already were.
+    assert summary.omitted_codes == 2
 
 
 def test_a_message_that_cannot_be_decoded_is_not_readable() -> None:
@@ -125,7 +131,9 @@ def test_a_header_is_one_line_without_control_characters_and_cut_at_200() -> Non
 
     summary = summarized(raw)
 
-    assert summary.subject.startswith("Hello there friend yyyy") and len(summary.subject) == 200
+    assert summary.subject.startswith("Hello there friend yyyy")
+    # The cut is marked and counted rather than left to look like the whole header.
+    assert summary.subject.endswith(" … [200 of 319 characters]")
     assert "\x07" not in summary.subject and "\n" not in summary.subject
 
 
@@ -172,7 +180,7 @@ def stored(minutes_ago: float, body: bytes = b"mail") -> StoredObject:
 
 def mailbox(endpoint: str, *, prefix: str = "mail", region: str | None = "auto") -> S3AgentMailbox:
     return S3AgentMailbox(
-        alias_domain="orliantra.cc",
+        alias_domain="mail.example",
         bucket="mailbox",
         prefix=prefix,
         endpoint=endpoint,
@@ -191,7 +199,7 @@ def _no_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_an_alias_is_read_from_its_own_prefix_newest_first_since_the_window(
     region: str | None,
 ) -> None:
-    alias, other = "a1@orliantra.cc", "b2@orliantra.cc"
+    alias, other = "a1@mail.example", "b2@mail.example"
     objects = {
         f"mail/{alias}/old.eml": stored(60, b"too old"),
         f"mail/{alias}/first.eml": stored(10, b"first"),
@@ -235,7 +243,7 @@ async def test_the_client_is_given_a_region_only_when_one_is_set(
 
     for region in (None, "us-east-1"):
         await mailbox("http://127.0.0.1:9", region=region).messages(
-            "a1@orliantra.cc", since=NOW, limit=5, max_bytes=1000
+            "a1@mail.example", since=NOW, limit=5, max_bytes=1000
         )
 
     assert ["region_name" in options for options in built] == [False, True]
@@ -243,7 +251,7 @@ async def test_the_client_is_given_a_region_only_when_one_is_set(
 
 
 async def test_a_message_over_the_size_asked_is_listed_and_never_fetched() -> None:
-    alias = "a1@orliantra.cc"
+    alias = "a1@mail.example"
     objects = {f"mail/{alias}/big.eml": stored(1, b"x" * 100), f"mail/{alias}/small.eml": stored(2)}
     async with s3_stub(objects) as stub:
         listing = await mailbox(stub.endpoint).messages(
@@ -255,7 +263,7 @@ async def test_a_message_over_the_size_asked_is_listed_and_never_fetched() -> No
 
 
 async def test_an_empty_prefix_puts_the_alias_folders_at_the_root() -> None:
-    alias = "a1@orliantra.cc"
+    alias = "a1@mail.example"
     async with s3_stub({f"{alias}/one.eml": stored(1)}) as stub:
         listing = await mailbox(stub.endpoint, prefix="").messages(
             alias, since=NOW - timedelta(hours=1), limit=5, max_bytes=1000
@@ -267,7 +275,7 @@ async def test_an_empty_prefix_puts_the_alias_folders_at_the_root() -> None:
 async def test_an_alias_with_more_stored_messages_than_a_listing_reads_is_reported_truncated() -> (
     None
 ):
-    alias = "a1@orliantra.cc"
+    alias = "a1@mail.example"
     objects = {f"mail/{alias}/{n:03}.eml": stored(500 - n) for n in range(25)}
     # Two keys a page, so ten pages read the first twenty.
     async with s3_stub(objects, page_keys=2) as stub:
@@ -283,7 +291,7 @@ async def test_an_alias_with_more_stored_messages_than_a_listing_reads_is_report
 async def test_a_bucket_that_cannot_be_read_says_why_by_its_code_and_nothing_else(
     failure: str,
 ) -> None:
-    alias = "a1@orliantra.cc"
+    alias = "a1@mail.example"
     async with s3_stub({}, denied=True) as stub:
         endpoint = stub.endpoint if failure == "denied" else "http://127.0.0.1:9"
 

@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any, cast
 
 import asyncpg
@@ -19,9 +20,9 @@ from dlightrag.adapters.postgres.answer.session_repository import (
     PGAgentSessionRepository,
     PGProgressStore,
 )
-from dlightrag.adapters.postgres.runtime import PGRunBlobStore
+from dlightrag.adapters.postgres.runtime.run_blob_store import PGRunBlobStore
 from dlightrag.adapters.postgres.runtime.run_store import PGRunStore
-from dlightrag.application.answer_runs import AnswerService
+from dlightrag.application.answer_runs.service import AnswerService
 from dlightrag.engine.agent.session.effects import ToolResultEntry
 from dlightrag.engine.agent.session.entries import (
     AssistantMessageEntry,
@@ -52,7 +53,6 @@ from dlightrag.engine.agent.session.projection import (
     ContextProjection,
     projection_source_digest,
 )
-from dlightrag.engine.agent.session.provenance import call_payload, prompt_digests
 from dlightrag.engine.agent.session.registers import (
     DeleteRegister,
     LaneHead,
@@ -77,13 +77,17 @@ from dlightrag.engine.agent.session.transactions import (
     TransactionCommit,
 )
 from dlightrag.engine.agent.tool_content import ToolResourceAttachmentPart, ToolTextPart
-from dlightrag.engine.agent.tools import AgentTool, ToolResult
-from dlightrag.engine.ai.fingerprints import model_invocation_fingerprint
+from dlightrag.engine.agent.tools.contracts import (
+    AgentTool,
+    ResourceAttachmentBytes,
+    ToolResult,
+)
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
-from dlightrag.engine.ai.provenance import ModelCall
-from dlightrag.engine.ai.settings import ModelSettings
-from dlightrag.engine.answer.fast import FastSessionHost, ensure_session_lane
+from dlightrag.engine.answer.execution.executor import AnswerExecutor
+from dlightrag.engine.answer.fast.session_host import FastSessionHost, ensure_session_lane
+from dlightrag.engine.answer.resource_settlement import attached_resource_update
 from dlightrag.engine.runtime.blob_chunks import BLOB_CHUNK_BYTES, plan_blob
+from dlightrag.engine.runtime.coordinator import RunSession
 from dlightrag.engine.runtime.progress import (
     StageCommit,
     StageEvidenceConflict,
@@ -98,6 +102,7 @@ from dlightrag.engine.runtime.records import (
     RunAccessScope,
 )
 from dlightrag.engine.runtime.settlements import (
+    AgentspaceInventoryUpdate,
     ArtifactAttachmentUpdate,
     CommittedSpillUpdate,
     CompleteBlobDescriptor,
@@ -107,9 +112,8 @@ from dlightrag.engine.runtime.settlements import (
     MemoryOperationSettlement,
     OpaqueEvidenceWrite,
     OpaqueFetchedResourceWrite,
-    WorkspaceInventoryUpdate,
 )
-from tests.in_memory_session_repository import MemoryAgentSessionRepository
+from tests.support.in_memory_session_repository import MemoryAgentSessionRepository
 from tests.support.pg import PG_CONN_KWARGS, drop_database, skip_without_postgres
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
@@ -429,13 +433,14 @@ def _tool_result(
     *,
     parts=None,
     entry_id: EntryId | None = None,
+    tool_name: str = "lookup",
 ) -> ToolResultMessageEntry:
     return ToolResultMessageEntry(
         entry_id=entry_id or EntryId.new(),
         session_id=session_id,
         timestamp=datetime.now(UTC),
         result=ToolResultEntry(
-            tool_name="lookup",
+            tool_name=tool_name,
             call_id="c1",
             outcome="succeeded",
             parts=parts or (ToolTextPart("found"),),
@@ -496,57 +501,6 @@ async def test_agent_session_runtime_memory_and_pg_have_atomic_state_parity(pool
     assert len(memory.applied_host_deltas(memory_id)) == 1
     async with pool.acquire() as conn:
         assert await conn.fetchval("SELECT count(*) FROM dlightrag_answer_evidence") == 1
-
-
-async def test_a_step_keeps_its_call_through_postgres(pool) -> None:
-    """A `call` is written with its entry, read back as written, and absent where none was stated."""
-    claimed = await _claim(pool)
-    store = claimed.execution.session_repository
-    session_id = _claimed_session(claimed)
-    effects = Effects(session_id=session_id)
-    stated = ModelCall.of(
-        model_invocation_fingerprint(ModelSettings(model="m")),
-        served_model="m-2026",
-        temperature=0.2,
-        max_tokens=100,
-        tool_choice="auto",
-        response_format=None,
-        reasoning=None,
-        model_kwargs={},
-        queued_seconds=0.0,
-        duration_seconds=0.012,
-    )
-    effects.turns[0] = replace(effects.turns[0], call=stated)  # the second turn states none
-    runtime = AgentSessionRuntime(
-        repository=store,
-        effects=effects,
-        tools=[_TOOL],
-        fencing_epoch=claimed.execution.fencing_epoch,
-        holder="run",
-    )
-    accepted = await runtime.accept(
-        session_id=session_id,
-        lane_id=LaneId.main(),
-        idempotency_key="call",
-        content="question",
-        plan=_PLAN,
-    )
-    final = await runtime.drive(session_id=session_id, operation_id=accepted.operation_id)
-    assert isinstance(final.state, OperationCompleted)
-
-    rows = await pool.fetch(
-        "SELECT payload_json FROM dlightrag_agent_session_entries"
-        " WHERE owner_id = $1 AND session_id = $2 AND entry_type = 'assistant_message'"
-        " ORDER BY sequence",
-        _OWNER,
-        uuid.UUID(session_id.value),
-    )
-    stored = [json.loads(row["payload_json"]).get("call") for row in rows]
-    prompt = prompt_digests([{"role": "user", "content": "exact"}], [])  # what Effects assembled
-    expected = call_payload(stated, role="query", prompt=prompt, plan_digest=_PLAN.digest)
-    assert stored == [expected, None]
-    entries = (await store.load(session_id)).entries
-    assert [e.call for e in entries if isinstance(e, AssistantMessageEntry)] == stored
 
 
 async def test_a_read_only_group_pends_and_recovers_through_postgres(pool) -> None:
@@ -1639,6 +1593,83 @@ async def test_fetched_resource_host_delta_writes_complete_blob(pool) -> None:
     }
 
 
+async def test_the_images_a_run_attached_are_the_rows_its_answer_may_place(pool) -> None:
+    """What a tool attached as an image settles as a row an Answer's held-image check admits.
+
+    A fetched page's image settles beside it and is not admitted; the reader that serves the
+    run-resource route finds the admitted row, so an admitted id is one a reader can open.
+    """
+    claimed = await _claim(pool)
+    store = claimed.execution.session_repository
+    epoch = claimed.execution.fencing_epoch
+    session_id = _claimed_session(claimed)
+    await _seed_transaction_session(store, session_id, epoch)
+    intent_id = IntentId.new()
+    picture = b"\x89PNG viewed picture"
+    attached = attached_resource_update(
+        ResourceAttachmentBytes(
+            resource_id="res-view-held",
+            filename="chart",
+            mime_type="image/png",
+            source_locator="res-document",
+            content=picture,
+        ),
+        session_id=session_id.value,
+        intent_id=intent_id.value,
+    )
+    fetched_image = b"\x89PNG fetched with a page"
+    plan = plan_blob(fetched_image)
+    page_image = FetchedResourceSettlementUpdate(
+        resource=OpaqueFetchedResourceWrite(
+            resource_id="res-web-image",
+            ordinal=1,
+            safe_name="logo.png",
+            media_type="image/png",
+            capabilities={
+                "resource_kind": "web",
+                "admission_origin": "agent",
+                "acquisition": "direct_http",
+                "resource_aliases": [],
+            },
+            blob_digest=plan.digest,
+            source_locator_digest=hashlib.sha256(b"https://example.test/logo.png").hexdigest(),
+            source_locator=b"https://example.test/logo.png",
+            session_id=session_id.value,
+            intent_id=intent_id.value,
+        ),
+        complete_blob=CompleteBlobDescriptor(
+            digest=plan.digest,
+            total_bytes=plan.total_bytes,
+            chunks=tuple(plan.chunk(fetched_image, index) for index in range(plan.chunk_count)),
+        ),
+    )
+    outcome = await _append_transaction_entry(
+        store,
+        session_id,
+        _tool_result(session_id, intent_id),
+        fencing_epoch=epoch,
+        intent_id=intent_id,
+        host_delta=EffectHostUpdate(fetched=(attached, page_image)),
+    )
+    assert isinstance(outcome, TransactionCommit)
+    runs = await _store(pool)
+    answering = SimpleNamespace(_store=runs)
+    run = SimpleNamespace(owner_id=_OWNER, run_id=claimed.run.run_id)
+
+    held = await AnswerExecutor._held_image_ids(
+        cast(AnswerExecutor, answering),
+        cast(RunSession, run),
+        "![chart](evidence:res-view-held) ![logo](evidence:res-web-image)",
+    )
+
+    assert held == {"res-view-held"}
+    served = await runs.read_run_resource_row(
+        owner_id=_OWNER, run_id=claimed.run.run_id, resource_id="res-view-held"
+    )
+    assert served is not None
+    assert served.mime_type == "image/png"
+
+
 async def test_fetched_blob_size_collision_is_an_evidence_identity_conflict(pool) -> None:
     from dlightrag.adapters.postgres.answer.session_repository import _EvidenceIdentityConflict
 
@@ -1786,7 +1817,7 @@ async def test_host_delta_commits_workspace_inventory_and_spill(pool) -> None:
             )
             for resource_id in spill_ids
         ),
-        workspace_inventory=WorkspaceInventoryUpdate(
+        workspace_inventory=AgentspaceInventoryUpdate(
             upserts=(
                 InventoryPathRecord(
                     relative_path="notes/a.md",
@@ -1836,7 +1867,7 @@ def _files(*files: tuple[str, int]) -> tuple[InventoryPathRecord, ...]:
 
 
 async def _settle_inventory(
-    store: Any, session_id: SessionId, epoch: int, update: WorkspaceInventoryUpdate
+    store: Any, session_id: SessionId, epoch: int, update: AgentspaceInventoryUpdate
 ) -> None:
     """Settle one tool result whose Host update carries ``update``."""
     intent_id = IntentId.new()
@@ -1880,12 +1911,12 @@ async def test_a_workspace_rescan_rewrites_only_what_changed(pool) -> None:
 
     rescan = _files(("kept.md", 1), ("grown.md", 2), ("removed.md", 3))
     await _settle_inventory(
-        store, session_id, epoch, WorkspaceInventoryUpdate(upserts=rescan, replace_all=True)
+        store, session_id, epoch, AgentspaceInventoryUpdate(upserts=rescan, replace_all=True)
     )
     before = await _inventory_rows(pool, claimed.run.run_id)
     rescan = _files(("kept.md", 1), ("grown.md", 20), ("added.md", 4))
     await _settle_inventory(
-        store, session_id, epoch, WorkspaceInventoryUpdate(upserts=rescan, replace_all=True)
+        store, session_id, epoch, AgentspaceInventoryUpdate(upserts=rescan, replace_all=True)
     )
     after = await _inventory_rows(pool, claimed.run.run_id)
 
@@ -1905,7 +1936,7 @@ async def test_an_inventory_delta_deletes_its_paths_before_its_observations(pool
     await _seed_transaction_session(store, session_id, epoch)
     initial = _files(("gone.md", 1), ("moved.md", 2), ("kept.md", 3))
     await _settle_inventory(
-        store, session_id, epoch, WorkspaceInventoryUpdate(upserts=initial, replace_all=True)
+        store, session_id, epoch, AgentspaceInventoryUpdate(upserts=initial, replace_all=True)
     )
     before = await _inventory_rows(pool, claimed.run.run_id)
 
@@ -1913,7 +1944,7 @@ async def test_an_inventory_delta_deletes_its_paths_before_its_observations(pool
         store,
         session_id,
         epoch,
-        WorkspaceInventoryUpdate(
+        AgentspaceInventoryUpdate(
             # A path observed twice in one delta keeps its last observation.
             upserts=_files(("moved.md", 5), ("moved.md", 9), ("new.md", 4)),
             deletes=("gone.md", "moved.md", "never-there.md"),
@@ -1934,7 +1965,7 @@ async def test_session_notes_are_owned_by_the_session_and_outlive_the_run(pool) 
     reclamation cannot take memory with it — which is the whole reason the plane
     exists (ADR 0022).
     """
-    from dlightrag.engine.runtime.workspace import SessionNoteRecord as Note
+    from dlightrag.engine.runtime.agentspace import SessionNoteRecord as Note
 
     claimed = await _claim(pool)
     store = claimed.execution.session_repository
@@ -2003,11 +2034,11 @@ async def test_session_notes_are_owned_by_the_session_and_outlive_the_run(pool) 
 
 
 async def test_session_notes_refuse_an_over_budget_note_without_evicting_one(pool) -> None:
-    from dlightrag.engine.runtime.workspace import (
+    from dlightrag.engine.runtime.agentspace import (
         SESSION_NOTES_BUDGET_REFUSED,
         SESSION_NOTES_MAX_BYTES,
     )
-    from dlightrag.engine.runtime.workspace import SessionNoteRecord as Note
+    from dlightrag.engine.runtime.agentspace import SessionNoteRecord as Note
 
     claimed = await _claim(pool)
     store = claimed.execution.session_repository
@@ -2060,6 +2091,7 @@ async def test_host_delta_upserts_artifact_attachment_by_root_path(pool) -> None
         presentation="markdown",
         session_id=session_id.value,
         intent_id=first_intent.value,
+        sources=("analysis.build.py", "data.csv"),
     )
     outcome = await _append_transaction_entry(
         store,
@@ -2115,7 +2147,7 @@ async def test_host_delta_upserts_artifact_attachment_by_root_path(pool) -> None
         fencing_epoch=epoch,
         intent_id=mutation_intent,
         host_delta=EffectHostUpdate(
-            workspace_inventory=WorkspaceInventoryUpdate(
+            workspace_inventory=AgentspaceInventoryUpdate(
                 upserts=(
                     InventoryPathRecord(
                         relative_path="analysis.md",
@@ -2140,6 +2172,9 @@ async def test_host_delta_upserts_artifact_attachment_by_root_path(pool) -> None
     assert rows[0].content_digest == "b" * 64
     assert rows[0].size_bytes == 11
     assert rows[0].intent_id == second_intent.value
+    # The sources ride on the row and come back through the reader the terminal stage
+    # publishes from, which is the only reason reinstating the row is enough (ADR 0052).
+    assert rows[0].sources == ("analysis.build.py", "data.csv")
 
 
 async def test_memory_operation_event_is_exactly_once_with_transaction(pool) -> None:
@@ -2564,9 +2599,13 @@ async def test_postgres_and_service_transcript_project_typed_tool_result_parts(p
         run_id=claimed.run.run_id,
         session_id=session_id.value,
         limit=20,
+        scope="lane",
     )
     assert [message["role"] for message in projected] == ["user", "assistant", "tool"]
-    assert projected[-1] == {
+    # Every message states when its entry was written, in the form every public record carries.
+    written_at = projected[-1]["at"]
+    assert isinstance(written_at, str) and written_at.endswith("Z")
+    assert {key: value for key, value in projected[-1].items() if key != "at"} == {
         "sequence": projected[-1]["sequence"],
         "role": "tool",
         "tool_call_id": "c1",
@@ -2594,7 +2633,9 @@ async def test_postgres_and_service_transcript_project_typed_tool_result_parts(p
         resources=cast(Any, None),
         model_invocation_fingerprint_for_role=cast(Any, None),
         agent_may_register=cast(Any, None),
+        policies=cast(Any, None),
         child_roster_cursor_secret=b"agent-session-child-roster-test",
+        protected_skill_documents=lambda: frozenset(),
     )
     transcript = await service.transcript_tail(
         owner_id=_OWNER,
@@ -2827,6 +2868,7 @@ async def test_product_session_spans_answer_runs_and_projects_selected_lane(pool
         run_id=branch.run.run_id,
         session_id=session_id.value,
         limit=20,
+        scope="lane",
     )
     assert [message["content"] for message in transcript] == [
         "first question",
@@ -2836,6 +2878,88 @@ async def test_product_session_spans_answer_runs_and_projects_selected_lane(pool
         "branch question",
         "branch answer",
     ]
+    across = await run_store.search_run_transcript(
+        owner_id=_OWNER,
+        run_id=branch.run.run_id,
+        terms=["branch"],
+        require_all=True,
+        limit=20,
+    )
+    assert all("branch" in message["snippet"] for message in across)
+
+    assert {message["agent"] for message in across} == {"main"}, "a Run's own agent is named main"
+    capped = await run_store.search_run_transcript(
+        owner_id=_OWNER,
+        run_id=branch.run.run_id,
+        terms=["branch"],
+        require_all=True,
+        limit=1,
+    )
+    assert len(capped) == 1 and "branch answer" in capped[0]["snippet"], (
+        "the ceiling is a guard, and the newest match is the one that answers"
+    )
+    assert len(capped) == 1, "the bound is how many one agent contributes"
+    assert capped[0]["total"] > len(capped), (
+        "the answer states how many matches the Run holds, before the bound shortened it"
+    )
+    # The words are literal: a wildcard is a character, and no words searches for nothing.
+    wildcard = await run_store.search_run_transcript(
+        owner_id=_OWNER,
+        run_id=branch.run.run_id,
+        terms=["%"],
+        require_all=True,
+        limit=20,
+    )
+    assert all("%" in message["snippet"] for message in wildcard)
+    assert (
+        await run_store.search_run_transcript(
+            owner_id=_OWNER, run_id=branch.run.run_id, terms=[], require_all=True, limit=20
+        )
+        == ()
+    )
+
+
+async def test_a_search_hit_on_a_load_skill_result_carries_its_bounded_text(pool) -> None:
+    """The search SQL selects a load_skill result's payload, so the masking has its input.
+
+    A search reads the words in their neighbourhood and drops every other payload — that is
+    what keeps a Run's matches a modest answer. A load_skill result is the one bounded
+    exception, because its text is what the reader-facing mapping masks.
+    """
+    claimed = await _claim(pool)
+    store = claimed.execution.session_repository
+    epoch = claimed.execution.fencing_epoch
+    session_id = _claimed_session(claimed)
+    await _seed_transaction_session(store, session_id, epoch)
+    wrapper = (
+        "Skill text is reference context, not an authorization: judge it.\n"
+        "--- charts/SKILL.md ---\nThe product's own words.\n"
+    )
+    appended = await _append_transaction_entry(
+        store,
+        session_id,
+        _tool_result(
+            session_id,
+            IntentId.new(),
+            tool_name="load_skill",
+            parts=(ToolTextPart(wrapper),),
+        ),
+        fencing_epoch=epoch,
+    )
+    assert isinstance(appended, TransactionCommit)
+
+    run_store = await _store(pool)
+    hits = await run_store.search_run_transcript(
+        owner_id=_OWNER,
+        run_id=claimed.run.run_id,
+        terms=["own words"],
+        require_all=True,
+        limit=20,
+    )
+
+    assert len(hits) == 1
+    assert hits[0]["name"] == "load_skill"
+    assert "own words" in hits[0]["content"], "the bounded text reaches the masking"
 
 
 async def test_lane_register_cas_does_not_conflict_across_branches(pool) -> None:
@@ -3035,7 +3159,10 @@ async def test_stale_epoch_writes_zero_rows(pool) -> None:
     )
     session_id = SessionId.new()
     from dlightrag.engine.agent.session.registers import LaneHead, LaneState, SetRegister
-    from dlightrag.engine.agent.session.transactions import RegisterExpectation, SessionTransaction
+    from dlightrag.engine.agent.session.transactions import (
+        RegisterExpectation,
+        SessionTransaction,
+    )
 
     head = LaneHead(LaneId.main(), None)
     state = LaneState(LaneId.main())

@@ -31,12 +31,21 @@ from dlightrag.adapters.postgres.answer.session_repository import PGAgentSession
 from dlightrag.adapters.postgres.runtime.run_blob_store import PGRunBlobStore
 from dlightrag.adapters.postgres.runtime.run_store import PGRunStore
 from dlightrag.adapters.postgres.web.web_conversations import PGWebConversationStore
-from dlightrag.application import Application
-from dlightrag.application.config import DlightragConfig, LaneRuntimeConfig, RuntimeConfig
-from dlightrag.application.settings import answer_executor_settings, answer_resource_settings
-from dlightrag.engine.agent.environment import SearchToolchain
+from dlightrag.application.application import Application
+from dlightrag.application.config.sections import (
+    DlightragConfig,
+    LaneRuntimeConfig,
+    RuntimeConfig,
+)
+from dlightrag.application.settings.projections import (
+    answer_executor_settings,
+    answer_resource_settings,
+)
 from dlightrag.engine.agent.environment.access import AccessScheduler
 from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
+from dlightrag.engine.agent.environment.toolchain import (
+    SearchToolchain,
+)
 from dlightrag.engine.agent.session.effects import canonical_json
 from dlightrag.engine.agent.session.entries import ToolResultMessageEntry, UserMessageEntry
 from dlightrag.engine.agent.session.fold import PriorTurns
@@ -55,7 +64,10 @@ from dlightrag.engine.agent.session.transactions import (
     SessionTransaction,
     TransactionCommit,
 )
-from dlightrag.engine.agent.tools import ToolResult, ToolRuntime
+from dlightrag.engine.agent.tools.contracts import (
+    ToolResult,
+    ToolRuntime,
+)
 from dlightrag.engine.agent.tools.files import ResourceReadRequest
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
@@ -63,33 +75,32 @@ from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
 from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
-from dlightrag.engine.answer.agent_browser import (
+from dlightrag.engine.answer.agent_browser.contracts import (
     AgentBrowserBinding,
     BrowserHolder,
     BrowserProvider,
 )
 from dlightrag.engine.answer.citations.streaming import AnswerStream
-from dlightrag.engine.answer.execution import (
-    AnswerExecutor,
-    AnswerResourceResolver,
-    OrchestratorRun,
-)
 from dlightrag.engine.answer.execution import executor as answer_executor_module
+from dlightrag.engine.answer.execution.executor import AnswerExecutor, OrchestratorRun
 from dlightrag.engine.answer.execution.input import (
     AnswerRunInput,
     PinnedModelProfile,
     model_reasoning_settings,
     new_resource_identity,
 )
-from dlightrag.engine.answer.fast import FastRunBoundaries
-from dlightrag.engine.answer.orchestration import AnswerOrchestrator
+from dlightrag.engine.answer.execution.resources import AnswerResourceResolver
+from dlightrag.engine.answer.fast.boundaries import FastRunBoundaries
+from dlightrag.engine.answer.orchestration.orchestrator import AnswerOrchestrator
 from dlightrag.engine.answer.publication import ArtifactIssue, PublicationLimits, PublicationPlan
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 from dlightrag.engine.answer.tools.artifacts import attach_artifact_tool
 from dlightrag.engine.answer.tools.resources import make_resource_reader
 from dlightrag.engine.answer.tools.subagents import SubagentHost
-from dlightrag.engine.rag.retrieval import RetrievalResult
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalResult,
+)
 from dlightrag.engine.runtime.coordinator import (
     RunCoordinator,
     RunSession,
@@ -549,7 +560,10 @@ async def test_session_turn_survives_a_new_worker(store: FingerprintingRunStore)
     from dlightrag.engine.agent.session.entries import AssistantMessageEntry
     from dlightrag.engine.agent.session.ids import EntryId, LaneId, SessionId
     from dlightrag.engine.agent.session.registers import LaneHead, LaneState, SetRegister
-    from dlightrag.engine.agent.session.transactions import RegisterExpectation, SessionTransaction
+    from dlightrag.engine.agent.session.transactions import (
+        RegisterExpectation,
+        SessionTransaction,
+    )
 
     async def body(session: RunSession) -> RunExecutionOutcome:
         repository = session.execution.session_repository
@@ -861,7 +875,10 @@ async def test_session_round_trips_through_jsonb(store: FingerprintingRunStore) 
     from dlightrag.engine.agent.session.fold import fold_entries
     from dlightrag.engine.agent.session.ids import EntryId, LaneId, SessionId
     from dlightrag.engine.agent.session.registers import LaneHead, LaneState, SetRegister
-    from dlightrag.engine.agent.session.transactions import RegisterExpectation, SessionTransaction
+    from dlightrag.engine.agent.session.transactions import (
+        RegisterExpectation,
+        SessionTransaction,
+    )
 
     assert creation.run.prepared_input is not None
     session_id = SessionId(str(creation.run.prepared_input["agent_session_id"]))
@@ -1504,6 +1521,21 @@ async def test_async_children_run_while_parent_progresses_and_barrier_adopts_res
         "research",
         "child_result",
     ]
+    # The Child's result reached the parent Session as input the owner never wrote, and says so.
+    routing = await store.load_routing(owner_id="owner-async-child", run_id=creation.run.run_id)
+    assert routing is not None
+    reader = PGAgentSessionRepository(
+        pool=cast(Any, store)._operation_pool,
+        owner_id="owner-async-child",
+        run_id=uuid.UUID(creation.run.run_id),
+        worker_id="reader",
+        lease_owner="reader",
+        fencing_epoch=1,
+    )
+    snapshot = await reader.load(SessionId(routing.agent_session_id))
+    users = [entry for entry in snapshot.tree.ancestry() if isinstance(entry, UserMessageEntry)]
+    assert [entry.origin for entry in users] == [None, "child_notification"]
+    assert str(users[1].content).startswith("Child ")
     assert run.result["trace"]["usage"]["child_usage_details"] == {
         "input_tokens": 4,
         "output_tokens": 2,
@@ -2434,9 +2466,13 @@ async def test_publication_correction_is_one_linked_agent_operation(
         attachments: Any,
         limits: Any,
         contexts: Any,
+        protected_digests: Any = frozenset(),
+        protected_index: Any = None,
+        protected_text_exempt_names: Any = (),
     ) -> PublicationPlan:
         nonlocal publication_calls
-        del attachments, limits, contexts
+        del attachments, limits, contexts, protected_digests, protected_index
+        del protected_text_exempt_names
         publication_calls += 1
         if publication_calls == 1:
             return PublicationPlan(

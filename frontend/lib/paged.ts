@@ -6,15 +6,15 @@ export type PageLoadState = 'idle' | 'loading' | 'error';
 
 /** How the latest next-page load ended: null while any load runs, and until
  *  a next-page load ends after start(), cancel(), or reset(). */
-export type NextPageOutcome = 'loaded' | 'failed' | null;
+type NextPageOutcome = 'loaded' | 'failed' | null;
 
 /** Any keyset page: what it holds is its owner's, its cursor the pager's. */
-export interface KeysetPage {
+interface KeysetPage {
   readonly nextCursor: string | null;
 }
 
 /** Load one page; a null cursor asks for the first page. */
-export type KeysetPageLoader<P extends KeysetPage> = (
+type KeysetPageLoader<P extends KeysetPage> = (
   cursor: string | null,
   signal: AbortSignal,
 ) => Promise<P>;

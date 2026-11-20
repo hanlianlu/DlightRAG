@@ -10,7 +10,10 @@ from unittest.mock import AsyncMock
 import pytest
 
 from dlightrag.engine.agent.session.ids import IntentId
-from dlightrag.engine.agent.tools import ToolResult, ToolRuntime
+from dlightrag.engine.agent.tools.contracts import (
+    ToolResult,
+    ToolRuntime,
+)
 from dlightrag.engine.answer.execution.connection_binding import ResearchToolClaim
 from dlightrag.engine.credential_cipher import CredentialCipher
 from tests.integration.run_runtime_pg_harness import isolated_run_runtime, run_envelope
@@ -25,7 +28,8 @@ async def dispatch_fixture(
     if authenticated:
         from pydantic import SecretStr
 
-        from dlightrag.application.connections import ConnectionCommand, Connections
+        from dlightrag.application.connections.models import ConnectionCommand
+        from dlightrag.application.connections.service import Connections
         from dlightrag.engine.credential_cipher import CredentialCipher
         from tests.unit.test_connections_config import KEYRING
 
@@ -145,7 +149,7 @@ async def test_committed_pending_owner_binding_dispatches_once():
     ],
 )
 async def test_dispatch_authority_denials_send_zero_calls(denial):
-    from dlightrag.application.connections import ConnectionCommand
+    from dlightrag.application.connections.models import ConnectionCommand
 
     async with isolated_run_runtime("dispatch_deny") as (runs, pool):
         service, store, mcp, view, bound, claim, tool, runtime = await dispatch_fixture(runs, pool)
@@ -200,7 +204,7 @@ async def test_dispatch_authority_denials_send_zero_calls(denial):
 async def test_gate_first_revoke_is_in_flight_cancelled_unknown_without_network_transaction():
     import asyncio
 
-    from dlightrag.application.connections import ConnectionCommand
+    from dlightrag.application.connections.models import ConnectionCommand
 
     async with isolated_run_runtime("dispatch_race") as (runs, pool), notification_hub(pool) as hub:
         service, store, mcp, view, bound, claim, tool, runtime = await dispatch_fixture(
@@ -298,7 +302,7 @@ async def test_interactive_child_requires_own_live_fence_and_parent(mutation):
 
 @pytest.mark.asyncio
 async def test_one_broken_connection_reports_degraded_without_disabling_other_tools():
-    from dlightrag.application.connections import ConnectionsError
+    from dlightrag.application.connections.models import ConnectionsError
 
     async with isolated_run_runtime("dispatch_fault") as (runs, pool):
         service, store, mcp, view, bound, claim, tool, runtime = await dispatch_fixture(runs, pool)
@@ -314,7 +318,7 @@ async def test_one_broken_connection_reports_degraded_without_disabling_other_to
 
 @pytest.mark.asyncio
 async def test_a_result_the_connection_cannot_show_says_the_call_completed():
-    from dlightrag.application.connections import UnsupportedResultError
+    from dlightrag.application.connections.models import UnsupportedResultError
 
     async with isolated_run_runtime("dispatch_media") as (runs, pool):
         service, store, mcp, view, bound, claim, tool, runtime = await dispatch_fixture(runs, pool)
@@ -334,7 +338,7 @@ async def test_real_pg_runtime_restart_settles_unknown_never_redispatches(crash_
     import asyncio
 
     from dlightrag.adapters.postgres.answer.session_repository import PGAgentSessionRepository
-    from dlightrag.application.connections import Connections
+    from dlightrag.application.connections.service import Connections
     from dlightrag.engine.agent.session.entries import ToolResultMessageEntry
     from dlightrag.engine.agent.session.ids import LaneId, SessionId
     from dlightrag.engine.agent.session.operation import OperationCompleted, ToolEffectPending
@@ -472,7 +476,7 @@ async def test_real_pg_runtime_restart_settles_unknown_never_redispatches(crash_
 async def test_revoke_wins_locked_pg_gate_race_and_causes_zero_dispatch():
     import asyncio
 
-    from dlightrag.application.connections import ConnectionCommand
+    from dlightrag.application.connections.models import ConnectionCommand
 
     async with isolated_run_runtime("dispatch_revoke_first") as (runs, pool):
         service, store, mcp, view, bound, claim, tool, runtime = await dispatch_fixture(runs, pool)
@@ -570,7 +574,8 @@ async def test_static_grant_authority_and_audience_gate_before_io(grant_state):
         assert mcp.call.await_count == (0 if grant_state else 1)
         if grant_state is None:
             assert (
-                mcp.call.call_args.kwargs["bearer"].get_secret_value() == "dispatch-test-only-token"
+                mcp.call.call_args.kwargs["access"].token.get_secret_value()
+                == "dispatch-test-only-token"
             )
         assert "dispatch-test-only-token" not in result.text_content
         assert "dispatch-test-only-token" not in repr(await service.read(owner_id="a"))
@@ -582,7 +587,7 @@ async def test_owner_gate_reaches_real_sdk_fake_http_static_call(monkeypatch):
     from pydantic import SecretStr
 
     from dlightrag.adapters.mcp.personal_http import PersonalMcpClient
-    from dlightrag.application.connections import Connections
+    from dlightrag.application.connections.service import Connections
     from dlightrag.engine.credential_cipher import CredentialCipher
     from tests.support.dns import public_dns
     from tests.unit.test_connections_config import KEYRING
@@ -626,15 +631,18 @@ async def test_research_runtime_continues_other_tools_and_reports_unavailable_pa
     from pydantic import BaseModel
 
     from dlightrag.adapters.postgres.answer.session_repository import PGAgentSessionRepository
-    from dlightrag.application.connections import ConnectionsError
+    from dlightrag.application.connections.models import ConnectionsError
     from dlightrag.engine.agent.session.effects import ToolResultEntry
-    from dlightrag.engine.agent.session.entries import AssistantMessageEntry, ToolResultMessageEntry
+    from dlightrag.engine.agent.session.entries import (
+        AssistantMessageEntry,
+        ToolResultMessageEntry,
+    )
     from dlightrag.engine.agent.session.ids import LaneId, SessionId
     from dlightrag.engine.agent.session.operation import OperationCompleted
     from dlightrag.engine.agent.session.plan import AgentRunPlan
     from dlightrag.engine.agent.session.registers import RequestSnapshot
     from dlightrag.engine.agent.session.runtime import AgentSessionRuntime, ToolEffectResult
-    from dlightrag.engine.agent.tools import AgentTool
+    from dlightrag.engine.agent.tools.contracts import AgentTool
     from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
     from dlightrag.engine.runtime.settlements import EffectHostUpdate
 
@@ -803,5 +811,121 @@ async def test_oauth_dispatch_uses_only_live_access_token_without_refresh_or_red
         else:
             assert not result.is_error
             mcp.call.assert_awaited_once()
-            assert mcp.call.call_args.kwargs["bearer"].get_secret_value() == "oauth-test-access"
+            assert (
+                mcp.call.call_args.kwargs["access"].token.get_secret_value() == "oauth-test-access"
+            )
         await service.aclose()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_states_the_endpoint_headers_and_the_credential_header_it_stored():
+    """One call carries both facts the Connection holds: what it states, and where the token goes.
+
+    The grant is a ``header`` credential, and the head states a header of its own. Both are read
+    at dispatch time -- no pin, no binding, and no Run input carries either -- so a credential
+    kind costs the pin path nothing.
+    """
+    from pydantic import SecretStr
+
+    from dlightrag.application.connections.models import ConnectionCommand
+    from dlightrag.application.connections.service import Connections
+    from tests.unit.test_connections_config import KEYRING
+
+    async with isolated_run_runtime("dispatch_transport") as (runs, pool):
+        service, store, mcp, view = await enabled_connection(pool)
+        service = Connections(store=store, mcp=mcp, cipher=CredentialCipher(SecretStr(KEYRING)))
+        identity = view.connections[0].connection_id
+        stated = (("X-Lark-MCP-Allowed-Tools", "create-doc,fetch-doc"),)
+        view = await service.change(
+            owner_id="a",
+            expected_revision=view.revision,
+            command=ConnectionCommand(kind="edit", connection_id=identity, endpoint_headers=stated),
+        )
+        view = await service.replace_header_credential(
+            owner_id="a",
+            connection_id=identity,
+            expected_revision=view.revision,
+            header="X-Lark-MCP-TAT",
+            prefix="",
+            token=SecretStr("t-dispatch-fixture-token"),
+        )
+        view = await service.change(
+            owner_id="a",
+            expected_revision=view.revision,
+            command=ConnectionCommand(kind="enable", connection_id=identity, consent_version=1),
+        )
+        service, store, mcp, view, bound, claim, tool, runtime = await dispatch_fixture(
+            runs, pool, connection=(service, store, mcp, view)
+        )
+
+        result = await tool.execute(tool.input_model.model_validate({"path": "x"}), runtime)
+
+        assert result.text_content == "written" and not result.is_error
+        (sent_call,) = mcp.call.await_args_list
+        sent = sent_call.kwargs
+        assert sent["access"].token.get_secret_value() == "t-dispatch-fixture-token"
+        assert sent["access"].header == "X-Lark-MCP-TAT"
+        assert sent["access"].prefix == ""
+        assert sent["endpoint_headers"] == stated
+        assert sent["endpoint"] == "https://example.com/mcp"
+
+
+@pytest.mark.asyncio
+async def test_resource_gate_pins_the_accepted_generation_and_live_run_fence():
+    """A resource read is authorized by the Run's pins, not by a pending tool effect."""
+    from dlightrag.application.connections.models import ConnectionCommand, ConnectionsError
+
+    async with isolated_run_runtime("resource_gate") as (runs, pool):
+        service, store, _mcp, view = await enabled_connection(pool)
+        bound = await service.bind_research(owner_id="a")
+        envelope = run_envelope("answer", key="rg", owner="a", mode="research")
+        envelope = replace(
+            envelope,
+            payload={
+                **envelope.payload,
+                "run_connection_bindings": [binding.as_json() for binding in bound.bindings],
+            },
+        )
+        await runs.accept_run(
+            envelope=envelope,
+            run_id=str(uuid.uuid7()),
+            connection_bindings=bound.bindings,
+        )
+        claimed = await runs.claim_next(worker_id="worker")
+        assert claimed is not None
+        run = claimed.run
+        claim = ResearchToolClaim("a", run.run_id, "worker", run.fencing_epoch, AsyncMock())
+        runtime = ToolRuntime(
+            call_id="call",
+            tool_name="mcp_list_resources",
+            intent_id=IntentId.new(),
+            execution_scope=str(envelope.payload["agent_session_id"]),
+            fencing_epoch=run.fencing_epoch,
+            _update_sink=AsyncMock(),
+        )
+        identity = bound.bindings[0].connection_id
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO dlightrag_agent_sessions(owner_id,session_id,lease_run_id,fencing_epoch) VALUES('a',$1,$2,$3)",
+                uuid.UUID(runtime.execution_scope),
+                uuid.UUID(run.run_id),
+                run.fencing_epoch,
+            )
+
+        dispatch = await store.resource_gate(claim=claim, runtime=runtime, connection_id=identity)
+        assert dispatch.endpoint == "https://example.com/mcp"
+        assert dispatch.generation == bound.bindings[0].generation
+        assert dispatch.activation_epoch == bound.bindings[0].activation_epoch
+
+        # Disabling the Connection is the owner's later word: the pinned read is denied.
+        await service.change(
+            owner_id="a",
+            expected_revision=(await service.read(owner_id="a")).revision,
+            command=ConnectionCommand(kind="disable", connection_id=identity),
+        )
+        with pytest.raises(ConnectionsError, match="dispatch denied"):
+            await store.resource_gate(claim=claim, runtime=runtime, connection_id=identity)
+
+        # A Connection the Run never pinned is denied the same way.
+        with pytest.raises(ConnectionsError, match="dispatch denied"):
+            await store.resource_gate(claim=claim, runtime=runtime, connection_id="f" * 32)

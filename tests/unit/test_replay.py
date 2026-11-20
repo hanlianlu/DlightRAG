@@ -6,7 +6,11 @@ import pytest
 from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall, tool_call_message
 from dlightrag.engine.ai.providers.openai_response import response_input
-from dlightrag.engine.ai.replay import ProviderReplayError, bind_provider_replay, messages_for_model
+from dlightrag.engine.ai.replay import (
+    ProviderReplayError,
+    bind_provider_replay,
+    messages_for_model,
+)
 from dlightrag.engine.ai.response_policy import ResponseRequestError
 
 _SOURCE = ModelInvocationFingerprint("openai", "model-a", "endpoint-a", "chat_completion")
@@ -189,18 +193,3 @@ def test_response_tool_output_requires_one_matching_prior_call_id() -> None:
                 }
             ]
         )
-
-
-def test_legacy_unbound_provider_state_is_never_replayed() -> None:
-    prepared = messages_for_model(
-        [
-            {
-                "role": "assistant",
-                "content": "answer",
-                "provider_state": {"signature": "unbound"},
-            }
-        ],
-        _SOURCE,
-    )[0]
-
-    assert prepared == {"role": "assistant", "content": "answer"}

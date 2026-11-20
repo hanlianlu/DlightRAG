@@ -5,6 +5,7 @@ import datetime
 from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Protocol
 
+from dlightrag.engine.runtime.agentspace import AgentspaceHeadCommit
 from dlightrag.engine.runtime.contracts import RunKind, RunLane, RunPhase
 from dlightrag.engine.runtime.records import (
     ClaimedRun,
@@ -96,6 +97,7 @@ class RunStore(Protocol):
         result: Mapping[str, object],
         stop_reason: str | None = None,
         publications: Sequence[object] = (),
+        workspace_head: AgentspaceHeadCommit | None = None,
     ) -> TerminalOutcome: ...
 
     async def finish_failure(
@@ -142,12 +144,19 @@ class RunStore(Protocol):
     ) -> ShutdownOutcome: ...
 
     async def sweep_once(self) -> SweepOutcome: ...
+    async def compact_evidence_logs(self) -> int: ...
+    async def clear_finished_run_working_state(self) -> int: ...
     async def trim_expired_event_logs(self) -> int: ...
     async def prune_expired_runs(self) -> RunDeletion: ...
     async def get_run(self, *, owner_id: str, run_id: str) -> RunRecord | None: ...
     async def get_run_global(self, *, run_id: str) -> RunRecord | None: ...
     async def list_runs(
-        self, *, owner_id: str, after_run_id: str | None = None, limit: int = 50
+        self,
+        *,
+        owner_id: str,
+        after_run_id: str | None = None,
+        limit: int = 50,
+        newest_first: bool = False,
     ) -> tuple[RunRecord, ...]: ...
     async def read_event_page(
         self, *, owner_id: str, run_id: str, after_sequence: int = 0

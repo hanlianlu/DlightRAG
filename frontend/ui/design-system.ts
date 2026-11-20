@@ -28,6 +28,13 @@ const TOKEN_NAMES = [
   'duration-control',
 ] as const;
 
+/** Where a glyph comes from: its source, and the shape it was derived from where this product drew it, so
+ *  the catalog never shows an authored solid as if the source shipped it. */
+function provenance(name: IconName): string {
+  const {source, derivedFrom} = ICON_REGISTRY[name];
+  return derivedFrom === null ? source : `${source} · ${derivedFrom}`;
+}
+
 const host = document.getElementById('ds-primitives');
 if (host) {
   render(html`
@@ -50,9 +57,26 @@ if (host) {
         ${(Object.keys(ICON_REGISTRY) as IconName[]).map((name) => html`
           <figure class="ds-icon-specimen">
             ${icon(name, {size: 'md'})}
-            <figcaption><code>${name}</code><small>${ICON_REGISTRY[name].source}</small></figcaption>
+            <figcaption><code>${name}</code><small>${provenance(name)}</small></figcaption>
           </figure>
         `)}
+      </div>
+    </article>
+
+    <article class="ds-card">
+      <h2>Action row</h2>
+      <div class="dl-action-row">
+        <button type="button">Agent traces</button>
+        <button type="button">Fork</button>
+        <span class="ds-action-part" data-action-part>
+          <button class="dl-icon-button dl-icon-button--dense" type="button" aria-label="Good answer">
+            ${icon('thumbs-up', {size: 'xs'})}
+          </button>
+          <button class="dl-icon-button dl-icon-button--dense" type="button" aria-label="Bad answer">
+            ${icon('thumbs-down', {size: 'xs'})}
+          </button>
+        </span>
+        <span class="dl-note">1,234 tokens</span>
       </div>
     </article>
 
@@ -73,6 +97,10 @@ if (host) {
             <button class="dl-switch" type="button" role="switch" aria-checked="false" disabled
                     aria-label="Switch disabled specimen"></button>
             <textarea class="dl-dialog-input" rows="2" placeholder="Text input"></textarea>
+            <input class="dl-input" type="search" placeholder="Search specimen">
+            <p class="dl-note">One quiet line that says what is happening.</p>
+            <p class="dl-note">Marked: <mark class="dl-mark">found words</mark></p>
+            <button class="dl-text-action" type="button">2 reads skipped</button>
             <nav class="ds-nav" aria-label="Navigation item specimen">
               <button class="dl-nav-item" type="button" aria-current="page">
                 <span class="dl-nav-item-icon">${icon('connections', {size: 'sm'})}</span>
@@ -125,6 +153,9 @@ if (host) {
                     aria-label="Dense switch off specimen"></button>
             <button class="dl-switch dl-switch--dense" type="button" role="switch" aria-checked="true"
                     aria-label="Dense switch on specimen"></button>
+            <button class="dl-text-action dl-text-action--disclosure" type="button" aria-expanded="false">
+              3 reads skipped ${icon('chevron-down', {size: 'xs'})}
+            </button>
           </div>
         </section>
       </div>

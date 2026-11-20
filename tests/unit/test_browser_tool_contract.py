@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from dlightrag.engine.answer.tools.browser import browser_declaration
+from dlightrag.engine.answer.tools.browser import BrowserRequest, browser_declaration
 
 
 def parse(
@@ -45,8 +45,11 @@ def properties(
         ({"action": "wait", "text": "x", "seconds": 1}, "exactly one of text, text_gone"),
         ({"action": "wait"}, "exactly one of text, text_gone"),
         ({"action": "wait", "text": "   "}, "wait text cannot be blank"),
-        ({"action": "wait", "seconds": 31}, "less than or equal to 30"),
         ({"action": "wait", "seconds": 0}, "greater than 0"),
+        ({"action": "find", "query": "q", "limit": 0}, "greater than or equal to 1"),
+        ({"action": "click", "ref": "e1", "limit": 5}, "does not take limit"),
+        ({"action": "snapshot", "limit": 5}, "does not take limit"),
+        ({"action": "inbox", "dialog": "accept"}, "does not take dialog"),
         ({"action": "click", "ref": "button"}, "String should match pattern"),
         ({"action": "click", "ref": "e1; drop"}, "String should match pattern"),
         ({"action": "press", "key": "a b"}, "String should match pattern"),
@@ -65,12 +68,19 @@ def properties(
         ),
         ({"action": "login"}, "browser login takes email_ref, username_ref, or password_refs"),
         ({"action": "login", "email_ref": "e1", "text": "x"}, "does not take text"),
+        ({"action": "login", "password_refs": ["e1"], "length": 10}, "does not take length"),
+        (
+            {"action": "register", "password_refs": ["e1"], "length": 5},
+            "greater than or equal to 6",
+        ),
         ({"action": "click", "ref": "e1", "email_ref": "e2"}, "does not take email_ref"),
         ({"action": "snapshot", "password_refs": ["e1"]}, "does not take password_refs"),
         ({"action": "inbox", "url": "http://a.example/"}, "does not take url"),
         ({"action": "inbox", "ref": "e1"}, "does not take ref"),
         ({"action": "teleport"}, "Input should be"),
         ({"action": "snapshot", "extra": 1}, "Extra inputs are not permitted"),
+        ({"action": "click", "ref": "e1", "headed": True}, "does not take headed"),
+        ({"action": "find", "query": "q", "headed": True}, "does not take headed"),
     ],
 )
 def test_each_action_takes_only_its_own_arguments_and_says_what_is_wrong(
@@ -93,9 +103,13 @@ def test_the_account_fields_are_every_browsers_and_the_register_line_is_a_regist
 ) -> None:
     registering, login_only = (properties(upload=upload, may_register=on) for on in (True, False))
 
-    assert {"password_refs", "email_ref", "username_ref"} <= set(login_only) == set(registering)
+    assert {"password_refs", "email_ref", "username_ref"} <= set(login_only)
+    # The length is a registration's alone: it is what the password is made with, and a login
+    # makes none.
+    assert set(login_only) | {"length"} == set(registering)
     assert (
-        "register (password_refs, email_ref, username_ref)" in registering["action"]["description"]
+        "register (password_refs, email_ref, username_ref, length)"
+        in registering["action"]["description"]
     )
     assert "register" not in login_only["action"]["description"]
 
@@ -134,12 +148,19 @@ def test_a_registration_names_the_fields_it_fills_and_a_login_may_name_any_of_th
             "password_refs": ["e4", "f1e5"],
             "email_ref": "e2",
             "username_ref": "e3",
+            "length": 14,
         }
     )
     assert (registered.password_refs, registered.email_ref, registered.username_ref) == (
         ["e4", "f1e5"],
         "e2",
         "e3",
+    )
+    assert BrowserRequest.from_args(registered).length == 14
+    # A call that asks for none leaves the length to the generator's own default.
+    assert (
+        BrowserRequest.from_args(parse({"action": "register", "password_refs": ["e1"]})).length
+        is None
     )
     for field, value in (("email_ref", "e1"), ("username_ref", "e1"), ("password_refs", ["e1"])):
         assert parse({"action": "login", field: value}).action == "login"
@@ -152,12 +173,71 @@ def test_typed_text_keeps_its_spaces_and_can_clear_a_field_while_a_query_is_trim
     assert parse({"action": "navigate", "url": "  http://a.example/  "}).url == "http://a.example/"
 
 
-def test_the_description_teaches_the_tiers_and_the_captcha_boundary() -> None:
+def test_find_takes_the_limit_the_browser_already_takes() -> None:
+    offered = properties()["limit"]
+    # The floor is the schema's; the ceiling is the tool's, said in the surface's own words.
+    assert offered["anyOf"][0]["minimum"] == 1
+    assert "maximum" not in offered["anyOf"][0]
+    assert "1 to 100" in offered["description"]
+    plain = parse({"action": "find", "query": "q"})
+    asked = parse({"action": "find", "query": "q", "limit": 100})
+
+    # Omitted keeps the surface's default; a call that asks is honoured by the port.
+    assert BrowserRequest.from_args(plain).limit is None
+    assert BrowserRequest.from_args(asked).limit == 100
+    # A wait past one call's stretch parses: the tool refuses it in its own words.
+    assert BrowserRequest.from_args(parse({"action": "wait", "seconds": 31})).seconds == 31
+    assert BrowserRequest.from_args(parse({"action": "wait", "seconds": 300})).seconds == 300
+    # And so does a find past the lines one call answers with, refused in the same words.
+    assert (
+        BrowserRequest.from_args(parse({"action": "find", "query": "q", "limit": 101})).limit == 101
+    )
+
+
+def test_the_inbox_is_offered_no_dialog_it_could_never_answer() -> None:
+    # inbox reads no page and leases no browser, so a verdict on a page's dialog is not its.
+    with pytest.raises(ValidationError, match="does not take dialog"):
+        parse({"action": "inbox", "dialog": "accept"})
+    assert "Every action that reads or drives a page" in properties()["dialog"]["description"]
+
+
+def test_every_page_action_may_say_what_to_do_with_a_dialog() -> None:
+    offered = properties()["dialog"]
+    assert offered["anyOf"][0]["enum"] == ["accept", "dismiss"]
+    assert "left waiting and reported" in offered["description"]
+    plain = parse({"action": "click", "ref": "e1"})
+    accepted = parse({"action": "click", "ref": "e1", "dialog": "accept"})
+
+    # Omitted is the stop-and-report default, so the parameter is never required.
+    assert BrowserRequest.from_args(plain).dialog is None
+    assert BrowserRequest.from_args(accepted).dialog == "accept"
+    # A page can show a dialog while nothing acts, so a read takes the verdict too.
+    dismissed = parse({"action": "snapshot", "dialog": "dismiss"})
+    assert BrowserRequest.from_args(dismissed).dialog == "dismiss"
+    with pytest.raises(ValidationError, match="Input should be 'accept' or 'dismiss'"):
+        parse({"action": "click", "ref": "e1", "dialog": "answer"})
+
+
+def test_navigate_is_the_one_action_that_may_ask_for_a_headed_browser() -> None:
+    asking = parse({"action": "navigate", "url": "http://a.example/", "headed": True})
+    plain = parse({"action": "navigate", "url": "http://a.example/"})
+
+    assert BrowserRequest.from_args(asking).headed is True
+    # A call that does not ask for one is headless, as every call was before it could ask.
+    assert BrowserRequest.from_args(plain).headed is False
+    assert "keeps that browser for the rest of the Run" in properties()["headed"]["description"]
+
+
+def test_the_description_teaches_the_tiers_the_captcha_boundary_and_the_refusal() -> None:
     description = browser_declaration(upload=False, may_register=False, mailbox=False).description
 
     assert "rendered=true" in description
     assert "use browser only for interaction" in description
     assert "CAPTCHA" in description and "never solve" in description
+    # A page that refuses an automated browser is named as such, and the one read that may
+    # be tried instead is the headed browser the Run has one of.
+    assert "refuses the browser for being automated" in description
+    assert "headed=true" in description and "keeps for the rest of the Run" in description
     # Nothing a deployment configures can change what a Run is pinned to.
     assert not any(character.isdigit() for character in description.replace("[ref=eN]", ""))
 

@@ -12,7 +12,9 @@ import pytest
 
 from dlightrag.adapters.postgres.answer.attachment_replay import retain_attachment_occurrences
 from dlightrag.adapters.postgres.runtime.run_blob_store import PGRunBlobStore
-from dlightrag.engine.agent.environment import SearchToolchain
+from dlightrag.engine.agent.environment.toolchain import (
+    SearchToolchain,
+)
 from dlightrag.engine.agent.session.fold import project_session_messages
 from dlightrag.engine.agent.session.ids import LaneId, SessionId
 from dlightrag.engine.agent.session.operation import OperationCompleted
@@ -29,8 +31,8 @@ from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.answer.attachment_replay import AttachmentReplaySelection
 from dlightrag.engine.answer.errors import AnswerInputOverflowError
 from dlightrag.engine.answer.execution.executor import AnswerExecutor
-from dlightrag.engine.answer.fast import ensure_session_lane
-from dlightrag.engine.answer.orchestration import AnswerOrchestrator
+from dlightrag.engine.answer.fast.session_host import ensure_session_lane
+from dlightrag.engine.answer.orchestration.orchestrator import AnswerOrchestrator
 from dlightrag.engine.answer.research.persistence import ResearchRunStore
 from dlightrag.engine.answer.research.runtime import FetchedResourceBuffer, ResearchRuntimeEffects
 from dlightrag.engine.answer.resources.models import ResourceInput
@@ -779,7 +781,7 @@ async def test_unified_docx_host_settlement_restores_exact_text_assets_and_curso
         )
         effects = registry.conversion_effects(resource_id)
         raw = json.loads(effects[-1].content)
-        assert raw["converter"] == "firecrawl-anydoc" and raw["converter_version"] == "0.2.4"
+        assert raw["converter"] == "firecrawl-anydoc" and raw["converter_version"] == "0.2.5"
         assert raw["extraction_status"] == "usable_text_unverified_coverage"
         assert len(raw["assets"]) == 2
         assert len({a["resource_id"] for a in raw["assets"]}) == 2
@@ -835,7 +837,7 @@ async def test_view_of_a_workspace_image_settles_every_copy_under_the_name_the_m
     from PIL import Image
 
     from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
-    from dlightrag.engine.answer.workspace import RunWorkspace
+    from dlightrag.engine.answer.agentspace import RunAgentspace
 
     store, pool = pg
     session, session_id = await new_run(store)
@@ -857,8 +859,8 @@ async def test_view_of_a_workspace_image_settles_every_copy_under_the_name_the_m
         return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
 
     host = orchestrator(model)
-    host.bind_workspace(
-        RunWorkspace(
+    host.bind_agentspace(
+        RunAgentspace(
             epoch=1,
             workspace=tmp_path,
             spill_dir=tmp_path / "spill",

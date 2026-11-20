@@ -24,7 +24,9 @@ from dlightrag.engine.answer.errors import (
 )
 from dlightrag.engine.answer.memory import reserved_auto_recall_text
 from dlightrag.engine.answer.synthesizer import NO_CONTEXT_DISCLAIMER, AnswerSynthesizer
-from dlightrag.engine.rag.retrieval import RetrievalContexts
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalContexts,
+)
 from tests.unit.conftest import answer_image_policy, answer_model_profile
 
 _PNG_B64 = (

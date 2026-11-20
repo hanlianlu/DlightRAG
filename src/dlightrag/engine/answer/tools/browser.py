@@ -33,8 +33,10 @@ from pydantic import (
     model_validator,
 )
 
-from dlightrag.engine.agent.environment import AccessScheduler
-from dlightrag.engine.agent.environment.access import PathAccess
+from dlightrag.engine.agent.environment.access import (
+    AccessScheduler,
+    PathAccess,
+)
 from dlightrag.engine.agent.environment.errors import (
     TOOL_RESULT_MAX_BYTES,
     TOOL_RESULT_MAX_LINES,
@@ -42,50 +44,62 @@ from dlightrag.engine.agent.environment.errors import (
 )
 from dlightrag.engine.agent.environment.execution import ExecutionEnvironment
 from dlightrag.engine.agent.tool_content import ToolResourceAttachmentPart, ToolTextPart
-from dlightrag.engine.agent.tools import (
+from dlightrag.engine.agent.tools.contracts import (
     AgentTool,
+    CommittedOutput,
     ResourceAttachmentBytes,
     ToolDeclaration,
     ToolEffects,
     ToolResult,
     ToolRuntime,
 )
-from dlightrag.engine.agent.tools.contracts import CommittedOutput
 from dlightrag.engine.agent.tools.files import (
     ImagePreparer,
     ResourceReader,
     ResourceReadRequest,
     SpillWriter,
+    agentspace_integrity_refusal,
     head_excerpt,
     spill_continuation,
     within_result_bounds,
-    workspace_integrity_refusal,
 )
 from dlightrag.engine.agent.tools.listing import escape_path
-from dlightrag.engine.answer.agent_browser import (
-    INBOX_MESSAGE_BYTES,
-    INBOX_MESSAGES,
-    MAX_DOWNLOADS_PER_CALL,
-    MIN_PASSWORD_LENGTH,
+from dlightrag.engine.answer.agent_browser.accounts import (
     PASSWORD_LENGTH,
+    PASSWORD_MIN_LENGTH,
     AgentAccount,
-    AgentBrowserError,
-    AgentMailboxError,
-    AgentPage,
-    CredentialFill,
-    DownloadRefusal,
-    MailListing,
-    PageEvents,
-    PageObservation,
-    PageState,
     RunAgentAccounts,
-    RunAgentBrowser,
     SessionAccounts,
-    UploadFile,
     account_site,
     generate_password,
     has_mailbox,
+)
+from dlightrag.engine.answer.agent_browser.contracts import (
+    MAX_DOWNLOADS_PER_CALL,
+    REF_PATTERN,
+    AgentBrowserError,
+    AgentPage,
+    CredentialFill,
+    DialogVerdict,
+    PageEvents,
+    PageObservation,
+    PageState,
+    UploadFile,
+    browser_failure,
+    page_failure,
+)
+from dlightrag.engine.answer.agent_browser.elision import (
+    elide,
+)
+from dlightrag.engine.answer.agent_browser.mailbox import (
+    INBOX_MESSAGE_BYTES,
+    INBOX_MESSAGES,
+    AgentMailboxError,
+    MailListing,
     inbox_text,
+)
+from dlightrag.engine.answer.agent_browser.run import (
+    RunAgentBrowser,
 )
 from dlightrag.engine.answer.resources.models import ResourceRegistryError
 from dlightrag.engine.answer.resources.registry import (
@@ -127,6 +141,15 @@ BrowserAction = Literal[
 ]
 BROWSER_ACTIONS: tuple[BrowserAction, ...] = get_args(BrowserAction)
 
+#: The most characters one register makes, and this mechanism's own bound rather than a rule about
+#: the password an agent should choose. Every character of one is drawn, held in this process's
+#: memory, filled into the page, and sealed into the envelope the account stores: at this bound the
+#: envelope is about 270 bytes, where a longer ask would put a secret of its own size into the
+#: process and the accounts table. A site's own field decides below it, and a longer ask is refused
+#: in this surface's own words. The account actions' wording states it, so it stands here, before
+#: the wording that reads it.
+_MAX_PASSWORD_CHARS = 128
+
 _ACTION_LINES: dict[str, str] = {
     "navigate": "navigate (url): open a public http(s) URL in this session's page.",
     "snapshot": "snapshot: the current page's accessibility snapshot.",
@@ -135,8 +158,9 @@ _ACTION_LINES: dict[str, str] = {
     "wait": "wait (text | text_gone | seconds): until text appears, text_gone disappears, or "
     "seconds pass.",
     "click": "click (ref): click the element.",
-    "type": "type (ref, text, submit): replace the field's value with text; submit=true then "
-    "presses Enter.",
+    "type": "type (ref, text, submit): type text into the field, replacing what it holds, as "
+    "keystrokes, so a suggestion or autocomplete widget answers; submit=true then presses "
+    "Enter.",
     "select": "select (ref, values): choose options by value or label.",
     "press": "press (key, ref): press a key on the element, or on the page without ref.",
     "scroll": "scroll (direction, ref): scroll the page, or the container under the element, "
@@ -146,9 +170,10 @@ _ACTION_LINES: dict[str, str] = {
     "budget.",
     "capture": "capture: admit the current page as a new citable Web Resource and return its "
     "first window.",
-    "register": "register (password_refs, email_ref, username_ref): fill a generated password, and "
-    "the Agent's mailbox alias when there is one, into a sign-up or password-reset form of this "
-    "page's site, and store the account; type a username first. Submit with click or press.",
+    "register": "register (password_refs, email_ref, username_ref, length): fill a generated "
+    "password of the length you ask for, and the Agent's mailbox alias when there is one, into a "
+    "sign-up or password-reset form of this page's site, and store the account; type a username "
+    "first. Submit with click or press.",
     "login": "login (email_ref, username_ref, password_refs): fill this site's stored Agent "
     "Account into a sign-in form. Submit with click or press.",
 }
@@ -214,6 +239,18 @@ _REGISTERING = AccountWording(
             "register, login: the ref of the username field. register records the username you "
             "typed there; login fills it.",
         ),
+        (
+            "length",
+            f"register: how many characters the generated password has, {PASSWORD_MIN_LENGTH} to "
+            f"{_MAX_PASSWORD_CHARS}; {PASSWORD_LENGTH} when omitted. {_MAX_PASSWORD_CHARS} is the "
+            "most this mechanism will fill and seal, whatever the site takes. Ask for the longest "
+            "the site's own password field allows, and never a shorter password than the task "
+            "needs: read the maxlength, minlength, pattern, and required format off the page, "
+            "which a snapshot prints beside the field's ref. Every password DlightRAG makes "
+            "holds a lowercase letter, an uppercase letter, a digit, and one of -._, at any "
+            "length, so a site's character-set rules are met. A field that takes fewer characters "
+            "than you ask for is refused, and the refusal says how many it takes.",
+        ),
     ),
     no_account=(
         'No Agent Account exists for {site}. Register one with browser(action="register", ...).'
@@ -262,7 +299,7 @@ def _action_line(action: str, wording: AccountWording) -> str:
     return wording.inbox if action == "inbox" else _ACTION_LINES[action]
 
 
-_REF = Annotated[str, StringConstraints(pattern=r"^(f[0-9]+)?e[0-9]+$", max_length=32)]
+_REF = Annotated[str, StringConstraints(pattern=rf"^{REF_PATTERN}$", max_length=32)]
 _KEY = Annotated[str, StringConstraints(pattern=r"^[\x21-\x7e]{1,64}$")]
 _URL = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=8192)]
 _QUERY = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
@@ -271,7 +308,7 @@ _GONE = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, ma
 _TEXT = Annotated[str, StringConstraints(max_length=10_000)]
 _VALUE = Annotated[str, StringConstraints(max_length=1000)]
 _PATH = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4096)]
-_SECONDS = Annotated[float, Field(gt=0, le=30, allow_inf_nan=False)]
+_SECONDS = Annotated[float, Field(gt=0, allow_inf_nan=False)]
 
 #: Each argument: its annotation, its field arguments, and the actions that read it. The
 #: order is the schema's. An action reads only what it names, so every argument is optional.
@@ -286,6 +323,17 @@ _FIELDS: dict[str, tuple[Any, dict[str, Any], frozenset[str]]] = {
         {"description": "find: text to look for in element roles, names, and text."},
         frozenset({"find"}),
     ),
+    #: The most matching lines one find answers with, which the call may ask for.
+    "limit": (
+        Annotated[int, Field(ge=1)],
+        {
+            "description": (
+                "find: how many matching lines to return, 1 to 100; 30 when omitted. The "
+                "result says how many matched in all."
+            )
+        },
+        frozenset({"find"}),
+    ),
     "ref": (
         _REF,
         {
@@ -295,7 +343,12 @@ _FIELDS: dict[str, tuple[Any, dict[str, Any], frozenset[str]]] = {
     ),
     "text": (
         _TEXT,
-        {"description": "type: the text that replaces the field's value. wait: text to wait for."},
+        {
+            "description": (
+                "type: the text typed into the field, replacing what it holds. wait: text to "
+                "wait for."
+            )
+        },
         frozenset({"type", "wait"}),
     ),
     "submit": (
@@ -329,13 +382,40 @@ _FIELDS: dict[str, tuple[Any, dict[str, Any], frozenset[str]]] = {
     ),
     "seconds": (
         _SECONDS,
-        {"description": "wait: seconds to wait."},
+        {
+            "description": (
+                "wait: seconds to wait, up to 30 in one call; call wait again to wait longer."
+            )
+        },
         frozenset({"wait"}),
     ),
     "full_page": (
         bool,
         {"description": "screenshot: the whole page instead of its visible part."},
         frozenset({"screenshot"}),
+    ),
+    "headed": (
+        bool,
+        {
+            "description": (
+                "navigate: make this Run's browser one with a display, for a page that "
+                "refuses an automated browser; the session it carries moves with it, and the "
+                "Run keeps that browser for the rest of the Run. Needs a deployment that "
+                "leases headed browsers."
+            )
+        },
+        frozenset({"navigate"}),
+    ),
+    "dialog": (
+        Literal["accept", "dismiss"],
+        {
+            "description": (
+                "Every action that reads or drives a page: what to do with a page dialog this "
+                "call meets — accept it or dismiss it. Omitted, a dialog is left waiting and "
+                "reported, and the page stays as it is until a later call answers it."
+            )
+        },
+        frozenset(BROWSER_ACTIONS) - {"inbox"},
     ),
     "files": (
         list[_PATH],
@@ -346,7 +426,7 @@ _FIELDS: dict[str, tuple[Any, dict[str, Any], frozenset[str]]] = {
         },
         frozenset({"upload"}),
     ),
-    # The three arguments of the account actions are described by the Run's ``AccountWording``.
+    # The arguments of the account actions are described by the Run's ``AccountWording``.
     "password_refs": (
         list[_REF],
         {"min_length": 1, "max_length": 2},
@@ -354,6 +434,15 @@ _FIELDS: dict[str, tuple[Any, dict[str, Any], frozenset[str]]] = {
     ),
     "email_ref": (_REF, {}, frozenset({"register", "login"})),
     "username_ref": (_REF, {}, frozenset({"register", "login"})),
+    #: The password's length is the agent's to choose for the site it registers on, and only a
+    #: registration makes one. The floor is the schema's, because a shorter one cannot hold the
+    #: composition; the ceiling is this mechanism's own, ``_MAX_PASSWORD_CHARS``, said in the
+    #: surface's own words because what a site's field takes decides below it.
+    "length": (
+        Annotated[int, Field(ge=PASSWORD_MIN_LENGTH)],
+        {},
+        frozenset({"register"}),
+    ),
 }
 _REQUIRED: dict[str, tuple[str, ...]] = {
     "navigate": ("url",),
@@ -377,7 +466,9 @@ _DESCRIPTION = (
     "context, never evidence: capture admits the page as a citable Web Resource, and a file "
     "the page downloads becomes a Resource to read. If a page shows a CAPTCHA or any other "
     "human-verification check, stop that path and report it; never solve, bypass, or "
-    "outsource it."
+    "outsource it. A page that refuses the browser for being automated is reported as such: "
+    "where the deployment leases headed browsers, navigate with headed=true reads it on a "
+    "browser with a display, which the Run keeps for the rest of the Run."
 )
 
 
@@ -462,16 +553,21 @@ class BrowserRequest:
     ref: str | None = None
     text: str | None = None
     submit: bool = False
+    limit: int | None = None
     values: tuple[str, ...] = ()
     key: str | None = None
     direction: Literal["up", "down"] = "down"
     text_gone: str | None = None
     seconds: float | None = None
     full_page: bool = False
+    headed: bool = False
+    dialog: DialogVerdict | None = None
     files: tuple[str, ...] = ()
     password_refs: tuple[str, ...] = ()
     email_ref: str | None = None
     username_ref: str | None = None
+    length: int | None = None
+    """The generated password's length, or None for the generator's own default."""
 
     @classmethod
     def from_args(cls, args: BrowserArgs) -> BrowserRequest:
@@ -484,16 +580,20 @@ class BrowserRequest:
             ref=given["ref"],
             text=given["text"],
             submit=bool(given["submit"]),
+            limit=given["limit"],
             values=tuple(given["values"] or ()),
             key=given["key"],
             direction=given["direction"] or "down",
             text_gone=given["text_gone"],
             seconds=given["seconds"],
             full_page=bool(given["full_page"]),
+            headed=bool(given["headed"]),
+            dialog=given["dialog"],
             files=tuple(given["files"] or ()),
             password_refs=tuple(given["password_refs"] or ()),
             email_ref=given["email_ref"],
             username_ref=given["username_ref"],
+            length=given["length"],
         )
 
 
@@ -531,7 +631,34 @@ DOWNLOADED = (
     "Downloaded {filename} ({mime}, {size:,} bytes) as {resource_id} (browser_download); "
     "read(resource_id='{resource_id}') reads it."
 )
-DIALOG = 'The page showed a {kind} dialog: "{message}" ({verdict}).'
+DIALOG = 'The page showed a {kind} dialog: "{message}" ({answer}).'
+DIALOG_DEFAULT = 'Its default text is "{default}"; accepting takes that as the answer.'
+DIALOG_WAITING = (
+    'The page showed a {kind} dialog: "{message}" and it is waiting for an answer: the page '
+    "is stopped until a call answers it. Every call of this Session reports it until then. "
+    'Call browser again with dialog="accept" or dialog="dismiss" to answer it.'
+)
+NOT_SETTLED = (
+    "The page had not gone quiet within {seconds:g} seconds of this call: what follows was "
+    "read while it was still loading, so something may be missing. Wait, scroll, or snapshot "
+    "again before concluding that the page does not have it."
+)
+WAIT_TOO_LONG = (
+    "A single wait is at most {max:g} seconds: the page was not waited for. Call wait again "
+    "for another stretch, or wait for the text to appear instead."
+)
+LENGTH_TOO_LONG = (
+    "This mechanism fills and seals a password of at most {max} characters: every one is drawn, "
+    "held in memory, filled into the page, and sealed into the stored account. {asked} was asked "
+    "for, so nothing was made. Ask for {max} or fewer, and for no more than the site's own "
+    "password field takes."
+)
+FIND_TOO_LONG = (
+    "A single find answers with at most {max} matching lines: nothing was searched. Ask for "
+    "fewer, or narrow the query, and the result says how many lines matched in all."
+)
+DIALOGS_OMITTED = "({n} more dialog(s) omitted)"
+REFUSALS_OMITTED = "({n} more refused download(s) omitted)"
 NOT_ADMITTED = "The download {name} was not admitted: {why}."
 CAPTURED = "Captured this page as Web Resource {resource_id} (browser_capture)."
 NO_IMAGE = (
@@ -539,18 +666,16 @@ NO_IMAGE = (
     "does not accept images."
 )
 SHOT = (
-    "Screenshot of the {extent} page ({media}, {size:,} model bytes); its pixels are context, "
-    "not evidence."
+    "Screenshot of the {extent} page ({media}, {size:,} model bytes). Treat its pixels as an "
+    "observation of the page rather than as a citable source: quote the page's own text for a "
+    "claim. To show the reader the page itself, fetch or view it: a Resource is what an Answer can "
+    "place, and this screenshot is context."
 )
 NO_KEY_RING = (
     "Agent Accounts are unavailable: this deployment has no credential key ring, so no "
     "password can be stored or read."
 )
 NO_SITE = "{action} needs an https page with a registrable domain; this page is {label}."
-SHORT_LIMIT = (
-    "This site's password field takes at most {n} characters, fewer than the {minimum} an Agent "
-    "Account needs, so nothing was filled."
-)
 BAD_EMAIL = "Field {ref} holds no email address to record; type the address first."
 BAD_USERNAME = "Field {ref} holds no username to record; type it first."
 NEEDS_IDENTITY = "A new account needs email_ref or username_ref, so that login can name it later."
@@ -582,8 +707,25 @@ NO_ALIAS = (
     "The accounts this Agent Session used have no mailbox alias, so there is no mail to read."
 )
 MAILBOX_FAILED = "The Agent Mailbox could not be read ({code})."
+#: Said under the answer of the first call after a person drove this Run's browser.
+DROVE = (
+    "[browser: a person drove this page since your last call | it may have moved, and a form "
+    "may hold what they typed; snapshot before acting on what you remember]"
+)
+#: Said under the answer of a call that moved this Run's browser to one with a display.
+HEADED = "[browser: headed | this Run's browser moved to one with a display, on the session the last one held]"
+HEADED_CARRIED = (
+    "The page is driven on a browser with a display from here on: its cookies and web "
+    "storage moved with it; a form that was half filled did not, so fill it again. Every "
+    "later call of this Run drives that same browser."
+)
 
+#: How many matching lines find answers with when the call does not say; the port takes any.
 _FOUND_SHOWN = 30
+#: How many matching lines one find answers with; a longer list is a narrower query's to make.
+_MAX_FOUND = 100
+#: How long one wait may last; a longer stretch is the agent's to ask for again.
+_MAX_WAIT_SECONDS = 30.0
 _FRAME_URL_CHARS = 500
 #: The longest email address, and the longest username, an account records.
 _MAX_EMAIL_CHARS = 254
@@ -662,14 +804,35 @@ class _Call:
         self._owner = ResourceEffectOwner(self._scope, runtime.intent_id)
 
     async def run(self) -> ToolResult:
+        if self._host.browser.taken_over():
+            # A person is driving this Run's browser. The call is refused and the Run goes on:
+            # what they are doing on the page is not the agent's to interrupt (ADR 0032).
+            return ToolResult.text(page_failure("taken_over").public_message, is_error=True)
         if subject := self._subject():
             await self._runtime.emit_update(ToolResult.text("", subject=subject))
+        before = self._host.browser.headed
         try:
-            return await self._act()
+            result = await self._act()
         except AgentBrowserError as exc:
             return ToolResult.text(exc.public_message, is_error=True)
         except ResourceRegistryError as exc:
             return ToolResult.text(str(exc), is_error=True)
+        if self._request.headed and before is False and self._host.browser.headed is True:
+            # The call moved the Run to a browser with a display, and its answer says so.
+            result = self._noted(result, f"{HEADED}\n{HEADED_CARRIED}")
+        if not result.is_error and self._host.browser.take_drive_notice():
+            # A person drove this page and handed the seat back: the page is not the one the
+            # agent last saw, and the first call that learns it says so. A call that failed
+            # spent nothing, so the next one that reaches the page still carries the notice.
+            result = self._noted(result, DROVE)
+        return result
+
+    def _noted(self, result: ToolResult, note: str) -> ToolResult:
+        """The answer of a call with one more fact about the browser it was made on."""
+        first = result.parts[0] if result.parts else None
+        text = "" if first is None else getattr(first, "text", "")
+        head = ToolTextPart(f"{text}\n{note}" if text else note)
+        return replace(result, parts=(head, *result.parts[1:]))
 
     def _subject(self) -> str:
         """What the call acts on, for the live row: never typed text."""
@@ -700,12 +863,18 @@ class _Call:
                     await avalidate_public_http_url(url)
                 except PublicHttpPolicyError as exc:
                     return ToolResult.text(NAVIGATE_REFUSED.format(exc=exc), is_error=True)
-                return await self._acting(lambda p: p.navigate(url), open_page=True)
+                return await self._acting(
+                    lambda p: p.navigate(url), open_page=True, headed=request.headed
+                )
             case "back":
                 return await self._acting(lambda p: p.back())
             case "snapshot":
                 return await self._acting(lambda p: p.snapshot())
             case "wait":
+                if request.seconds is not None and request.seconds > _MAX_WAIT_SECONDS:
+                    return ToolResult.text(
+                        WAIT_TOO_LONG.format(max=_MAX_WAIT_SECONDS), is_error=True
+                    )
                 return await self._acting(
                     lambda p: p.wait(
                         text=request.text, text_gone=request.text_gone, seconds=request.seconds
@@ -747,18 +916,31 @@ class _Call:
                 return await self._inbox()
 
     async def _on_page[T](
-        self, call: Callable[[AgentPage], Awaitable[T]], *, open_page: bool = False
+        self,
+        call: Callable[[AgentPage], Awaitable[T]],
+        *,
+        open_page: bool = False,
+        headed: bool = False,
     ) -> T:
-        return await self._host.browser.with_page(self._scope, call, open_page=open_page)
+        """Run ``call`` on this Session's page, with this call's verdict for its dialogs."""
+
+        async def with_verdict(page: AgentPage) -> T:
+            await page.answer_dialogs(self._request.dialog)
+            return await call(page)
+
+        return await self._host.browser.with_page(
+            self._scope, with_verdict, open_page=open_page, headed=headed
+        )
 
     async def _acting(
         self,
         call: Callable[[AgentPage], Awaitable[PageObservation]],
         *,
         open_page: bool = False,
+        headed: bool = False,
     ) -> ToolResult:
         """A call that answers with the page and its snapshot."""
-        return await self._reported(await self._on_page(call, open_page=open_page))
+        return await self._reported(await self._on_page(call, open_page=open_page, headed=headed))
 
     async def _reported(self, observation: PageObservation, *lines: str) -> ToolResult:
         """The frame and notes of what a call left, then ``lines``, then its bounded snapshot."""
@@ -769,7 +951,12 @@ class _Call:
 
     async def _find(self) -> ToolResult:
         query = cast(str, self._request.query)
-        found = await self._on_page(lambda p: p.find(query, limit=_FOUND_SHOWN))
+        limit = self._request.limit or _FOUND_SHOWN
+        if limit > _MAX_FOUND:
+            # A sentence the model can act on, as a long wait's is, and refused before the
+            # page is touched: this surface never answers with a validation dump.
+            return ToolResult.text(FIND_TOO_LONG.format(max=_MAX_FOUND), is_error=True)
+        found = await self._on_page(lambda p: p.find(query, limit=limit))
         report = await self._report(found.page, found.events)
         if not found.lines:
             return ToolResult.text("\n".join((report, NOTHING_FOUND.format(query=query))))
@@ -879,12 +1066,27 @@ class _Call:
         return await self._on_page(on_page)
 
     async def _register(self, page: AgentPage, accounts: SessionAccounts, site: str) -> ToolResult:
-        """Fill a new generated password, and the account's email, into a sign-up form.
+        """Fill a new generated password of the length the call asked for, and the account's
+        email, into a sign-up form.
 
         The account is recorded as soon as its fields are filled, before the site accepts the
-        form; a password reset is a registration on a site whose account exists.
+        form; a password reset is a registration on a site whose account exists. A length past
+        the most one call makes is refused in this surface's own words, and a site whose own
+        field takes fewer characters than the call asked for is refused before anything is
+        filled or stored, naming both numbers: a password is never shortened to fit a field,
+        since the length is the agent's to choose for the site it meets. A field that takes
+        fewer than the shortest password this mechanism can make leaves no ask that fits it, so
+        that refusal names the mechanism's own minimum and the site as one no registration can
+        succeed on, rather than advising an ask that cannot be made.
         """
         request = self._request
+        length = request.length or PASSWORD_LENGTH
+        if length > _MAX_PASSWORD_CHARS:
+            # A sentence the model can act on, as a wait's or a find's is, and refused before
+            # the form is read: this surface never answers with a validation dump.
+            return ToolResult.text(
+                LENGTH_TOO_LONG.format(max=_MAX_PASSWORD_CHARS, asked=length), is_error=True
+            )
         existing = await accounts.registration_target(site)
         form = await page.credential_form(
             site=site,
@@ -892,11 +1094,14 @@ class _Call:
             email_ref=request.email_ref,
             username_ref=request.username_ref,
         )
-        length = min(PASSWORD_LENGTH, form.password_limit or PASSWORD_LENGTH)
-        if length < MIN_PASSWORD_LENGTH:
-            return ToolResult.text(
-                SHORT_LIMIT.format(n=length, minimum=MIN_PASSWORD_LENGTH), is_error=True
-            )
+        if (limit := form.password_limit) is not None and limit < length:
+            if limit < PASSWORD_MIN_LENGTH:
+                # No ask this mechanism can honour is short enough for the field, so the agent is
+                # told the site cannot be registered on instead of being sent to ask again.
+                raise browser_failure(
+                    "password_limit_too_small", limit=limit, minimum=PASSWORD_MIN_LENGTH
+                )
+            raise browser_failure("password_too_long", limit=limit, asked=length)
         # What an account already holds is kept unless the form names the field again.
         email = existing.email if existing else None
         username = existing.username if existing else None
@@ -1026,16 +1231,16 @@ class _Call:
 
     async def _upload(self) -> ToolResult:
         environment = cast(ExecutionEnvironment, self._environment)
-        files = await self._workspace_files(environment)
+        files = await self._agentspace_files(environment)
         if isinstance(files, ToolResult):
             return files
         return await self._acting(lambda p: p.upload(cast(str, self._request.ref), files))
 
-    async def _workspace_files(
+    async def _agentspace_files(
         self, environment: ExecutionEnvironment
     ) -> tuple[UploadFile, ...] | ToolResult:
         """The workspace files an upload sends, or the result that says why it cannot."""
-        if blocked := workspace_integrity_refusal(environment):
+        if blocked := agentspace_integrity_refusal(environment):
             return blocked
         files: list[UploadFile] = []
         total = 0
@@ -1046,7 +1251,7 @@ class _Call:
                 return ToolResult.text(str(exc), is_error=True)
             async with self._scheduler.hold(PathAccess(path=str(path), kind="read")):
                 # A command that held the workspace while this waited may have latched it.
-                if blocked := workspace_integrity_refusal(environment):
+                if blocked := agentspace_integrity_refusal(environment):
                     return blocked
                 if environment.stat_kind(path) != "file":
                     return ToolResult.text(
@@ -1072,9 +1277,7 @@ class _Call:
         if page is None:
             frame = f"[browser: {action} | the page closed]"
         else:
-            url = page.url
-            if len(url) > _FRAME_URL_CHARS:
-                url = url[: _FRAME_URL_CHARS - 1] + "…"
+            url = elide(page.url, _FRAME_URL_CHARS)
             status = ""
             if events.http_status is not None and events.http_status >= 400:
                 status = f" | HTTP {events.http_status}"
@@ -1088,17 +1291,32 @@ class _Call:
             )
             if flag
         ]
-        notes.extend(
-            DIALOG.format(
-                kind=dialog.kind,
-                message=dialog.message,
-                verdict="accepted" if dialog.accepted else "dismissed",
-            )
-            for dialog in events.dialogs
-        )
+        if events.settled is False:
+            notes.append(NOT_SETTLED.format(seconds=self._host.browser.limits.settle_timeout))
+        notes.extend(self._dialogs(events))
         notes.extend(await self._admit_downloads(events))
-        notes.extend(self._refusals(events.refused_downloads))
+        notes.extend(self._refusals(events))
         return "\n".join((frame, *notes))
+
+    def _dialogs(self, events: PageEvents) -> list[str]:
+        """One note for every dialog the call met, waiting or answered, and one for the rest.
+
+        The dialogs past the bound are counted rather than listed: a page can raise them
+        without end, and a list that looked complete would be read as the whole of them.
+        """
+        notes: list[str] = []
+        for dialog in events.dialogs:
+            if dialog.answer == "waiting":
+                notes.append(DIALOG_WAITING.format(kind=dialog.kind, message=dialog.message))
+            else:
+                notes.append(
+                    DIALOG.format(kind=dialog.kind, message=dialog.message, answer=dialog.answer)
+                )
+            if dialog.default:
+                notes.append(DIALOG_DEFAULT.format(default=dialog.default))
+        if events.omitted_dialogs:
+            notes.append(DIALOGS_OMITTED.format(n=events.omitted_dialogs))
+        return notes
 
     async def _admit_downloads(self, events: PageEvents) -> list[str]:
         """Admit what the pages downloaded as Resources of this call, one note for each."""
@@ -1127,7 +1345,12 @@ class _Call:
             )
         return notes
 
-    def _refusals(self, refused: tuple[DownloadRefusal, ...]) -> list[str]:
+    def _refusals(self, events: PageEvents) -> list[str]:
+        """One note for every download the call refused, and one for the rest the bound left.
+
+        The refusals past the bound are counted rather than listed: a page can start downloads
+        without end, and a list that looked complete would be read as the whole of them.
+        """
         limits = self._host.browser.limits
         reasons = {
             "too_large": f"it exceeds {limits.max_download_bytes} bytes",
@@ -1135,13 +1358,16 @@ class _Call:
             "failed": "it could not be downloaded",
             "limit": f"one call admits at most {MAX_DOWNLOADS_PER_CALL} downloads",
         }
-        return [
+        notes = [
             NOT_ADMITTED.format(
                 name=browser_download_filename(refusal.suggested_filename),
                 why=reasons[refusal.reason],
             )
-            for refusal in refused
+            for refusal in events.refused_downloads
         ]
+        if events.omitted_refusals:
+            notes.append(REFUSALS_OMITTED.format(n=events.omitted_refusals))
+        return notes
 
     async def _bounded(self, report: str, snapshot: str) -> ToolResult:
         """The report and the snapshot, with the snapshot kept in full when it is too big.

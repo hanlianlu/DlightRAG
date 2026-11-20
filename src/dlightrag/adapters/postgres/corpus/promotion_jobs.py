@@ -179,29 +179,9 @@ WHERE job_id = $1
 
 _SCHEMA_MIGRATIONS = (
     Migration(
-        "promotion_jobs",
-        "Create durable promotion-job table",
-        (_CREATE,),
-    ),
-    Migration(
-        "promotion_jobs_active_unique",
-        "At most one live job per workspace",
-        (_ACTIVE_JOB_INDEX,),
-    ),
-    Migration(
-        "promotion_jobs_claim_index",
-        "Bounded keyset claim index for pending jobs",
-        (_CLAIM_INDEX,),
-    ),
-    Migration(
-        "promotion_jobs_retry_index",
-        "Bounded keyset index for failed retry jobs",
-        (_RETRY_INDEX,),
-    ),
-    Migration(
-        "promotion_jobs_lease_index",
-        "Bounded keyset index for expired promotion leases",
-        (_LEASE_INDEX,),
+        "baseline",
+        "Create the durable promotion-job table and its claim, retry, and lease indexes",
+        (_CREATE, _ACTIVE_JOB_INDEX, _CLAIM_INDEX, _RETRY_INDEX, _LEASE_INDEX),
     ),
 )
 

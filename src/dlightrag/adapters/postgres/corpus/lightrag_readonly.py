@@ -30,6 +30,7 @@ from lightrag.kg.shared_storage import (
 from lightrag.lightrag import StoragesStatus
 from pgvector.asyncpg import register_vector
 
+from dlightrag.adapters.postgres.core._retry import retry_transient
 from dlightrag.adapters.postgres.core.identifiers import pg_qualified_identifier
 from dlightrag.adapters.postgres.corpus.lightrag_contract import READ_ONLY_STORAGE_ATTRS
 from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
@@ -97,33 +98,38 @@ class ReadOnlyPostgreSQLDB(PostgreSQLDB):
         if self.enable_vector and self.vector_index_type == "VCHORDRQ":
             await self.configure_vchordrq(connection)
 
-    async def initdb(self) -> None:
-        """Create a read-only asyncpg pool without LightRAG bootstrap DDL."""
-        attempts = max(1, int(self.connection_retry_attempts))
+    async def initdb(self, *, reconnect: bool = False) -> None:
+        """Create a read-only asyncpg pool without LightRAG bootstrap DDL.
+
+        ``reconnect`` is LightRAG's ``_ensure_pool`` asking for a lost pool back
+        (1.5.8+). It makes one attempt, as upstream does, so concurrent requests
+        during an outage do not each wait out the whole retry budget.
+        """
+        attempts = 1 if reconnect else max(1, int(self.connection_retry_attempts))
         backoff = max(0.0, float(self.connection_retry_backoff))
         backoff_max = max(backoff, float(self.connection_retry_backoff_max))
 
-        for attempt in range(1, attempts + 1):
+        transient = self._transient_exceptions
+
+        async def connect() -> None:
             try:
                 self.pool = await asyncpg.create_pool(
                     **self._pool_kwargs(),
                     init=self._init_read_only_connection,
                     reset=self._reset_read_only_connection,
                 )
-                return
-            except self._transient_exceptions as exc:
+            except transient:
                 self.pool = None
-                if attempt >= attempts:
-                    raise
-                sleep_for = min(backoff * (2 ** (attempt - 1)), backoff_max)
-                logger.warning(
-                    "PostgreSQL read-only pool transient connection issue on attempt %d/%d: %r",
-                    attempt,
-                    attempts,
-                    exc,
-                )
-                if sleep_for > 0:
-                    await asyncio.sleep(sleep_for)
+                raise
+
+        await retry_transient(
+            connect,
+            is_transient=lambda exc: isinstance(exc, transient),
+            attempts=attempts,
+            backoff=backoff,
+            backoff_max=backoff_max,
+            subject="PostgreSQL read-only pool",
+        )
 
 
 _VECTOR_STORAGE_ATTRS = frozenset({"entities_vdb", "relationships_vdb", "chunks_vdb"})

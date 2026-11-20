@@ -1,7 +1,7 @@
 /* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
 
-/* One child in the Child agents dock: a scrolling page (title, state, question, result, activity)
- * above the composer that stays docked at the bottom (ui/agent-session.ts). */
+/* One agent in the Run traces dock: a read-only, scrolling page (title, state, question, result,
+ * history, activity) beside the Run timeline (ui/agent-session.ts). */
 
 @layer features {
   /* ── State mark ── */
@@ -32,21 +32,8 @@
     color: var(--color-text-subtle);
   }
 
-  @keyframes pulse {
-    0%,
-    100% {
-      opacity: 1;
-      transform: scale(1);
-    }
-
-    50% {
-      opacity: 0.45;
-      transform: scale(0.8);
-    }
-  }
-
   .pulse {
-    animation: pulse 1.6s ease-in-out infinite;
+    animation: var(--duration-pulse-slow) global(dl-pulse) ease-in-out infinite;
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -68,7 +55,7 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: var(--space-inline) var(--space-section) var(--space-related);
+    padding: var(--space-tight) 0 var(--space-related);
   }
 
   .title {
@@ -93,33 +80,14 @@
     overflow: hidden;
   }
 
+  /* "Show full objective" is the design system's disclosure primitive; this rule only places it.
+     The authored display is still given back to `hidden` explicitly. */
   .more {
-    align-items: center;
-    background: none;
-    border: 0;
-    border-radius: var(--radius-control);
-    color: var(--color-text-muted);
-    cursor: pointer;
-    display: inline-flex;
-    font: inherit;
-    font-size: var(--font-size-caption);
-    min-height: var(--size-button);
-    padding: 0;
-    text-decoration: underline;
-    text-underline-offset: 0.2em;
+    align-self: flex-start;
   }
 
   .more[hidden] {
     display: none;
-  }
-
-  .more:hover {
-    color: var(--color-text-primary);
-  }
-
-  .more:focus-visible {
-    outline: 2px solid var(--focus-ring-color);
-    outline-offset: 2px;
   }
 
   .status {
@@ -139,25 +107,6 @@
   .state {
     color: var(--color-text-secondary);
     font-weight: 500;
-  }
-
-  .cancel {
-    margin-inline-start: auto;
-  }
-
-  .confirm {
-    align-items: center;
-    color: var(--color-text-secondary);
-    display: flex;
-    flex-wrap: wrap;
-    font-size: var(--font-size-detail);
-    gap: var(--space-tight);
-    margin-top: var(--space-component);
-  }
-
-  .confirm p {
-    flex: 1 1 100%;
-    line-height: var(--line-height-control);
   }
 
   /* ── The parent's question ── */
@@ -182,12 +131,6 @@
     margin: var(--space-inline) 0 var(--space-tight);
     overflow-wrap: anywhere;
     white-space: pre-wrap;
-  }
-
-  .reply {
-    display: grid;
-    gap: var(--space-tight);
-    justify-items: start;
   }
 
   /* ── Result, activity, history ── */
@@ -305,9 +248,8 @@
     list-style: none;
   }
 
+  /* A quiet line's type and ink are the design system's `.dl-note`; this only sets it off. */
   .quiet {
-    color: var(--color-text-muted);
-    font-size: var(--font-size-detail);
     margin-top: var(--space-related);
   }
 
@@ -327,7 +269,7 @@
   .gone {
     display: grid;
     gap: var(--space-inline);
-    padding: var(--space-layout) var(--space-section);
+    padding: var(--space-layout) 0;
     place-items: center;
     text-align: center;
   }
@@ -343,108 +285,4 @@
     font-size: var(--font-size-caption);
   }
 
-  /* ── The composer ── */
-
-  .composer {
-    border-top: 1px solid var(--color-divider);
-    flex: none;
-    padding: var(--space-component) var(--space-section) var(--space-related);
-  }
-
-  /* A Run that is over has no box: this quiet note stands in the composer's place. */
-  .finished {
-    border-top: 1px solid var(--color-divider);
-    color: var(--color-text-muted);
-    flex: none;
-    font-size: var(--font-size-caption);
-    line-height: var(--line-height-control);
-    padding: var(--space-component) var(--space-section) var(--space-related);
-  }
-
-  .outcome {
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-caption);
-    line-height: var(--line-height-control);
-    margin-bottom: var(--space-tight);
-  }
-
-  .reauthorize {
-    font-size: var(--font-size-detail);
-    margin-block: 0 var(--space-tight);
-  }
-
-  .field {
-    align-items: flex-end;
-    background: var(--color-control-surface);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-card);
-    display: flex;
-    gap: var(--space-tight);
-    padding: var(--space-inline) var(--space-inline) var(--space-inline) var(--space-related);
-    transition: border-color var(--duration-control), box-shadow var(--duration-control);
-    width: 100%;
-  }
-
-  .field:focus-within {
-    border-color: var(--color-accent-border-soft);
-    box-shadow: 0 0 0 2px var(--color-accent-ghost);
-  }
-
-  .input {
-    background: transparent;
-    border: 0;
-    color: var(--color-text-primary);
-    flex: 1;
-    font: inherit;
-    font-size: var(--font-size-detail);
-    line-height: var(--line-height-control);
-    max-height: calc(var(--font-size-detail) * var(--line-height-control) * 6 + var(--space-tight) * 2);
-    min-width: 0;
-    outline: none;
-    overflow-y: hidden;
-    padding: var(--space-tight) 0;
-    resize: none;
-  }
-
-  .input::placeholder {
-    color: var(--color-text-muted);
-  }
-
-  .send {
-    align-items: center;
-    background: var(--color-action-bg);
-    border: 0;
-    border-radius: var(--radius-circle);
-    color: var(--color-on-action);
-    cursor: pointer;
-    display: flex;
-    flex: none;
-    height: var(--size-button);
-    justify-content: center;
-    transition: background var(--duration-control) var(--easing-standard);
-    width: var(--size-button);
-  }
-
-  .send:hover {
-    background: var(--color-action-bg-hover);
-  }
-
-  .send:focus-visible {
-    outline: 2px solid var(--focus-ring-color);
-    outline-offset: 2px;
-  }
-
-  /* An empty box or a command in flight dims the button without disabling it, which would drop focus. */
-  .send[aria-disabled='true'] {
-    background: var(--color-bg-elevated);
-    color: var(--color-text-dim);
-    cursor: default;
-  }
-
-  .hint {
-    color: var(--color-text-muted);
-    font-size: var(--font-size-caption);
-    line-height: var(--line-height-control);
-    margin-top: var(--space-tight);
-  }
 }

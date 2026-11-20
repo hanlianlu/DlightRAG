@@ -13,46 +13,15 @@ from dlightrag.adapters.postgres.corpus.pg_metadata_index import (
     metadata_match_conditions,
 )
 from dlightrag.adapters.postgres.corpus.pg_metadata_search import PGMetadataSearchStore
-from dlightrag.application.corpus_admin import (
-    FilePanelCursor,
-    FilePanelCursorCodec,
+from dlightrag.application.corpus_admin.file_panel import FilePanelCursor, FilePanelCursorCodec
+from dlightrag.application.corpus_admin.metadata_search import (
     MetadataSearchCursor,
     MetadataSearchCursorCodec,
     MetadataSearchCursorError,
     MetadataSearchPageRequest,
 )
-from dlightrag.engine.rag.retrieval import MetadataFilter
-
-
-class _Acquire:
-    def __init__(self, conn: Any) -> None:
-        self._conn = conn
-
-    async def __aenter__(self) -> Any:
-        return self._conn
-
-    async def __aexit__(self, *_exc: object) -> bool:
-        return False
-
-
-class _Pool:
-    def __init__(self, conn: Any) -> None:
-        self._conn = conn
-
-    def acquire(self) -> _Acquire:
-        return _Acquire(self._conn)
-
-
-class _Conn:
-    """Records every read, so a refusal can show it reached no storage."""
-
-    def __init__(self) -> None:
-        self.fetches: list[tuple[str, tuple[Any, ...]]] = []
-
-    async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
-        self.fetches.append((query, args))
-        return []
-
+from dlightrag.engine.rag.retrieval.models import MetadataFilter
+from tests.support.pg_fakes import FakePool, RecordingConnection
 
 # ---------------------------------------------------------------------------
 # Cursor codec
@@ -130,8 +99,8 @@ def test_match_conditions_reject_an_unknown_filename_mode() -> None:
 
 
 async def test_page_store_rejects_cross_workspace_before_fetch() -> None:
-    conn = _Conn()
-    store = PGMetadataSearchStore(pool=_Pool(conn))
+    conn = RecordingConnection()
+    store = PGMetadataSearchStore(pool=FakePool(conn))
 
     with pytest.raises(ValueError, match="another workspace"):
         await store.search_metadata_page(

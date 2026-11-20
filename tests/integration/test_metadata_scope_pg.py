@@ -32,7 +32,10 @@ from typing import Any
 import asyncpg
 import pytest
 
-from dlightrag.engine.rag.retrieval import MetadataFilter, MetadataScope
+from dlightrag.engine.rag.retrieval.models import (
+    MetadataFilter,
+    MetadataScope,
+)
 from tests.support.pg import (
     PG_CONN_KWARGS,
     drop_database,
@@ -127,8 +130,9 @@ async def writer_corpus() -> AsyncIterator[WriterCorpus]:
     """One fresh writer attach over the dedicated test database."""
     from dlightrag.adapters.postgres.core._pool import pg_pool
     from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
-    from dlightrag.application.config import DlightragConfig, set_config
-    from dlightrag.application.settings import rag_settings
+    from dlightrag.application.config.loading import set_config
+    from dlightrag.application.config.sections import DlightragConfig
+    from dlightrag.application.settings.projections import rag_settings
     from dlightrag.engine.ai.settings import (
         EmbeddingSettings,
         ModelRoleSettings,
@@ -266,37 +270,6 @@ async def test_finalization_marker_round_trips_and_partial_updates_preserve_true
     assert preserved["title"] == "partial update"
     assert preserved["_dlightrag_finalization_complete"] is True
     assert preserved["_dlightrag_parser_input_sha256"] == digest
-    await index.upsert("doc-unfinished", {"filename": "unfinished.pdf"})
-
-    # Reproduce an already-partitioned pre-marker schema. Foundation validation
-    # must allow the append-only migration to add the column before the final
-    # schema verifier requires it. A durable LightRAG PROCESSED record proves a
-    # legacy document was complete; rows without that proof stay hidden.
-    conn = await asyncpg.connect(**_kwargs(_TEST_DB))
-    try:
-        await conn.execute(
-            "INSERT INTO lightrag_doc_status "
-            "(workspace, id, status, file_path) "
-            "VALUES ('ms_finalization_marker', 'doc-marker', 'processed', 'marker.pdf')"
-        )
-        await conn.execute(
-            "DELETE FROM dlightrag_schema_migrations "
-            "WHERE scope = 'doc_metadata' AND version IN "
-            "('column_finalization_complete', 'product_document_visibility', "
-            "'publish_legacy_processed_documents')"
-        )
-        await conn.execute(
-            "ALTER TABLE dlightrag_doc_metadata DROP COLUMN _dlightrag_finalization_complete"
-        )
-    finally:
-        await conn.close()
-    await index.initialize()
-    migrated = await index.get("doc-marker")
-    unfinished = await index.get("doc-unfinished")
-    assert migrated is not None
-    assert unfinished is not None
-    assert migrated["_dlightrag_finalization_complete"] is True
-    assert unfinished["_dlightrag_finalization_complete"] is False
 
 
 async def test_publication_probe_sees_only_this_workspace_finished_documents(
@@ -1129,7 +1102,8 @@ async def test_unscoped_product_reads_hide_incomplete_and_metadata_less_rows(
     from dlightrag.adapters.postgres.corpus.file_panel import PGFilePanelStore
     from dlightrag.adapters.postgres.corpus.pg_metadata_index import PGMetadataIndex
     from dlightrag.adapters.postgres.corpus.pg_metadata_search import PGMetadataSearchStore
-    from dlightrag.application.corpus_admin import FilePanelPageRequest, MetadataSearchPageRequest
+    from dlightrag.application.corpus_admin.file_panel import FilePanelPageRequest
+    from dlightrag.application.corpus_admin.metadata_search import MetadataSearchPageRequest
     from dlightrag.engine.rag.corpus.downloads import (
         RedirectDownloadTarget,
         SourceDownloadNotFoundError,
@@ -1453,7 +1427,10 @@ async def test_failed_files_page_past_several_rows_and_prefer_the_error(
     writer_corpus: WriterCorpus,
 ) -> None:
     from dlightrag.adapters.postgres.corpus.file_panel import PGFilePanelStore
-    from dlightrag.application.corpus_admin import FilePanelCursor, FilePanelPageRequest
+    from dlightrag.application.corpus_admin.file_panel import (
+        FilePanelCursor,
+        FilePanelPageRequest,
+    )
 
     workspace = "ms_failed_files"
     newer = datetime.datetime(2026, 3, 4, 5, 6, 7)
@@ -1510,25 +1487,17 @@ async def test_failed_files_page_past_several_rows_and_prefer_the_error(
         await conn.close()
 
 
-async def test_source_options_migrate_without_guessing_historical_routing(
+async def test_source_options_are_replaced_not_merged_and_survive_partial_writes(
     writer_corpus: WriterCorpus,
 ) -> None:
-    """Real old-schema upgrade preserves rows; partial metadata writes preserve routing."""
+    """Partial metadata writes preserve routing; an explicit routing choice replaces the old one."""
     from dlightrag.adapters.postgres.corpus.pg_metadata_index import PGMetadataIndex
     from dlightrag.engine.rag.retrieval.metadata_fields import SOURCE_RETRIEVAL_OPTIONS_FIELD
 
     index = PGMetadataIndex(workspace=_WORKSPACE)
-    document_id = "source-options-migration"
+    document_id = "source-options-routing"
     conn = await asyncpg.connect(**_kwargs(_TEST_DB))
     try:
-        # Restore just the pre-options schema in this dedicated scratch database.
-        await conn.execute(
-            "ALTER TABLE dlightrag_doc_metadata DROP COLUMN _dlightrag_source_options"
-        )
-        await conn.execute(
-            "DELETE FROM dlightrag_schema_migrations "
-            "WHERE scope = 'doc_metadata' AND version = 'source_retrieval_options'"
-        )
         await conn.execute(
             "INSERT INTO dlightrag_doc_metadata "
             "(workspace, doc_id, download_locator, _dlightrag_finalization_complete) "
@@ -1536,12 +1505,10 @@ async def test_source_options_migrate_without_guessing_historical_routing(
             _WORKSPACE,
             document_id,
         )
-        await index.initialize()
-        await index.initialize(validate_only=True)
-        historical = await index.get(document_id)
-        assert historical is not None
-        assert historical[SOURCE_RETRIEVAL_OPTIONS_FIELD] is None
-        assert historical["download_locator"] == "s3://bucket/report.pdf"
+        unrouted = await index.get(document_id)
+        assert unrouted is not None
+        assert unrouted[SOURCE_RETRIEVAL_OPTIONS_FIELD] is None
+        assert unrouted["download_locator"] == "s3://bucket/report.pdf"
 
         await index.upsert(
             document_id,

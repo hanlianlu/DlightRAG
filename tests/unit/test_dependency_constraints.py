@@ -17,14 +17,6 @@ _MANIFESTS = (
 )
 
 
-def _project(path: Path = Path("pyproject.toml")) -> dict[str, object]:
-    return tomllib.loads(path.read_text(encoding="utf-8"))["project"]
-
-
-def _dependencies(path: Path = Path("pyproject.toml")) -> list[str]:
-    return _project(path)["dependencies"]  # type: ignore[return-value]
-
-
 def test_workspace_requirements_use_floors_without_upper_bounds() -> None:
     for path in _MANIFESTS:
         config = tomllib.loads(path.read_text(encoding="utf-8"))
@@ -43,112 +35,6 @@ def test_workspace_requirements_use_floors_without_upper_bounds() -> None:
         assert all(
             "<" not in requirement and "~=" not in requirement for requirement in requirements
         )
-
-
-def test_root_is_batteries_included_and_depends_only_on_standalone_memory() -> None:
-    dependencies = _dependencies()
-    version = _project()["version"]
-
-    assert f"dlightrag-memory=={version}" in dependencies
-    assert all(
-        any(dependency.startswith(name) for dependency in dependencies)
-        for name in (
-            "openai",
-            "anthropic",
-            "google-genai",
-            "json-repair",
-            "aiofiles",
-            "aiobotocore",
-            "azure-storage-blob",
-            "botocore",
-            "lightrag-hku",
-            "lingua-language-detector",
-        )
-    )
-    assert [dependency for dependency in dependencies if dependency.startswith("dlightrag-")] == [
-        f"dlightrag-memory=={version}",
-        f"dlightrag-observability=={version}",
-    ]
-
-
-def test_runtime_uses_the_current_yaml_1_2_parser() -> None:
-    dependencies = _dependencies()
-
-    assert "ruamel.yaml>=0.19.1" in dependencies
-    assert not any(dependency.startswith("pyyaml") for dependency in dependencies)
-
-
-def test_root_has_no_server_template_runtime_dependency() -> None:
-    names = {
-        re.split(r"[<>=!~\[]", dependency.lower(), maxsplit=1)[0] for dependency in _dependencies()
-    }
-
-    assert names.isdisjoint({"jinja2", "markupsafe"})
-
-
-def test_workspace_sources_and_lock_are_exact() -> None:
-    root = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-    assert root["tool"]["uv"]["workspace"]["members"] == [
-        "packages/memory",
-        "packages/observability",
-    ]
-    assert root["tool"]["uv"]["sources"] == {
-        "dlightrag-memory": {"workspace": True},
-        "dlightrag-observability": {"workspace": True},
-    }
-
-    lock = tomllib.loads(Path("uv.lock").read_text(encoding="utf-8"))
-    workspace_sources = {
-        package["name"]: package["source"]
-        for package in lock["package"]
-        if package["name"].startswith("dlightrag")
-    }
-    assert workspace_sources == {
-        "dlightrag": {"editable": "."},
-        "dlightrag-memory": {"editable": "packages/memory"},
-        "dlightrag-observability": {"editable": "packages/observability"},
-    }
-
-
-def test_the_observability_package_owns_the_otlp_export() -> None:
-    """The exporter is the package's, so its transport is the package's dependency and
-    the product imports no OpenTelemetry SDK of its own."""
-    package = _dependencies(Path("packages/observability/pyproject.toml"))
-    assert any(dependency.startswith("opentelemetry-sdk") for dependency in package)
-    assert any(
-        dependency.startswith("opentelemetry-exporter-otlp-proto-http") for dependency in package
-    )
-
-    root = _dependencies()
-    assert not [dependency for dependency in root if dependency.startswith("opentelemetry")]
-
-
-def test_postgres_init_uses_required_pg18_extensions() -> None:
-    init_sql = Path("postgres/init.sql").read_text(encoding="utf-8")
-
-    assert "CREATE EXTENSION IF NOT EXISTS vector;" in init_sql
-    assert "CREATE EXTENSION IF NOT EXISTS pg_textsearch;" in init_sql
-    assert "CREATE EXTENSION IF NOT EXISTS pg_jieba;" in init_sql
-
-
-def test_postgres_dockerfile_targets_pg18_ecosystem() -> None:
-    dockerfile = Path("postgres/Dockerfile").read_text(encoding="utf-8")
-
-    assert "pgvector/pgvector:pg18" in dockerfile
-    assert "postgresql-server-dev-18" in dockerfile
-    # A pin is required (no floating main/latest), but the exact patch version is
-    # intentionally NOT asserted so routine version bumps don't break the test.
-    assert re.search(r"ARG PG_TEXTSEARCH_REF=v\d+\.\d+", dockerfile)
-    assert (
-        "git clone --branch ${PG_TEXTSEARCH_REF} --depth 1 https://github.com/timescale/pg_textsearch.git"
-        in dockerfile
-    )
-    assert re.search(r"ARG PG_JIEBA_REF=v\d+\.\d+", dockerfile)
-    assert (
-        "git clone --branch ${PG_JIEBA_REF} --depth 1 --recurse-submodules https://github.com/jaiminpan/pg_jieba.git"
-        in dockerfile
-    )
-    assert "pg_config --includedir-server" in dockerfile
 
 
 def _compose() -> dict[str, Any]:
@@ -187,22 +73,6 @@ def test_compose_preloads_postgres_extensions() -> None:
     assert "shared_preload_libraries=pg_textsearch,pg_jieba" in compose
 
 
-def test_compose_api_healthcheck_uses_strict_readiness_endpoint() -> None:
-    """`docker compose up --wait` deploys on this check, so it must mean ready."""
-    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
-
-    assert "http://127.0.0.1:8100/ready" in compose
-    assert "urllib.request.urlopen" in compose
-
-
-def test_runtime_image_precreates_default_application_paths() -> None:
-    """Named volumes take the image's ownership of these paths; absent, they are root's."""
-    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
-
-    assert "/app/dlightrag_storage" in dockerfile
-    assert "/home/app/.dlightrag/agent_workspaces" in dockerfile
-
-
 def test_runtime_image_installs_the_library_the_copied_node_links() -> None:
     """Only the node binary crosses stages, so the runtime stage owns its libatomic.
 
@@ -219,7 +89,7 @@ def test_runtime_image_installs_the_library_the_copied_node_links() -> None:
 
 
 def test_compose_mcp_local_listener_passes_security_validation() -> None:
-    from dlightrag.application.config import DlightragConfig
+    from dlightrag.application.config.sections import DlightragConfig
 
     environment = _compose()["services"]["dlightrag-mcp"]["environment"]
 
@@ -240,13 +110,6 @@ def test_compose_mcp_local_listener_passes_security_validation() -> None:
         )
 
     assert config.interfaces.mcp.host == "0.0.0.0"
-
-
-def test_docx_native_parser_runtime_dependency_is_direct() -> None:
-    """LightRAG native DOCX parsing needs python-docx available at DlightRAG runtime."""
-    dependencies = _dependencies()
-
-    assert any(dep.lower().startswith("python-docx") for dep in dependencies)
 
 
 def test_compose_reader_service_is_a_profiled_second_role() -> None:

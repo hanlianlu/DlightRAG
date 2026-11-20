@@ -1,27 +1,11 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Reader-activated playback is independent of settlement metadata."""
 
-from collections.abc import Callable
-from typing import Any
-
 import pytest
 
 from dlightrag.adapters.http.browser import video_playback
 from dlightrag.adapters.http.browser.presentation import build_answer_presentation
 from dlightrag.engine.public_http import PublicHttpFetch
-
-
-@pytest.fixture
-def serve_oembed(monkeypatch: pytest.MonkeyPatch) -> Callable[[Any], Any]:
-    """Answer the playback resolver's oEmbed reads with a scripted fetch."""
-
-    def install(fetch: Any) -> Any:
-        monkeypatch.setattr(
-            "dlightrag.adapters.http.browser.video_playback.fetch_public_http", fetch
-        )
-        return fetch
-
-    return install
 
 
 def test_metadata_free_video_links_offer_playback_without_rewriting_the_answer():
@@ -301,7 +285,7 @@ def test_browser_playback_route_authentication_csrf_and_no_history_dependency():
 
     from dlightrag.adapters.http.browser.auth import WEB_CSRF_COOKIE, WebAuthMiddleware
     from dlightrag.adapters.http.browser.routes import router
-    from dlightrag.application.config import DlightragConfig
+    from dlightrag.application.config.sections import DlightragConfig
 
     app = FastAPI()
     app.include_router(router)
@@ -356,7 +340,7 @@ def test_playback_route_requires_real_credentials_and_cookie_bound_csrf(mode):
 
     from dlightrag.adapters.http.browser.auth import WEB_CSRF_COOKIE, WebAuthMiddleware
     from dlightrag.adapters.http.browser.routes import router
-    from dlightrag.application.config import DlightragConfig
+    from dlightrag.application.config.sections import DlightragConfig
 
     secret = "fixture-secret-never-used-outside-this-test"
     cfg = DlightragConfig.model_validate(

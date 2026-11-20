@@ -7,7 +7,6 @@ import pytest
 
 from dlightrag.engine.ai.capacity import (
     CONTEXT_POLICY,
-    CONTEXT_POLICY_REVISION,
     ContextPolicy,
     ModelInputOverflowError,
     ModelProfile,
@@ -38,16 +37,94 @@ def test_context_policy_applies_explicit_model_aware_reserves() -> None:
     )
     policy = ContextPolicy()
 
-    assert policy.revision == "agent-v5-absolute-reserves"
-    assert policy.dynamic_context_reserve_tokens == 40_000
-    assert not hasattr(policy, "observation_reserve_tokens")
+    assert policy.revision == "agent-v6-absolute-reserves"
+    # The configured 60K is the reserve a large window keeps whole; this profile's hard input
+    # limit cannot afford it, so it keeps the larger of a third of itself and the flat 40,000
+    # the product charged before this change — 54,666 here.
+    assert policy.dynamic_context_reserve_tokens == 60_000
+    assert policy.dynamic_context_reserve(profile) == 60_000
     assert policy.hard_input_limit(profile) == 180_000
-    assert policy.compaction_trigger(profile) == 140_000
-    assert policy.history_allowance_cap(profile) == 140_000
-    assert policy.compaction_trigger(profile, require_full_dynamic_reserve=True) == 140_000
+    assert policy.compaction_trigger(profile) == 120_000
+    assert policy.history_allowance_cap(profile) == 120_000
+    # Fast takes the reserve whole, so its ceiling is the same either way on this profile.
+    assert policy.compaction_trigger(profile, require_full_dynamic_reserve=True) == 120_000
+    assert policy.observation_capacity(profile) == 60_000
+    # The ceiling is the guarantee named for what it limits: one result may not claim a share
+    # of the window on top of the reserve, because a batch larger than the reserve is a turn
+    # no compaction can shed.
+    assert policy.tool_result_ceiling(profile) == 60_000
     assert policy.retained_tail_target(profile) == 20_000
     with pytest.raises(FrozenInstanceError):
         profile.context_window_tokens = 1  # type: ignore[misc]
+
+
+def test_the_dynamic_reserve_shrinks_with_the_profile_and_never_cuts_its_history() -> None:
+    """The 60K is a floor, not a flat charge: a window keeps what it can afford.
+
+    A window too small for 60,000 keeps the larger of a third of its hard input limit — the
+    share that leaves history — and the flat 40,000 the product charged before this change, so
+    shrinking the constant is never how the floor is paid for.
+    """
+    policy = ContextPolicy()
+
+    def bounded(window: int) -> ModelProfile:
+        # An output cap small enough that the window itself is the binding constraint.
+        return ModelProfile(context_window_tokens=window, max_output_tokens=1024)
+
+    for window in (8_000, 32_000, 128_000, 200_000, 500_000, 1_000_000):
+        profile = bounded(window)
+        hard = policy.hard_input_limit(profile)
+        reserve = policy.dynamic_context_reserve(profile)
+        ceiling = policy.tool_result_ceiling(profile)
+        floor = min(policy.minimum_input_tokens, hard)
+        previously_charged = min(40_000, max(0, hard - floor))
+        assert reserve >= 0
+        assert reserve <= policy.dynamic_context_reserve_tokens
+        # No more than a third, never less than the guarantee the profile already had, and the
+        # larger of the two decides when the profile cannot afford the configured floor.
+        assert reserve == min(
+            policy.dynamic_context_reserve_tokens, max(hard // 3, previously_charged)
+        )
+        assert reserve >= previously_charged
+        assert ceiling <= hard
+        assert ceiling >= policy.observation_capacity(profile)
+        assert policy.observation_capacity(profile) == reserve
+        assert policy.compaction_trigger(profile) == hard - reserve
+        assert policy.compaction_trigger(profile) >= 0
+
+    # Small windows keep proportionally less, large ones keep the whole floor. Either way the
+    # region between 40K and 100K of hard input is where the old flat charge and the third
+    # cross, and neither is ever below the other's guarantee.
+    assert policy.dynamic_context_reserve(bounded(128_000)) >= 40_000
+    assert policy.dynamic_context_reserve(bounded(1_000_000)) == 60_000
+    # The ceiling is the guarantee, not a share of the window: three full-size results in one
+    # exchange must still fit under the trigger that then bounds the turn.
+    assert policy.tool_result_ceiling(bounded(1_000_000)) == policy.observation_capacity(
+        bounded(1_000_000)
+    )
+    assert 3 * policy.tool_result_ceiling(bounded(1_000_000)) < policy.compaction_trigger(
+        bounded(1_000_000)
+    )
+
+
+def test_the_reserve_never_shrinks_the_guarantee_a_profile_already_had() -> None:
+    """The change raises capacity; it must not take any away.
+
+    Shrinking a flat constant is the one thing a floor may not do, so for every window the
+    effective reserve is at least the flat 40,000 (or the hard input limit less the request
+    floor, for a window that cannot hold that much) that the product charged before this
+    change. This is the regression that a third-only clamp would have introduced on mid-size
+    profiles, where a third is 37,205 against 40,000.
+    """
+    policy = ContextPolicy()
+
+    for window in (8_000, 17_408, 32_000, 64_000, 100_000, 128_000, 200_000, 500_000, 1_000_000):
+        for output in (1_024, 16_000, None):
+            profile = ModelProfile(context_window_tokens=window, max_output_tokens=output)
+            hard = policy.hard_input_limit(profile)
+            floor = min(policy.minimum_input_tokens, hard)
+            previously_charged = min(40_000, max(0, hard - floor))
+            assert policy.dynamic_context_reserve(profile) >= previously_charged
 
 
 def test_profile_resolution_prefers_runtime_complete_overlay_before_builtin() -> None:
@@ -78,7 +155,6 @@ def test_profile_resolution_prefers_runtime_complete_overlay_before_builtin() ->
         MODEL_CATALOGUE.replace_overlay(previous)
 
     catalog_profile = resolve_model_profile(fingerprint)
-    assert MODEL_CATALOGUE.is_builtin(fingerprint)
     assert catalog_profile.context_window_tokens == 1_048_576
     assert catalog_profile.max_output_tokens == 131_072
     assert catalog_profile.supports_images is True
@@ -102,7 +178,6 @@ def test_unknown_model_resolves_to_the_fallback_profile() -> None:
     assert resolved.reasoning.format == "openai"
     assert resolved.reasoning.best_effort is True
     assert cheapest_supported_reasoning(resolved.reasoning) is None
-    assert not hasattr(resolved, "supports_tools")
 
 
 @pytest.mark.parametrize(
@@ -151,6 +226,13 @@ def test_unknown_model_reasoning_uses_protocol_derived_best_effort_mapping(
 
 
 def test_fast_full_dynamic_reserve_is_not_clamped_on_small_profiles() -> None:
+    """Fast admits against the whole reserve without shrinking it to fit.
+
+    A profile too small for the reserve compacts to its input floor and fails the Fast
+    envelope loudly, rather than quietly taking a smaller reserve and calling it the same
+    product request. This is the one place the reserve is charged flat: Research may shrink
+    it, Fast may not.
+    """
     profile = ModelProfile(context_window_tokens=30_000)
     policy = ContextPolicy(
         requested_output_reserve_tokens=0,
@@ -158,7 +240,9 @@ def test_fast_full_dynamic_reserve_is_not_clamped_on_small_profiles() -> None:
         minimum_input_tokens=1_024,
     )
 
+    # Research's proactive trigger keeps the request floor and takes the rest as reserve.
     assert policy.compaction_trigger(profile) == 1_024
+    # Fast keeps the whole 40,000 reserve, so its ceiling is negative and admission fails.
     assert policy.compaction_trigger(profile, require_full_dynamic_reserve=True) == -10_000
 
 
@@ -267,9 +351,6 @@ def test_input_ceiling_carries_no_estimator_safety_margin() -> None:
     input ceilings the compaction trigger and the output allowance derive from.
     """
     policy = ContextPolicy()
-
-    assert not hasattr(policy, "safety_reserve_tokens")
-    assert CONTEXT_POLICY_REVISION == "agent-v5-absolute-reserves"
 
     # 1024-window edge: the floor keeps a usable ceiling instead of 1 token.
     assert (

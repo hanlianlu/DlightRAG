@@ -6,15 +6,16 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import BaseModel
 
-from dlightrag.application.answer_runs import AnswerConnectionsChangedError
-from dlightrag.application.connections import BoundResearchConnections
-from dlightrag.engine.agent.tools import ToolDeclaration
+from dlightrag.application.answer_runs.service import AnswerConnectionsChangedError
+from dlightrag.application.connections.models import BoundResearchConnections
+from dlightrag.engine.agent.tools.contracts import ToolDeclaration
 from dlightrag.engine.answer.execution.connection_binding import (
     RunConnectionBinding,
     StaleConnectionBindingError,
     decode_connection_bindings,
 )
 from dlightrag.engine.answer.execution.input import AnswerRunInput
+from tests.support.callers import ANONYMOUS as _ANON
 from tests.unit.test_answer_service import (
     _record,
     _request,
@@ -49,7 +50,7 @@ async def test_acceptance_pins_tools_and_input_for_research_capable_modes(mode):
     binding = bound()
     binder = AsyncMock(return_value=binding)
     await _service(store=store, bind_research=binder).create(
-        request=_request(mode=mode), owner_id="owner-1"
+        request=_request(mode=mode), owner_id="owner-1", caller=_ANON
     )
     binder.assert_awaited_once_with(owner_id="owner-1")
     accepted = store.created[0]
@@ -71,7 +72,7 @@ async def test_fast_never_binds_and_keyed_replay_keeps_original_pins():
     binder = AsyncMock(side_effect=AssertionError("must not bind"))
     store = _Store()
     service = _service(store=store, bind_research=binder)
-    await service.create(request=_request(mode="fast"), owner_id="owner-1")
+    await service.create(request=_request(mode="fast"), owner_id="owner-1", caller=_ANON)
     assert store.created[0]["connection_bindings"] == ()
     assert (
         AnswerRunInput.from_prepared_input(
@@ -83,7 +84,10 @@ async def test_fast_never_binds_and_keyed_replay_keeps_original_pins():
 
     replay_store = _Store(replay=RunCreation(run=_record(), replayed=True))
     await _service(store=replay_store, bind_research=binder).create(
-        request=_request(mode="research"), owner_id="owner-1", idempotency_key="original"
+        request=_request(mode="research"),
+        owner_id="owner-1",
+        idempotency_key="original",
+        caller=_ANON,
     )
     assert replay_store.created == []
     binder.assert_not_awaited()
@@ -108,10 +112,12 @@ async def test_stale_binding_rebuild_is_bounded_and_does_not_repeat_resource_pre
     service = _service(store=store, resources=resources, retrieval=retrieval, bind_research=binder)
     if churn:
         with pytest.raises(AnswerConnectionsChangedError):
-            await service.create(request=_request(mode="research"), owner_id="owner-1")
+            await service.create(
+                request=_request(mode="research"), owner_id="owner-1", caller=_ANON
+            )
         assert not store.created
     else:
-        await service.create(request=_request(mode="research"), owner_id="owner-1")
+        await service.create(request=_request(mode="research"), owner_id="owner-1", caller=_ANON)
         accepted = store.created[0]
         assert accepted["connection_bindings"] == bound(2).bindings
         plan = AnswerRunInput.from_prepared_input(accepted["prepared_input"]).agent_run_plan
@@ -177,7 +183,7 @@ async def test_only_research_offers_connection_tools_restored_under_the_session_
         bind_research=AsyncMock(return_value=binding),
         research_tool_declarations=executor.research_tool_declarations,
     )
-    await service.create(request=_request(mode="research"), owner_id="owner-1")
+    await service.create(request=_request(mode="research"), owner_id="owner-1", caller=_ANON)
     payload = {
         **accepted_store.created[0]["prepared_input"],
         "owner_id": "model-forged",
@@ -219,7 +225,10 @@ async def test_concurrent_key_winner_replays_before_stale_rebind():
     store = ConcurrentStore()
     binder = AsyncMock(side_effect=[bound(), AssertionError("Replay must not rebind")])
     result = await _service(store=store, bind_research=binder).create(
-        request=_request(mode="research"), owner_id="owner-1", idempotency_key="same"
+        request=_request(mode="research"),
+        owner_id="owner-1",
+        idempotency_key="same",
+        caller=_ANON,
     )
     assert result.replayed
     binder.assert_awaited_once()
@@ -273,3 +282,40 @@ async def test_pin_writer_checks_a_research_acceptance_against_its_heads():
     with pytest.raises(StaleConnectionBindingError):
         await _validate_pins(heads, mode="research", pinned=True)
     assert len(heads.statements) == 1
+
+
+async def test_a_pinned_surface_accepts_the_shared_resource_tools_and_keeps_its_bytes() -> None:
+    """A Run with an enabled Connection pins the three reads and their attributed surface."""
+    from dlightrag.application.connections.models import BoundConnectionSurface
+    from dlightrag.engine.answer.execution.connection_binding import ConnectionSurface
+
+    surface = (
+        BoundConnectionSurface(
+            connection_id="a" * 32,
+            token="Notion",
+            label="Notion",
+            instructions="Prefer page bodies.",
+        ),
+    )
+    from dataclasses import replace
+
+    binder = AsyncMock(
+        return_value=replace(bound(), surface=surface, resource_tools_available=True)
+    )
+    store = _Store()
+    await _service(store=store, bind_research=binder).create(
+        request=_request(mode="research"), owner_id="owner-1", caller=_ANON
+    )
+
+    decoded = AnswerRunInput.from_prepared_input(store.created[0]["prepared_input"])
+    assert decoded.connection_surface == (
+        ConnectionSurface(
+            connection_id="a" * 32,
+            token="Notion",
+            label="Notion",
+            instructions="Prefer page bodies.",
+        ),
+    )
+    assert decoded.agent_run_plan is not None
+    names = {tool.definition["name"] for tool in decoded.agent_run_plan.tools}
+    assert {"mcp_list_resources", "mcp_list_resource_templates", "mcp_read_resource"} <= names

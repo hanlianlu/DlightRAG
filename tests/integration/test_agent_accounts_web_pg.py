@@ -26,10 +26,15 @@ from dlightrag.adapters.postgres.answer.agent_accounts import (
     PGAgentAccountSettingsStore,
     PGAgentAccountStore,
 )
-from dlightrag.application.access import DEPLOYMENT_OWNER_ID, owner_id_from_principal
+from dlightrag.application.access.principal import (
+    DEPLOYMENT_OWNER_ID,
+    owner_id_from_principal,
+)
 from dlightrag.application.agent_accounts import AgentAccounts
-from dlightrag.application.config import DlightragConfig
-from dlightrag.engine.answer.agent_browser import StoredAgentAccount
+from dlightrag.application.config.sections import DlightragConfig
+from dlightrag.engine.answer.agent_browser.accounts import (
+    StoredAgentAccount,
+)
 from tests.integration.run_runtime_pg_harness import isolated_run_runtime
 from tests.support.application_double import application_double
 from tests.support.pg import skip_without_postgres

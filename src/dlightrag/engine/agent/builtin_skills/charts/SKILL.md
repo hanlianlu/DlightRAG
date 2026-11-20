@@ -5,7 +5,7 @@ description: Use when the user asks for a chart, graph or plot, or when a figure
 
 # Charts
 
-Charts are Apache ECharts options rendered by `echarts-render`, which draws them on the server in the house theme with a Chinese font; there is no matplotlib and no browser. Build the `option` as a Python dict from pandas (`.tolist()`, NaN as `None`), render it, look at the PNG with `view`, and attach it with `attach_artifact`:
+Charts are Apache ECharts options rendered by `echarts-render`, which draws them on the server in the house theme with the image's fonts — Latin, Chinese, Japanese, Korean; there is no matplotlib and no browser. Build the `option` as a Python dict from pandas (`.tolist()`, NaN as `None`), render it, look at the PNG with `view`, and attach it with `attach_artifact`:
 
 ```python
 chart = json.dumps(option, ensure_ascii=False)
@@ -16,4 +16,4 @@ subprocess.run(["echarts-render", "-", "artifacts/name.png"], input=chart, text=
 - **Option**: it is JSON, so a formatter is a template string such as `"{b}: {c} 亿元"`, never a JavaScript function; `custom` and `map` series cannot be drawn.
 - **Layout**: long or many category names go on `yAxis` (horizontal bars). Keep to six series or fewer, which is as many as the palette tells apart for every reader, folding the rest into “其他”; use one value axis, never two.
 - **Files**: the PNG is the figure in the answer, laid out at 800 × 500 unless `--width` and `--height` say otherwise. Add `--html artifacts/name.html` only when the user wants one chart to hover or zoom, and `--svg artifacts/name.svg` for a vector file. A page with several charts, filters or tabs is `interactive-html`'s job: load it, and never build a report from `--html` pages in iframes.
-- **Failures**: a failed render prints one `echarts-render:` line that says what to fix. A line naming characters without a font means they show as boxes: emoji, Korean and Arabic are not in the font.
+- **Failures**: a failed render prints one `echarts-render:` line that says what to fix. A line naming characters without a font means they show as boxes: emoji, Arabic, Hebrew, Thai and Devanagari are in none of the shipped fonts, and one field mixing scripts — a title holding both Latin and Chinese — loses the ones the family chosen for it lacks, so give each script its own field.

@@ -3,7 +3,10 @@
 
 from pydantic import SecretStr
 
-from dlightrag.engine.answer.agent_browser import PASSWORD_MASK, FilledPasswords
+from dlightrag.engine.answer.agent_browser.passwords import (
+    PASSWORD_MASK,
+    FilledPasswords,
+)
 
 # A fixture, not a generated password: this test is about the primitive's own behaviour.
 FIRST = SecretStr("Fixture-Pass_123x")

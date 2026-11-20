@@ -35,7 +35,10 @@ DlightRAG has nine top-level sections: `deployment`, `storage`, `models`,
 Unknown keys are rejected, whether they come from YAML or from `DLIGHTRAG_*`
 variables; the only `DLIGHTRAG_*` names that are not settings are the client
 variables `DLIGHTRAG_API_URL`, `DLIGHTRAG_API_TOKEN`, and
-`DLIGHTRAG_CLIENT_TIMEOUT`. The ownership decision is recorded in
+`DLIGHTRAG_CLIENT_TIMEOUT`, and `DLIGHTRAG_EXPORT_KEY`, the key the operator's
+`make export-traces ARGS="--dataset DIR"` pseudonymises a training dataset under
+([ADR 0044](adr/0044-the-training-dataset-is-a-full-re-export-of-whole-consented-sessions.md)).
+The ownership decision is recorded in
 [ADR 0006](adr/0006-configuration-ownership-and-deployment-bindings.md).
 
 ## Configuration Ownership
@@ -73,6 +76,19 @@ Leave these at code defaults unless measurement proves otherwise:
 - BM25 index signatures, RRF constants, and exact-vector thresholds
 - thumbnail, highlight-cache, and URL-signing internals
 
+A few settings are not configuration at all: an administrator changes them while the
+deployment runs, and they are kept in PostgreSQL, as the model catalogue's runtime overlay is.
+Unlike the overlay, which each process caches and refreshes when it is told of a change, a policy
+is read afresh by every request that needs it. Whether a reader is offered answer feedback, how
+high an Answer's agents may reason, and how many Answers one owner may have in progress at once,
+and for which people each is set, are the three Runtime Policies there are. None has a
+`config.yaml` key or a `DLIGHTRAG_*` variable, so a change needs neither a restart nor a
+rebuild, and every API process sharing the database meets it on its next request
+([Interfaces](interfaces.md#runtime-policies)). The limits that bound the machine, not a
+person, stay configuration: the lane admission limits, worker and model concurrency, and how many
+children one Run runs at once
+([RunRuntime](run-runtime.md#admission-limits)).
+
 ### Service URLs carry no credentials
 
 A configured service URL must not embed userinfo (`https://user:password@host`).
@@ -108,7 +124,7 @@ access, and the minimal topology bindings each workload needs:
 
 - mount corpus storage at `/app/dlightrag_storage`, matching the checked-in
   `deployment.working_dir: ./dlightrag_storage`;
-- mount the shared Agent Workspace, when enabled, at
+- mount the shared Agentspace root, when enabled, at
   `/home/app/.dlightrag/agent_workspaces`, matching the application default;
 - inject the PostgreSQL Service DNS through
   `DLIGHTRAG_STORAGE__POSTGRES__HOST` unless the mounted YAML owns it;
@@ -155,7 +171,10 @@ corpus:
 | `max_polls` | `1440` | Two-hour default polling window |
 
 DlightRAG leaves MinerU image analysis off; its own VLM sidecar describes
-extracted figures instead. `make mineru-install` installs MinerU 3.4.5 or newer;
+extracted figures instead. `make mineru-install` installs the range the pinned
+LightRAG client can drive — today MinerU 3.4.5 up to (not including) 4.0, because
+that client calls the 3.x local task API, and it follows the client to 4.x when
+LightRAG does. `MINERU_MAX_VERSION` overrides the derived ceiling;
 [Parser Services](operations.md#parser-services) covers running it.
 
 ### Docling
@@ -339,7 +358,7 @@ models:
   chat:
     default:
       provider: openai
-      model: openai/gpt-6.1-sol
+      model: openai/gpt-6.2-sol
       base_url: https://openrouter.ai/api/v1
     roles:
       extract:
@@ -370,7 +389,7 @@ default and each `extract`, `keyword`, `query`, or `vlm` override:
 
 A `models.chat.default` that leaves fields out, as when only its API key comes
 from the environment, takes them from the code's default endpoint
-(`provider: openai`, `google/gemini-3.8-flash` on OpenRouter,
+(`provider: openai`, `google/gemini-4-hydrogen` on OpenRouter,
 `temperature: 1.0`). When the default's `provider` is not `openai` it describes
 another endpoint, Anthropic's or Gemini's, and inherits none of that endpoint's
 `base_url`, `model`, or `temperature`.
@@ -446,7 +465,7 @@ models:
     roles:
       query:
         provider: gemini
-        model: gemini-3.8-flash
+        model: gemini-4-hydrogen
         reasoning: high
 ```
 
@@ -462,7 +481,7 @@ a Gemini default does not inherit the code default's
 
 Typed `reasoning` maps through the catalogue's `gemini` format to
 `generation_config.thinking_level`, one of `minimal`, `low`, `medium`, or `high`
-(`gemini-3.8-flash` takes `low`, `medium`, and `high`). An unsupported level
+(`gemini-4-hydrogen` takes `low`, `medium`, and `high`). An unsupported level
 clamps to the nearest supported one, and `off` cannot be honored because Gemini
 cannot turn thinking off. A configured level also asks for
 `thinking_summaries: auto`, whose text becomes the turn's reasoning. Thoughts and
@@ -534,10 +553,13 @@ operations and revision rules are in
 shallow overlay for Research calls. When typed reasoning is configured, raw
 provider reasoning keys in `model_kwargs` are rejected, so translation has one
 owner. A role that sets reasoning through raw keys in `model_kwargs` or
-`agentic_model_kwargs` instead ignores a caller-chosen agent effort, since it has
-no typed level to replace. `agentic_reasoning` on the answering role is the
-deployment's default, not a ceiling: one Answer request may choose its own
-[`effort`](interfaces.md#request-fields).
+`agentic_model_kwargs` instead ignores a caller-chosen agent effort and an
+administrator's ceiling alike, since it has no typed level to replace or lower.
+`agentic_reasoning` on the answering role is the deployment's default, not a
+ceiling: one Answer request may choose its own
+[`effort`](interfaces.md#request-fields), and the `agent_effort_ceiling`
+[Runtime Policy](interfaces.md#runtime-policies) is the ceiling, which also
+lowers the configured level of any role that is above it for a Run's child agents.
 
 ### Structured Output
 
@@ -696,6 +718,7 @@ non-mutating reader attach for an external vector adapter.
 | `deployment.service_role` | `writer` | `writer` or `reader`; see [Service roles](postgresql.md#service-roles-and-shared-artifacts) |
 | `deployment.workspace` | `default` | Default workspace's display name. Its canonical id strips surrounding whitespace, replaces each character that is not an ASCII letter, digit, or `_` with `_`, lowercases the result, and prefixes a leading digit with `_`; the id must be 1-64 characters, or startup fails |
 | `deployment.working_dir` | `./dlightrag_storage` | Corpus/input/artifact root; resolved absolute. Operators place local sources in `inputs/<workspace>`, which DlightRAG only reads; `corpus/` is DlightRAG's own |
+| `deployment.goal_recovery` | `true` | Whether this process runs Goal recovery — the startup scan and a scan about once a minute. Each pass continues every active Goal whose Session is idle, delivers a continuation a previous process left pending, and takes up a Goal with no answer Run to continue from through its Web conversation. The Web/API process keeps it on; a second process such as the MCP service sets `DLIGHTRAG_DEPLOYMENT__GOAL_RECOVERY=false` so only one process scans. Rounds stay fenced by the durable goal's compare-and-set revision and the pending-round row either way ([ADR 0077](adr/0077-goal-mode-continues-automatically-and-pause-stops-the-running-round.md)) |
 | `storage.lightrag.vector_storage` | `PGVectorStorage` | `PGVectorStorage` or explicit `MilvusVectorDBStorage` |
 | `storage.lightrag.milvus_uri` | unset | Optional `MILVUS_URI` bridge; may be a Milvus-compatible Zilliz URI |
 | `storage.lightrag.milvus_token` | unset | Optional secret `MILVUS_TOKEN` bridge |
@@ -713,8 +736,9 @@ non-mutating reader attach for an external vector adapter.
 | `session_settings` | `{}` | asyncpg session parameters |
 | `statement_cache_size` | driver default | Prepared-statement cache size |
 | `connection_retries` | `10` | Attempts for each replay-safe domain-pool operation; also LightRAG's `POSTGRES_CONNECTION_RETRIES` |
-| `connection_retry_backoff` / `_max` | `3` / `30` | Retry delay/cap seconds, for both pools |
+| `connection_retry_backoff` / `connection_retry_backoff_max` | `3` / `30` | Retry delay/cap seconds, for both pools |
 | `pool_close_timeout` | `5` | Seconds LightRAG waits to close its pool before reconnecting after a transient error |
+
 
 ## Concurrency And Ingestion Limits
 
@@ -774,6 +798,7 @@ Advanced fields:
 | `max_total_tokens` | `40000` | Total LightRAG context ceiling |
 | `kg_chunk_pick_method` | `VECTOR` | `VECTOR` or `WEIGHT` |
 | `kg_entity_types` | `[]` | Empty uses LightRAG's general taxonomy; for stronger domain control set `corpus.extraction.entity_type_prompt_file` |
+| `federation_min_chunks_per_workspace` | `7` | Fairness floor for multi-workspace Retrieval: the merged result keeps at least this many chunks of each contributing workspace, even when `chunk_top_k` is smaller; `0` disables the floor ([Multi-Workspace Retrieval](retrieval-answer.md#multi-workspace-retrieval)) |
 
 Enabling BM25 for existing data or changing profiles requires
 [Workspace BM25 Rebuild](operations.md#workspace-bm25-rebuild). Algorithm and
@@ -792,11 +817,15 @@ Workspace partition promotion is off unless `corpus.promotion.doc_threshold` or
 | `runtime.query.max_nonterminal_runs` | `30000` | Query Lane admission limit across the deployment |
 | `runtime.corpus_mutation.worker_concurrency` | `2` | Corpus Mutation Runs one writer process executes at once |
 | `runtime.corpus_mutation.max_nonterminal_runs` | `1000` | Corpus Mutation Lane admission limit across the deployment |
-| `runtime.run_retention_days` | `365` | Days a terminal Answer Run is kept; superseded Profile Memory history is kept as long |
+| `observability.telemetry_erasure.url` / `.user` / `.password` | unset | The deployment's own ClickHouse endpoint and a delete-capable user, used by `dlightrag-owner-data erase` to remove one owner's spans and log records at once instead of leaving them to the seven-day TTL. Unset, the command refuses rather than writing a receipt for a partial erase ([ADR 0049](adr/0049-owner-export-and-erasure.md)) |
+| `runtime.run_retention_days` | `365` | Days a terminal Answer Run is kept; superseded Profile Memory history is kept as long. Its Agentspace tree is removed after seven days regardless; its published Artifacts are Blobs and stay with the row ([Retention](run-runtime.md#retention)) |
 
 Every value is at least 1. What each lane carries and how its limit admits Runs
 are in [RunRuntime](run-runtime.md#lanes); what retention removes, and
 the fixed retention of other Runs, is in [RunRuntime](run-runtime.md#retention).
+These bound the deployment. How many Answers one owner may have in progress is the
+`active_answer_runs` [Runtime Policy](interfaces.md#runtime-policies), edited while the
+deployment runs and not set here.
 
 ## Answer Generation And Attachments
 
@@ -824,6 +853,22 @@ which uploads a Run admits is decided by type and content, not configuration
 images. The final answer image count is clamped to the query model's discovered
 capability. `lineage_adoption` lets a Run adopt a Resource an earlier Run on the
 same Agent Session registered ([Earlier Runs](resource-reading.md#earlier-runs)).
+The artifact attestation record is not configurable: what a reader is told about whether an Agent
+Skill stood behind a published Artifact is derived from the Run's own durable records and published
+beside every Artifact, and nothing withholds a file because of it
+([ADR 0058](adr/0058-a-skill-declares-the-verifier-of-its-delivery.md)). A verdict that names no verifier (no Skill loaded, a Skill that declares
+none, an unreadable declaration, a log that cannot name the Skill) carries no claim, and an
+unattested verdict is a finding the reader sees rather than a delivery refusal: errors belong to
+the Skill's own gate, which the Agent sees while it can still correct them.
+A Skill that declares no verifier also draws no *label*: it promises no gate over
+what it produces, so its Artifacts carry no record to publish, unless the Run also
+left unread a document that Skill declares (below).
+The record also lists `required_reads_missing`: the documents a loaded Skill declares
+in its frontmatter (`required_reads`) that the Run did not read to the end, derived from
+the `load_skill` calls the Run's events record ([ADR 0057](adr/0057-a-skill-names-what-a-run-must-read.md)).
+It is evidence beside the verdict, not part of it, so neither policy treats it as a gate.
+A Run is never failed for being unattested, and the
+file it wrote is always handed over with its record ([ADR 0058](adr/0058-a-skill-declares-the-verifier-of-its-delivery.md)).
 
 ## Research Agent
 
@@ -837,6 +882,11 @@ answer:
     session_notes:                 # durable Agent memory per Agent Session
       max_count: 64                # 1–1024 notes
       max_bytes: 262144            # 1024–16 MiB total
+    memory_consolidation:          # Session Memory Pass (ADR 0045)
+      enabled: true
+      max_batch_tokens: 40000      # most estimated tokens one model call is fed
+      session_record_limit: 5      # most records one model call may add, every kind; 1–50
+      reasoning: low               # the pass's own reasoning level on the query role's model
     skills_root: null              # absolute path; null → ~/.dlightrag/skills
     owner_skills_root: null        # absolute path; null → ~/.dlightrag/owner_skills
     disabled_builtin_skills: []    # packaged Skill names only
@@ -862,32 +912,94 @@ answer:
 call starts at most 16, so at the default none of its children waits for a slot, and
 a lower value makes the rest wait while the roster already reads them `running`.
 
+`memory_consolidation` governs the Session Memory Pass. After a successful
+Answer Run it reads the Session's own user and assistant turns past its
+watermark — never a tool result, a Child, a note or the injected recall block —
+however few there are, and asks the `query` role's model what is worth
+remembering across conversations. There is no accumulation threshold: a
+one-line conversation is read. `max_batch_tokens` bounds what one model call is
+fed; a longer conversation is read in as many calls as it takes, one after
+another under one claim, until the pass has caught up with the Session, and
+each call is also shown the few turns just before its batch as context only.
+`reasoning` (`off` to `max`, default `low`) is the level the pass asks of that
+model, whatever levels the `query` role sets for its own work; the model
+profile clamps a level it does not support. One model call adds at most
+`session_record_limit` records, across every kind, so a pass of several calls
+gives each its own allowance; updating or fusing records
+the owner already holds — whichever conversation wrote them — never counts, and
+nothing is ever evicted from the owner's profile. Each owner's Profile Memory switch still governs that owner; a
+conversation held while it was off is never read later, nor shown to a model as
+context. Passes run detached,
+two at a time per process, and never delay or fail the Run that scheduled them. A pass a
+restart or a failed model call lost is found again by a sweep every ten minutes; its timing and
+its backoff are fixed, not configuration
+([Long-Term Memory](retrieval-answer.md#session-memory-pass)).
+
 `session_notes` bounds the notes one Agent Session keeps, independently of
-`publication.workspace_max_bytes`, which bounds one Run's workspace; a note that
+`publication.workspace_max_bytes`, which bounds one Run's Agentspace; a note that
 does not fit is refused, never truncated or evicted
 ([Session Notes](retrieval-answer.md#session-notes)).
 
 `trust` runs rooted tools as the service user. On a Linux kernel with Landlock
-it confines every Agent process to its Agent Workspace; elsewhere processes run
+it confines every Agent process to its Agentspace; elsewhere processes run
 unconfined, which `GET /health` and the Run trace report. What the boundary
 admits is in [Security](security.md#answer-resources-and-execution). `disabled`
-means no workspace root for any mode: no path tools, no artifacts, and no
+means no Agentspace root for any mode: no path tools, no artifacts, and no
 Session notes. Reclamation follows a configured root rather than the mode, so a
 deployment that turns execution off still deletes trees earlier Runs left.
 
-An explicit workspace root must be absolute, must not overlap
+An explicit Agentspace root must be absolute, must not overlap
 `deployment.working_dir`, and must be the same shared RWX path on every worker.
 Published artifacts fail whole when over budget; they are not truncated.
 Interactive HTML is separately opt-in and isolated by the Web artifact boundary
 ([Security](security.md#answer-artifact-browser-boundary)).
 
+### Personal MCP Connections
+
+```yaml
+answer:
+  agent:
+    connections:                     # non-secret Connection policy; owner credentials are not settings
+      oauth_callback_url: null       # null follows the address the browser reached; an override keeps the fixed path
+      oauth_timeout: 300             # one authorization flow, seconds; 30–600
+      max_connections: 20            # Connections one owner may hold; 1–100
+      max_enabled_tools: 256         # tools across one owner's enabled Connections; 1–1024
+      max_tools: 128                 # tools in one catalogue; 1–256
+      max_pages: 16                  # `tools/list` pages one discovery follows; 1–32
+      max_schema_bytes: 131072       # one tool's input schema, bytes; 1–262144
+      max_instruction_bytes: 32768   # one server's initialize instructions, bytes; 1024–131072
+      max_description_bytes: 8192    # one tool's description, bytes; 1–16384
+      max_catalogue_bytes: 524288    # one whole catalogue, bytes; 1–1048576
+      discovery_concurrency: 4       # refresh loops, and concurrent discoveries or token refreshes, per worker; 1–16
+      refresh_seconds: 300           # refresh interval, and its backoff ceiling, seconds; 1–3600
+      discovery_timeout: 30          # one discovery, token refresh, or authorization wait, seconds; 1–120
+      call_timeout: 60               # one tool call, gate included, seconds; 1–120
+      call_concurrency: 8            # concurrent tool calls per worker; 1–32
+      max_result_bytes: 262144       # text of one result, bytes; 1–1048576
+      max_call_argument_bytes: 65536  # encoded arguments of one call, bytes; 1–262144
+      max_result_parts: 32           # content parts of one result; 1–128
+      connect_timeout: 10            # connect and DNS admission of one request, seconds; 1–30
+      idle_timeout: 15               # read and write inactivity, seconds; 1–60
+      max_response_bytes: 1048576    # one HTTP response body, bytes; 1–4194304
+      allow_private_hosts: []        # host patterns exempt from the private-address denial
+      require_https: true            # reject plain HTTP endpoints
+```
+
 Research reaches external tools only through its owner's Personal MCP
 Connections and the deployment's [Agent Browser](#agent-browser);
-`answer.agent.connections` holds the Connections' non-secret policy, whose
-fields and limits are in
-[Personal MCP Connections](personal-mcp-connections.md#streamable-http-security-and-limits).
-No owner authorizes the Agent Browser: `read` uses it to render public pages, and the
-`browser` tool drives one.
+`answer.agent.connections` is the non-secret policy every Connection is admitted
+under, and exceeding a size or count limit fails the request, call, or discovery
+candidate rather than truncating it. `max_instruction_bytes` also bounds the
+`initialize` instructions a server publishes; the text is stored with the
+Connection's generation and rides in each Research Run's prompt as attributed
+external guidance
+([Resources and server instructions](personal-mcp-connections.md#resources-and-server-instructions)).
+What each field admits and bounds, and the
+owner-facing rules around credentials, are in
+[Personal MCP Connections](personal-mcp-connections.md#streamable-http-security-and-limits);
+credentials, stated headers, and OAuth grants are owner state in PostgreSQL, not
+settings. No owner authorizes the Agent Browser: `read` uses it to render public
+pages, and the `browser` tool drives one.
 
 Research discovers Skills from packaged built-ins, an operator-global root, and
 owner roots ([Architecture](architecture.md#agent-execution) gives the
@@ -921,6 +1033,13 @@ answer:
       snapshot_depth: 12              # 1–64
       idle_release_seconds: 30        # 0–600
       account_registration: true      # DLIGHTRAG_ANSWER__AGENT__BROWSER__ACCOUNT_REGISTRATION
+      live:
+        budget:                       # what one watcher costs
+          frames_per_second: 24       # above 0, at most 60
+          max_width: 1280             # 320–3840
+          jpeg_quality: 70            # 10–95
+        session_seconds: 1800         # above 0, at most 14400
+        control_idle_seconds: 90      # above 0, at most 3600
 ```
 
 The Agent Browser lets Research read a page as a browser renders it and drive one with
@@ -937,10 +1056,22 @@ and Research has no `browser` tool.
 - `egress_proxy` is the HTTP proxy every browser launch uses (`http://host:port`, no
   path). It is the pool's only way out, so `endpoints` require it: startup refuses
   endpoints without it, naming the field.
-- Both are Compose Service names, so `docker-compose.yml` binds them
+- `headed_endpoints` lists the members that run a **headed** browser under a display
+  server: the same image and the same Playwright run-server, launched with `headless` off,
+  so a site that refuses an automated browser may read. Every URL here must also be in
+  `endpoints` — startup refuses one that is not, naming it — while a headless lease claims
+  `endpoints` alone, so a headed member is never leased headless. Empty means the
+  deployment leases no headed browser, and a Run may then ask for none: the `browser`
+  tool's `navigate` still takes `headed`, and the call is refused as not configured. Once a
+  Run asks for a headed member it keeps it for the rest of the Run: the lease is the state,
+  and nothing counts how often it asked. The bundled stack binds one such member
+  (`agent-browser-headed`, port 3001).
+- `endpoints`, `headed_endpoints`, and `egress_proxy` are Compose Service names, so
+  `docker-compose.yml` binds them
   ([ADR 0006](adr/0006-configuration-ownership-and-deployment-bindings.md)) and
-  `config.yaml` leaves them unset. The bundled stack binds two members and the Squid
-  proxy for `dlightrag-api`, `dlightrag-mcp`, and `dlightrag-reader`.
+  `config.yaml` leaves them unset. The bundled stack binds three members — two headless
+  and one headed — and the Squid proxy for `dlightrag-api`, `dlightrag-mcp`, and
+  `dlightrag-reader`.
 - `chromium_sandbox` is whether every browser launches inside Chromium's own process
   sandbox. Whether a pool host can start it is for the operator to state, so DlightRAG
   neither probes for it nor falls back: on a host that cannot, every launch fails and
@@ -954,7 +1085,9 @@ and Research has no `browser` tool.
 - `navigation_timeout_seconds` is how long a page may take to load. It also bounds the
   `browser` tool's `wait` for text, `screenshot`, and `capture`, and the save of one
   downloaded file. `settle_timeout_seconds` is how long a loaded page may take to go quiet
-  before it is read as it stands.
+  before it is read as it stands: the call that read it, and the note of a rendered read,
+  say the page had not gone quiet, so a partial read is never taken for the whole page.
+  Zero reads every page as it stands and claims nothing either way.
 - `action_timeout_seconds` is how long one element action, one snapshot, or one `find` may
   take on a page the `browser` tool drives. `snapshot_depth` is how many levels of the
   page its accessibility snapshot shows; deeper elements keep their refs, and `find`
@@ -975,6 +1108,46 @@ and Research has no `browser` tool.
   sign-ups in Settings can only turn registration off further than this. A deployment with no
   Agent Browser allows none, whatever this says. Without a key ring, register and login fail
   closed whatever this says.
+- `live` bounds the live preview of a Run's browser in the Inspector, where a reader
+  watches the page the Run is driving and can take the driving seat
+  ([operating it](operations.md#agent-browser-pool)). Frames come from the page's
+  own screencast and exist only while somebody is watching, so they cost nothing between
+  sessions. They are also change-driven rather than paced: an unchanged page produces no
+  frame at all, so there is no idle rate here, only a ceiling. `budget` is that ceiling and
+  it is one budget for the whole session, whoever drives: `frames_per_second` the most
+  frames sent, `max_width` the widest frame the browser encodes, `jpeg_quality` what it
+  encodes each with. Who holds the driving seat is authority over the page, not an
+  allowance of frames, so taking it changes none of the three. What does change them is
+  the session itself: a page whose viewers cannot keep up is stepped down a rung at a time
+  — quality first, then the rate — and stepped back up once they can
+  ([how](operations.md#agent-browser-pool)). `session_seconds` ends a session
+  whatever it is doing; the browser stays the Run's. `control_idle_seconds` hands the
+  driving seat back to the agent when a reader who took it stops touching the page, so a
+  forgotten handover cannot strand a Run. These are the ceilings every connection is served
+  under: a viewer cannot ask for more, and one that reads slowly is sent fewer frames
+  rather than older ones.
+
+  What those ceilings actually carry is measured, not assumed. On the bundled pool — a
+  headless Chromium in `agent-browser`, 1280 px wide, quality 70, a page repainting every
+  50 ms — the real frames socket was read for 15 s at three caps:
+
+  | `budget.frames_per_second` | delivered | on the wire | browser container |
+  | --- | --- | --- | --- |
+  | 12 | 11.6 fps | 0.49 MB/s (44 kB a frame) | 30 % of one core |
+  | 24 | 22.6 fps | 0.96 MB/s (44 kB a frame) | 47 % of one core |
+  | 30 | 27.9 fps | 1.18 MB/s (44 kB a frame) | 43 % of one core |
+
+  So each cap is delivered just under what it asks for — 93–97 % over the runs measured,
+  the rest being the acknowledge-and-pace round trip — and `budget: 24` is a rate the
+  mechanism reaches: the screencast does not saturate at 12, and a budget is not a claim
+  the browser cannot honour. What limits a stream at these rates is bytes rather than
+  frames. The same page painted as a canvas whose every pixel changes was still delivered
+  at 20 fps under a 24 fps budget, but each frame was 430 kB: 8.4 MB/s on the wire and
+  more than one core of encoding. A deployment whose readers watch photo- or video-like
+  pages should read `budget` as a bandwidth decision, not a frame-rate one; a smoother
+  stream for that content is a WebRTC media path, which is a different deployment and not
+  a bigger number. What CDP's screencast cannot show at any rate is what is not the page:
+  an OS-level dialog, a PDF viewer, or a native picker never appears in it.
 
 The pool's size is the deployment's limit on Runs using a browser at the same moment
 ([sizing](operations.md#agent-browser-pool)). What `GET /health` says of the Agent
@@ -1000,9 +1173,10 @@ browser itself, and `register` records the address it typed. No bucket means no 
 Mailbox, and an Agent Mailbox needs an [Agent Browser](#agent-browser), whose accounts it
 serves.
 
-- The two keys are secrets, so they belong in `.env` and nowhere in YAML
-  ([ADR 0006](adr/0006-configuration-ownership-and-deployment-bindings.md)):
-  `DLIGHTRAG_ANSWER__AGENT__MAILBOX__ACCESS_KEY_ID` and
+- The two keys, `access_key_id` and `secret_access_key`, are secrets, so they belong in `.env`
+  and nowhere in YAML
+  ([ADR 0006](adr/0006-configuration-ownership-and-deployment-bindings.md)). Both default to
+  unset and are set through `DLIGHTRAG_ANSWER__AGENT__MAILBOX__ACCESS_KEY_ID` and
   `DLIGHTRAG_ANSWER__AGENT__MAILBOX__SECRET_ACCESS_KEY`. They never render, and an Agent's
   own processes get no `DLIGHTRAG_*` variable. A deployment that runs the checked-in
   `config.yaml` keeps its endpoint, bucket, and alias domain in `.env` as well, as it keeps its
@@ -1041,15 +1215,32 @@ answer:
       api_key: null     # DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEY
     tavily:
       api_key: null     # DLIGHTRAG_ANSWER__WEB_SOURCES__TAVILY__API_KEY
+    deepseek:
+      api_key: null     # DLIGHTRAG_ANSWER__WEB_SOURCES__DEEPSEEK__API_KEY
     search_providers: null
     extract_providers: null
 ```
 
-Exa and Tavily are optional provider adapters. A `null` provider order derives
-an Exa-then-Tavily chain from configured keys; `[]` disables that operation.
+Exa, Tavily and DeepSeek are optional provider adapters. A `null` provider order
+derives an Exa, then Tavily, then DeepSeek chain from configured keys; `[]` disables
+that operation. DeepSeek's key is the Web Search and Fetch key of its own platform,
+separate from the chat model's key even when the same account holds both.
 Set each list explicitly to give Search and Extract independent failover order.
 Every provider named in a list must have a key. The setup wizard can configure
-Exa, Tavily, both with one shared order, or independent Search/Extract orders.
+Exa, Tavily, both with one shared order, or independent Search/Extract orders, and
+then offers DeepSeek as the last fallback of both chains, offering to reuse the key of
+a chat model that runs on `api.deepseek.com`.
+A chain is walked in order and the first provider that answers supplies the whole
+result, so the fallback is availability and never a blend of two rankings. A provider
+that answers `401`, `402`, or `429` is left alone for a minute — per operation, so
+Exa's search credit says nothing about its `contents` calls — and the chain reports it
+as cooling; when every provider of an operation is cooling, one probe goes out to the
+one that recovers first, so a top-up is noticed without a restart. DeepSeek's `429` is a
+per-second limit, so its adapter waits a second and asks once more; if that is also
+refused, the call fails as `throttled` and the chain moves on without cooling DeepSeek.
+A timeout, an unreachable host, or one malformed body is about the call, not the
+provider, and cools nothing. Every failed attempt is logged once with `provider`, `operation`, `reason`,
+and `status` beside the message.
 
 `extract_providers` may also name `browser`, the [Agent Browser](#agent-browser),
 which holds no key. A configured Agent Browser always joins the automatic Extract
@@ -1135,6 +1326,9 @@ the ingestion key belongs in `.env`.
 | `release` | running package version | `service.version`, so two releases never share a bucket |
 | `sample_rate` | `1.0` | Trace-id ratio exported; `0` exports none |
 | `timeout` | exporter default | OTLP/HTTP request timeout in seconds (1–300) |
+| `browser_otlp_url` | unset | OTLP/HTTP address the **browser** sends its errors, RUM interactions, and session replay to, such as `http://localhost:4318` (from the host) or `http://otel-collector:4318` (inside the stack's network) |
+| `browser_api_key` | unset | ClickStack team's ingestion API key the browser presents; the page receives it, so it is readable by the page's users |
+| `browser_replay_sample_rate` | `1.0` | Share of browser sessions whose **replay** is recorded (0–1). The page flips one coin per session and remembers it, so a session is recorded whole or not at all; an unsampled session still reports its errors and its RUM, which are never sampled |
 
 Without `otlp_endpoint` the process exports nothing, logs one info line, and
 never retries or fails: a destination that is absent or unreachable costs
@@ -1145,9 +1339,36 @@ same endpoint carries the process's own log records: stdout does not change, the
 export is one additional handler over a bounded queue, and a record carries the
 trace and span id of the observation that logged it.
 
+The browser channel exists only when `browser_otlp_url` and `browser_api_key`
+are both set: with either alone the bootstrap snapshot omits the object and the
+page starts no SDK. It reports as the service `dlightrag-web`, and its replay
+is masked where the [observability contract](observability.md#redaction) says a
+value is private — DOM text and input values are masked, and request and response
+bodies, console output, and canvas recording are not captured. Replay is the one
+sampled signal: at `browser_replay_sample_rate` below `1` a session the coin flip
+passed over initialises with replay off and reports everything else, and the
+decision is remembered for that session rather than re-flipped per page. The SDK
+loads after the first render, so a blocked or failing load leaves the page
+unchanged.
+
 Memory traces include counts and character totals, never record bodies. Span
-names, observation kinds, attribution, and redaction follow the
-[observability contract](observability.md). Run the bundled stack with the
+names, observation kinds, span kinds, attribution, rendering, and redaction follow
+the [observability contract](observability.md).
+
+The stack's own retention is not a product setting but it is a number an operator
+changes, and it lives in exactly one place: `HYPERDX_OTEL_EXPORTER_TABLES_TTL` in
+`packages/observability/stack/.env` states the TTL in ClickHouse's duration unit
+(`168h` is the shipped seven days, `30d` is thirty). `dlightrag-observability
+bootstrap` reads that same variable for the tables the collector's variable cannot
+reach and defaults to seven days when neither the environment nor `stack/.env`
+states one, so the collector and the CLI cannot come to different answers
+([Retention](operations.md#retention)).
+
+Monitoring has no off state
+([ADR 0039](adr/0039-observability-is-always-on-and-the-seam-masks-private-data.md),
+[ADR 0040](adr/0040-observability-lands-in-clickstack.md)): the seam classifies what
+leaves instead of switching content off, and the export is one OTLP seam into
+ClickStack. Run the bundled stack with the
 [ClickStack runbook](operations.md#local-clickstack-observability).
 
 ## Vector Index Fields

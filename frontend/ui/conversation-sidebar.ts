@@ -1,9 +1,9 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {msg} from '@lit/localize';
-import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
+import {html, nothing, type TemplateResult} from 'lit';
 import {clearMemory} from '../api/memory.ts';
-import {icon} from '../design-system/index.ts';
+import {icon, isImeKey} from '../design-system/index.ts';
 import {DESKTOP_SHELL_MEDIA} from '../lib/breakpoints.ts';
 import {raise, tabbables, wrapTabFocus} from '../lib/dom.ts';
 import {LightElement, MediaController, StoreController} from '../lib/lit-host.ts';
@@ -13,7 +13,7 @@ import type {
   ConversationMutationResult,
 } from '../stores/conversation-store.ts';
 import conversationStyles from '../styles/conversations.module.css';
-import type {ChatView, ChatViewActionDetail} from './chat-feature.ts';
+import type {ConversationRouteController} from './conversation-route-controller.ts';
 import type {
   ConversationIntentDetail,
   ConversationRenameDetail,
@@ -33,28 +33,13 @@ export interface ConversationSidebarStateDetail {
   compact: boolean;
 }
 
-export interface ConversationRouteChangeDetail {
-  previousConversationId: string | null;
-  nextConversationId: string | null;
-}
-
-/** The Chat seam required by conversation route ownership. */
-export interface ConversationChat {
-  view: ChatView;
-  readonly hasDraft: boolean;
-  readonly hasUnresolvedSubmission?: boolean;
-  readonly submissionPending: boolean;
-  clearDraft(): void;
-  detachRun(): void;
-  focusComposer(): void;
-}
-
-/** Conversation route lifecycle, navigation commands, and sidebar accessibility. */
+/** The conversation list and its drawer, the commands that change the list, and the sidebar's accessibility.
+ *  Where the page is, and what the Chat is told of it, is the route controller's; the sidebar asks it. */
 export class DlConversationSidebar extends LightElement {
   static properties = {
     handles: {attribute: false},
     enabled: {attribute: false},
-    chatFeature: {attribute: false},
+    routes: {attribute: false},
     drawerOpen: {state: true},
     desktopCollapsed: {state: true},
     pendingLifecycleAction: {state: true},
@@ -63,7 +48,8 @@ export class DlConversationSidebar extends LightElement {
 
   declare handles: AppHandles;
   declare enabled: boolean;
-  declare chatFeature: ConversationChat | null;
+  /** Where the page is and what leaving it costs; null where nothing joins the sidebar to a Chat. */
+  declare routes: ConversationRouteController | null;
   declare drawerOpen: boolean;
   declare desktopCollapsed: boolean;
   declare pendingLifecycleAction: boolean;
@@ -71,42 +57,32 @@ export class DlConversationSidebar extends LightElement {
 
   #drawerReturnFocus: HTMLElement | null = null;
   readonly #desktop = new MediaController(this, DESKTOP_SHELL_MEDIA, () => { this.#breakpointCrossed(); });
-  #releaseRouter: (() => void) | null = null;
-  #renderedViewRevision = -1;
   #stateSignature = '';
 
   constructor() {
     super();
     this.handles = productionHandles();
     this.enabled = false;
-    this.chatFeature = null;
+    this.routes = null;
     this.drawerOpen = false;
     this.desktopCollapsed = this.#collapsedPreference();
     this.pendingLifecycleAction = false;
     this.shellInert = false;
     /** Store reads: activeConversationId, fallbackConversationId, mutationPending. */
-    new StoreController(this, this.handles.conversations);
+    new StoreController(this, () => [this.handles.conversations]);
   }
 
   override connectedCallback(): void {
     super.connectedCallback();
     document.addEventListener('keydown', this.#documentKeydown, {signal: this.lifetime});
-    window.addEventListener('beforeunload', this.#beforeUnload, {signal: this.lifetime});
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
-    this.#releaseRouter?.();
-    this.#releaseRouter = null;
-    webRouter.setGuard(null);
-    this.handles.conversations.dispose();
     this.#stateSignature = '';
   }
 
-  protected override updated(changed: PropertyValues<this>): void {
-    if (changed.has('chatFeature')) this.#renderedViewRevision = -1;
-    this.#startIfReady();
-    this.#renderCurrentConversationView();
+  protected override updated(): void {
     this.classList.toggle('open', this.#expanded && this.#desktop.matches);
     this.#publishSidebarState();
   }
@@ -180,26 +156,27 @@ export class DlConversationSidebar extends LightElement {
     const alsoClearMemory = this.querySelector<HTMLInputElement>(
       '#delete-all-also-clear-memory',
     )?.checked;
-    const previousConversationId = this.handles.conversations.activeConversationId;
     let result: ConversationMutationResult = 'error';
 
-    this.pendingLifecycleAction = true;
+    this.#holdNavigation(true);
     try {
-      this.chatFeature?.detachRun();
+      this.routes?.beforeDeleting();
       result = await this.handles.conversations.deleteAll(signal);
       if (signal.aborted) return false;
       if (result === 'error') {
         requestToast(this, {
+          tone: 'error',
           message: msg('Could not delete conversations.', {id: 'conversationSidebar.deleteAllFailed'}),
         });
       } else {
-        this.chatFeature?.clearDraft();
+        this.routes?.afterDeleting();
         if (alsoClearMemory) {
           try {
             await clearMemory(signal);
           } catch {
             if (!signal.aborted) {
               requestToast(this, {
+                tone: 'error',
                 message: msg('Conversations deleted; could not clear Profile memory.', {
                   id: 'conversationSidebar.memoryClearFailed',
                 }),
@@ -208,11 +185,13 @@ export class DlConversationSidebar extends LightElement {
           }
         }
         if (signal.aborted) return false;
-        if (previousConversationId === null) this.#announceRouteChange(null, null);
+        // The store has already closed the conversation that was open, so the move to a new chat below
+        // may find nothing to leave: what belonged to it is told to go here, whichever way the route moves.
+        this.routes?.conversationsGone();
         await webRouter.navigate(newChatRoute(), {replace: true, bypassGuard: true});
       }
     } finally {
-      this.pendingLifecycleAction = false;
+      this.#holdNavigation(false);
     }
     if (signal.aborted) return false;
     await this.updateComplete;
@@ -221,19 +200,18 @@ export class DlConversationSidebar extends LightElement {
     return result !== 'error';
   }
 
-  handleChatViewAction(action: ChatViewActionDetail['action']): void {
-    if (action === 'new') {
-      void webRouter.navigate(newChatRoute());
-      return;
-    }
-    if (action === 'recent') {
-      const fallback = this.handles.conversations.fallbackConversationId;
-      if (fallback) void webRouter.navigate(conversationRoute(fallback));
-      return;
-    }
-    const conversationId = this.handles.conversations.activeConversationId;
-    if (conversationId) void this.handles.conversations.open(conversationId);
-    else void this.handles.conversations.loadList();
+  /** The page does not move while a deletion is under way, and the controls that start another wait. */
+  #holdNavigation(held: boolean): void {
+    this.pendingLifecycleAction = held;
+    if (this.routes) this.routes.lifecycleInFlight = held;
+  }
+
+  /** Ask the reader whether the unsent message may go before the page moves to `next`. The dialog is the
+   *  sidebar's; the route controller asks for it when its guard meets a draft. */
+  async confirmDiscardDraft(next: WebRoute): Promise<boolean> {
+    const dialog = this.#dialog('discard-draft-dialog');
+    if (!dialog) return false;
+    return await modalResult(this, dialog, this.#routeFocusTarget(next), this.lifetime) === 'discard';
   }
 
   get #busy(): boolean {
@@ -292,116 +270,17 @@ export class DlConversationSidebar extends LightElement {
   }
 
   #hasUnsavedDraft(): boolean {
-    return this.chatFeature?.hasDraft ?? false;
+    return this.routes?.hasDraft ?? false;
   }
 
   #lifecycleBlocked(): boolean {
-    if (!this.chatFeature?.submissionPending) return false;
-    requestToast(this, {
-      message: msg('Wait for the current question to be accepted.', {
-        id: 'conversationSidebar.waitForAcceptedQuestion',
-      }),
-    });
-    return true;
-  }
-
-  async #confirmDiscardDraft(restoreFocus: FocusRestorer): Promise<boolean> {
-    if (!this.#hasUnsavedDraft()) return true;
-    const dialog = this.#dialog('discard-draft-dialog');
-    if (!dialog) return false;
-    return await modalResult(this, dialog, restoreFocus, this.lifetime) === 'discard';
-  }
-
-  async #guardNavigation(next: WebRoute): Promise<boolean> {
-    if (this.pendingLifecycleAction || this.#lifecycleBlocked()) return false;
-    if (!this.#hasUnsavedDraft()) return true;
-    const accepted = await this.#confirmDiscardDraft(this.#routeFocusTarget(next));
-    if (accepted) this.chatFeature?.clearDraft();
-    return accepted;
-  }
-
-  #startIfReady(): void {
-    if (!this.enabled || !this.chatFeature || this.#releaseRouter) return;
-    webRouter.setGuard((next) => this.#guardNavigation(next));
-    this.#releaseRouter = webRouter.start((route) => this.#applyRoute(route));
-    queueMicrotask(() => {
-      if (this.#releaseRouter) void this.#initialize();
-    });
-  }
-
-  async #initialize(): Promise<void> {
-    await this.handles.conversations.loadList();
-    if (this.#releaseRouter) await this.#applyRoute(webRouter.current, false);
-  }
-
-  #renderCurrentConversationView(): void {
-    if (!this.chatFeature || this.#renderedViewRevision === this.handles.conversations.viewRevision) return;
-    this.#renderedViewRevision = this.handles.conversations.viewRevision;
-
-    if (this.handles.conversations.viewState === 'new') {
-      this.chatFeature.view = {kind: 'new'};
-      return;
-    }
-    if (this.handles.conversations.viewState === 'loading') {
-      this.chatFeature.view = {kind: 'loading'};
-      return;
-    }
-    if (this.handles.conversations.viewState === 'ready') {
-      const history = this.handles.conversations.history;
-      if (!history) return;
-      const lineage = this.handles.conversations.conversations.find(
-        (summary) => summary.conversationId === history.conversation.conversationId,
-      )?.forkedFromTitle ?? null;
-      this.chatFeature.view = {
-        kind: 'ready',
-        conversationId: history.conversation.conversationId,
-        history: history.turns,
-        lineage,
-        olderMessages: this.handles.conversations.olderMessages,
-      };
-      return;
-    }
-    if (this.handles.conversations.viewState === 'unavailable') {
-      this.chatFeature.view = {
-        kind: 'unavailable',
-        hasRecent: Boolean(this.handles.conversations.fallbackConversationId),
-      };
-      return;
-    }
-    this.chatFeature.view = {kind: 'error'};
-  }
-
-  async #applyRoute(route: WebRoute, closeDrawer = true): Promise<void> {
-    const previous = this.handles.conversations.activeConversationId;
-    const next = route.kind === 'conversation' ? route.conversationId : null;
-    if (previous !== next) {
-      this.chatFeature?.detachRun();
-      this.#announceRouteChange(previous, next);
-    }
-
-    if (route.kind === 'conversation') {
-      await this.handles.conversations.open(route.conversationId);
-    } else if (route.kind === 'new') {
-      this.handles.conversations.openNew();
-    } else {
-      this.handles.conversations.openNew();
-      await this.updateComplete;
-      if (this.chatFeature) this.chatFeature.view = {kind: 'unavailable', hasRecent: false};
-    }
-    if (closeDrawer) await this.close(false);
-  }
-
-  #announceRouteChange(previous: string | null, next: string | null): void {
-    raise(this, 'dl-conversation-route-change', {
-      previousConversationId: previous,
-      nextConversationId: next,
-    });
+    return this.routes?.blocksLeaving() ?? false;
   }
 
   /** Having chosen where to be, close the drawer and let the reader type. */
   async #backToComposer(): Promise<void> {
     await this.close(true);
-    window.requestAnimationFrame(() => this.chatFeature?.focusComposer());
+    window.requestAnimationFrame(() => { raise(this, 'dl-conversation-chosen'); });
   }
 
   async #requestSelectConversation(conversationId: string): Promise<void> {
@@ -424,11 +303,13 @@ export class DlConversationSidebar extends LightElement {
     if (signal.aborted || result === 'ok') return;
     if (result === 'missing') {
       requestToast(this, {
+        tone: 'error',
         message: msg('Conversation unavailable.', {id: 'conversationSidebar.renameMissing'}),
       });
       return;
     }
     requestToast(this, {
+      tone: 'error',
       message: title.trim().length > 120
         ? msg('Conversation titles must be 1 to 120 characters.', {
             id: 'conversationSidebar.renameTooLong',
@@ -463,19 +344,20 @@ export class DlConversationSidebar extends LightElement {
     const signal = this.lifetime;
     if (signal.aborted) return;
     let result: ConversationMutationResult = 'error';
-    this.pendingLifecycleAction = true;
+    this.#holdNavigation(true);
     try {
-      if (wasActive) this.chatFeature?.detachRun();
+      if (wasActive) this.routes?.beforeDeleting();
       result = await this.handles.conversations.delete(conversationId, signal);
       if (signal.aborted) return;
       if (result === 'error') {
         requestToast(this, {
+          tone: 'error',
           message: msg('Could not delete the conversation.', {
             id: 'conversationSidebar.deleteFailed',
           }),
         });
       } else if (wasActive) {
-        this.chatFeature?.clearDraft();
+        this.routes?.afterDeleting();
         const fallback = this.handles.conversations.fallbackConversationId;
         await webRouter.navigate(
           fallback ? conversationRoute(fallback) : newChatRoute(),
@@ -483,7 +365,7 @@ export class DlConversationSidebar extends LightElement {
         );
       }
     } finally {
-      this.pendingLifecycleAction = false;
+      this.#holdNavigation(false);
     }
     if (signal.aborted) return;
     await this.updateComplete;
@@ -492,14 +374,23 @@ export class DlConversationSidebar extends LightElement {
   }
 
 
-  #toggleSidebar = (): void => {
+  /**
+   * Puts the sidebar away: where it is drawn beside the chat it collapses to its rail, and where it
+   * covers the chat it closes. What its own control does, and what a drag that takes its width away
+   * asks for — the panel decides what its state means, the split only reports the width.
+   */
+  collapse(restoreFocus = true): void {
     if (this.#desktop.matches) {
       this.desktopCollapsed = true;
       this.#setCollapsedPreference(true);
-      void this.updateComplete.then(() => { this.#openButton()?.focus(); });
+      void this.updateComplete.then(() => { if (restoreFocus) this.#openButton()?.focus(); });
       return;
     }
-    void this.close(true);
+    void this.close(restoreFocus);
+  }
+
+  #toggleSidebar = (): void => {
+    this.collapse(true);
   };
 
   #focusTrap = (event: KeyboardEvent): void => {
@@ -509,7 +400,8 @@ export class DlConversationSidebar extends LightElement {
   };
 
   #documentKeydown = (event: KeyboardEvent): void => {
-    if (event.key !== 'Escape' || this.#desktop.matches || !this.drawerOpen) return;
+    // An Escape that cancels an IME composition belongs to the composition, not to the drawer.
+    if (isImeKey(event) || event.key !== 'Escape' || this.#desktop.matches || !this.drawerOpen) return;
     if (document.querySelector('dialog[open]') || this.#list()?.menuOpen) return;
     event.preventDefault();
     void this.close(true);
@@ -529,12 +421,6 @@ export class DlConversationSidebar extends LightElement {
       });
     }
   }
-
-  #beforeUnload = (event: BeforeUnloadEvent): void => {
-    if (!this.#hasUnsavedDraft() && !this.chatFeature?.hasUnresolvedSubmission) return;
-    event.preventDefault();
-    event.returnValue = '';
-  };
 
   /** Whether the conversation list shows: the column on desktop unless collapsed, the drawer when compact. */
   get #expanded(): boolean {
@@ -567,7 +453,7 @@ export class DlConversationSidebar extends LightElement {
 
   #retryConversation = (event: CustomEvent<ConversationRetryDetail>): void => {
     event.stopPropagation();
-    void (event.detail.kind === 'reload' ? this.#initialize() : this.#requestNewConversation());
+    void (event.detail.kind === 'reload' ? this.routes?.reload() : this.#requestNewConversation());
   };
 
   #requestSettings = (): void => {
@@ -704,7 +590,7 @@ declare global {
   interface HTMLElementEventMap {
     'dl-conversation-sidebar-opening': CustomEvent<void>;
     'dl-conversation-sidebar-state-change': CustomEvent<ConversationSidebarStateDetail>;
-    'dl-conversation-route-change': CustomEvent<ConversationRouteChangeDetail>;
-    'dl-settings-request': CustomEvent<void>;
+    /** The reader chose where to be and the drawer is put away: the Chat's box is theirs to type in. */
+    'dl-conversation-chosen': CustomEvent<void>;
   }
 }

@@ -10,7 +10,7 @@ import asyncpg
 import pytest
 
 from dlightrag.adapters.postgres.runtime.run_store import PGRunStore
-from dlightrag.application.retrieval import (
+from dlightrag.application.retrieval.execution import (
     PinnedRetrievalModel,
     RetrievalExecutor,
     RetrievalRunInput,
@@ -20,7 +20,12 @@ from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
-from dlightrag.engine.rag.retrieval import RetrievalOptions, RetrievalResult
+from dlightrag.engine.rag.retrieval.models import (
+    RetrievalOptions,
+)
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalResult,
+)
 from dlightrag.engine.runtime.coordinator import RunCoordinator
 from dlightrag.engine.runtime.policy import RETRIEVAL_RUN_RETENTION_SECONDS
 from dlightrag.engine.runtime.records import (

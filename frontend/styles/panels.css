@@ -71,7 +71,7 @@ dl-inspector[aria-hidden='true'] {
     min-height: var(--size-button);
     padding: var(--space-inline) var(--space-component);
     border-radius: var(--radius-control);
-    transition: color 0.15s, background 0.15s;
+    transition: color var(--duration-control), background var(--duration-control);
 }
 
 .source-toggle-all:hover {
@@ -114,18 +114,26 @@ dl-icon-button.panel-close {
 
 dl-inspector-sources,
 dl-inspector-files,
-dl-inspector-traces {
+dl-inspector-traces,
+dl-inspector-agentspace {
     display: block;
 }
 
 dl-inspector-sources[hidden],
 dl-inspector-files[hidden],
-dl-inspector-traces[hidden] {
+dl-inspector-traces[hidden],
+dl-inspector-agentspace[hidden] {
     display: none;
 }
 
-/* Child agents lays out its own list, child, and docked composer, so the panel's padding and scroll
-   give way to it. */
+/* The Agentspace is a timeline of copies, so its panel owns the one 16px gutter and the row
+   hairlines reach it, as the Run traces dock's do. */
+.panel[data-panel-kind='agentspace'] .panel-content {
+    padding: 0;
+}
+
+/* Child agents lays out its own timeline, switcher, and agent page, so the panel's padding and
+   scroll give way to it. */
 .panel[data-panel-kind='traces'] .panel-content {
     display: flex;
     flex-direction: column;
@@ -136,6 +144,12 @@ dl-inspector-traces[hidden] {
 .panel[data-panel-kind='traces'] dl-inspector-traces {
     flex: 1;
     min-height: 0;
+}
+
+/* The Run traces dock owns one 16px gutter, so its panel header starts on the same line as the
+   timeline and the agent page below it. */
+.panel[data-panel-kind='traces'] .panel-header {
+    padding-inline: var(--space-related);
 }
 
 @media (height <= 640px) and (width < 1200px) {

@@ -7,7 +7,9 @@ reachable.
 
 ## Status
 
-Accepted and implemented.
+Accepted and implemented. The **watching** half stands; [ADR 0067](0067-the-inspector-keeps-two-read-grains.md)
+retired the **steering** half: the Web Inspector no longer offers child commands, and a reader who
+wants to act returns to the conversation. The API's child control routes keep their contract.
 
 ## Context
 

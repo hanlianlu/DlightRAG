@@ -9,6 +9,11 @@
  * entry needs a declaring id (`id:` or `verbId:`, static or interpolated), and
  * each interpolated family must hold exactly the members its source map names,
  * so copy for removed UI cannot accumulate.
+ *
+ * The last two tests lock the one rule that keeps a language change honest: a view
+ * holds machine facts, and the component applies the words. Copy the client owns
+ * travels as `LocalizedText` (its English source plus the catalog id), so nothing
+ * under lib/ resolves a language that a later switch would leave behind.
  */
 
 import {readdirSync, readFileSync, statSync} from 'node:fs';
@@ -37,7 +42,12 @@ function declaredIds(): Set<string> {
   const ids = new Set<string>();
   for (const file of sourceFiles()) {
     const source = readFileSync(file, 'utf8');
+    // Three ways to declare copy the client owns: a msg() option, a ToolRow verb,
+    // and the source-plus-id pair a view carries (`catalogText`).
     for (const match of source.matchAll(/\b(?:id|verbId):\s*'([A-Za-z][\w.]*)'/g)) {
+      ids.add(match[1]);
+    }
+    for (const match of source.matchAll(/\bcatalogText\([\s\S]*?,\s*'([A-Za-z][\w.]*)',?\s*\)/g)) {
       ids.add(match[1]);
     }
   }
@@ -49,8 +59,15 @@ function declaredFamilies(): RegExp[] {
   const families: RegExp[] = [];
   for (const file of sourceFiles()) {
     const source = readFileSync(file, 'utf8');
+    const patterns: string[] = [];
     for (const match of source.matchAll(/\b(?:id|verbId):\s*`([A-Za-z][^`]*)`/g)) {
-      const pattern = match[1]
+      patterns.push(match[1]);
+    }
+    for (const match of source.matchAll(/\bcatalogText\([\s\S]*?,\s*`([A-Za-z][^`]*)`/g)) {
+      patterns.push(match[1]);
+    }
+    for (const raw of patterns) {
+      const pattern = raw
         .split(/\$\{[^}]*\}/)
         .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
         .join('[^.]+');
@@ -101,6 +118,48 @@ test('every zh catalog entry has a declaring msg id', () => {
   assert.deepEqual(orphans, []);
 });
 
+test('the declaration-cost estimate keeps its one/many pair and its tools-less form', () => {
+  // The estimate states a token cost, then the catalogue's tool count when there is one: one id
+  // for the singular, one for the plural, and one for a cost whose tool count is unknown. The
+  // closed family keeps a rename from silently leaving one of the three in English.
+  assertClosedFamily('connections.declarationCost', ['Tokens', 'One', 'Many']);
+});
+
+test('the Inspector switcher, its Run overview band, and its step search declare their copy, and the zh catalog states it', () => {
+  // The one-line switcher, the Run panel's band and states, and the step search that replaces the
+  // panel while a reader looks for words: their copy is pinned by name, so a rename on one side of
+  // the feature cannot leave the other reading in English.
+  const expected = [
+    'tracesPanel.switcherListAria',
+    'tracesPanel.switcherEmpty',
+    'tracesPanel.switcherNoMatch',
+    'tracesPanel.filterAgents',
+    'tracesPanel.asksParent',
+    'tracesPanel.asksParentMany',
+    'tracesPanel.childNumber',
+    'tracesPanel.overview',
+    'tracesPanel.overviewLoading',
+    'tracesPanel.overviewFailed',
+    'tracesPanel.overviewOneStep',
+    'tracesPanel.overviewSteps',
+    'tracesPanel.overviewOneAgent',
+    'tracesPanel.overviewAgents',
+    'tracesPanel.searchResults',
+    'tracesPanel.searchLoading',
+    'tracesPanel.searchFailed',
+    'tracesPanel.searchNoMatch',
+    'tracesPanel.searchOneMatch',
+    'tracesPanel.searchMatches',
+    'tracesPanel.searchLoadOlder',
+    'tracesPanel.searchSaid',
+    'tracesPanel.searchAnswered',
+    'tracesPanel.searchInstruction',
+  ];
+  const declared = declaredIds();
+  assert.deepEqual(expected.filter((id) => !declared.has(id)), [], 'the Inspector declares its copy');
+  assert.deepEqual(expected.filter((id) => !catalogKeys().has(id)), [], 'and the zh catalog states it');
+});
+
 test('localized run error kinds and their zh entries match one to one', () => {
   const errors = readFileSync(join(FRONTEND_DIR, 'lib', 'run-errors.ts'), 'utf8');
   const block = errors.match(/RUN_ERROR_KIND_COPY[^{]+\{([\s\S]*?)\n\};/)?.[1];
@@ -132,6 +191,36 @@ test('mode, phase, and reconnect families hold exactly their mapped members', ()
   assertClosedFamily('chatMessageList.reconnect.', states, '.action');
 });
 
+test('every reason a thumb down is given has a label, and a zh entry', () => {
+  const wire = readFileSync(join(FRONTEND_DIR, 'api', 'feedback.ts'), 'utf8');
+  const block = wire.match(/FEEDBACK_REASONS = \[([^\]]+)\]/)?.[1];
+  assert.ok(block, 'FEEDBACK_REASONS missing');
+  const reasons = [...block.matchAll(/'([a-z_]+)'/g)].map((match) => match[1]);
+  assert.equal(reasons.length, 5);
+  // The labels are offered in the order the server keeps the reasons.
+  assert.deepEqual(mapKeys('ui/answer-feedback.ts', 'const REASON_LABELS'), reasons);
+  assertClosedFamily('answerFeedback.reason.', reasons);
+});
+
+test('every reason an Artifact attestation can give has a zh entry', () => {
+  const badge = readFileSync(join(FRONTEND_DIR, 'ui', 'artifact-attestation.ts'), 'utf8');
+  const block = badge.match(/const REASON_TEXT[^{]+\{([\s\S]*?)\n\};/)?.[1];
+  assert.ok(block, 'REASON_TEXT catalog missing');
+  const reasons = [...block.matchAll(/^\s*([a-z][a-z0-9_]*):/gm)].map((match) => match[1]);
+  // The server's closed vocabulary, in the order `provenance.py` publishes it.
+  assert.deepEqual(reasons, [
+    'no_skill_loaded',
+    'skill_loaded_without_verifier',
+    'skill_has_no_verifier_contract',
+    'contract_unavailable',
+    'verifier_reported_failures',
+    'records_pruned',
+    'skill_name_unavailable',
+    'arguments_truncated',
+  ]);
+  assertClosedFamily('artifactAttestation.reason.', reasons);
+});
+
 test('every catalogued tool verb has a zh entry', () => {
   const display = readFileSync(join(FRONTEND_DIR, 'lib', 'tool-display.ts'), 'utf8');
   const block = display.match(/const TOOL_VERBS[^{]+\{([^}]+)\}/)?.[1];
@@ -140,4 +229,26 @@ test('every catalogued tool verb has a zh entry', () => {
   assert.ok(names.length > 0, 'TOOL_VERBS catalog is empty');
   // `mcp` is the static verbId for tools outside the catalogued set.
   assertClosedFamily('chatFeature.tool.', [...names, 'mcp']);
+});
+
+test('the turn view holds machine facts, never resolved copy', () => {
+  const source = readFileSync(join(FRONTEND_DIR, 'lib', 'chat-views.ts'), 'utf8');
+  const body = source.match(/export interface ChatTurnView \{([\s\S]*?)\n\}/)?.[1];
+  assert.ok(body, 'ChatTurnView missing');
+  // The only plain strings are words the server wrote or an identifier.
+  const strings = [...body.matchAll(/^\s*(\w+):\s*string;$/gm)].map((match) => match[1]).sort();
+  assert.deepEqual(strings, ['id', 'runId', 'streamText', 'userText']);
+  // What the client owns is carried as its source, for a component to resolve.
+  assert.match(body, /error: LocalizedText \| null;/);
+  assert.match(body, /activity: TurnActivity \| null;/);
+});
+
+test('no view builder resolves words', () => {
+  for (const relative of ['lib/chat-views.ts', 'lib/turn-projection.ts', 'lib/tool-events.ts']) {
+    const source = readFileSync(join(FRONTEND_DIR, relative), 'utf8');
+    assert.ok(
+      !source.includes("from '@lit/localize'"),
+      `${relative} must leave the words to the component that draws them`,
+    );
+  }
 });

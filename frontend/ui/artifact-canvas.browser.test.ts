@@ -44,6 +44,8 @@ function htmlArtifact(): AnswerArtifact {
     downloadUrl: '/web/api/answer/run-1/artifacts/artifact-html?download=1',
     presentationUrl: '/web/api/answer/run-1/artifacts/artifact-html/presentation',
     issue: null,
+    // Most Artifacts carry no derived record, which is not a verdict.
+    attestation: null,
   };
 }
 
@@ -170,6 +172,28 @@ it('ignores previous HTML text that finishes decoding after an Artifact switch',
   expect(frame?.source).not.to.contain('Stale HTML');
 });
 
+it('closes on Escape, and leaves the Escape that cancels an IME composition to the composition', async () => {
+  window.matchMedia = desktopMedia;
+  window.fetch = async () => new Response('<!doctype html><html><body>Report</body></html>');
+  const canvas = document.createElement('dl-artifact-canvas') as DlArtifactCanvas;
+  document.body.appendChild(canvas);
+  await canvas.open(htmlArtifact());
+  await canvas.updateComplete;
+  const press = (init: KeyboardEventInit): KeyboardEvent => {
+    const event = new KeyboardEvent('keydown', {key: 'Escape', bubbles: true, cancelable: true, ...init});
+    canvas.querySelector<HTMLElement>('[data-action="close"]')!.dispatchEvent(event);
+    return event;
+  };
+
+  // Chromium marks the key of a composition; WebKit sends it after it ended, as keyCode 229.
+  for (const init of [{isComposing: true}, {keyCode: 229}]) {
+    expect(press(init).defaultPrevented, 'the Escape of a composition was taken').to.equal(false);
+    expect(canvas.classList.contains('open'), 'the Canvas closed under a composition').to.equal(true);
+  }
+  expect(press({}).defaultPrevented).to.equal(true);
+  expect(canvas.classList.contains('open')).to.equal(false);
+});
+
 it('opens the interactive frame directly without a consent step', async () => {
   window.matchMedia = desktopMedia;
   window.fetch = async () => new Response('<!doctype html><html><body>Report</body></html>');
@@ -276,29 +300,61 @@ it('publishes modal, overlay, and wide predicates for Shell composition', async 
   expect(states.at(-1)).to.deep.equal({open: true, modal: false, overlay: false, wide: false});
 });
 
-it('does not restore stale focus when close is immediately followed by reopen', async () => {
+it('reopening the Artifact it drew is not a second read, and a new digest is', async () => {
+  // What the Canvas holds is identified by the digest, so an edge that is slow
+  // or failing cannot turn a second open of the same Artifact into a failure.
   window.matchMedia = desktopMedia;
-  const artifact = htmlArtifact();
-  artifact.status = 'unavailable';
-  artifact.issue = {
-    kind: 'missing_file',
-    description: 'Referenced Artifact is missing.',
-    resourceId: artifact.resourceId,
+  const reads: string[] = [];
+  window.fetch = async (input) => {
+    reads.push(String(input));
+    return new Response('<!doctype html><html><body>Report</body></html>');
   };
-  const firstTrigger = document.createElement('button');
-  const secondTrigger = document.createElement('button');
   const canvas = document.createElement('dl-artifact-canvas') as DlArtifactCanvas;
-  document.body.append(firstTrigger, secondTrigger, canvas);
+  document.body.appendChild(canvas);
 
-  await canvas.open(artifact, firstTrigger);
+  await canvas.open(htmlArtifact());
+  await canvas.updateComplete;
   canvas.close();
-  const reopened = canvas.open(artifact, secondTrigger);
-  await reopened;
-  await new Promise((resolve) => requestAnimationFrame(resolve));
+  await canvas.updateComplete;
+  await canvas.open(htmlArtifact());
+  await canvas.updateComplete;
 
-  expect(canvas.classList.contains('open')).to.equal(true);
-  expect(document.activeElement).not.to.equal(firstTrigger);
-  expect(canvas.contains(document.activeElement)).to.equal(true);
+  expect(reads.length).to.equal(1);
+  const frame = canvas.querySelector<DlActiveArtifactFrame>('dl-active-artifact-frame');
+  expect(frame?.source).to.contain('Report');
+  expect(canvas.querySelector('.artifact-error')).to.equal(null);
+
+  // The same resource published again is a new digest, and therefore new bytes.
+  await canvas.open({...htmlArtifact(), digest: 'b'.repeat(64)});
+  await canvas.updateComplete;
+  expect(reads.length).to.equal(2);
+});
+
+it('says which failure it met: a server answer, an unreachable server, or bytes it cannot vouch for', async () => {
+  window.matchMedia = desktopMedia;
+  const canvas = document.createElement('dl-artifact-canvas') as DlArtifactCanvas;
+  document.body.appendChild(canvas);
+
+  // A refused read names the status: an edge answering 530 is not a safety refusal.
+  window.fetch = async () => new Response('<html>error</html>', {status: 530});
+  await canvas.open(htmlArtifact());
+  await canvas.updateComplete;
+  expect(canvas.querySelector('.artifact-error')?.textContent).to.contain('530');
+  expect(canvas.querySelector('.artifact-error')?.textContent).not.to.contain('safely');
+  canvas.close();
+
+  // A read that never reached a response says so.
+  window.fetch = async () => { throw new TypeError('Failed to fetch'); };
+  await canvas.open(artifact('unreachable', 'Unreachable', 'html'));
+  await canvas.updateComplete;
+  expect(canvas.querySelector('.artifact-error')?.textContent).to.contain('could not be reached');
+  canvas.close();
+
+  // Bytes that fail their schema keep the wording that says the Canvas refused them.
+  window.fetch = async () => new Response('not the presentation');
+  await canvas.open(artifact('unreadable', 'Unreadable', 'markdown'));
+  await canvas.updateComplete;
+  expect(canvas.querySelector('.artifact-error')?.textContent).to.contain('safely');
 });
 
 it('operator-disabled HTML uses only the script-disabled static frame', async () => {
@@ -318,7 +374,9 @@ it('operator-disabled HTML uses only the script-disabled static frame', async ()
   expect(canvas.querySelector('details')).to.equal(null);
 });
 
-it('isolates PDF preview in a sandboxed no-referrer iframe', async () => {
+it('shows a PDF in a no-referrer frame that is not sandboxed', async () => {
+  // Chrome refuses the PDF viewer inside a sandboxed frame, empty or fully permissive, so the
+  // sandbox that used to be asserted here bought a broken-page icon rather than isolation.
   const artifact = {...htmlArtifact(),
     media_type: 'application/pdf',
     filename: 'report.pdf',
@@ -331,7 +389,7 @@ it('isolates PDF preview in a sandboxed no-referrer iframe', async () => {
   await canvas.updateComplete;
 
   const iframe = canvas.querySelector<HTMLIFrameElement>('iframe.artifact-pdf');
-  expect(iframe?.getAttribute('sandbox')).to.equal('');
+  expect(iframe?.hasAttribute('sandbox')).to.equal(false);
   expect(iframe?.referrerPolicy).to.equal('no-referrer');
 });
 
@@ -417,4 +475,87 @@ it('an unavailable Artifact renders a persistent safe issue without fetching', a
 
   expect(canvas.querySelector('[role="alert"]')?.textContent).to.contain('missing');
   expect(fetched).to.equal(false);
+});
+
+it('names the Artifact attestation status in the Canvas header, and nothing under it', async () => {
+  window.matchMedia = desktopMedia;
+  const canvas = document.createElement('dl-artifact-canvas') as DlArtifactCanvas;
+  document.body.appendChild(canvas);
+
+  // An Artifact the server derived no record for draws no badge at all: `null` is not a verdict.
+  canvas.artifact = {...htmlArtifact(), attestation: null};
+  await canvas.updateComplete;
+  expect(canvas.querySelector('.artifact-attestation')).to.equal(null);
+
+  const badgeFor = async (attestation: AnswerArtifact['attestation']) => {
+    canvas.artifact = {...htmlArtifact(), attestation};
+    await canvas.updateComplete;
+    const badge = canvas.querySelector('.artifact-attestation');
+    if (badge !== null) {
+      expect(canvas.querySelector('.artifact-canvas-heading')?.contains(badge)).to.equal(true);
+    }
+    return badge;
+  };
+  const words = (badge: Element | null): string =>
+    badge?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+
+  const attested = await badgeFor({
+    status: 'attested',
+    skill: 'sealed-research-brief',
+    verifier: 'scripts/validate_model.py',
+    reason: null,
+    basis: 'named_in_a_recorded_command',
+    requiredReadsMissing: null,
+  });
+  expect(attested?.getAttribute('data-attestation')).to.equal('attested');
+  // The claim, not its basis: the Answer's delivery record names the verifier the claim rests on.
+  expect(words(attested)).to.equal('Attested by sealed-research-brief');
+  expect(attested?.querySelector('.artifact-attestation-detail')).to.equal(null);
+
+  const unattested = await badgeFor({
+    status: 'unattested', skill: null, verifier: null, reason: 'no_skill_loaded', basis: null,
+    requiredReadsMissing: null,
+  });
+  expect(words(unattested)).to.equal('Not attested');
+
+  // The Answer that brought a reader here: the records cannot settle the question because a recorded
+  // call was cut, and the Run skipped three declared reads. The Canvas header stops at the status;
+  // the reason and the lines are the Answer's delivery record, which says them once for the Run.
+  const unknown = await badgeFor({
+    status: 'unknown', skill: null, verifier: null, reason: 'arguments_truncated', basis: null,
+    requiredReadsMissing: [
+      {
+        skill: 'sealed-research-brief',
+        paths: ['references/industry-structure.md'],
+        when: 'before any forecast — the industry condition behind every parameter',
+      },
+      {
+        skill: 'sealed-research-brief',
+        paths: ['references/reporting-methods.md'],
+        when: 'before valuing — the WACC dossier, the terminal value, the price inversion',
+      },
+      {
+        skill: 'sealed-research-brief',
+        paths: ['references/audit-checklist.md'],
+        when: 'before delivery — the rule table and the instant-fail list',
+      },
+    ],
+  });
+  expect(unknown?.getAttribute('data-attestation')).to.equal('unknown');
+  expect(words(unknown)).to.equal('Attestation unknown');
+  expect(unknown?.querySelector('.artifact-attestation-detail')).to.equal(null);
+  expect(unknown?.querySelectorAll('.artifact-attestation-unread')).to.have.length(0);
+  // Records that cannot settle the question are not a failure, so nothing here is announced as one.
+  expect(canvas.querySelector('[role="alert"]')).to.equal(null);
+
+  // A Skill that declares no verifier made no claim for a status to judge: the Canvas names no
+  // verdict, and the skipped read is the Answer's record to draw.
+  const claimless = await badgeFor({
+    status: 'unattested', skill: 'interactive-html', verifier: null,
+    reason: 'skill_has_no_verifier_contract', basis: null,
+    requiredReadsMissing: [
+      {skill: 'interactive-html', paths: ['references/fragment.md'], when: 'before the build'},
+    ],
+  });
+  expect(claimless).to.equal(null);
 });

@@ -21,7 +21,9 @@ from typing import Any, cast
 
 import pytest
 
-from dlightrag.adapters.agent_browser import PooledBrowserProvider
+from dlightrag.adapters.agent_browser.pool import (
+    PooledBrowserProvider,
+)
 from dlightrag.adapters.postgres.runtime.browser_leases import PGAgentBrowserLeaseStore
 from dlightrag.adapters.postgres.runtime.run_store import PGRunStore
 from dlightrag.engine.agent.session.entries import ToolResultMessageEntry
@@ -33,9 +35,11 @@ from dlightrag.engine.agent.tool_content import tool_content_text
 from dlightrag.engine.agent.tools.files import ResourceReadRequest
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
-from dlightrag.engine.answer.agent_browser import (
+from dlightrag.engine.answer.agent_browser.contracts import (
     AgentBrowserSettings,
     BrowserHolder,
+)
+from dlightrag.engine.answer.agent_browser.run import (
     RunAgentBrowser,
 )
 from dlightrag.engine.answer.research.runtime import (
@@ -67,7 +71,7 @@ from tests.support.agent_browser import (
 )
 from tests.support.dns import public_dns
 from tests.support.pg import skip_without_postgres
-from tests.tool_helpers import tool_runtime
+from tests.support.tool_helpers import tool_runtime
 from tests.unit.conftest import answer_model_profile
 from tests.unit.test_research_runtime_migration import _Session
 
@@ -210,6 +214,7 @@ async def world(
         leases = CountingLeases(pool=pg[1])
         provider = PooledBrowserProvider(
             endpoints=(server.endpoint,),
+            headed_endpoints=(),
             egress_proxy=proxy.url,
             chromium_sandbox=True,
             connect_timeout_seconds=20,

@@ -3,12 +3,11 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 
-import type {ChatTurnView} from './chat-views.ts';
+import {MAX_PROCESS_ENTRIES, type ChatTurnView, type ProcessEntry} from './chat-views.ts';
 import {
   ANSWER_PHASE_LABELS,
   answerPhaseLabel,
   applyAnswerEvent,
-  isChildToolEvent,
 } from './turn-projection.ts';
 
 function turn(overrides: Partial<ChatTurnView> = {}): ChatTurnView {
@@ -19,15 +18,16 @@ function turn(overrides: Partial<ChatTurnView> = {}): ChatTurnView {
     runId: 'r1',
     state: 'pending',
     streamText: '',
+    processEntries: [],
     presentation: null,
     usage: {},
-    error: '',
-    progress: '',
-    liveStatus: '',
-    sawChildren: false,
+    error: null,
+    activity: null,
     cancelRequested: false,
     steeringMessages: [],
     toolRows: [],
+    answerSequence: null,
+    feedback: null,
     ...overrides,
   };
 }
@@ -43,22 +43,30 @@ test('tokens accumulate within a batch and settle the stream state', () => {
   view = applyAnswerEvent(view, {kind: 'token', text: 'llo'}, 1000);
   assert.equal(view.streamText, 'Hello');
   assert.equal(view.state, 'streaming');
-  assert.equal(view.error, '');
+  assert.equal(view.error, null);
 });
 
 test('reset clears the stream back to pending', () => {
-  const streamed = turn({state: 'streaming', streamText: 'abc', progress: 'x', error: ''});
+  const streamed = turn({
+    state: 'streaming',
+    streamText: 'abc',
+    processEntries: [],
+    activity: {kind: 'tool'},
+    error: null,
+  });
   const view = applyAnswerEvent(streamed, {kind: 'reset'}, 1000);
   assert.deepEqual(
-    {state: view.state, streamText: view.streamText, progress: view.progress},
-    {state: 'pending', streamText: '', progress: ''},
+    {state: view.state, streamText: view.streamText, activity: view.activity},
+    {state: 'pending', streamText: '', activity: null},
   );
 });
 
 test('progress applies known phases and ignores unknown ones', () => {
   const base = turn();
   const known = applyAnswerEvent(base, {kind: 'progress', payload: {phase: 'searching'}}, 1000);
-  assert.ok(known.progress.includes('Searching'));
+  // The view keeps the source and the id; the component applies the words, so the
+  // line follows a language change.
+  assert.deepEqual(known.activity, {kind: 'phase', phase: 'searching'});
   const ignored = applyAnswerEvent(known, {kind: 'progress', payload: {phase: 'bogus'}}, 1000);
   assert.equal(ignored, known);
 });
@@ -77,28 +85,21 @@ test('memory events never change the view', () => {
   );
 });
 
-test('tool events drive the trace and sawChildren', () => {
+test('tool events drive the trace', () => {
   let view = applyAnswerEvent(turn(), {
     kind: 'tool',
     eventType: 'tool_start',
     payload: {tool_name: 'spawn_agent', call_id: 'c1', tool_label: 'Child agent'},
   }, 4000);
-  assert.equal(view.sawChildren, true);
   assert.equal(view.toolRows[0].startedAt, 4000);
   assert.equal(view.toolRows[0].label, 'Child agent');
-  assert.equal(view.progress, 'Child agent');
+  assert.deepEqual(view.activity, {kind: 'tool'});
   view = applyAnswerEvent(view, {
     kind: 'tool',
     eventType: 'tool_progress',
     payload: {tool_name: 'spawn_agent', call_id: 'c1', object_label: 'review'},
   }, 1000);
-  assert.ok(view.progress.includes('review'));
-  view = applyAnswerEvent(turn(), {
-    kind: 'tool',
-    eventType: 'tool_start',
-    payload: {tool_name: 'wait_subagent', call_id: 'c2'},
-  }, 1000);
-  assert.equal(view.sawChildren, true);
+  assert.equal(view.toolRows[0].object, 'review');
 });
 
 test('errors fail the turn', () => {
@@ -107,7 +108,8 @@ test('errors fail the turn', () => {
     payload: {kind: 'run_abandoned', message: 'Run could not be recovered.'},
   }, 1000);
   assert.equal(view.state, 'failed');
-  assert.equal(view.error, 'Run could not be recovered.');
+  // Server words carry no catalog id; the view holds them verbatim.
+  assert.deepEqual(view.error, {source: 'Run could not be recovered.', id: null});
 });
 
 // A succeeded done frame as the server sends it: the history's presentation wire,
@@ -194,16 +196,133 @@ test('done settles succeeded, cancelled, and malformed payloads', () => {
     payload: {...doneFrame, presentation: incomplete},
   }, 1000);
   assert.equal(violated.state, 'failed');
-  assert.equal(violated.error, 'Service error. Please try again.');
+  assert.deepEqual(violated.error, {
+    source: 'Service error. Please try again.',
+    id: 'errors.service',
+  });
   assert.equal(violated.presentation, null);
 });
 
-test('only child-agent tool events count as child activity', () => {
-  const tool = (name: unknown) => ({kind: 'tool' as const, eventType: 'tool_progress' as const, payload: {tool_name: name}});
-  assert.equal(isChildToolEvent(tool('wait_subagent')), true);
-  assert.equal(isChildToolEvent(tool('spawn_agent')), true);
-  assert.equal(isChildToolEvent(tool('search_corpus')), false);
-  assert.equal(isChildToolEvent(tool(42)), false);
-  assert.equal(isChildToolEvent({kind: 'token', text: 'spawn_agent'}), false);
-  assert.equal(isChildToolEvent({kind: 'tool', eventType: 'tool_end', payload: null}), false);
+test('reasoning grows the one open process fold and starts a pending turn streaming', () => {
+  let view = applyAnswerEvent(turn(), {kind: 'reasoning', text: 'Let me '}, 1000);
+  view = applyAnswerEvent(view, {kind: 'reasoning', text: 'check the filing.'}, 1000);
+  assert.deepEqual(view.processEntries, [
+    {kind: 'thinking', text: 'Let me check the filing.', open: true},
+  ]);
+  assert.equal(view.state, 'streaming');
+
+  // The answer's own words do not disturb the fold the process trace holds.
+  view = applyAnswerEvent(view, {kind: 'token', text: 'The fee '}, 1000);
+  view = applyAnswerEvent(view, {kind: 'token', text: 'was fixed.'}, 1000);
+  assert.deepEqual(view.processEntries, [
+    {kind: 'thinking', text: 'Let me check the filing.', open: true},
+  ]);
+  assert.equal(view.streamText, 'The fee was fixed.');
+});
+
+test('a tool call shuts the open fold and joins its row to the one merged trace', () => {
+  const search = {
+    kind: 'tool', eventType: 'tool_start', payload: {tool_name: 'search_web', call_id: 'c1'},
+  } as const;
+  let view = applyAnswerEvent(turn(), {kind: 'reasoning', text: 'Search first.'}, 1000);
+  view = applyAnswerEvent(view, search, 1000);
+  assert.deepEqual(view.processEntries.map((entry) => entry.kind), ['thinking', 'tool']);
+  assert.deepEqual(view.processEntries[0], {kind: 'thinking', text: 'Search first.', open: false});
+  // The Tool entry holds the row object the trace's own state machine holds.
+  assert.equal(
+    view.processEntries[1]?.kind === 'tool' ? view.processEntries[1].row : null,
+    view.toolRows[0],
+  );
+
+  // A progress event updates that row in place: the trace never holds the same call twice.
+  view = applyAnswerEvent(view, {
+    kind: 'tool', eventType: 'tool_progress',
+    payload: {tool_name: 'search_web', call_id: 'c1', object_label: 'MSA 9.2'},
+  }, 1000);
+  assert.equal(view.processEntries.length, 2);
+  assert.equal(
+    view.processEntries[1]?.kind === 'tool' ? view.processEntries[1].row.object : '',
+    'MSA 9.2',
+  );
+
+  // Reasoning after a call opens a new fold after the Tool entries; the call that follows shuts it.
+  view = applyAnswerEvent(view, {kind: 'reasoning', text: 'Read it next.'}, 1000);
+  view = applyAnswerEvent(view, {
+    kind: 'tool', eventType: 'tool_start', payload: {tool_name: 'read', call_id: 'c2'},
+  }, 1000);
+  assert.deepEqual(view.processEntries.map((entry) => entry.kind), ['thinking', 'tool', 'thinking', 'tool']);
+  assert.deepEqual(
+    view.processEntries.flatMap((entry) => (entry.kind === 'thinking' ? [entry.text, entry.open] : [])),
+    ['Search first.', false, 'Read it next.', false],
+  );
+});
+
+test('the folds and the rows keep one growing history, so the block can scroll back through it', () => {
+  const reason = (text: string) => ({kind: 'reasoning', text} as const);
+  const call = (id: string) => ({
+    kind: 'tool', eventType: 'tool_start', payload: {tool_name: 'read', call_id: id},
+  } as const);
+  let view = turn();
+  // think a, call 1, think b, call 2, think c: five entries, which is what the block shows at rest.
+  for (const event of [reason('a'), call('c1'), reason('b'), call('c2'), reason('c')]) {
+    view = applyAnswerEvent(view, event, 1000);
+  }
+  assert.equal(view.processEntries.length, 5);
+
+  // A sixth and seventh entry join the history rather than rolling the first steps out: the block
+  // scrolls them, and the newest five are what its viewport holds.
+  view = applyAnswerEvent(view, call('c3'), 1000);
+  view = applyAnswerEvent(view, reason('d'), 1000);
+  assert.deepEqual(
+    view.processEntries.map((entry) => entry.kind),
+    ['thinking', 'tool', 'thinking', 'tool', 'thinking', 'tool', 'thinking'],
+  );
+  assert.deepEqual(
+    view.processEntries.flatMap((entry) => (entry.kind === 'thinking' ? [entry.text] : [])),
+    ['a', 'b', 'c', 'd'],
+  );
+});
+
+test('a run longer than the history bound keeps its newest steps and its whole count', () => {
+  const call = (id: string) => ({
+    kind: 'tool', eventType: 'tool_start', payload: {tool_name: 'read', call_id: id},
+  } as const);
+  let view = turn();
+  for (let index = 0; index < MAX_PROCESS_ENTRIES + 10; index += 1) {
+    view = applyAnswerEvent(view, call(`c${index}`), 1000);
+  }
+
+  assert.equal(view.processEntries.length, MAX_PROCESS_ENTRIES);
+  const first = view.processEntries[0];
+  assert.equal(
+    first?.kind === 'tool' ? first.row.callId : null,
+    'c10',
+    'the oldest ten steps are the ones the bound drops',
+  );
+  const newest = view.processEntries.at(-1);
+  assert.equal(
+    newest?.kind === 'tool' ? newest.row.ordinal : null,
+    MAX_PROCESS_ENTRIES + 10,
+    'the count outlives the entries the bound drops',
+  );
+});
+
+test('a terminal frame clears the process trace: the settled reading surface is silent', () => {
+  const streaming = (): ChatTurnView => turn({
+    state: 'streaming',
+    streamText: 'The answer so far',
+    processEntries: [{kind: 'thinking', text: 'An open thought', open: true}],
+  });
+  const cleared = (view: ChatTurnView): readonly ProcessEntry[] => view.processEntries;
+
+  assert.deepEqual(cleared(applyAnswerEvent(streaming(), {kind: 'reset'}, 1000)), []);
+  assert.deepEqual(cleared(applyAnswerEvent(streaming(), {
+    kind: 'error',
+    payload: {kind: 'run_abandoned', message: 'Run could not be recovered.'},
+  }, 1000)), []);
+  assert.deepEqual(cleared(applyAnswerEvent(streaming(), {
+    kind: 'done',
+    payload: {status: 'cancelled'},
+  }, 1000)), []);
+  assert.deepEqual(cleared(applyAnswerEvent(streaming(), {kind: 'done', payload: doneFrame}, 1000)), []);
 });

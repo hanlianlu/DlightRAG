@@ -11,11 +11,12 @@ from typing import Any, Literal
 
 from dlightrag.engine.agent.session.ids import SessionId
 from dlightrag.engine.agent.session.repository import AgentSessionRepository
+from dlightrag.engine.agent.tools.contracts import DeclaredSource
+from dlightrag.engine.runtime.agentspace import AgentspaceStore
 from dlightrag.engine.runtime.contracts import RunKind, RunLane, RunPhase, RunStatus
 from dlightrag.engine.runtime.policy import MAX_RECLAIMS_WITHOUT_PROGRESS
 from dlightrag.engine.runtime.progress import RunProgressStore
 from dlightrag.engine.runtime.settlements import EffectHostUpdate, FetchedResourceSettlementUpdate
-from dlightrag.engine.runtime.workspace import WorkspaceStore
 
 # Event labels are executor-owned. RunRuntime orders and persists them without
 # importing an operation-specific vocabulary.
@@ -89,6 +90,27 @@ class RunAdmissionLimitExceededError(RuntimeError):
     """A deployment-wide nonterminal admission limit was reached."""
 
 
+class SessionWorkBusyError(RuntimeError):
+    """Another Run already holds this Session's work head.
+
+    Admission claims the Session's one work slot in the same transaction that links a
+    conversation turn, so two producers can never both be admitted: the loser is a typed
+    refusal naming the Run that holds the slot, not a crash later on the agent lane.
+    """
+
+    def __init__(self, active_run_id: str | None = None) -> None:
+        super().__init__(f"Session is already working on run {active_run_id}")
+        self.active_run_id = active_run_id
+
+
+class ActiveRunLimitExceededError(RuntimeError):
+    """The submitter already holds as many queued or running Runs as an envelope allows."""
+
+    def __init__(self, limit: int) -> None:
+        super().__init__(f"Active run limit of {limit} reached")
+        self.limit = limit
+
+
 @dataclass(frozen=True, slots=True)
 class RunAccessScope:
     """The authorization scope required to observe or cancel one run."""
@@ -106,6 +128,11 @@ class PreparedRunEnvelope:
     acceptance relationship, never parsed from an operation payload. A
     submission key is mandatory even when the external caller did not provide
     one; the Application then uses the run id.
+
+    ``active_run_limit`` is how many Runs of this kind the owner may hold queued
+    or running, this one included; None is no limit. It is a condition of this
+    acceptance only: it is not stored with the Run and not part of its request
+    fingerprint, so a keyed replay is never refused by a limit that has changed.
     """
 
     run_kind: RunKind
@@ -118,6 +145,7 @@ class PreparedRunEnvelope:
     accepted_input: Mapping[str, Any]
     retention_seconds: int
     supersedes_run_id: str | None = None
+    active_run_limit: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -273,7 +301,7 @@ class RunExecutionContext:
     fencing_epoch: int
     _session_repository: AgentSessionRepository[EffectHostUpdate] | None
     _progress_store: RunProgressStore | None
-    workspace_store: WorkspaceStore | None
+    workspace_store: AgentspaceStore | None
 
     def __init__(
         self,
@@ -285,7 +313,7 @@ class RunExecutionContext:
         fencing_epoch: int,
         session_repository: AgentSessionRepository[EffectHostUpdate] | None = None,
         progress_store: RunProgressStore | None = None,
-        workspace_store: WorkspaceStore | None = None,
+        workspace_store: AgentspaceStore | None = None,
     ) -> None:
         object.__setattr__(self, "owner_id", owner_id)
         object.__setattr__(self, "run_id", run_id)
@@ -449,6 +477,10 @@ class PendingPublication:
     #: The conversion view a later Run adopts with the product, as the rows a read of
     #: it would settle, or nothing when the product needs none or has none.
     view: tuple[FetchedResourceSettlementUpdate, ...] = ()
+    #: What this product was built from, and the handles its sources were published under.
+    #: They ride on the product's Resource capabilities, which is what lets a later Run that
+    #: reopens the published version get the files that rebuild it (ADR 0052).
+    declared_sources: tuple[DeclaredSource, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -506,6 +538,7 @@ __all__ = [
     "RunEvent",
     "RunEventType",
     "RunRecord",
+    "ActiveRunLimitExceededError",
     "ArtifactReferenceKind",
     "CancellationOutcome",
     "ClaimedRun",
@@ -524,6 +557,7 @@ __all__ = [
     "RunAccessScope",
     "RunArtifactReference",
     "RunAdmissionLimitExceededError",
+    "SessionWorkBusyError",
     "RunFetchedResource",
     "RunCreation",
     "DeletedRun",

@@ -14,8 +14,15 @@ from typing import Any, Literal
 
 from dlightrag.adapters.postgres.core._channels import RUN_ACTIVITY_CHANNEL
 from dlightrag.adapters.postgres.core._notifications import PGNotificationHub
+from dlightrag.adapters.postgres.runtime._feedback import (
+    answer_message_column,
+    read_answer_message,
+)
 from dlightrag.adapters.postgres.runtime._lease import hold_run_lease
-from dlightrag.application.answer_runs import ChildRosterPageRequest, ChildRosterRowPage
+from dlightrag.application.answer_runs.child_roster import (
+    ChildRosterPageRequest,
+    ChildRosterRowPage,
+)
 from dlightrag.engine.agent.session.ids import OperationId
 from dlightrag.engine.runtime.policy import RUN_LEASE_SECONDS
 from dlightrag.engine.runtime.records import parse_run_id
@@ -184,6 +191,17 @@ _CHILD_TIMING_COLUMNS = """operation.created_at AS operation_created_at,
           AND guidance.status = 'pending' AND guidance.expires_at > NOW()
        ) AS pending_questions"""
 
+# What the Child answered and how the owner judged it, under the same bindings. A Child's Session
+# holds nothing but its Run's entries, so the Session alone anchors the lookup on its primary key;
+# naming the Run as well would let the planner walk the Run's index past every sibling's messages.
+_CHILD_RESULT_COLUMN = answer_message_column(
+    alias="result_message",
+    entries="entry.owner_id = $1 AND entry.session_id = child.child_session_id",
+    owner="$1",
+    run="$2",
+    agent="child.child_session_id::text",
+)
+
 _SELECT_CHILD_SESSION = f"""
 SELECT child.child_session_id, child.parent_session_id, child.parent_call_id,
        child.status, child.cancel_requested_at, child.summary, child.parent_intent_id,
@@ -198,6 +216,7 @@ SELECT child.child_session_id, child.parent_session_id, child.parent_call_id,
        operation.status AS operation_status,
        operation.cancellation_origin,
        {_CHILD_TIMING_COLUMNS},
+       {_CHILD_RESULT_COLUMN},
        (SELECT jsonb_agg(history.usage_json ORDER BY history.operation_sequence)
         FROM dlightrag_answer_child_operations AS history
         WHERE history.owner_id = child.owner_id AND history.run_id = child.run_id
@@ -211,7 +230,7 @@ LEFT JOIN LATERAL (
     ORDER BY operation.operation_sequence DESC LIMIT 1
 ) AS operation ON TRUE
 WHERE child.owner_id = $1 AND child.run_id = $2 AND child.child_session_id = $3
-"""  # noqa: S608 - interpolates only the trusted column constant
+"""  # noqa: S608 - interpolates only the trusted column constants
 
 _SELECT_CHILD_SESSIONS = f"""
 SELECT child.child_session_id, child.parent_session_id, child.parent_call_id,
@@ -227,6 +246,7 @@ SELECT child.child_session_id, child.parent_session_id, child.parent_call_id,
        operation.status AS operation_status,
        operation.cancellation_origin,
        {_CHILD_TIMING_COLUMNS},
+       {_CHILD_RESULT_COLUMN},
        (SELECT jsonb_agg(history.usage_json ORDER BY history.operation_sequence)
         FROM dlightrag_answer_child_operations AS history
         WHERE history.owner_id = child.owner_id AND history.run_id = child.run_id
@@ -241,7 +261,7 @@ LEFT JOIN LATERAL (
 ) AS operation ON TRUE
 WHERE child.owner_id = $1 AND child.run_id = $2
 ORDER BY child.created_at, child.child_session_id
-"""  # noqa: S608 - interpolates only the trusted column constant
+"""  # noqa: S608 - interpolates only the trusted column constants
 
 _CHILD_ROSTER_COLUMNS = """
 child_session_id, parent_session_id, parent_call_id, parent_intent_id,
@@ -255,7 +275,8 @@ SELECT child.*, operation.operation_sequence, operation.operation_id,
        operation.idempotency_key AS operation_key,
        operation.content AS operation_content, operation.origin AS operation_origin,
        operation.status AS operation_status, operation.cancellation_origin,
-       {_CHILD_TIMING_COLUMNS}
+       {_CHILD_TIMING_COLUMNS},
+       {_CHILD_RESULT_COLUMN}
 FROM (
     SELECT {_CHILD_ROSTER_COLUMNS}
     FROM dlightrag_answer_child_sessions
@@ -270,14 +291,15 @@ LEFT JOIN LATERAL (
     ORDER BY operation.operation_sequence DESC LIMIT 1
 ) AS operation ON TRUE
 ORDER BY child.created_at DESC, child.child_session_id DESC
-"""  # noqa: S608 - interpolates only the trusted column constant
+"""  # noqa: S608 - interpolates only the trusted column constants
 
 _SELECT_CHILD_SESSIONS_AFTER = f"""
 SELECT child.*, operation.operation_sequence, operation.operation_id,
        operation.idempotency_key AS operation_key,
        operation.content AS operation_content, operation.origin AS operation_origin,
        operation.status AS operation_status, operation.cancellation_origin,
-       {_CHILD_TIMING_COLUMNS}
+       {_CHILD_TIMING_COLUMNS},
+       {_CHILD_RESULT_COLUMN}
 FROM (
     SELECT {_CHILD_ROSTER_COLUMNS}
     FROM dlightrag_answer_child_sessions
@@ -294,22 +316,25 @@ LEFT JOIN LATERAL (
     ORDER BY operation.operation_sequence DESC LIMIT 1
 ) AS operation ON TRUE
 ORDER BY child.created_at DESC, child.child_session_id DESC
-"""  # noqa: S608 - interpolates only the trusted column constant
+"""  # noqa: S608 - interpolates only the trusted column constants
 
-_SELECT_AGENT_TRANSCRIPT = """
+_LANE_TRANSCRIPT_SCOPE = """
 WITH RECURSIVE authorized AS (
-    SELECT agent_session_id, agent_lane_id
-    FROM (
-        SELECT agent_session_id, agent_lane_id
-        FROM dlightrag_answer_run_routing
-        WHERE owner_id = $1 AND run_id = $2 AND agent_session_id = $3
-        UNION ALL
-        SELECT child_session_id, 'main'
-        FROM dlightrag_answer_child_sessions
-        WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
-    ) AS bound
+    SELECT rt.agent_session_id, rt.agent_lane_id, TRUE AS is_main, NULL::text AS child_objective
+    FROM dlightrag_answer_run_routing AS rt
+    WHERE rt.owner_id = $1 AND rt.run_id = $2
+      AND ($3::uuid IS NULL OR rt.agent_session_id = $3)
+    UNION ALL
+    SELECT child.child_session_id, 'main', FALSE, child.objective
+    FROM dlightrag_answer_child_sessions AS child
+    WHERE child.owner_id = $1 AND child.run_id = $2
+      AND ($3::uuid IS NULL OR child.child_session_id = $3)
 ), ancestry AS (
-    SELECT e.entry_id, e.parent_entry_id, e.sequence, e.entry_type, e.payload_json
+    -- The walk carries what names an entry, never what it says. A conversation's lane can hold
+    -- every Run it ever had, and joining the payloads back only for the rows the read keeps is
+    -- what keeps a page's cost proportional to that page instead of to the whole conversation.
+    SELECT a.agent_session_id AS session_id, a.is_main, a.child_objective,
+           e.entry_id, e.parent_entry_id, e.sequence, e.entry_type, e.run_id, e.timestamp
     FROM authorized AS a
     JOIN dlightrag_agent_session_entries AS e
       ON e.owner_id = $1 AND e.session_id = a.agent_session_id
@@ -318,19 +343,215 @@ WITH RECURSIVE authorized AS (
      AND r.register_kind = 'lane_head' AND r.register_key = a.agent_lane_id
      AND e.entry_id = NULLIF(r.payload_json->>'entry_id', '')::uuid
     UNION ALL
-    SELECT parent.entry_id, parent.parent_entry_id, parent.sequence,
-           parent.entry_type, parent.payload_json
+    SELECT child.session_id, child.is_main, child.child_objective,
+           parent.entry_id, parent.parent_entry_id, parent.sequence,
+           parent.entry_type, parent.run_id, parent.timestamp
     FROM dlightrag_agent_session_entries AS parent
     JOIN ancestry AS child ON child.parent_entry_id = parent.entry_id
-    WHERE parent.owner_id = $1 AND parent.session_id = $3
-)
-SELECT sequence, entry_type, payload_json
-FROM ancestry
-WHERE entry_type IN ('user_message', 'assistant_message', 'tool_result', 'control_message')
-  AND ($5::bigint IS NULL OR sequence < $5)
-ORDER BY sequence DESC
-LIMIT $4
+    WHERE parent.owner_id = $1 AND parent.session_id = child.session_id
+), bodied AS (
+    SELECT ancestry.session_id, ancestry.is_main, ancestry.child_objective, ancestry.sequence,
+           ancestry.entry_type, entry.payload_json, ancestry.run_id, ancestry.timestamp,
+           -- Stored with the entry by its writer, so a `pg_trgm` index over this column can serve
+           -- a search: one rule decides what the words are, and a search never re-derives them.
+           coalesce(entry.search_text, '') AS body
+    FROM ancestry
+    JOIN dlightrag_agent_session_entries AS entry
+      ON entry.owner_id = $1 AND entry.session_id = ancestry.session_id
+     AND entry.entry_id = ancestry.entry_id
+    WHERE ancestry.entry_type IN ('user_message', 'assistant_message', 'tool_result', 'control_message', 'delivery_warning')
+      AND ($4::bigint IS NULL OR ancestry.sequence < $4)
+      -- A delta read asks for what this Run wrote after a sequence the reader already holds: it
+      -- takes the oldest of those, so a reader that asks again never skips one, and only the page
+      -- read keeps walking backwards from the newest.
+      AND ($6::bigint IS NULL OR ancestry.sequence > $6)
+      -- A Session's lane is every Run of it, so this read keeps the walk and states that the
+      -- lane, not one Run, is what it means. A read scoped to one Run uses the run_id directly
+      -- (_RUN_TRANSCRIPT_SCOPE) and never pays for the conversation before it.
+      AND ($5::boolean OR ancestry.run_id = $2)
+)"""
+
+_RUN_TRANSCRIPT_SCOPE = """
+WITH bodied AS (
+    SELECT e.session_id,
+           (e.session_id = rt.agent_session_id) AS is_main,
+           CASE WHEN e.session_id = rt.agent_session_id THEN NULL ELSE child.objective END
+               AS child_objective,
+           e.sequence, e.entry_type, e.payload_json, e.run_id, e.timestamp,
+           coalesce(e.search_text, '') AS body
+    FROM dlightrag_agent_session_entries AS e
+    JOIN dlightrag_answer_run_routing AS rt
+      ON rt.owner_id = e.owner_id AND rt.run_id = e.run_id
+    LEFT JOIN dlightrag_answer_child_sessions AS child
+      ON child.owner_id = e.owner_id AND child.run_id = e.run_id
+     AND child.child_session_id = e.session_id
+    WHERE e.owner_id = $1 AND e.run_id = $2
+      AND e.entry_type IN ('user_message', 'assistant_message', 'tool_result', 'control_message', 'delivery_warning')
+      AND ($3::uuid IS NULL OR e.session_id = $3)
+      AND ($4::bigint IS NULL OR e.sequence < $4)
+      AND ($6::bigint IS NULL OR e.sequence > $6)
+      -- This is the run-scope form. Naming the flag keeps the shared call shape typed (PostgreSQL
+      -- refuses a statement with an unused parameter) and makes a lane caller a mistake rather
+      -- than a silent run read.
+      AND $5::boolean = FALSE
+)"""
+
+_SELECT_RUN_TIMELINE_STEPS = """
+SELECT e.session_id,
+       (e.session_id = rt.agent_session_id) AS is_main,
+       e.sequence, e.timestamp, e.entry_type,
+       -- The shape the timeline's step rule reads: how many calls an Assistant entry names, whether
+       -- it carried words beside them and whether it carried reasoning, and what a Tool result
+       -- settled as. The invocation record itself is read too — it is not a step, but it is the
+       -- clock a Tool result is timed against and the one place its call id is written down.
+       CASE WHEN e.entry_type = 'assistant_message'
+             AND jsonb_typeof(e.payload_json->'tool_calls') = 'array'
+            THEN jsonb_array_length(e.payload_json->'tool_calls') ELSE 0 END AS tool_calls,
+       CASE WHEN e.entry_type = 'assistant_message'
+             AND jsonb_typeof(e.payload_json->'content') = 'string'
+            THEN btrim(e.payload_json->>'content', E' \t\n\r') <> '' ELSE FALSE END AS has_content,
+       CASE WHEN e.entry_type = 'assistant_message'
+             AND jsonb_typeof(e.payload_json->'reasoning') = 'string'
+            THEN btrim(e.payload_json->>'reasoning', E' \t\n\r') <> '' ELSE FALSE END AS has_reasoning,
+       e.payload_json->>'call_id' AS call_id,
+       e.payload_json->>'tool_name' AS tool_name,
+       coalesce(e.payload_json->>'outcome', 'failed') <> 'succeeded' AS failed,
+       -- Whether the search degraded: the provider reported it, or answered nothing at all. The
+       -- first condition looks at JSON true, not at the word, so a stored string cannot pass for
+       -- the boolean the reader's fact card states.
+       CASE WHEN jsonb_typeof(e.payload_json->'facts') = 'object'
+            THEN coalesce(e.payload_json->'facts'->'degraded' = 'true'::jsonb, FALSE)
+                 OR coalesce(e.payload_json->'facts'->>'provider' = '', FALSE)
+            ELSE FALSE END AS degraded,
+       -- The ids an Assistant entry names, which is how a Tool result finds the clock its call
+       -- started at. Only ids travel: an argument or a result payload is not this read's business.
+       CASE WHEN e.entry_type = 'assistant_message'
+             AND jsonb_typeof(e.payload_json->'tool_calls') = 'array'
+            THEN coalesce((
+                     SELECT jsonb_agg(call->>'id')
+                     FROM jsonb_array_elements(e.payload_json->'tool_calls') AS call
+                     WHERE call ? 'id' AND coalesce(call->>'id', '') <> ''
+                 ), '[]'::jsonb)
+            ELSE '[]'::jsonb END AS tool_call_ids
+FROM dlightrag_agent_session_entries AS e
+JOIN dlightrag_answer_run_routing AS rt
+  ON rt.owner_id = $1 AND rt.run_id = $2
+WHERE e.owner_id = $1 AND e.run_id = $2
+  AND e.entry_type IN ('user_message', 'assistant_message', 'tool_result', 'control_message', 'delivery_warning')
+-- One Session's entries read in the order they were written; the merge re-orders the Run.
+ORDER BY e.session_id, e.sequence
 """
+
+_SELECT_RUN_TIMELINE_VERSION = """
+SELECT r.durable_progress_version,
+       r.status,
+       -- The agents the merge names, in roster order: a Child appearing changes the merged index
+       -- without moving the Run's own progress version.
+       coalesce((
+           -- Newest first, the order the roster page states: the merge's tie-break between two
+           -- agents' steps at the same instant is the roster order, and it must not move with
+           -- this read.
+           SELECT jsonb_agg(jsonb_build_array(c.child_session_id, coalesce(c.objective, ''))
+                            ORDER BY c.created_at DESC, c.child_session_id DESC)
+           FROM dlightrag_answer_child_sessions AS c
+           WHERE c.owner_id = $1 AND c.run_id = $2
+       ), '[]'::jsonb) AS roster,
+       -- Each Session's highest stored sequence: a recovery write can append an entry without
+       -- moving the progress version, and a cached index must not miss it.
+       coalesce((
+           -- Ordered, so the token (and the version hash a client and its validators see) is
+           -- stable across executions: an unordered aggregate would mint a new version for an
+           -- unchanged Run and invalidate a cache that was still right.
+           SELECT jsonb_agg(jsonb_build_array(sequence.session_id, sequence.last_sequence)
+                            ORDER BY sequence.session_id)
+           FROM (
+               SELECT e.session_id, max(e.sequence) AS last_sequence
+               FROM dlightrag_agent_session_entries AS e
+               WHERE e.owner_id = $1 AND e.run_id = $2
+               GROUP BY e.session_id
+           ) AS sequence
+       ), '[]'::jsonb) AS sequences
+FROM dlightrag_runs AS r
+WHERE r.owner_id = $1 AND r.run_id = $2
+"""
+
+_SELECT_TIMELINE_ENTRIES = """
+SELECT wanted.session_id, wanted.sequence, entry.entry_type, entry.timestamp, entry.payload_json
+FROM unnest($3::uuid[], $4::bigint[]) AS wanted(session_id, sequence)
+JOIN dlightrag_agent_session_entries AS entry
+  ON entry.owner_id = $1 AND entry.run_id = $2
+ AND entry.session_id = wanted.session_id AND entry.sequence = wanted.sequence
+ORDER BY wanted.sequence
+"""
+
+_AGENT_TRANSCRIPT_TAIL = """, matched AS (
+    -- Every word has to appear, which is what a search means everywhere; $9 false asks for any of
+    -- them instead, for the second pass a reader gets when the strict one found nothing. `ILIKE`
+    -- is the form a `pg_trgm` index serves, so the words are matched with it and the anchor that
+    -- places the snippet is measured with `strpos`.
+    SELECT *, (
+        -- The words arrive as `ILIKE` patterns, which is what the match needs; where they sit has
+        -- to be read from the words themselves, or `strpos` looks for the per cent signs and finds
+        -- nothing, and the snippet is cut from the start of the message instead of around them.
+        -- $10 carries them literally, and is what a page read (with no words at all) leaves out.
+        SELECT coalesce(min(NULLIF(strpos(lower(body), lower(term)), 0)), 1)
+        FROM unnest(coalesce($10::text[], $8::text[])) AS term
+        WHERE btrim(coalesce(term, '')) <> ''
+    ) AS anchor,
+    -- How many messages matched, counted before anything is left out, so an answer can state it.
+    count(*) OVER () AS total,
+    -- The page cursor, counted over what was asked for: a page counts messages, and a search
+    -- counts the messages it matched.
+    row_number() OVER (PARTITION BY session_id ORDER BY
+        CASE WHEN $6::bigint IS NULL THEN sequence ELSE -sequence END DESC) AS rank
+    FROM bodied
+    WHERE $8::text[] IS NULL
+       OR (CASE WHEN $9::boolean
+                -- Every word as its own `ILIKE`, which is the shape a `pg_trgm` index serves: the
+                -- array forms do not reach it, `ANY` does, and expanded `ALL` does.
+                THEN (($8[1]::text IS NULL OR body ILIKE $8[1])
+                  AND ($8[2]::text IS NULL OR body ILIKE $8[2])
+                  AND ($8[3]::text IS NULL OR body ILIKE $8[3])
+                  AND ($8[4]::text IS NULL OR body ILIKE $8[4])
+                  AND ($8[5]::text IS NULL OR body ILIKE $8[5])
+                  AND ($8[6]::text IS NULL OR body ILIKE $8[6])
+                  AND ($8[7]::text IS NULL OR body ILIKE $8[7])
+                  AND ($8[8]::text IS NULL OR body ILIKE $8[8])
+                     )
+                ELSE body ILIKE ANY($8::text[])
+           END)
+)
+SELECT session_id, is_main, child_objective, sequence, entry_type, timestamp,
+       -- A page reads whole messages; a search reads the words in their neighbourhood, and
+       -- carries one bounded exception: a load_skill result, whose text the reader-facing
+       -- mapping masks when it is a protected Skill document.
+       CASE WHEN $8::text[] IS NULL OR payload_json->>'tool_name' = 'load_skill'
+            THEN payload_json END AS payload_json,
+       -- Long enough to read past the words in place, short enough that a whole Run's matches
+       -- stay a modest answer.
+       substring(body FROM greatest(1, anchor - 240) FOR 800) AS snippet,
+       total
+FROM matched
+WHERE rank <= $7
+-- Ascending here, because a reader reverses the page: this puts the Run's own agent first.
+ORDER BY is_main, session_id, sequence DESC
+"""
+
+_SELECT_AGENT_TRANSCRIPT_LANE = (
+    _LANE_TRANSCRIPT_SCOPE  # noqa: S608 - only the module's own trusted SQL is concatenated
+    + _AGENT_TRANSCRIPT_TAIL
+)
+"""One Run's messages read across the whole lane a Session has lived, oldest pages first.
+
+A conversation's lane spans the Runs that continued it, so the read walks the parent-entry
+ancestry from the lane head; a read that means one Run uses the run-scoped form below and
+never pays for the conversation before it."""
+
+_SELECT_AGENT_TRANSCRIPT_RUN = (
+    _RUN_TRANSCRIPT_SCOPE  # noqa: S608 - only the module's own trusted SQL is concatenated
+    + _AGENT_TRANSCRIPT_TAIL
+)
+"""One Run's messages, read straight from the entries it wrote (the ``run_id`` index)."""
 
 _LOCK_CONTROL_RUN = """
 SELECT r.status, r.lease_owner, r.fencing_epoch,
@@ -628,6 +849,7 @@ def _guidance_row(row: Any) -> dict[str, Any]:
 
 
 def _child_roster_row(row: Any) -> dict[str, Any]:
+    result_sequence, feedback = read_answer_message(row["result_message"])
     return {
         "child_session_id": str(row["child_session_id"]),
         "parent_session_id": str(row["parent_session_id"]),
@@ -650,6 +872,8 @@ def _child_roster_row(row: Any) -> dict[str, Any]:
         "host_state": _json_value(row["host_state_json"]),
         "fencing_epoch": int(row["fencing_epoch"]),
         "pending_questions": int(row["pending_questions"]),
+        "result_sequence": result_sequence,
+        "feedback": feedback,
         **(
             {
                 "operation_sequence": int(row["operation_sequence"]),
@@ -867,7 +1091,7 @@ class ChildRunStoreMixin:
         fencing_epoch: int,
         child_fencing_epoch: int,
     ) -> bool:
-        """Renew one Child lease the worker still owns under its live parent run claim."""
+        """Renew one Child lease its worker still owns, under its parent run claim."""
         owner = _require_owner(owner_id)
         run_uuid = parse_run_id(run_id)
         child_uuid = parse_run_id(child_session_id)
@@ -904,6 +1128,7 @@ class ChildRunStoreMixin:
             row = await conn.fetchrow(_SELECT_CHILD_SESSION, owner, run_uuid, child_uuid)
             if row is None:
                 return None
+            result_sequence, feedback = read_answer_message(row["result_message"])
             return {
                 "child_session_id": str(row["child_session_id"]),
                 "status": str(row["status"]),
@@ -940,6 +1165,8 @@ class ChildRunStoreMixin:
                 "cancellation_origin": row["cancellation_origin"],
                 "operation_usage": _json_value(row["operation_usage_jsons"] or []),
                 "pending_questions": int(row["pending_questions"]),
+                "result_sequence": result_sequence,
+                "feedback": feedback,
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
             }
@@ -1779,9 +2006,11 @@ class ChildRunStoreMixin:
                     str(outcome_payload.get("operation_id") or "")
                 )
                 if operation_id is None:
+                    # A Child bound at its spawn intent and finished before its runtime was
+                    # persisted has no Operation row; the outcome still names a stable one.
                     operation_id = uuid.UUID(
                         OperationId.deterministic(
-                            idempotency_key=f"legacy-child:{child_session_id}"
+                            idempotency_key=f"unstarted-child:{child_session_id}"
                         ).value
                     )
                 supplied_operation_id = str(outcome_payload.get("operation_id") or "")

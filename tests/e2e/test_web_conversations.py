@@ -12,7 +12,7 @@ from uuid import uuid4
 import pytest
 from playwright.sync_api import Locator, Page, Route, expect
 
-from tests.e2e.test_source_panel import _inject_answer_with_sources, _open_ready_page
+from tests.e2e.test_source_panel import _open_ready_page, _send_answer_with_sources
 
 
 @dataclass
@@ -191,7 +191,9 @@ def _install_conversation_routes(page: Page) -> ConversationRouteState:
             route.fulfill(status=404, json={"detail": "Conversation not found"})
             return
         if path.endswith("/history") and method == "GET":
-            route.fulfill(json={"conversation": item, "turns": []})
+            route.fulfill(
+                json={"conversation": item, "turns": [], "commands": [], "next_cursor": None}
+            )
             return
         if method == "PATCH":
             item["title"] = str((request.post_data_json or {})["title"])
@@ -387,7 +389,7 @@ def test_new_select_rename_delete_survive_reload(page: Page) -> None:
     page.get_by_role("menuitem", name="Rename").click()
     page.get_by_role("textbox", name="Conversation title").fill("Research notes")
     page.keyboard.press("Enter")
-    page.get_by_text("Research notes", exact=True).wait_for()
+    page.get_by_role("button", name="Research notes", exact=True).wait_for()
 
     _, second_id = _new_conversation(page)
     assert second_id != first_id
@@ -399,10 +401,13 @@ def test_new_select_rename_delete_survive_reload(page: Page) -> None:
     assert page.locator("[aria-current='page']").get_attribute("data-conversation-id") == first_id
 
     page.reload()
-    page.get_by_text("Research notes", exact=True).wait_for()
+    page.get_by_role("button", name="Research notes", exact=True).wait_for()
     assert page.locator("[aria-current='page']").get_attribute("data-conversation-id") == first_id
 
-    page.locator("[aria-current='page']").get_by_role("button", name="Conversation actions").click()
+    # A titled conversation names its actions button after its title.
+    page.locator("[aria-current='page']").get_by_role(
+        "button", name="Actions for Research notes"
+    ).click()
     page.get_by_role("menuitem", name="Delete").click()
     page.get_by_role("dialog", name="Delete conversation").get_by_role(
         "button", name="Delete"
@@ -454,7 +459,7 @@ def test_new_chat_is_an_unpersisted_root_route(page: Page) -> None:
     page.wait_for_url("**/web/")
     assert page.locator("[aria-current='page']").count() == 0
     assert len(state.conversations) == 1
-    page.get_by_text("Ask anything about your documents").wait_for()
+    page.get_by_text("Deep work, delegated.").wait_for()
 
 
 @pytest.mark.e2e
@@ -541,6 +546,8 @@ def test_workspace_files_panel_survives_conversation_route_changes(page: Page) -
 def test_draft_confirmation_and_sidebar_toggle_preserve_the_composer(page: Page) -> None:
     _install_conversation_routes(page)
     page.goto("/web/")
+    # The shell redraws the composer while it boots, and a draft typed before that is lost.
+    page.locator("[aria-current='page']").wait_for()
     page.get_by_role("textbox", name="Message").fill("Unsent draft")
 
     composer = page.locator("#composer")
@@ -957,7 +964,7 @@ def _open_files_panel(page: Page) -> None:
 
 def _open_sources_panel(page: Page) -> None:
     _open_ready_page(page)
-    _inject_answer_with_sources(page)
+    _send_answer_with_sources(page)
     page.locator("[data-answer-ref]").last.click()
     page.locator('#panel-content [data-ref="1"][data-expanded]').wait_for()
 
@@ -1400,11 +1407,23 @@ def test_wide_panel_effective_width_tracks_sidebar_and_viewport_transitions(page
     persisted_width = int(page.evaluate("localStorage.getItem('dlightrag-panel-width')"))
     assert persisted_width == pytest.approx(keyboard_resized["effectiveWidth"], abs=1)
 
+    # Enter is the window splitter's collapse key: the panel puts itself away and the width it had
+    # stays the one it comes back at, so the zero is never stored. The sash leaves with the panel,
+    # so focus goes to the control that opens it again, and Enter there brings the width back.
     handle.press("Enter")
     _wait_for_shell_settled(page)
     after_enter = shell_geometry()
-    assert after_enter["panelWidth"] == pytest.approx(keyboard_resized["panelWidth"], abs=1)
+    assert after_enter["panelWidth"] == 0
+    assert page.evaluate("document.querySelector('#inspector').classList.contains('open')") is False
     assert page.evaluate("localStorage.getItem('dlightrag-panel-width')") == str(persisted_width)
+    assert page.evaluate("document.activeElement?.id") == "files-btn"
+
+    page.keyboard.press("Enter")
+    page.wait_for_function("document.querySelector('#panel')?.classList.contains('open')")
+    _wait_for_shell_settled(page)
+    restored_by_enter = shell_geometry()
+    assert restored_by_enter["panelWidth"] == pytest.approx(persisted_width, abs=1)
+    assert restored_by_enter["effectiveWidth"] == pytest.approx(persisted_width, abs=1)
 
     page.get_by_role("button", name="Close panel").click()
     page.get_by_role("button", name="Files", exact=True).click()

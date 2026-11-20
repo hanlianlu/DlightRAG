@@ -8,7 +8,9 @@ from typing import Any
 from dlightrag.engine.answer.citations.indexer import CitationIndexer
 from dlightrag.engine.answer.citations.utils import REQUEST_OWNED_WORKSPACES, context_chunk_key
 from dlightrag.engine.network_admission import validate_public_web_url
-from dlightrag.engine.rag.retrieval import RetrievalContexts
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalContexts,
+)
 
 _INTERNAL_KEYS: frozenset[str] = frozenset(
     {

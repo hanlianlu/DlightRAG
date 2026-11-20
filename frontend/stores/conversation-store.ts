@@ -6,18 +6,20 @@ import {
   getConversationHistory,
   listConversations,
   renameConversation,
+  type ConversationCommand,
   type ConversationHistory,
   type ConversationPage,
   type ConversationSummary,
 } from '../api/conversations.ts';
 import {ApiError} from '../api/wire.ts';
 import {isAbortError} from '../lib/errors.ts';
+import {LatestRequest} from '../lib/latest-request.ts';
 import {KeysetPager, type KeysetPagerStatus} from '../lib/paged.ts';
 import {Store} from './base.ts';
 
-export type ConversationListState = 'loading' | 'ready' | 'error' | 'empty-error';
-export type ConversationViewState = 'new' | 'loading' | 'ready' | 'unavailable' | 'error';
-export type ConversationOpenResult = 'ready' | 'unavailable' | 'error' | 'stale';
+type ConversationListState = 'loading' | 'ready' | 'error' | 'empty-error';
+type ConversationViewState = 'new' | 'loading' | 'ready' | 'unavailable' | 'error';
+type ConversationOpenResult = 'ready' | 'unavailable' | 'error' | 'stale';
 export type ConversationMutationResult = 'ok' | 'missing' | 'error';
 
 export interface ConversationApi {
@@ -51,12 +53,16 @@ export class ConversationStore extends Store {
   #conversations: ConversationSummary[] = [];
   #activeConversationId: string | null = null;
   #history: ConversationHistory | null = null;
+  /** Commands the server executed for a conversation whose history is not loaded yet. The next
+   *  history page states them again; keeping them here means a command posted into a view that is
+   *  open but not read does not disappear until the page arrives. */
+  readonly #unloadedCommands = new Map<string, ConversationCommand[]>();
   #listState: ConversationListState = 'loading';
   #viewState: ConversationViewState = 'new';
   #viewRevision = 0;
   #mutationPending = false;
-  #viewGeneration = 0;
-  #viewController: AbortController | null = null;
+  /** The read that fills the view; opening, closing, or deleting a conversation ends the one under way. */
+  readonly #viewRead = new LatestRequest();
   readonly #listPages: KeysetPager<ConversationPage>;
   readonly #olderMessages: KeysetPager<ConversationHistory>;
 
@@ -88,6 +94,14 @@ export class ConversationStore extends Store {
 
   get history(): ConversationHistory | null {
     return this.#history;
+  }
+
+  /** The server-executed commands this store holds for the open conversation, oldest first: the loaded
+   *  history's, or the ones posted into a conversation whose history is not read yet. */
+  get commands(): readonly ConversationCommand[] {
+    if (this.#history !== null) return this.#history.commands ?? [];
+    const active = this.#activeConversationId;
+    return active === null ? [] : this.#unloadedCommands.get(active) ?? [];
   }
 
   get listState(): ConversationListState {
@@ -162,9 +176,7 @@ export class ConversationStore extends Store {
     const showing = sameConversation && this.#viewState === 'ready';
     // A refresh in place keeps an older page the reader already asked for.
     this.#abortView({keepOlderMessages: hadHistory});
-    const controller = new AbortController();
-    const generation = this.#viewGeneration;
-    this.#viewController = controller;
+    const signal = this.#viewRead.start();
     this.#activeConversationId = conversationId;
     if (!sameConversation) {
       this.#history = null;
@@ -176,8 +188,8 @@ export class ConversationStore extends Store {
     }
 
     try {
-      const recent = await this.#api.history(conversationId, null, undefined, controller.signal);
-      if (generation !== this.#viewGeneration) return 'stale';
+      const recent = await this.#api.history(conversationId, null, undefined, signal);
+      if (!this.#viewRead.isCurrent(signal)) return 'stale';
       if (recent.conversation.conversationId !== conversationId) {
         throw new Error('conversation history response changed conversation identity');
       }
@@ -186,12 +198,24 @@ export class ConversationStore extends Store {
       const turns = sameConversation && this.#history !== null && !replaceHistory
         ? this.#mergeTurns(this.#history.turns, recent.turns, true)
         : this.#mergeTurns([], recent.turns, true);
+      // Commands share the turns' ordering space and arrive on the same page. A refresh that joins the
+      // loaded range keeps the commands already read; one that opens a gap drops them with the turns.
+      // A command posted before the conversation's history was ever read is waiting here to join it.
+      const heldCommands = sameConversation && this.#history !== null && !replaceHistory
+        ? this.#history.commands ?? []
+        : [];
+      const pendingCommands = this.#unloadedCommands.get(conversationId) ?? [];
+      this.#unloadedCommands.delete(conversationId);
+      const commands = this.#mergeCommands(heldCommands, [
+        ...(recent.commands ?? []),
+        ...pendingCommands,
+      ]);
       // A refresh that joins the loaded range keeps paging from its oldest
       // page, and any older page in flight still extends it.
       const nextCursor = hadHistory && !replaceHistory
         ? this.#history?.nextCursor ?? null
         : recent.nextCursor ?? null;
-      this.#history = {...recent, turns, nextCursor};
+      this.#history = {...recent, turns, commands, nextCursor};
       if (!hadHistory || replaceHistory) this.#olderMessages.reset(nextCursor);
       this.#activeConversationId = conversationId;
       this.#upsert(recent.conversation);
@@ -199,7 +223,7 @@ export class ConversationStore extends Store {
       this.#publishView();
       return 'ready';
     } catch (error) {
-      if (isAbortError(error) || generation !== this.#viewGeneration) return 'stale';
+      if (isAbortError(error) || !this.#viewRead.isCurrent(signal)) return 'stale';
       if (this.#isRouteUnavailable(error)) {
         this.#removeSummary(conversationId);
         this.#history = null;
@@ -221,7 +245,7 @@ export class ConversationStore extends Store {
       this.#publishView();
       return 'error';
     } finally {
-      if (this.#viewController === controller) this.#viewController = null;
+      this.#viewRead.finish(signal);
     }
   }
 
@@ -233,10 +257,30 @@ export class ConversationStore extends Store {
         ...this.#history,
         conversation: older.conversation,
         turns: this.#mergeTurns(this.#history.turns, older.turns, false),
+        commands: this.#mergeCommands(this.#history.commands ?? [], older.commands ?? []),
         nextCursor: older.nextCursor,
       };
       this.#upsert(older.conversation);
     });
+  }
+
+  /** Keep a command the server has just executed, so it appears where it belongs without reading the
+   *  conversation's history again. A conversation whose history is not loaded yet holds it until the
+   *  page that states it arrives. */
+  appendCommand(conversationId: string, command: ConversationCommand): void {
+    if (this.#activeConversationId === conversationId && this.#history !== null) {
+      this.#history = {
+        ...this.#history,
+        commands: this.#mergeCommands(this.#history.commands ?? [], [command]),
+      };
+      this.#publishView();
+      return;
+    }
+    const waiting = this.#unloadedCommands.get(conversationId) ?? [];
+    this.#unloadedCommands.set(
+      conversationId,
+      this.#mergeCommands(waiting, [command]),
+    );
   }
 
   async refreshActive(): Promise<ConversationOpenResult> {
@@ -289,8 +333,10 @@ export class ConversationStore extends Store {
     conversationId: string,
     signal?: AbortSignal,
   ): Promise<ConversationMutationResult> {
-    if (this.#activeConversationId === conversationId) this.#abortView();
     return this.#mutate(async () => {
+      // Only a deletion that goes ahead ends the read that fills the view: one refused because another
+      // change is under way would leave the view loading, and nothing to say it had stopped.
+      if (this.#activeConversationId === conversationId) this.#abortView();
       let result: ConversationMutationResult = 'ok';
       try {
         await this.#api.delete(conversationId, signal);
@@ -299,6 +345,7 @@ export class ConversationStore extends Store {
         result = 'missing';
       }
       this.#removeSummary(conversationId);
+      this.#unloadedCommands.delete(conversationId);
       if (this.#activeConversationId === conversationId) {
         this.#abortView();
         this.#activeConversationId = conversationId;
@@ -312,14 +359,15 @@ export class ConversationStore extends Store {
   }
 
   async deleteAll(signal?: AbortSignal): Promise<ConversationMutationResult> {
-    this.#abortView();
     return this.#mutate(async () => {
+      this.#abortView();
       try {
         await this.#api.deleteAll(signal);
       } catch {
         return 'error';
       }
       this.#conversations = [];
+      this.#unloadedCommands.clear();
       this.openNew();
       return 'ok';
     });
@@ -350,10 +398,8 @@ export class ConversationStore extends Store {
   }
 
   #abortView({keepOlderMessages = false}: {keepOlderMessages?: boolean} = {}): void {
-    this.#viewController?.abort();
-    this.#viewController = null;
+    this.#viewRead.cancel();
     if (!keepOlderMessages) this.#olderMessages.cancel();
-    this.#viewGeneration += 1;
   }
 
   #upsert(summary: ConversationSummary): void {
@@ -407,10 +453,29 @@ export class ConversationStore extends Store {
       ) {
         throw new Error('conversation turn identity changed across history pages');
       }
-      if (!sameId || incomingWins) byId.set(turn.turnId, turn);
-      byNumber.set(turn.turnNumber, byId.get(turn.turnId)!);
+      const kept = !sameId || incomingWins ? turn : sameId;
+      byId.set(turn.turnId, kept);
+      byNumber.set(turn.turnNumber, kept);
     }
     return [...byId.values()].sort((left, right) => left.turnNumber - right.turnNumber);
+  }
+
+  /** Commands of the loaded range, oldest first. A page states the newest version of a command it
+   *  repeated; a command whose place in the ordering changed would mean the two pages disagree about
+   *  the same command, which is not something the store can draw. */
+  #mergeCommands(
+    existing: readonly ConversationCommand[],
+    incoming: readonly ConversationCommand[],
+  ): ConversationCommand[] {
+    const byId = new Map(existing.map((command) => [command.commandId, command]));
+    for (const command of incoming) {
+      const same = byId.get(command.commandId);
+      if (same && same.sequence !== command.sequence) {
+        throw new Error('conversation command identity changed across history pages');
+      }
+      byId.set(command.commandId, command);
+    }
+    return [...byId.values()].sort((left, right) => left.sequence - right.sequence);
   }
 
   #sort(conversations: readonly ConversationSummary[]): ConversationSummary[] {

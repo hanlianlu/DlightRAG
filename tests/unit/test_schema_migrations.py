@@ -22,7 +22,7 @@ from dlightrag.adapters.postgres.core._migrations import (
 
 
 class _SchemaError(RuntimeError):
-    """Owner-selected schema error used to exercise the shared primitive."""
+    """Owner-selected schema error exercising the shared primitive."""
 
 
 async def apply_migrations(conn: Any, **kwargs: Any) -> None:
@@ -167,48 +167,29 @@ async def test_apply_migrations_skips_versions_already_recorded_for_scope() -> N
     assert conn.applied == {("example", "create_table"), ("example", "add_name")}
 
 
-async def test_apply_migrations_runs_only_newly_appended_versions() -> None:
-    conn = _Conn(row_shape="record")
-    initial = (Migration("create_table", "first", ("CREATE TABLE example (id TEXT)",)),)
-    appended = initial + (
-        Migration("add_name", "second", ("ALTER TABLE example ADD COLUMN name TEXT",)),
-    )
+def _every_scope_migrations() -> dict[str, tuple[Migration, ...]]:
+    from dlightrag.adapters.postgres import connections, model_catalogue
+    from dlightrag.adapters.postgres.corpus import pg_metadata_index, promotion_jobs, workspaces
+    from dlightrag.adapters.postgres.runtime import run_store
+    from dlightrag.adapters.postgres.web import web_conversations
 
-    await apply_migrations(conn, scope="example", migrations=initial, tables=())
-    await apply_migrations(conn, scope="example", migrations=appended, tables=())
+    return {
+        "runs": run_store.RUN_MIGRATIONS,
+        "web_conversations": web_conversations.WEB_CONVERSATION_MIGRATIONS,
+        "connections": connections._MIGRATIONS,
+        "doc_metadata": pg_metadata_index._SCHEMA_MIGRATIONS,
+        "promotion_jobs": promotion_jobs._SCHEMA_MIGRATIONS,
+        "workspace_registry": workspaces._SCHEMA_MIGRATIONS,
+        "model_catalogue": model_catalogue.MODEL_CATALOGUE_MIGRATIONS,
+    }
 
-    executed_sql = [query for query, _ in conn.executed]
-    assert executed_sql.count("CREATE TABLE example (id TEXT)") == 1
-    assert executed_sql.count("ALTER TABLE example ADD COLUMN name TEXT") == 1
-    assert conn.applied == {("example", "create_table"), ("example", "add_name")}
 
-
-def test_run_schema_changes_are_append_only() -> None:
-    from dlightrag.adapters.postgres.runtime.run_store import RUN_MIGRATIONS
-
-    expected_versions = (
-        "run_runtime_v1",
-        "child_roster_index",
-        "worker_cancel_pending_index",
-        "write_model_published_artifact_kind",
-        "write_model_root_artifact_attachments",
-        "write_model_web_resource_catalog",
-        "corpus_mutation_runtime",
-        "normalize_run_event_constraints",
-        "remove_run_active_permit",
-        "interactive_child_async_lifecycle",
-        "interactive_child_controls",
-        "child_cancel_submission_receipts",
-        "attachment_occurrence_reference_index",
-        "write_model_fork_points",
-        "answer_session_notes",
-        "published_artifact_resources",
-        "artifact_attachment_video_presentation",
-        "agent_browser_leases",
-        "agent_accounts",
-        "agent_account_activity_and_sign_ups",
-    )
-    assert tuple(migration.version for migration in RUN_MIGRATIONS) == expected_versions
+def test_every_scope_declares_exactly_one_baseline() -> None:
+    """There is no upgrade path: a scope is its whole current schema, and an old database resets."""
+    assert {
+        scope: tuple(migration.version for migration in migrations)
+        for scope, migrations in _every_scope_migrations().items()
+    } == {scope: ("baseline",) for scope in _every_scope_migrations()}
 
 
 async def test_apply_migrations_does_not_record_failed_versions() -> None:
@@ -258,10 +239,7 @@ async def test_apply_migrations_rejects_gapped_current_ledger_before_running_mig
 
     with pytest.raises(
         RuntimeError,
-        match=(
-            r"scope 'example'.*missing current versions: create_table.*"
-            r"out-of-order recorded current versions: add_name"
-        ),
+        match=r"scope 'example'.*not a prefix of the declared versions.*reset the development",
     ):
         await apply_migrations(conn, scope="example", migrations=migrations, tables=())
 
@@ -275,10 +253,7 @@ async def test_apply_migrations_rejects_gapped_current_ledger_before_running_mig
     assert conn.transaction_events == []
 
 
-@pytest.mark.parametrize("require_applied_prefix", [True, False])
-async def test_apply_migrations_rejects_undeclared_ledger_versions(
-    require_applied_prefix: bool,
-) -> None:
+async def test_apply_migrations_rejects_undeclared_ledger_versions() -> None:
     conn = _Conn()
     conn.applied.update({("example", "create_table"), ("example", "0999")})
     migrations = _example_migrations()
@@ -287,13 +262,7 @@ async def test_apply_migrations_rejects_undeclared_ledger_versions(
         RuntimeError,
         match=r"scope 'example'.*undeclared versions: 0999.*reset the development database",
     ):
-        await apply_migrations(
-            conn,
-            scope="example",
-            migrations=migrations,
-            tables=(),
-            require_applied_prefix=require_applied_prefix,
-        )
+        await apply_migrations(conn, scope="example", migrations=migrations, tables=())
 
     executed_sql = [query for query, _ in conn.executed]
     assert executed_sql.count("CREATE TABLE example (id TEXT)") == 0
@@ -301,30 +270,26 @@ async def test_apply_migrations_rejects_undeclared_ledger_versions(
     assert conn.applied == {("example", "create_table"), ("example", "0999")}
 
 
-async def test_apply_migrations_can_run_missing_versions_from_non_prefix_ledger() -> None:
+async def test_a_database_from_an_earlier_revision_is_refused_before_any_ddl() -> None:
+    """Its ledger names versions this revision no longer declares: reset it, never upgrade it."""
+    from dlightrag.adapters.postgres.runtime.run_store import RUN_MIGRATIONS
+
     conn = _Conn()
-    conn.applied.add(("example", "add_name"))
+    conn.applied.update({("runs", "run_runtime_v1"), ("runs", "child_roster_index")})
 
-    await apply_migrations(
-        conn,
-        scope="example",
-        migrations=_three_migrations(),
-        tables=(),
-        require_applied_prefix=False,
-    )
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            r"scope 'runs'.*undeclared versions: child_roster_index, run_runtime_v1.*"
+            r"reset the development database"
+        ),
+    ):
+        await apply_migrations(conn, scope="runs", migrations=RUN_MIGRATIONS, tables=())
 
-    executed_sql = [query for query, _ in conn.executed]
-    assert executed_sql.count("CREATE TABLE example (id TEXT)") == 1
-    assert executed_sql.count("ALTER TABLE example ADD COLUMN name TEXT") == 0
-    assert executed_sql.count("CREATE INDEX example_name_idx ON example (name)") == 1
-    assert conn.applied == {
-        ("example", "create_table"),
-        ("example", "add_name"),
-        ("example", "create_index"),
-    }
-    assert executed_sql.index("CREATE TABLE example (id TEXT)") < executed_sql.index(
-        "CREATE INDEX example_name_idx ON example (name)"
-    )
+    statements = {statement for migration in RUN_MIGRATIONS for statement in migration.statements}
+    assert not statements & {query for query, _ in conn.executed}
+    assert conn.transaction_events == []
+    assert conn.applied == {("runs", "run_runtime_v1"), ("runs", "child_roster_index")}
 
 
 async def test_apply_migrations_rejects_duplicate_versions_before_mutating_db() -> None:
@@ -522,3 +487,74 @@ async def test_apply_migrations_refuses_a_recorded_scope_missing_a_declared_obje
     executed_sql = [query for query, _ in conn.executed]
     assert "ALTER TABLE example ADD COLUMN name TEXT" not in executed_sql
     assert executed_sql[-1] == "SELECT pg_advisory_unlock($1)"
+
+
+def test_the_web_conversation_goal_round_table_requirement_is_pinned() -> None:
+    """A continuation's goal identity is part of the table's schema proof, not a loose column."""
+    from dlightrag.adapters.postgres.web.web_conversations import (
+        WEB_CONVERSATION_SCHEMA_TABLES,
+    )
+
+    table = next(
+        requirement
+        for requirement in WEB_CONVERSATION_SCHEMA_TABLES
+        if requirement.name == "web_conversation_goal_rounds"
+    )
+    assert table.columns == (
+        "principal_id",
+        "conversation_id",
+        "request_id",
+        "content",
+        "prompt_digest",
+        "workspaces",
+        "goal_id",
+        "goal_revision",
+        "goal_round",
+        "created_at",
+    )
+    assert table.primary_key == ("principal_id", "conversation_id")
+    assert table.checks == (
+        "web_conversation_goal_rounds_content_check",
+        "web_conversation_goal_rounds_digest_check",
+    )
+    assert table.foreign_keys == (
+        ForeignKeyRequirement(
+            columns=("principal_id", "conversation_id"),
+            references="web_conversations",
+        ),
+    )
+
+
+def test_the_web_conversation_command_table_requirement_is_pinned() -> None:
+    """The reader's catalog proof names every column and invariant the table carries."""
+    from dlightrag.adapters.postgres.web.web_conversations import (
+        WEB_CONVERSATION_SCHEMA_TABLES,
+    )
+
+    table = next(
+        requirement
+        for requirement in WEB_CONVERSATION_SCHEMA_TABLES
+        if requirement.name == "web_conversation_commands"
+    )
+    assert table.columns == (
+        "principal_id",
+        "conversation_id",
+        "command_id",
+        "sequence",
+        "name",
+        "input",
+        "result",
+        "tone",
+        "created_at",
+        "result_data",
+    )
+    assert table.primary_key == ("principal_id", "conversation_id", "command_id")
+    assert table.unique == (("principal_id", "conversation_id", "sequence"),)
+    assert table.checks == ("web_conversation_commands_tone_check",)
+    assert table.foreign_keys == (
+        ForeignKeyRequirement(
+            columns=("principal_id", "conversation_id"),
+            references="web_conversations",
+        ),
+    )
+    assert table.indexes == ("idx_web_conversation_commands_principal_conversation",)

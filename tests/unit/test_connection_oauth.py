@@ -10,7 +10,7 @@ import httpx2
 import pytest
 from pydantic import SecretStr
 
-from dlightrag.application.connections import ConnectionPolicy
+from dlightrag.application.connections.policy import ConnectionPolicy
 from tests.support.dns import public_dns
 
 
@@ -127,6 +127,7 @@ class FakeAuthorizationServer:
                     "protocolVersion": "2025-11-25",
                     "capabilities": {"tools": {}},
                     "serverInfo": {"name": "fake", "version": "1"},
+                    "instructions": "Read first. test-access-token is never guidance.",
                 }
                 if body["method"] == "initialize"
                 else {"tools": [{"name": "read", "inputSchema": {"type": "object"}}]}
@@ -171,6 +172,7 @@ async def test_sdk_authorization_pkce_resource_and_token_storage(monkeypatch, ca
         save=save,
     )
     assert result.tools[0]["name"] == "read"
+    assert result.instructions == "Read first. [redacted] is never guidance."
     assert result.scopes == ("read",)
     assert len(saved) == 2
     credentials = json.loads(result.credentials.get_secret_value())
@@ -241,7 +243,7 @@ async def test_a_server_that_advertises_client_id_metadata_uses_the_published_ur
 )
 async def test_sdk_token_targets_are_admitted_before_credentials_leave(target, monkeypatch):
     from dlightrag.adapters.mcp.oauth import PersonalOAuthClient
-    from dlightrag.application.connections import ConnectionsError
+    from dlightrag.application.connections.models import ConnectionsError
 
     monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
     server = FakeAuthorizationServer()
@@ -273,7 +275,7 @@ async def test_sdk_token_targets_are_admitted_before_credentials_leave(target, m
 @pytest.mark.asyncio
 async def test_sdk_rejects_resource_audience_mismatch_before_registration(monkeypatch):
     from dlightrag.adapters.mcp.oauth import PersonalOAuthClient
-    from dlightrag.application.connections import ConnectionsError
+    from dlightrag.application.connections.models import ConnectionsError
 
     monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
     server = FakeAuthorizationServer()
@@ -297,7 +299,7 @@ async def test_sdk_rejects_resource_audience_mismatch_before_registration(monkey
 @pytest.mark.asyncio
 async def test_token_scope_outside_provider_consent_is_rejected_before_mcp_repost(monkeypatch):
     from dlightrag.adapters.mcp.oauth import PersonalOAuthClient
-    from dlightrag.application.connections import ConnectionsError
+    from dlightrag.application.connections.models import ConnectionsError
 
     monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
     server = FakeAuthorizationServer()
@@ -341,7 +343,7 @@ async def test_browser_authorization_target_is_admitted_before_settings_redirect
     target, monkeypatch
 ):
     from dlightrag.adapters.mcp.oauth import PersonalOAuthClient
-    from dlightrag.application.connections import ConnectionsError
+    from dlightrag.application.connections.models import ConnectionsError
 
     monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
     server = FakeAuthorizationServer()
@@ -480,8 +482,10 @@ async def test_oauth_catalogue_and_logs_cannot_echo_flow_credentials(monkeypatch
         callback=callback,
         save=save,
     )
+    assert result.instructions is not None
     for secret in ("test-access-token", "test-refresh-token", "test-client-secret", "test-code"):
         assert secret not in str(result.tools)
+        assert secret not in result.instructions
         assert secret not in caplog.text
 
 
@@ -496,7 +500,7 @@ async def test_oauth_catalogue_and_logs_cannot_echo_flow_credentials(monkeypatch
 )
 async def test_sdk_challenged_metadata_target_is_rejected_before_http(metadata_target, monkeypatch):
     from dlightrag.adapters.mcp.oauth import PersonalOAuthClient
-    from dlightrag.application.connections import ConnectionsError
+    from dlightrag.application.connections.models import ConnectionsError
 
     monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
     calls = []
@@ -566,7 +570,7 @@ async def test_sdk_refresh_preflight_sends_only_token_request_and_never_consent(
     outcome, monkeypatch
 ):
     from dlightrag.adapters.mcp.oauth import PersonalOAuthClient
-    from dlightrag.application.connections import ConnectionsError
+    from dlightrag.application.connections.models import ConnectionsError
 
     monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
     requests, saved = [], []

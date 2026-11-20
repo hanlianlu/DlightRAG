@@ -1,11 +1,20 @@
 /* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
 
-/* Shared motion semantics; reduced-motion behavior is part of the contract. */
+/* Shared motion semantics; reduced-motion behavior is part of the contract.
+ *
+ * Every transition and animation names its duration with one of these tokens, so reduced motion has one
+ * place to act. The four durations of a change are zeroed under `prefers-reduced-motion`; the periods of
+ * the looping marks below are not, because a loop with no period either freezes or flashes. A loop carries
+ * its own reduced-motion rule instead, where it knows what it should do in place of moving. */
 
 :root {
   --duration-instant: 100ms;
   --duration-control: 150ms;
   --duration-overlay: 200ms;
+  --duration-shell: 180ms;
+  --duration-spin: 0.7s;
+  --duration-pulse: 1.2s;
+  --duration-pulse-slow: 1.6s;
   --easing-standard: cubic-bezier(0.2, 0, 0, 1);
 }
 
@@ -14,5 +23,6 @@
     --duration-instant: 0ms;
     --duration-control: 0ms;
     --duration-overlay: 0ms;
+    --duration-shell: 0ms;
   }
 }

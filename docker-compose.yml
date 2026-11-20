@@ -34,15 +34,17 @@ x-local-proxies: &local-proxies "127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.
 x-agent-browser-networks: &agent-browser-networks
   agent-browser-1:
   agent-browser-2:
+  agent-browser-headed:
 
 x-agent-browser-bindings: &agent-browser-bindings
-  DLIGHTRAG_ANSWER__AGENT__BROWSER__ENDPOINTS: '["ws://agent-browser-1:3000/","ws://agent-browser-2:3000/"]'
+  DLIGHTRAG_ANSWER__AGENT__BROWSER__ENDPOINTS: '["ws://agent-browser-1:3000/","ws://agent-browser-2:3000/","ws://agent-browser-headed:3001/"]'
+  DLIGHTRAG_ANSWER__AGENT__BROWSER__HEADED_ENDPOINTS: '["ws://agent-browser-headed:3001/"]'
   DLIGHTRAG_ANSWER__AGENT__BROWSER__EGRESS_PROXY: http://agent-browser-egress:3128
 # <<< agent-browser-pool:anchors
 
 x-agent-browser: &agent-browser
   restart: unless-stopped
-  image: dlightrag-agent-browser:1.63.0
+  image: dlightrag-agent-browser:1.65.1
   build:
     context: agent-browser/browser
   init: true
@@ -62,110 +64,121 @@ x-agent-browser: &agent-browser
     timeout: 5s
     retries: 6
 
+# The one member that runs a headed browser. The image already carries Xvfb, so what is
+# added is the display server and the port its headed run-server listens on: a headed
+# Chromium is a Chromium with a display, not a different browser. A Run leases it to ask
+# for a headed browser, or to recover from a page that refused a headless one, and it
+# serves one Run at a time as every member does.
+x-agent-browser-headed: &agent-browser-headed
+  <<: *agent-browser
+  command:
+    - xvfb-run
+    - --auto-servernum
+    - --server-args=-screen 0 1920x1080x24
+    - /opt/agent-browser/node_modules/.bin/playwright
+    - run-server
+    - --port
+    - "3001"
+    - --host
+    - 0.0.0.0
+    - --unsafe
+  healthcheck:
+    test:
+      - CMD
+      - node
+      - -e
+      - "fetch('http://127.0.0.1:3001/json').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
+    interval: 10s
+    timeout: 5s
+    retries: 6
+
+# What the three DlightRAG services (API, MCP, reader) share: one image, one config, the
+# same volumes and Postgres, and the Agent Browser pool's networks. Each service adds its own
+# ports, environment and command.
+x-app: &app
+  restart: unless-stopped
+  image: dlightrag:local
+  build:
+    context: .
+  networks:
+    <<: *agent-browser-networks
+    default:
+  env_file: .env
+  configs:
+    - source: dlightrag_config
+      target: /app/config.yaml
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  volumes:
+    - dlightrag_data:/app/dlightrag_storage
+    - dlightrag_agent_workspaces:/home/app/.dlightrag/agent_workspaces
+    # Operator-provisioned global Skills; read-only for every user's Agent.
+    - *global-skills-mount
+    # Per-owner Agent Skills: published only through the validated publish_skill
+    # tool, turned off or deleted through set_skill_enabled, delete_skill or
+    # Settings. Persisted across container recreations; multi-host deployments
+    # must share this path.
+    - dlightrag_owner_skills:/home/app/.dlightrag/owner_skills
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+# What every one of the three reads from its environment. Each service names itself and adds its own.
+x-app-environment: &app-environment
+  <<: *agent-browser-bindings
+  # Compose Service DNS; the native application default remains localhost.
+  DLIGHTRAG_STORAGE__POSTGRES__HOST: postgres
+  # Every port below is published to 127.0.0.1 only, so no-auth is acceptable for local dev. Set the
+  # deployment's access in .env (see .env.example) and drop this override before publishing a port
+  # on a non-loopback address.
+  DLIGHTRAG_ACCESS__ALLOW_INSECURE_NO_AUTH: "true"
+
+# The Web/API and the reader answer the same readiness route, and are healthy when it does.
+x-ready-healthcheck: &ready-healthcheck
+  test:
+    - CMD
+    - python
+    - -c
+    - "import urllib.request; response = urllib.request.urlopen('http://127.0.0.1:8100/ready', timeout=3); response.close()"
+  interval: 10s
+  timeout: 5s
+  retries: 12
+  start_period: 30s
+  # Inside start_period, check every 2s so healthy follows readiness without waiting
+  # out a 10s interval.
+  start_interval: 2s
+
 services:
   dlightrag-api:
-    restart: unless-stopped
-    image: dlightrag:local
-    build:
-      context: .
+    <<: *app
     ports:
       - "127.0.0.1:8100:8100"
-    networks:
-      <<: *agent-browser-networks
-      default:
     environment:
-      <<: *agent-browser-bindings
+      <<: *app-environment
       # service.name on this process's spans and logs, so ClickStack separates the three.
       DLIGHTRAG_OBSERVABILITY__SERVICE_NAME: dlightrag-api
-      # Compose Service DNS; the native application default remains localhost.
-      DLIGHTRAG_STORAGE__POSTGRES__HOST: postgres
-      # The container binds 0.0.0.0, but the port above is published to
-      # 127.0.0.1 only, so no-auth is acceptable for local dev. Set the
-      # deployment's access in .env (see .env.example) and drop this override
-      # before publishing the port on a non-loopback address.
+      # The container binds 0.0.0.0; the port above is published to 127.0.0.1 only.
       DLIGHTRAG_INTERFACES__API__HOST: "0.0.0.0"
-      DLIGHTRAG_ACCESS__ALLOW_INSECURE_NO_AUTH: "true"
       FORWARDED_ALLOW_IPS: *local-proxies
-      # The document-conversion stack loads an ONNX runtime whose 1DS telemetry is on by
-      # default and reports model metadata and this machine's identifiers to Microsoft.
-      ORT_DISABLE_TELEMETRY: "1"
-    env_file: .env
-    configs:
-      - source: dlightrag_config
-        target: /app/config.yaml
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    volumes:
-      - dlightrag_data:/app/dlightrag_storage
-      - dlightrag_agent_workspaces:/home/app/.dlightrag/agent_workspaces
-      # Operator-provisioned global Skills; read-only for every user's Agent.
-      - *global-skills-mount
-      # Per-owner Agent Skills: published only through the validated publish_skill
-      # tool, turned off or deleted through set_skill_enabled, delete_skill or
-      # Settings. Persisted across container recreations; multi-host deployments
-      # must share this path.
-      - dlightrag_owner_skills:/home/app/.dlightrag/owner_skills
-    depends_on:
-      postgres:
-        condition: service_healthy
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import urllib.request; response = urllib.request.urlopen('http://127.0.0.1:8100/ready', timeout=3); response.close()"
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 30s
-      # Inside start_period, check every 2s so healthy follows readiness without waiting
-      # out a 10s interval.
-      start_interval: 2s
+    healthcheck: *ready-healthcheck
 
   dlightrag-mcp:
-    restart: unless-stopped
-    image: dlightrag:local
-    build:
-      context: .
+    <<: *app
     # SECURITY: MCP streamable-http exposes ingest / delete_files / answer.
     # This maps the host port to 127.0.0.1 only; set the deployment's access in
     # .env (see .env.example) before exposing it on a non-loopback network.
     ports:
       - "127.0.0.1:8101:8101"
-    networks:
-      <<: *agent-browser-networks
-      default:
     environment:
-      <<: *agent-browser-bindings
+      <<: *app-environment
       # service.name on this process's spans and logs, so ClickStack separates the three.
       DLIGHTRAG_OBSERVABILITY__SERVICE_NAME: dlightrag-mcp
-      # Compose Service DNS; the native application default remains localhost.
-      DLIGHTRAG_STORAGE__POSTGRES__HOST: postgres
       DLIGHTRAG_INTERFACES__MCP__TRANSPORT: streamable-http
       DLIGHTRAG_INTERFACES__MCP__HOST: "0.0.0.0"
       DLIGHTRAG_INTERFACES__MCP__PORT: "8101"
-      DLIGHTRAG_ACCESS__ALLOW_INSECURE_NO_AUTH: "true"
-      # This service can convert a document too: see the API service above.
-      ORT_DISABLE_TELEMETRY: "1"
-    env_file: .env
-    configs:
-      - source: dlightrag_config
-        target: /app/config.yaml
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    volumes:
-      - dlightrag_data:/app/dlightrag_storage
-      - dlightrag_agent_workspaces:/home/app/.dlightrag/agent_workspaces
-      # Operator-provisioned global Skills; read-only for every user's Agent.
-      - *global-skills-mount
-      # Per-owner Agent Skills: published only through the validated publish_skill
-      # tool, turned off or deleted through set_skill_enabled, delete_skill or
-      # Settings. Persisted across container recreations; multi-host deployments
-      # must share this path.
-      - dlightrag_owner_skills:/home/app/.dlightrag/owner_skills
-    depends_on:
-      postgres:
-        condition: service_healthy
+      # Goals continue automatically after a restart. Only the Web/API process runs the startup
+      # recovery scan; this service must not duplicate it (CAS still fences any overlap).
+      DLIGHTRAG_DEPLOYMENT__GOAL_RECOVERY: "false"
     command: ["dlightrag-mcp"]
 
   # A second, corpus-read-only process over the same database. It serves every
@@ -176,53 +189,20 @@ services:
   # operational state (Runs, events, Web conversations) and Answer workspaces;
   # corpus writes are refused in the application layer, not by the mount.
   dlightrag-reader:
+    <<: *app
     profiles: [reader]
-    restart: unless-stopped
-    image: dlightrag:local
-    build:
-      context: .
     ports:
       - "127.0.0.1:8102:8100"
-    networks:
-      <<: *agent-browser-networks
-      default:
     environment:
-      <<: *agent-browser-bindings
+      <<: *app-environment
       # service.name on this process's spans and logs, so ClickStack separates the three.
       DLIGHTRAG_OBSERVABILITY__SERVICE_NAME: dlightrag-reader
       DLIGHTRAG_DEPLOYMENT__SERVICE_ROLE: reader
-      # Compose Service DNS; the native application default remains localhost.
-      DLIGHTRAG_STORAGE__POSTGRES__HOST: postgres
+      # One goal-recovery scanner per deployment: this process must not run a second scan.
+      DLIGHTRAG_DEPLOYMENT__GOAL_RECOVERY: "false"
       DLIGHTRAG_INTERFACES__API__HOST: "0.0.0.0"
-      DLIGHTRAG_ACCESS__ALLOW_INSECURE_NO_AUTH: "true"
       FORWARDED_ALLOW_IPS: *local-proxies
-      # This service reads published documents and can convert them: see the API service.
-      ORT_DISABLE_TELEMETRY: "1"
-    env_file: .env
-    configs:
-      - source: dlightrag_config
-        target: /app/config.yaml
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    volumes:
-      - dlightrag_data:/app/dlightrag_storage
-      - dlightrag_agent_workspaces:/home/app/.dlightrag/agent_workspaces
-      - *global-skills-mount
-      - dlightrag_owner_skills:/home/app/.dlightrag/owner_skills
-    depends_on:
-      postgres:
-        condition: service_healthy
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import urllib.request; response = urllib.request.urlopen('http://127.0.0.1:8100/ready', timeout=3); response.close()"
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 30s
-      start_interval: 2s
+    healthcheck: *ready-healthcheck
 
   postgres:
     restart: unless-stopped
@@ -243,7 +223,11 @@ services:
       # pg_textsearch and pg_jieba require preloading
       - "-c"
       - "shared_preload_libraries=pg_textsearch,pg_jieba"
-      # pg_textsearch 1.4 seeds filtered top-K scans from planner selectivity.
+      # Measured on Evidence payloads: lz4 stores the same text slightly smaller than
+      # pglz and compresses 3.8x faster, so every large value is stored with it.
+      - "-c"
+      - "default_toast_compression=lz4"
+      # pg_textsearch (1.4 and later) seeds filtered top-K scans from planner selectivity.
       # corpus.retrieval.chunk_top_k still owns the requested result count;
       # these GUCs only reduce rescoring retries and do not change correctness.
       - "-c"
@@ -299,6 +283,13 @@ services:
     networks: [agent-browser-2]
   # <<< agent-browser-pool:services
 
+  # The headed member: the same image and the same seccomp profile, under a display
+  # server. It is one member, not a second pool: the same lease gives a Run its endpoint,
+  # and a Run that asks for a headed browser is given one of these.
+  agent-browser-headed:
+    <<: *agent-browser-headed
+    networks: [agent-browser-headed]
+
   # Squid admits public destinations only (agent-browser/egress/squid.conf), so a
   # browser that loses or ignores its proxy setting reaches nothing.
   agent-browser-egress:
@@ -317,8 +308,10 @@ services:
 
   docling:
     profiles: [docling]
-    image: ${DOCLING_SERVE_IMAGE:-quay.io/docling-project/docling-serve-cpu:latest}
-    pull_policy: always
+    # Pinned to a release, so the parser does not change under a running deployment; DlightRAG needs
+    # docling-serve 1.30.0 or later (docs/configuration.md). Bump it from
+    # https://github.com/docling-project/docling-serve/releases (the quay.io tags carry the same names).
+    image: ${DOCLING_SERVE_IMAGE:-quay.io/docling-project/docling-serve-cpu:v1.38.2}
     restart: unless-stopped
     ports:
       - "127.0.0.1:5001:5001"
@@ -350,6 +343,8 @@ networks:
   agent-browser-1:
     internal: true
   agent-browser-2:
+    internal: true
+  agent-browser-headed:
     internal: true
   # <<< agent-browser-pool:networks
 

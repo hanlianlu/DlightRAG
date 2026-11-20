@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable
 from typing import Annotated, Any, Literal
 
@@ -21,20 +22,31 @@ from dlightrag.adapters.mcp.errors import ToolRejection
 from dlightrag.adapters.mcp.server import (
     mcp_app,
 )
-from dlightrag.application.access import AccessAction
-from dlightrag.application.corpus_admin import (
+from dlightrag.application.access.control import AccessAction
+from dlightrag.application.access.scope import (
+    current_request_scope,
+)
+from dlightrag.application.corpus_admin.file_panel import (
     FILE_PANEL_PAGE_DEFAULT_LIMIT,
     FILE_PANEL_PAGE_MAX_LIMIT,
     FilePanelCursorError,
     FilePanelPageRequest,
-    SourceType,
-    WorkspaceCatalogPageRequest,
+)
+from dlightrag.application.corpus_admin.service import (
     ingest_spec_from_payload,
     managed_local_ingest_documents,
     managed_local_ingest_path,
 )
+from dlightrag.application.corpus_admin.workspace_catalog import WorkspaceCatalogPageRequest
+from dlightrag.application.policies.service import (
+    AGENT_EFFORT_CEILING,
+    PolicyUnreadableError,
+)
 from dlightrag.application.runs import RunCreation
 from dlightrag.engine.answer.image_capability import answer_image_capability_summary
+from dlightrag.engine.rag.corpus.contracts import SourceType
+
+logger = logging.getLogger(__name__)
 
 
 async def _accepted_corpus_mutation(operation: Awaitable[RunCreation]) -> dict[str, Any]:
@@ -75,19 +87,30 @@ async def list_workspaces_tool() -> dict[str, Any]:
         "effective_max_images (max images the answer model accepts; 0 means send none), "
         "configured_ceiling, and model — query images reach the answer model only when "
         "status is 'supported'. Also returns answer_agent_effort_levels, the agent "
-        "efforts this deployment applies to a Research run; a request's `effort` outside "
-        "that set is accepted and ignored."
+        "efforts this deployment offers the current caller for a Research run; a "
+        "request's `effort` outside that set is never refused: it runs at the nearest "
+        "level that applies, or is ignored."
     ),
     annotations=ToolAnnotations(read_only_hint=True),
 )
 async def get_capabilities_tool() -> dict[str, Any]:
     application = await mcp_server._ensure_application()
     capabilities = await application.answers.capabilities()
+    # A ceiling that cannot be read offers nothing, as it does in the browser: this still
+    # answers, and a submission is refused until an administrator replaces the document.
+    try:
+        offer = await application.answers.agent_effort_offer(current_request_scope())
+        effort_levels = list(offer.levels)
+    except PolicyUnreadableError:
+        logger.warning(
+            "Runtime policy %s is unreadable; no effort is offered", AGENT_EFFORT_CEILING
+        )
+        effort_levels = []
     return {
         "answer_image_capability": answer_image_capability_summary(capabilities.answer),
-        # An answer request may name its own agent effort; a level outside this set is
-        # accepted and ignored, so an agent can check before submitting.
-        "answer_agent_effort_levels": list(application.answers.agent_effort_offer().levels),
+        # An answer request may name its own agent effort, so an agent can check what applies
+        # to it before submitting.
+        "answer_agent_effort_levels": effort_levels,
     }
 
 

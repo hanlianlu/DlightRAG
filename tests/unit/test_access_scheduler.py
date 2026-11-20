@@ -5,11 +5,11 @@ import asyncio
 
 import pytest
 
-from dlightrag.engine.agent.environment import (
+from dlightrag.engine.agent.environment.access import (
     AccessScheduler,
+    AgentspaceAccess,
     ExternalAccess,
     PathAccess,
-    WorkspaceAccess,
 )
 
 
@@ -60,7 +60,7 @@ async def test_workspace_access_serializes_path_operations() -> None:
     started = asyncio.Event()
 
     async def bash() -> None:
-        async with scheduler.hold(WorkspaceAccess()):
+        async with scheduler.hold(AgentspaceAccess()):
             started.set()
             order.append("bash")
             await asyncio.sleep(0.02)
@@ -81,7 +81,7 @@ async def test_workspace_access_does_not_block_external_retrieval() -> None:
     external_finished = asyncio.Event()
 
     async def workspace() -> None:
-        async with scheduler.hold(WorkspaceAccess()):
+        async with scheduler.hold(AgentspaceAccess()):
             workspace_started.set()
             await asyncio.wait_for(external_finished.wait(), timeout=1)
 

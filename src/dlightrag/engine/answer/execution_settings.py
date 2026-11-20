@@ -5,10 +5,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from dlightrag.engine.agent.environment import ExecutionMode
+from dlightrag.engine.agent.environment.execution import (
+    ExecutionMode,
+)
 
 
-def default_local_workspace_root() -> Path:
+def default_local_agentspace_root() -> Path:
     """Single-machine default: outside the repo, never the corpus working_dir."""
     return (Path.home() / ".dlightrag" / "agent_workspaces").resolve()
 
@@ -24,7 +26,7 @@ def validate_agent_execution(
         return None
     raw = (workspace_root or "").strip()
     if not raw or raw in {"null", "None"}:
-        root = default_local_workspace_root()
+        root = default_local_agentspace_root()
     else:
         root = Path(raw).expanduser()
         if not root.is_absolute():
@@ -40,6 +42,6 @@ def validate_agent_execution(
 
 
 __all__ = [
-    "default_local_workspace_root",
+    "default_local_agentspace_root",
     "validate_agent_execution",
 ]

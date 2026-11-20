@@ -5,24 +5,30 @@ import base64
 import binascii
 import secrets
 from collections.abc import Callable
+from typing import Literal
 from urllib.parse import quote, urlencode, urlsplit
 
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import FileResponse, RedirectResponse, Response
 from pydantic import SecretStr
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp
 
 from dlightrag.adapters.http.browser.app_shell import app_html_response
 from dlightrag.adapters.http.browser.edge_identity import EdgeIdentityError, authenticate_edge
 from dlightrag.adapters.http.errors import error_response
-from dlightrag.application.access import (
+from dlightrag.application.access.authentication import (
     AuthenticationError,
-    UserContext,
     authenticate_bearer_token,
 )
-from dlightrag.application.config import DlightragConfig, get_config
-from dlightrag.application.settings import authentication_settings, web_identity_settings
+from dlightrag.application.access.principal import UserContext
+from dlightrag.application.config.loading import get_config
+from dlightrag.application.config.sections import DlightragConfig
+from dlightrag.application.settings.projections import (
+    authentication_settings,
+    web_identity_settings,
+)
 
 WEB_AUTH_COOKIE = "dlightrag_web_auth"
 WEB_CSRF_COOKIE = "dlightrag_web_csrf"
@@ -36,6 +42,8 @@ _PUBLIC_WEB_PATHS = {
 }
 _WEB_COOKIE_PATH = "/web"
 _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+#: What an upgrade's own scheme is called in the vocabulary of the Origin it carries.
+_SAME_ORIGIN_SCHEMES = {"http": "http", "https": "https", "ws": "http", "wss": "https"}
 
 router = APIRouter()
 
@@ -98,23 +106,28 @@ def _origin_tuple(value: str) -> tuple[str, str, int] | None:
     return parsed.scheme, parsed.hostname.lower(), port
 
 
-def _request_origin(request: Request) -> tuple[str, str, int] | None:
+def _request_origin(request: HTTPConnection) -> tuple[str, str, int] | None:
+    # An upgrade's own URL is ws or wss, while the Origin a browser sends on it is http or
+    # https: the two name the same front door, and this is what compares them.
+    scheme = _SAME_ORIGIN_SCHEMES.get(request.url.scheme)
+    if scheme is None:
+        return None
     try:
         hostname = request.url.hostname
-        if hostname is None or request.url.scheme not in {"http", "https"}:
+        if hostname is None:
             return None
-        port = request.url.port or (443 if request.url.scheme == "https" else 80)
+        port = request.url.port or (443 if scheme == "https" else 80)
     except ValueError:
         return None
-    return request.url.scheme, hostname.lower(), port
+    return scheme, hostname.lower(), port
 
 
-def _has_exact_same_origin(request: Request) -> bool:
+def _has_exact_same_origin(request: HTTPConnection) -> bool:
     origin = request.headers.get("Origin")
     return origin is not None and _origin_tuple(origin) == _request_origin(request)
 
 
-def _bearer_from_header(request: Request) -> str | None:
+def _bearer_from_header(request: HTTPConnection) -> str | None:
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         return auth_header[7:]
@@ -123,7 +136,7 @@ def _bearer_from_header(request: Request) -> str | None:
     return None
 
 
-def _token_from_request(request: Request) -> str | None:
+def _token_from_request(request: HTTPConnection) -> str | None:
     raw = _bearer_from_header(request)
     if raw is not None:
         return raw
@@ -242,6 +255,48 @@ def _unauthenticated(request: Request, detail: str = "Authentication required") 
     return error_response(401, detail)
 
 
+class WebSocketHandshakeRefused(RuntimeError):
+    """Why a WebSocket upgrade carries no caller: the kind names the close code a route sends."""
+
+    def __init__(self, kind: Literal["unauthenticated", "cross_origin"], message: str) -> None:
+        super().__init__(message)
+        self.kind: Literal["unauthenticated", "cross_origin"] = kind
+
+
+def authenticate_web_socket(connection: HTTPConnection, cfg: DlightragConfig) -> UserContext:
+    """Resolve the Web caller of a WebSocket upgrade, or refuse the handshake.
+
+    A browser cannot set a header on an upgrade, so the session cookie is the credential
+    and the ``Origin`` is the only evidence that the page behind the socket is this
+    application's own — the same two rules a cookie-authenticated write already follows.
+    The middleware never sees a WebSocket scope, so the deployment's mode is applied here
+    from the same settings: an edge-asserted identity where there is one, the paste-token
+    cookie otherwise, and no credential at all where the deployment runs with auth off.
+    """
+    if not _has_exact_same_origin(connection):
+        # Deliberately stricter than the write path: a socket has no CSRF header to add,
+        # so an upgrade from anywhere but this application's own origin is refused.
+        raise WebSocketHandshakeRefused("cross_origin", "Origin is not this application's")
+    if cfg.access.auth_mode == "none":
+        return UserContext(user_id="anonymous", auth_mode="none")
+    if cfg.access.web_identity.edge is not None:
+        try:
+            return authenticate_edge(
+                connection, edge=cfg.access.web_identity.edge, settings=web_identity_settings(cfg)
+            )
+        except EdgeIdentityError as exc:
+            raise WebSocketHandshakeRefused("unauthenticated", str(exc)) from None
+    raw_token = _token_from_request(connection)
+    if not raw_token:
+        raise WebSocketHandshakeRefused("unauthenticated", "Authentication required")
+    try:
+        return _authenticate_bearer(
+            raw_token, cfg, default_user_id=connection.headers.get("X-User-Id", "anonymous")
+        )
+    except HTTPException as exc:
+        raise WebSocketHandshakeRefused("unauthenticated", str(exc.detail)) from None
+
+
 class WebAuthMiddleware(BaseHTTPMiddleware):
     """Protect `/web/*` with the same auth mode used by REST/MCP."""
 
@@ -275,7 +330,14 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
         if cfg.access.auth_mode == "none":
             request.state.user_context = UserContext(user_id="anonymous", auth_mode="none")
             if (
-                path.startswith(("/web/api/connections/mcp", "/web/api/agent-accounts"))
+                path.startswith(
+                    (
+                        "/web/api/connections/mcp",
+                        "/web/api/agent-accounts",
+                        "/web/api/memory",
+                        "/web/api/privacy",
+                    )
+                )
                 or path == "/web/api/video-playback"
             ):
                 if _reject_web_mutation(request):
@@ -374,4 +436,11 @@ async def logout() -> RedirectResponse:
     return response
 
 
-__all__ = ["WEB_AUTH_COOKIE", "WEB_CSRF_COOKIE", "WebAuthMiddleware", "router"]
+__all__ = [
+    "WEB_AUTH_COOKIE",
+    "WEB_CSRF_COOKIE",
+    "WebAuthMiddleware",
+    "WebSocketHandshakeRefused",
+    "authenticate_web_socket",
+    "router",
+]

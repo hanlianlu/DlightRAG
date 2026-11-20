@@ -6,7 +6,10 @@ from typing import Any
 
 from dlightrag.engine.answer.citations.utils import context_chunk_key
 from dlightrag.engine.answer.images import AnswerImageBudget
-from dlightrag.engine.rag.retrieval import ContextRow, RetrievalContexts
+from dlightrag.engine.rag.retrieval.models import ContextRow
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalContexts,
+)
 
 
 @dataclass

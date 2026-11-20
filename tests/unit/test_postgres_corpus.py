@@ -31,7 +31,7 @@ from dlightrag.adapters.postgres.corpus.lightrag_environment import (
     lightrag_runtime_env,
     lightrag_sidecar_env,
 )
-from dlightrag.application.config import (
+from dlightrag.application.config.sections import (
     DeploymentSettings,
     DlightragConfig,
     LightRAGStorageSettings,
@@ -46,7 +46,7 @@ from dlightrag.engine.rag.workspace.settings import (
     ParserSidecarsSettings,
     VLMSidecarSettings,
 )
-from tests.config_helpers import clone_config, mutate_config
+from tests.support.config_helpers import clone_config, mutate_config
 
 
 class _Connection:

@@ -1,0 +1,821 @@
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
+
+/* The Run overview (ui/run-overview.ts): the Run as a dossier under the Inspector's title band.
+ *
+ * One column, top to bottom: the composition bar and the legend that names it, the delivery card,
+ * the agents' ledger (one row per agent, with each agent's span over the Run's clock), and what needs
+ * attention. The panel is read at a dock's width — about 400 to 560px wide, and usable from 320px —
+ * so every row wraps or truncates instead of pushing the column sideways: an objective ends in an
+ * ellipsis with the whole text in its title, the ledger's numbers wrap under their lane, and the
+ * delivery card's files take the width that is left.
+ *
+ * Everything is a design token; the bar's palette is stated per dimension, kinds by kind and agents
+ * by a small repeating tint, and no meaning rests on a colour alone (the legend names every part,
+ * and every mark is a word).
+ */
+
+@layer features {
+  /* stylelint-disable selector-pseudo-class-no-unknown -- CSS Modules :global */
+
+  dl-run-overview {
+    display: block;
+  }
+
+  .overview {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-component);
+    min-inline-size: 0;
+    padding: var(--space-component) var(--space-related) var(--space-related);
+  }
+
+  .section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-tight);
+    min-inline-size: 0;
+  }
+
+  .sectionHead {
+    composes: head from './step-row.module.css';
+  }
+
+  .sectionTitle {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    line-height: var(--line-height-control);
+    margin: 0;
+    text-transform: uppercase;
+  }
+
+  .sectionCount {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    font-variant-numeric: tabular-nums;
+    line-height: var(--line-height-control);
+  }
+
+  /* A quiet line's type and ink are the design system's `.dl-note`; this only takes the paragraph's
+     own margin away and lets a long sentence wrap. */
+  .note {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  /* ── The composition bar and its legend ── */
+
+  .dimensions {
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-pill);
+    display: inline-flex;
+    flex: none;
+    gap: 0;
+    padding: var(--space-3xs);
+  }
+
+  .dimensionButton {
+    background: none;
+    border: 0;
+    border-radius: var(--radius-pill);
+    color: var(--color-text-muted);
+    cursor: pointer;
+    font: inherit;
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    padding: var(--space-3xs) var(--space-tight);
+  }
+
+  .dimensionButton:hover {
+    color: var(--color-text-primary);
+  }
+
+  .dimensionButton[aria-pressed='true'] {
+    background: var(--color-accent-ghost);
+    color: var(--color-accent-text);
+  }
+
+  .dimensionButton:focus-visible {
+    outline: 2px solid var(--focus-ring-color);
+    outline-offset: 2px;
+  }
+
+  /* The Run's shape as one strip: each part is its count, the parts share rounded ends, and every
+     part names itself on hover. By kind the bar is decorative (the legend states it in words); by
+     agent each part is a button that opens that agent's page. */
+  .bar {
+    background: var(--color-bg-elevated);
+    border-radius: var(--radius-pill);
+    block-size: 6px;
+    display: flex;
+    gap: 0;
+    inline-size: 100%;
+  }
+
+  .barPart {
+    appearance: none;
+    border: 0;
+    font: inherit;
+    margin: 0;
+    min-inline-size: 2px;
+    padding: 0;
+    position: relative;
+  }
+
+  /* A six-pixel strip is a hard thing to point at: the part answers a press well above and below it
+     (three-quarters of a rem each way takes the 6px strip past the product's 24px target floor), and
+     the tip it opens then sits in that space. */
+  .barPart::before {
+    content: '';
+    inset-block: -0.75rem;
+    inset-inline: 0;
+    position: absolute;
+  }
+
+  /* The agent on show is already stated by the switcher line and by the page beside this dossier, so
+     a part that is always current wears no permanent selection token: `aria-current` carries it for
+     assistive tech, and the eye gets the same part as every other one until hover or focus. The
+     `--color-selected-row` token stays for lists where selection is an optional mode (conversations). */
+  .barPart:focus-visible {
+    outline: 2px solid var(--focus-ring-color);
+    outline-offset: 2px;
+    z-index: 2;
+  }
+
+  /* The name a part states when a reader points at it or tabs to it: one line above the strip, never
+     moving the dossier, with the first and last parts pinned inside the bar's ends. */
+  .barTip {
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-control);
+    color: var(--color-text-primary);
+    font-size: var(--font-size-caption);
+    font-variant-numeric: tabular-nums;
+    inset-block-end: calc(100% + var(--space-tight));
+    inset-inline-start: 50%;
+    line-height: var(--line-height-control);
+    opacity: 0;
+    padding: var(--space-3xs) var(--space-inline);
+    pointer-events: none;
+    position: absolute;
+    transition: opacity var(--duration-control) var(--easing-standard);
+    translate: -50% 0;
+    white-space: nowrap;
+    z-index: 4;
+  }
+
+  .barPart:hover .barTip,
+  .barPart:focus-visible .barTip {
+    opacity: 1;
+  }
+
+  .barPart[data-edge='first'] .barTip {
+    inset-inline-start: 0;
+    translate: 0 0;
+  }
+
+  .barPart[data-edge='last'] .barTip {
+    inset-inline: auto 0;
+    translate: 0 0;
+  }
+
+  .barPart:first-child {
+    border-end-start-radius: var(--radius-pill);
+    border-start-start-radius: var(--radius-pill);
+  }
+
+  .barPart:last-child {
+    border-end-end-radius: var(--radius-pill);
+    border-start-end-radius: var(--radius-pill);
+  }
+
+  .barPart[data-key='thinking'],
+  .swatch[data-kind='thinking'] {
+    background: var(--color-accent-border-soft);
+  }
+
+  .barPart[data-key='tool'],
+  .swatch[data-kind='tool'] {
+    background: var(--color-accent-indicator);
+  }
+
+  .barPart[data-key='say'],
+  .swatch[data-kind='say'] {
+    background: var(--color-border-strong);
+  }
+
+  .barPart[data-key='answer'],
+  .swatch[data-kind='answer'] {
+    background: var(--color-success);
+  }
+
+  .barPart[data-key='instruction'],
+  .swatch[data-kind='instruction'] {
+    background: var(--color-text-subtle);
+  }
+
+  .barPart[data-key='delivery'],
+  .swatch[data-kind='delivery'] {
+    background: var(--color-accent-border);
+  }
+
+  /* The agents' tints repeat after six: a Run's ledger is main plus a handful of children, and the
+     legend beside the bar names every segment, so a repeated tint is not a lost meaning. An identity
+     is not a verdict, so the palette stays in the accent and neutral ramps: a successful green or a
+     danger red would read as a judgement about the agent whose segment wears it. */
+  .barPart[data-agent-tint='0'],
+  .swatch[data-agent-tint='0'] {
+    background: var(--color-accent-indicator);
+  }
+
+  .barPart[data-agent-tint='1'],
+  .swatch[data-agent-tint='1'] {
+    background: var(--color-accent-border-strong);
+  }
+
+  .barPart[data-agent-tint='2'],
+  .swatch[data-agent-tint='2'] {
+    background: var(--color-border-strong);
+  }
+
+  .barPart[data-agent-tint='3'],
+  .swatch[data-agent-tint='3'] {
+    background: var(--color-text-subtle);
+  }
+
+  .barPart[data-agent-tint='4'],
+  .swatch[data-agent-tint='4'] {
+    background: var(--color-accent-border-soft);
+  }
+
+  .barPart[data-agent-tint='5'],
+  .swatch[data-agent-tint='5'] {
+    background: var(--color-accent-text);
+  }
+
+  .legend {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3xs) var(--space-related);
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .legendItem {
+    align-items: center;
+    display: flex;
+    gap: var(--space-inline);
+    min-inline-size: 0;
+  }
+
+  .legendAgent {
+    composes: hoverTint from './step-row.module.css';
+    align-items: center;
+    background: none;
+    border: 0;
+    border-radius: var(--radius-control);
+    color: inherit;
+    cursor: pointer;
+    display: flex;
+    font: inherit;
+    gap: var(--space-inline);
+    min-block-size: var(--size-target-min);
+    min-inline-size: 0;
+    padding: var(--space-3xs) var(--space-inline);
+    text-align: start;
+  }
+
+  .legendAgent:focus-visible {
+    outline: 2px solid var(--focus-ring-color);
+    outline-offset: 2px;
+  }
+
+  .legendName {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    min-inline-size: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .legendCount {
+    composes: figure from './step-row.module.css';
+  }
+
+  .swatch {
+    border-radius: var(--radius-circle);
+    block-size: 0.5rem;
+    flex: none;
+    inline-size: 0.5rem;
+  }
+
+  /* ── Delivery ── */
+
+  .stateWord {
+    border: 1px solid var(--color-success);
+    border-radius: var(--radius-pill);
+    color: var(--color-success);
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    padding-inline: var(--space-inline);
+  }
+
+  .deliveryCard {
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-card);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-tight);
+    min-inline-size: 0;
+    padding: var(--space-component);
+  }
+
+  .deliveryCounts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-component);
+    margin: 0;
+  }
+
+  .deliveryCount {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .deliveryCount dt {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+  }
+
+  .deliveryCount dd {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-body);
+    font-variant-numeric: tabular-nums;
+    line-height: var(--line-height-control);
+    margin: 0;
+  }
+
+  .artifacts {
+    display: flex;
+    flex-direction: column;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .artifact {
+    align-items: baseline;
+    border-block-start: 1px solid var(--color-divider);
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-inline) var(--space-tight);
+    min-inline-size: 0;
+    padding-block: var(--space-3xs);
+  }
+
+  .artifact:first-child {
+    border-block-start: 0;
+  }
+
+  .artifactText {
+    align-items: baseline;
+    display: flex;
+    flex: 1 1 auto;
+    gap: var(--space-tight);
+    min-inline-size: 0;
+  }
+
+  .artifactLabel {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-detail);
+    line-height: var(--line-height-control);
+    min-inline-size: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .artifactFile {
+    color: var(--color-text-muted);
+    font-family: SFMono-Regular, Consolas, monospace;
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    min-inline-size: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* The Answer's attestation line carries its own top padding for the placements; inside a compact
+     Artifact row that padding is the row's gap already. */
+  .artifact :global(.artifact-attestation) {
+    padding-top: 0;
+  }
+
+  .artifactState {
+    color: var(--color-danger);
+    flex: none;
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+  }
+
+  .buckets {
+    color: var(--color-text-muted);
+    display: flex;
+    flex-wrap: wrap;
+    font-size: var(--font-size-caption);
+    gap: var(--space-inline) var(--space-tight);
+    line-height: var(--line-height-control);
+    margin: 0;
+  }
+
+  .bucket {
+    white-space: nowrap;
+  }
+
+  .warning {
+    color: var(--color-danger);
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .issues {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3xs);
+    min-inline-size: 0;
+  }
+
+  .issueHeading {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    font-weight: 600;
+    line-height: var(--line-height-control);
+    margin: 0;
+  }
+
+  .issueList {
+    color: var(--color-text-secondary);
+    display: flex;
+    flex-direction: column;
+    font-size: var(--font-size-caption);
+    gap: var(--space-3xs);
+    line-height: var(--line-height-control);
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .issue {
+    overflow-wrap: anywhere;
+  }
+
+  /* ── The agents' ledger ── */
+
+  .ledger {
+    display: flex;
+    flex-direction: column;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .ledgerItem {
+    min-inline-size: 0;
+  }
+
+  .ledgerRow {
+    composes: hoverTint from './step-row.module.css';
+    composes: focusRing from './step-row.module.css';
+    background: none;
+    border: 0;
+    border-block-start: 1px solid var(--color-border-subtle);
+    color: inherit;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    font: inherit;
+    gap: var(--space-3xs);
+    inline-size: 100%;
+    padding: var(--space-tight) 0;
+    text-align: start;
+  }
+
+  .ledgerItem:first-child .ledgerRow {
+    border-block-start: 0;
+  }
+
+  .rowHead {
+    align-items: center;
+    display: flex;
+    gap: var(--space-inline);
+    min-inline-size: 0;
+  }
+
+  .glyphBox {
+    flex: none;
+    inline-size: var(--size-icon-sm);
+  }
+
+  .rowName {
+    color: var(--color-text-primary);
+    flex: 1;
+    font-size: var(--font-size-detail);
+    line-height: var(--line-height-control);
+    min-inline-size: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .rowState {
+    composes: agent from './step-row.module.css';
+  }
+
+  .rowState[data-state='running'] {
+    color: var(--color-accent-text);
+  }
+
+  .rowState[data-state='failed'] {
+    color: var(--color-danger);
+  }
+
+  /* The lane: the Run's clock as one thin track, the agent's own span on it, and a dot per decision
+     the agent's steps state. It is aria-hidden, and the row's words state the same marks. */
+  .laneRow {
+    display: block;
+    padding-inline-end: var(--space-related);
+  }
+
+  .lane {
+    background: var(--color-bg-elevated);
+    border-radius: var(--radius-pill);
+    block-size: 4px;
+    display: block;
+    position: relative;
+  }
+
+  .laneTrack {
+    background: var(--color-border-subtle);
+    border-radius: var(--radius-pill);
+    inset: 0;
+    position: absolute;
+  }
+
+  .laneSpan {
+    background: var(--color-accent-indicator);
+    border-radius: var(--radius-pill);
+    inset-block: 0;
+    min-inline-size: 2px;
+    position: absolute;
+  }
+
+  .laneSpan[data-running='true'] {
+    background: var(--color-accent-text);
+  }
+
+  .laneDot {
+    border-radius: var(--radius-circle);
+    block-size: 6px;
+    inline-size: 6px;
+    inset-block-start: 50%;
+    position: absolute;
+    translate: -50% -50%;
+  }
+
+  .laneDot[data-mark='failed'] {
+    background: var(--color-danger);
+  }
+
+  .laneDot[data-mark='degraded'],
+  .laneDot[data-mark='redirect'] {
+    background: var(--color-accent-indicator);
+  }
+
+  .laneDot[data-mark='repeated'] {
+    background: var(--color-border-strong);
+  }
+
+  .laneDot[data-mark='delivery'] {
+    background: var(--color-text-subtle);
+  }
+
+  .metrics {
+    align-items: baseline;
+    color: var(--color-text-muted);
+    display: flex;
+    flex-wrap: wrap;
+    font-size: var(--font-size-caption);
+    gap: 0 var(--space-inline);
+    line-height: var(--line-height-control);
+    min-inline-size: 0;
+  }
+
+  .metric {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .metric[data-mark='failed'] {
+    color: var(--color-danger);
+  }
+
+  .metric[data-mark='degraded'],
+  .metric[data-mark='redirect'] {
+    color: var(--color-accent-text);
+  }
+
+  /* A separator is a word to a screen reader's contrast check even when it is decorative to the
+     eye, so it wears the muted ink rather than the subtle one. */
+  .metricSeparator {
+    color: var(--color-text-muted);
+  }
+
+  /* ── Run quality: one calm line, with the technical details folded away ── */
+
+  .qualityLine {
+    align-items: baseline;
+    color: var(--color-text-secondary);
+    display: flex;
+    font-size: var(--font-size-detail);
+    gap: var(--space-inline);
+    line-height: var(--line-height-control);
+    margin: 0;
+    min-inline-size: 0;
+  }
+
+  .qualityGlyph {
+    color: var(--color-text-muted);
+    display: inline-flex;
+    flex: none;
+  }
+
+  .qualityGlyph[data-quality-glyph='clean'] {
+    color: var(--color-success);
+  }
+
+  /* The expanded triage detail is self-contained: a bounded, focusable scroll region under the calm
+     line, so opening it never grows the dossier past its own head and line (the same shape the
+     activity pane uses for a long transcript). The disclosure above it is the design system's text
+     action, placed by the section head's trailing slot. */
+  .qualityDetails {
+    composes: focusRing from './step-row.module.css';
+    border-block-start: 1px solid var(--color-border-subtle);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-tight);
+    margin-block-start: var(--space-tight);
+    max-block-size: min(22rem, 45vh);
+    min-inline-size: 0;
+    overscroll-behavior: contain;
+    overflow-y: auto;
+    padding-block-start: var(--space-tight);
+    scrollbar-gutter: stable;
+  }
+
+  /* The class sets a display, so it has to give the hidden attribute back its meaning. */
+  .qualityDetails[hidden] {
+    display: none;
+  }
+
+  .counts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-inline) var(--space-tight);
+  }
+
+  .countChip {
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-pill);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    padding-inline: var(--space-inline);
+    white-space: nowrap;
+  }
+
+  .countChip[data-count-mark='failed'] {
+    border-color: var(--color-danger);
+    color: var(--color-danger);
+  }
+
+  .countChip[data-count-mark='degraded'],
+  .countChip[data-count-mark='redirect'] {
+    border-color: var(--color-accent-border-soft);
+    color: var(--color-accent-text);
+  }
+
+  .findings {
+    display: flex;
+    flex-direction: column;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .finding {
+    min-inline-size: 0;
+  }
+
+  .findingRow {
+    composes: hoverTint from './step-row.module.css';
+    composes: focusRing from './step-row.module.css';
+    background: none;
+    border: 0;
+    border-block-start: 1px solid var(--color-border-subtle);
+    color: inherit;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    font: inherit;
+    gap: var(--space-3xs);
+    inline-size: 100%;
+    padding: var(--space-tight) 0;
+    text-align: start;
+  }
+
+  .finding:first-child .findingRow {
+    border-block-start: 0;
+  }
+
+  .findingHead {
+    composes: head from './step-row.module.css';
+  }
+
+  .findingTitle {
+    composes: title from './step-row.module.css';
+  }
+
+  .findingKind {
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-pill);
+    color: var(--color-text-muted);
+    flex: none;
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    padding-inline: var(--space-inline);
+  }
+
+  .findingVerb {
+    composes: verb from './step-row.module.css';
+  }
+
+  .findingSubject {
+    composes: subject from './step-row.module.css';
+  }
+
+  .findingTime {
+    composes: figure from './step-row.module.css';
+  }
+
+  .findingMeta {
+    composes: meta from './step-row.module.css';
+  }
+
+  .findingAgent {
+    composes: agent from './step-row.module.css';
+  }
+
+  .findingExcerpt {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    min-inline-size: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* One decision mark, named on a row that also states it as a badge: the word is the mark, the
+     border and ink only repeat it. */
+  .mark {
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-pill);
+    color: var(--color-text-muted);
+    flex: none;
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    padding-inline: var(--space-inline);
+  }
+
+  .mark[data-run-mark='failed'] {
+    border-color: var(--color-danger);
+    color: var(--color-danger);
+  }
+
+  .mark[data-run-mark='degraded'],
+  .mark[data-run-mark='redirect'] {
+    border-color: var(--color-accent-border-soft);
+    color: var(--color-accent-text);
+  }
+}

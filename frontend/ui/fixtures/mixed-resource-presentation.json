@@ -67,7 +67,8 @@
           "data_url": "/web/api/answer/run-1/artifacts/clip.mp4",
           "download_url": "/web/api/answer/run-1/artifacts/clip.mp4?download=1",
           "presentation_url": null,
-          "issue": null
+          "issue": null,
+          "attestation": null
         },
         "evidence_image": null,
         "inline": false,
@@ -92,7 +93,8 @@
           "data_url": "/web/api/answer/run-1/artifacts/clip.mp4",
           "download_url": "/web/api/answer/run-1/artifacts/clip.mp4?download=1",
           "presentation_url": null,
-          "issue": null
+          "issue": null,
+          "attestation": null
         },
         "evidence_image": null,
         "inline": true,
@@ -143,7 +145,8 @@
         "data_url": "/web/api/answer/run-1/artifacts/clip.mp4",
         "download_url": "/web/api/answer/run-1/artifacts/clip.mp4?download=1",
         "presentation_url": null,
-        "issue": null
+        "issue": null,
+        "attestation": null
       }
     ],
     "artifact_outcome": {

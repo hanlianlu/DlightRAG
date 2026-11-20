@@ -9,20 +9,27 @@
  * no detail is lost. Unknown kinds and unmapped payloads fall back to the
  * server message, then to the localized generic failure copy.
  * tests/unit/test_run_error_kind_vocabulary.py locks the keys to the server.
+ *
+ * Every function here returns the source and its catalog id together, so a view
+ * can hold the copy and a component applies the words with `localizedText` when it
+ * draws them: a language change then redraws the message.
  */
 
-import {msg} from '@lit/localize';
+import {catalogText, serverText, type LocalizedText} from './localized-text.ts';
 
-/** The public message of an answer error payload, or the localized generic failure. */
-export function answerErrorMessage(
+/** The generic failure copy, which is what an unmapped payload falls back to. */
+export const SERVICE_ERROR_TEXT = catalogText('Service error. Please try again.', 'errors.service');
+
+/** The public message of an answer error payload, or the fallback. */
+export function answerErrorText(
   payload: unknown,
-  fallback: string = msg('Service error. Please try again.', {id: 'errors.service'}),
-): string {
+  fallback: LocalizedText = SERVICE_ERROR_TEXT,
+): LocalizedText {
   const message =
     payload !== null && typeof payload === 'object' && !Array.isArray(payload)
       ? (payload as {message?: unknown}).message
       : undefined;
-  return typeof message === 'string' && message.trim() ? message : fallback;
+  return typeof message === 'string' && message.trim() ? serverText(message) : fallback;
 }
 
 const RUN_ERROR_KIND_COPY: Record<string, string> = {
@@ -35,6 +42,13 @@ const RUN_ERROR_KIND_COPY: Record<string, string> = {
     + 'support. Provide a vision-capable query model or retry once the model is reachable.',
   CURRENT_IMAGES_UNSUPPORTED:
     'Current model does not support image input. Use a vision-capable model or remove images.',
+  active_run_limit:
+    'You have as many answers in progress as you may run at once. '
+    + 'Wait for one to finish or stop one, then try again.',
+  session_busy:
+    'Another answer in this conversation was using the agent lane. This answer did not run. '
+    + 'Retry; if the other answer is still working, send this message again and it will be '
+    + 'queued after that answer.',
 };
 
 function kindSource(kind: string | null): {kind: string; source: string} | null {
@@ -42,25 +56,28 @@ function kindSource(kind: string | null): {kind: string; source: string} | null 
   return {kind, source: RUN_ERROR_KIND_COPY[kind]};
 }
 
-/** Localized copy for a known error kind, or null when the kind is unmapped. */
-export function localizedErrorKind(kind: string | null): string | null {
+/** Copy for a known error kind as a source a view can hold, or null when unmapped. */
+export function errorKindText(kind: string | null): LocalizedText | null {
   const known = kindSource(kind);
-  return known ? msg(known.source, {id: `errors.kind.${known.kind}`}) : null;
+  return known ? catalogText(known.source, `errors.kind.${known.kind}`) : null;
 }
 
-/** Project one live SSE error payload to user-facing copy. */
-export function localizedRunErrorPayload(payload: unknown, fallback?: string): string {
+/** Project one live SSE error payload to copy a view can hold. */
+export function runErrorText(
+  payload: unknown,
+  fallback: LocalizedText = SERVICE_ERROR_TEXT,
+): LocalizedText {
   const kind = payload !== null && typeof payload === 'object' && !Array.isArray(payload)
     ? (payload as {kind?: unknown}).kind
     : undefined;
-  return localizedErrorKind(typeof kind === 'string' ? kind : null)
-    ?? answerErrorMessage(payload, fallback);
+  return errorKindText(typeof kind === 'string' ? kind : null)
+    ?? answerErrorText(payload, fallback);
 }
 
-/** Project one stored turn's terminal error fields to user-facing copy. */
-export function localizedStoredRunError(kind: string | null, message: string | null): string {
-  const localized = localizedErrorKind(kind);
+/** Project one stored turn's terminal error fields to copy a view can hold. */
+export function storedRunErrorText(kind: string | null, message: string | null): LocalizedText {
+  const localized = errorKindText(kind);
   if (localized) return localized;
-  if (typeof message === 'string' && message.trim()) return message;
-  return answerErrorMessage(null);
+  if (typeof message === 'string' && message.trim()) return serverText(message);
+  return answerErrorText(null);
 }

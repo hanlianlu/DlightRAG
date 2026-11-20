@@ -1,10 +1,40 @@
 {
-  "include": ["src", "packages", "tests", "scripts", "chart-render", "prerequisite_setup.py"],
-  "exclude": ["**/__pycache__", "**/node_modules", "**/.*", ".venv"],
-  "extraPaths": ["src", "chart-render"],
+  "include": [
+    "src",
+    "packages",
+    "tests",
+    "scripts",
+    "chart-render",
+    "prerequisite_setup.py"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    "**/node_modules",
+    "**/.*",
+    ".venv"
+  ],
+  "extraPaths": [
+    "src",
+    "packages/memory/src",
+    "packages/mineru/src",
+    "packages/observability/src",
+    "chart-render"
+  ],
   "venvPath": ".",
   "venv": ".venv",
   "pythonVersion": "3.14",
   "typeCheckingMode": "standard",
-  "reportIncompatibleMethodOverride": false
+  "reportIncompatibleMethodOverride": false,
+  "executionEnvironments": [
+    {
+      "root": ".",
+      "extraPaths": [
+        "src",
+        "packages/memory/src",
+        "packages/mineru/src",
+        "packages/observability/src",
+        "chart-render"
+      ]
+    }
+  ]
 }

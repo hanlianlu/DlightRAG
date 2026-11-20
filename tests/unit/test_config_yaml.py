@@ -10,8 +10,11 @@ import pytest
 from ruamel.yaml import YAML
 from ruamel.yaml.constructor import DuplicateKeyError
 
-from dlightrag.application.config import DlightragConfig, LaneRuntimeConfig, _find_yaml_config
 from dlightrag.application.config import sections as config_sections
+from dlightrag.application.config.sections import (
+    DlightragConfig,
+    _find_yaml_config,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -168,37 +171,6 @@ def test_nested_runtime_yaml_retains_the_other_lane_default(
     assert runtime.corpus_mutation.max_nonterminal_runs == 57
 
 
-def test_runtime_lanes_share_one_required_config_type_with_lane_defaults() -> None:
-    runtime = DlightragConfig(_env_file=None).runtime
-
-    assert type(runtime.query) is LaneRuntimeConfig
-    assert type(runtime.corpus_mutation) is LaneRuntimeConfig
-    assert set(LaneRuntimeConfig.model_fields) == {
-        "worker_concurrency",
-        "max_nonterminal_runs",
-    }
-    assert all(field.is_required() for field in LaneRuntimeConfig.model_fields.values())
-    assert runtime.query == LaneRuntimeConfig(
-        worker_concurrency=16,
-        max_nonterminal_runs=30_000,
-    )
-    assert runtime.corpus_mutation == LaneRuntimeConfig(
-        worker_concurrency=2,
-        max_nonterminal_runs=1_000,
-    )
-
-
-def test_flat_runtime_environment_is_rejected(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setitem(DlightragConfig.model_config, "env_file", None)
-    monkeypatch.setenv("DLIGHTRAG_ANSWER_WORKER_CONCURRENCY", "7")
-
-    with pytest.raises(ValueError, match="Unknown DlightRAG environment variables"):
-        DlightragConfig()
-
-
 def test_yaml_discovery_and_no_yaml_defaults(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -234,6 +206,20 @@ def test_shipped_config_yaml_validates_and_applies_every_value(
         if path == ("deployment", "working_dir"):
             value = str(Path(str(value)).resolve())
         assert reduce(operator.getitem, path, loaded) == value, path
+
+
+def test_shipped_config_yaml_gives_the_memory_pass_its_own_low_reasoning_level(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shipped = _REPO_ROOT / "config.yaml"
+    monkeypatch.setattr(config_sections, "_find_yaml_config", lambda: shipped)
+
+    config = DlightragConfig()
+
+    assert config.answer.agent.memory_consolidation.reasoning == "low"
+    # It is not the query role's: that role keeps reasoning off for ordinary calls.
+    assert config.models.chat.roles.query is not None
+    assert config.models.chat.roles.query.reasoning == "off"
 
 
 def test_unit_runs_ignore_the_checkout_config(

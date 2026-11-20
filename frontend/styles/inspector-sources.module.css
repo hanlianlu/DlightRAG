@@ -21,7 +21,7 @@
     width: 100%;
     padding: var(--space-tight) var(--space-component);
     background: transparent;
-    transition: background 0.15s ease;
+    transition: background var(--duration-control) ease;
 }
 
 .source-doc-header:hover {
@@ -97,7 +97,7 @@
     margin-bottom: var(--space-component);
     border-radius: var(--radius-surface);
     box-shadow: inset 2px 0 0 var(--color-source-accent);
-    transition: background 0.15s, box-shadow 0.15s;
+    transition: background var(--duration-control), box-shadow var(--duration-control);
 }
 
 .source-chunk.active {
@@ -199,7 +199,7 @@
     color: var(--color-text-muted);
     flex-shrink: 0;
     text-decoration: none;
-    transition: color 0.15s, background 0.15s;
+    transition: color var(--duration-control), background var(--duration-control);
 }
 
 .source-action-icon:hover {

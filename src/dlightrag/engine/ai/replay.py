@@ -46,8 +46,8 @@ def messages_for_model(
 ) -> list[dict[str, Any]]:
     """Unwrap same-model provider state and strip every cross-model opaque value.
 
-    Legacy unbound ``provider_state`` is also stripped: without a durable source
-    identity it cannot be replayed safely.
+    ``provider_state`` that names no source identity is stripped too: it cannot be
+    replayed safely.
     """
     prepared: list[dict[str, Any]] = []
     for source in messages:

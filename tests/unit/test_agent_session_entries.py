@@ -12,6 +12,7 @@ from dlightrag.engine.agent.session.entries import (
     AssistantMessageEntry,
     CompactionEntry,
     ControlMessageEntry,
+    DeliveryWarningEntry,
     ToolResultMessageEntry,
     UserMessageEntry,
     decode_entry_payload,
@@ -40,6 +41,7 @@ def test_entry_union_contains_only_approved_semantic_variants() -> None:
         "assistant_message",
         "tool_result",
         "control_message",
+        "delivery_warning",
         "compaction",
     }
 
@@ -76,6 +78,12 @@ def test_every_semantic_entry_round_trips_its_canonical_payload() -> None:
             effective_input_digest="b" * 64,
         ),
         ControlMessageEntry(**common, control_id="s1", content="correct"),
+        DeliveryWarningEntry(
+            **common,
+            operation_id="op-1",
+            attempt=1,
+            findings=("not read: references/gate-audit.md (before delivery)",),
+        ),
         CompactionEntry(
             **common,
             projection_id=ProjectionId.new(),
@@ -94,6 +102,40 @@ def test_every_semantic_entry_round_trips_its_canonical_payload() -> None:
             payload=entry.canonical_payload(),
         )
         assert decoded == entry
+
+
+def test_a_user_message_states_its_origin_only_when_it_has_one() -> None:
+    common = {**_common(), "sequence": 1}
+    owner = UserMessageEntry(**common, content="question")
+    notification = UserMessageEntry(**common, content="Child result", origin="child_notification")
+
+    assert owner.canonical_payload() == {"content": "question"}
+    assert notification.canonical_payload() == {
+        "content": "Child result",
+        "origin": "child_notification",
+    }
+    for entry in (owner, notification):
+        decoded = decode_entry_payload(
+            entry_type=entry.entry_type,
+            entry_id=entry.entry_id,
+            session_id=entry.session_id,
+            sequence=entry.sequence,
+            timestamp=entry.timestamp,
+            payload=entry.canonical_payload(),
+        )
+        assert decoded == entry
+
+
+def test_a_user_message_of_an_unknown_origin_is_refused_when_read_back() -> None:
+    with pytest.raises(ValueError, match="origin"):
+        decode_entry_payload(
+            entry_type="user_message",
+            entry_id=EntryId.new(),
+            session_id=SessionId.new(),
+            sequence=1,
+            timestamp=datetime.now(UTC),
+            payload={"content": "question", "origin": "owner"},
+        )
 
 
 def test_tool_result_requires_complete_executable_provenance() -> None:

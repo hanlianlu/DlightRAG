@@ -45,18 +45,14 @@ threads ids, and no observation restates them.
 
 ### Known boundary: model work outside any root
 
-Ingestion nests. The `ingest-documents` trace of release 2.0.40 (2026-10-03) holds
-all 3,057 of its observations in one tree, the batch root with 421 embeddings and
-2,635 completions beneath it, and no orphan completion or embedding root has
-appeared since. Release 2.0.23 did detach them (86 image-embedding roots on
-2026-09-30); that boundary has closed.
+Ingestion nests: an `ingest-documents` trace holds its embeddings and completions
+in one tree under the batch root, with no separate completion or embedding root.
 
 What can still surface as a trace of its own is model work LightRAG performs
 outside any root: the entity and relation rebuild after a delete that other
 documents share, and whatever the startup sweep finds to resume. Those calls have
 no ambient parent, and they are exported rather than dropped, because each is real
-spend a reviewer would otherwise never see. Neither has occurred in the measured
-data, so this is what can happen, not what has.
+spend a reviewer would otherwise never see.
 
 The exporter owns an isolated OpenTelemetry TracerProvider, never the
 process-global one
@@ -199,6 +195,15 @@ deprecated `code.filepath`/`code.lineno` had shipped in place of the stable
   `dlightrag.input`, `dlightrag.output`, and `dlightrag.metadata`, each of
   them already the classifier's output and each bounded at 64 KiB. A model's
   request parameters are one JSON attribute, `dlightrag.model_parameters`.
+  A Tool may state bounded facts about its own call, which the Runtime puts in its
+  span's `dlightrag.output` beside `is_error` and `cached` — those two are the
+  Runtime's and a Tool cannot overrule them. The Web search tool is the one that
+  does: `web_search_provider` (empty when no provider answered),
+  `web_search_hits`, `web_search_degraded`, and `web_search_cost_dollars`, which two
+  dashboard tiles group by — calls per provider with failovers marked, and cost with
+  passages per interval. Provider failures are also log records with `provider`,
+  `operation`, `reason`, and `status` beside the message, so an outage is countable
+  from the logs without a tile of its own.
 - A failure whose kind the application already classified carries it as
   `dlightrag.error.kind` (`dependency_unavailable`, `run_abandoned`,
   `workspace_integrity_error`, …), beside the status message rather than inside
@@ -243,14 +248,15 @@ writing to its console exactly as before.
 One classifier decides what leaves the process, and monitoring is never switched
 off ([ADR 0039](adr/0039-observability-is-always-on-and-the-seam-masks-private-data.md)).
 Every value that would be exported — an observation's `input` or `output`, a log
-record's message — is **private** or **exportable**. A
+record's message, a browser replay field — is **private** or **exportable**. A
 private value is masked to its presence, length, and digest
 (`[private: 1,234 chars, sha256:ab12…]`), never carried in the clear; a *credential*
 is the exception that keeps neither: it becomes `[redacted]`, because a digest of a
 low-entropy secret is a brute-force oracle. An exportable value is exported, still
 through the secret masker below.
 
-- **Private** is credentials and tokens, inline image bytes, memory
+- **Private** is credentials and tokens, inline image bytes, the browser's DOM
+  text and input values, request and response bodies, console output, memory
   record bodies — which were already exported as counts and character totals
   rather than as records — and **a path that names a home directory**, because
   that path names the operator: the account name and the layout of a personal
@@ -281,11 +287,26 @@ through the secret masker below.
   name is replaced except a flag, and a count under a name that merely contains
   `token` (such as `max_tokens`); inline image bytes are removed from message
   telemetry before it leaves the process.
+- The browser channel states the same rule in its own terms: replay stays on,
+  `maskAllText` and `maskAllInputs` are set, and request and response bodies,
+  console output, and canvas recording are not captured. A replay keeps the
+  interactions — clicks, navigation, timing, errors, network status — and not
+  the text they happened over. Replay is the one signal a deployment may sample
+  (`observability.browser_replay_sample_rate`): the page flips one coin per
+  session and an unsampled session initialises with replay off, while its errors
+  and its RUM are reported exactly as a sampled session's are. Sampling is a
+  volume knob; it is not an off state.
+- A reported browser stack names minified, hashed assets. The production build emits a source map
+  for each, hidden (no bundle points at one), and moves the maps out of the served directory into
+  `frontend/.sourcemaps/<build>/assets/` (gitignored; `<build>` is the application entry's hash), so
+  a stack can be symbolicated and the maps are never served. The container image does not carry
+  them: build the same commit with `make frontend-build` and match the hash in the asset's name.
 - Masking fails closed and never raises: a classification or mask that fails
   yields the placeholder, never the original value, and its exception never
   reaches the request path. Monitoring failure never fails the product either:
-  an initialization that fails installs no-op telemetry and an unreachable
-  destination drops telemetry from a bounded queue and nothing else.
+  an initialization that fails installs no-op telemetry, an unreachable
+  destination drops telemetry from a bounded queue and nothing else, and the
+  browser SDK is loaded off the render path, where a failure to load is ignored.
   **Turning the observing stack off is quiet**: an outage is reported once — one
   warning when the destination stops answering, one line when it answers again —
   and the failures in between are counted, not logged. A logging call never waits
@@ -301,16 +322,8 @@ through the secret masker below.
   pollute the tree. Every payload the collector receives has therefore passed the
   masking above.
 
-**What is in place.** The trace seam: no key decides whether content exists,
-`Telemetry.capture_sensitive_data` is gone, every call site hands the seam what it
-has and the seam bounds it, and the payload masker *is* the classifier above. The
-export: observations leave the process as OTLP spans into a self-hosted ClickStack,
-the process's log records travel beside them with the trace they belong to, and
-Langfuse is deleted rather than switched off
-([ADR 0040](adr/0040-observability-lands-in-clickstack.md)). What is not in place
-is cost attribution, which needs a price table over `otel_traces` that is the
-operator's to build. There is no browser channel: the product's own telemetry is
-the server's.
+**Not provided.** Cost attribution: it needs a price table over `otel_traces` that is the
+operator's to build.
 
 ## Cost
 
@@ -324,15 +337,6 @@ not the deployment's money account. A charge a provider reports itself
 (OpenRouter's `usage.include`, in [Operations](operations.md#cost-and-recovery)) is
 passed through as `gen_ai.usage.cost` and outranks any derived price.
 
-## One ClickStack, Several Products
-
-DlightRAG and DlightAgent export into the same kind of ClickStack, and one instance can
-serve both. Nothing is shared by accident: each process states its own `service.name`
-(`dlightrag-api`, `dlightrag-mcp`, `dlightrag-reader`), the shipped alerts, channel and
-dashboard carry the product's name, and every query over product signals filters on
-`startsWith(ServiceName, 'dlightrag')`. Two products therefore never overwrite each
-other's alerts and never count each other's spans
-([Operations](operations.md#alerts-and-the-dashboard)).
 
 ## Deployment
 

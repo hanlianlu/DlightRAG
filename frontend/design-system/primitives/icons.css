@@ -4,14 +4,18 @@
   display: block;
   flex: none;
   overflow: visible;
-  stroke-width: var(--dl-icon-stroke, 1.75);
-}
 
-.dl-icon :is(path, rect, circle, line, polyline, polygon, ellipse) {
-  vector-effect: non-scaling-stroke;
+  /* A viewBox-unit weight, not a CSS-pixel one: the drawing scales it, so a 16px mark carries a lighter
+   * line than a 24px mark the way Lucide's own set does. The one step that states its own weight is 12px
+   * below, where the geometric weight would fall under a CSS pixel. */
+  stroke-width: var(--dl-icon-weight, 1.5);
 }
 
 .dl-icon--xs {
+  /* At 12px the 1.5 weight is three quarters of a CSS pixel; this step keeps Lucide's 2 units so a mark
+   * that sits in a line of 12px words still draws a full pixel of ink. */
+  --dl-icon-weight: 2;
+
   height: var(--dl-icon-size-xs);
   width: var(--dl-icon-size-xs);
 }
@@ -53,7 +57,27 @@
 
 .dl-icon-button:disabled {
   cursor: default;
-  opacity: 0.45;
+  opacity: 0.5;
+}
+
+/* Dense variant for a control drawn inside a line of words: `dl-icon-button dl-icon-button--dense` is
+ * drawn at the size `--dl-icon-button-size` states — the mark's own size, so the ink stands where the box
+ * does and the row's measures hold — rather than at the control ladder's square. A mark drawn smaller
+ * carries a lighter stroke on its own, because the weight is a measure of the glyph's viewBox and the
+ * drawing scales it. The reader still presses the ladder's target — the same invisible extension the
+ * switch uses (primitives.css, `.dl-switch::before`) — so a tap beside the mark still reaches the control. */
+.dl-icon-button--dense {
+  block-size: var(--dl-icon-button-size, var(--dl-icon-size-sm));
+  inline-size: var(--dl-icon-button-size, var(--dl-icon-size-sm));
+  min-block-size: 0;
+  min-inline-size: 0;
+  position: relative;
+}
+
+.dl-icon-button--dense::before {
+  content: '';
+  inset: min(0px, calc((100% - var(--control-hit-target)) / 2));
+  position: absolute;
 }
 
 @media (forced-colors: active) {

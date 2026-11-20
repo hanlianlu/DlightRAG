@@ -7,11 +7,27 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
-MemoryKind = Literal["preference", "fact"]
+MemoryKind = Literal["preference", "fact", "experience"]
 MemoryStatus = Literal["active", "superseded", "forgotten"]
-MemoryOriginKind = Literal["answer_run", "management", "mcp", "undo"]
-MemoryOperationAction = Literal["remember", "forget", "undo"]
+MemoryOriginKind = Literal["answer_run", "management", "mcp", "undo", "session_pass"]
+MemoryOperationAction = Literal["remember", "forget", "undo", "fuse"]
 MemoryOperationOutcome = Literal["changed", "unchanged", "conflict"]
+#: How a record a Run left came to be: a new statement, a correction of an earlier one, or a merge.
+MemoryRunChangeAction = Literal["add", "update", "fuse"]
+
+#: Every kind, in one place: storage checks, policy and tool schemas derive from it.
+MEMORY_KINDS: tuple[MemoryKind, ...] = ("preference", "fact", "experience")
+#: Kinds that apply to every request and so stand in recall whenever they fit;
+#: a ``fact`` reaches a request only through relevance.
+STANDING_KINDS: tuple[MemoryKind, ...] = ("preference", "experience")
+MEMORY_ORIGIN_KINDS: tuple[MemoryOriginKind, ...] = (
+    "answer_run",
+    "management",
+    "mcp",
+    "undo",
+    "session_pass",
+)
+MEMORY_OPERATION_ACTIONS: tuple[MemoryOperationAction, ...] = ("remember", "forget", "undo", "fuse")
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +53,22 @@ class MemoryRecord:
     supersedes_id: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    #: A short verbatim excerpt of what the owner said, the words this record's current form
+    #: rests on; None where the owner did not say it, or the writer gave none.
+    quote: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryRunChange:
+    """One active record a Run's writer left, with the change that made it.
+
+    ``change_id`` is what undoes it; ``action`` says whether it added a statement, corrected
+    an earlier one (``update``) or replaced several (``fuse``).
+    """
+
+    record: MemoryRecord
+    change_id: str
+    action: MemoryRunChangeAction
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +86,11 @@ class MemoryOperation:
     target_change_id: str | None = None
     mutation_scope: str | None = None
     mutation_limit: int | None = None
+    #: The records one ``fuse`` replaces, in the caller's order; empty otherwise.
+    source_ids: tuple[str, ...] = ()
+    #: The owner's own words behind the record a ``remember`` or ``fuse`` writes (see
+    #: ``MemoryRecord.quote``); the policy admits one only where it can stand.
+    quote: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +120,10 @@ class MemoryOperationReceipt:
 
 
 __all__ = [
+    "MEMORY_KINDS",
+    "MEMORY_OPERATION_ACTIONS",
+    "MEMORY_ORIGIN_KINDS",
+    "STANDING_KINDS",
     "MemoryKind",
     "MemoryOperation",
     "MemoryOperationAction",
@@ -91,5 +132,7 @@ __all__ = [
     "MemoryOriginKind",
     "MemoryProvenance",
     "MemoryRecord",
+    "MemoryRunChange",
+    "MemoryRunChangeAction",
     "MemoryStatus",
 ]

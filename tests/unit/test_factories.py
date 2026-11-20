@@ -9,8 +9,8 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-from dlightrag.application.config import DlightragConfig
-from dlightrag.application.settings import (
+from dlightrag.application.config.sections import DlightragConfig
+from dlightrag.application.settings.projections import (
     model_profile_for_role,
     model_settings_for_role,
     rerank_scoring_model_settings,
@@ -104,7 +104,7 @@ def test_root_resolves_model_profiles_independently_per_role() -> None:
         models={
             "chat": ModelRoleSettings(
                 default=ModelSettings(
-                    model="google/gemini-3.8-flash",
+                    model="google/gemini-4-hydrogen",
                     base_url="https://openrouter.ai/api/v1",
                 ),
                 roles=ModelRoleOverrides(
@@ -124,7 +124,7 @@ def test_root_resolves_model_profiles_independently_per_role() -> None:
         },
     )
 
-    assert model_profile_for_role(config, "keyword").max_output_tokens == 65_536
+    assert model_profile_for_role(config, "keyword").max_output_tokens == 943_718
     assert model_profile_for_role(config, "extract").max_output_tokens == 384_000
     query = model_profile_for_role(config, "query")
     assert query.context_window_tokens == 1_048_576

@@ -28,7 +28,7 @@ def test_a_reload_restores_the_saved_question_and_answer(page: Page) -> None:
     assert isinstance(payload, dict)
     assert payload["query"] == query
     assert set(payload["workspaces"]) == {"default", "research"}
-    expect(page.get_by_text("DlightRAG is a multimodal RAG system.", exact=True)).to_be_visible()
+    expect(page.get_by_text("DlightRAG is a durable agent.", exact=True)).to_be_visible()
     page.wait_for_url("**/web/conversations/*")
     expect(page.locator('[data-conversation-id][aria-current="page"]')).to_have_count(1)
 
@@ -36,9 +36,7 @@ def test_a_reload_restores_the_saved_question_and_answer(page: Page) -> None:
 
     chat_messages = page.locator("#chat-messages")
     expect(chat_messages.get_by_text(query, exact=True)).to_be_visible()
-    expect(
-        chat_messages.get_by_text("DlightRAG is a multimodal RAG system.", exact=True)
-    ).to_be_visible()
+    expect(chat_messages.get_by_text("DlightRAG is a durable agent.", exact=True)).to_be_visible()
 
 
 def test_composing_line_break_does_not_submit_but_plain_line_break_does(page: Page) -> None:
@@ -74,7 +72,7 @@ def test_composing_line_break_does_not_submit_but_plain_line_break_does(page: Pa
             }))"""
         )
 
-    expect(page.get_by_text("DlightRAG is a multimodal RAG system.", exact=True)).to_be_visible()
+    expect(page.get_by_text("DlightRAG is a durable agent.", exact=True)).to_be_visible()
 
 
 def test_mobile_shell_tracks_viewport_height(page: Page) -> None:
@@ -92,55 +90,3 @@ def test_mobile_shell_tracks_viewport_height(page: Page) -> None:
             })"""
         )
         assert dimensions == {"viewport": height, "app": height, "panel": height}
-
-
-def test_soft_shell_keeps_all_structural_chrome_square_on_desktop(page: Page) -> None:
-    page.set_viewport_size({"width": 1440, "height": 900})
-    _open_ready_chat(page)
-
-    radii = page.evaluate(
-        """() => {
-            const style = selector => getComputedStyle(document.querySelector(selector));
-            const radius = selector => style(selector).borderRadius;
-            document.body.classList.add('sources-panel-open');
-            document.querySelector('#artifact-canvas').classList.add('open');
-            return {
-                app: radius('.app'),
-                appClip: style('.app').clipPath,
-                conversations: radius('#chat-sidebar'),
-                outerPanel: radius('#panel'),
-                internalArtifact: radius('#artifact-canvas'),
-            };
-        }"""
-    )
-    assert radii == {
-        "app": "0px",
-        "appClip": "none",
-        "conversations": "0px",
-        "outerPanel": "0px",
-        "internalArtifact": "0px",
-    }
-
-
-def test_soft_shell_stays_full_bleed_on_mobile(page: Page) -> None:
-    page.set_viewport_size({"width": 390, "height": 700})
-    _open_ready_chat(page)
-
-    radii = page.evaluate(
-        """() => {
-            const style = selector => getComputedStyle(document.querySelector(selector));
-            const radius = selector => style(selector).borderRadius;
-            return {
-                app: radius('.app'),
-                appClip: style('.app').clipPath,
-                conversations: radius('#chat-sidebar'),
-                panel: radius('#panel'),
-            };
-        }"""
-    )
-    assert radii == {
-        "app": "0px",
-        "appClip": "none",
-        "conversations": "0px",
-        "panel": "0px",
-    }

@@ -72,6 +72,18 @@ test('route parser distinguishes new chat, conversations, and unsupported pages'
   assert.equal(routePath(conversationRoute('a/b')), '/web/conversations/a%2Fb');
 });
 
+test('the address a page was loaded with survives the first canonicalization', () => {
+  // The server sends an OAuth return to /web/?settings=connections: the query is the marker
+  // the shell reads once it has booted, and it is not the router's to drop.
+  const driver = new FakeDriver('/web/?settings=connections&authorization=restart#connections');
+  new WebRouter(driver);
+
+  assert.deepEqual(
+    driver.replacements,
+    ['/web/?settings=connections&authorization=restart#connections'],
+  );
+});
+
 test('accepted navigation owns history and notifies one listener', async () => {
   const driver = new FakeDriver();
   const router = new WebRouter(driver);

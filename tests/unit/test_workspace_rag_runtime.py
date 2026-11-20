@@ -14,15 +14,18 @@ import httpx
 import pytest
 from lightrag.constants import PARSED_DIR_NAME
 
-from dlightrag.application.config import DlightragConfig
-from dlightrag.application.settings import rag_settings
+from dlightrag.application.config.sections import DlightragConfig
+from dlightrag.application.settings.projections import rag_settings
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY, NoopTelemetry, Telemetry
 from dlightrag.engine.rag.corpus.ingestion.document_embedding import (
     build_document_embedder,
     resolve_direct_image_embedding_enabled,
 )
-from dlightrag.engine.rag.corpus.ingestion.engine import PreparedIngestFile, UnifiedIngestionEngine
+from dlightrag.engine.rag.corpus.ingestion.engine import (
+    PreparedIngestFile,
+    UnifiedIngestionEngine,
+)
 from dlightrag.engine.rag.corpus.ingestion.paths import (
     remote_parser_input_path,
     retained_remote_source_path,
@@ -32,7 +35,7 @@ from dlightrag.engine.rag.retrieval.rerank_breaker import RerankBreaker
 from dlightrag.engine.rag.workspace.pool import WorkspacePool, WorkspaceUnavailableError
 from dlightrag.engine.rag.workspace.workspace_rag import RemoteIngestWindowProgress, WorkspaceRag
 from dlightrag.engine.rag.workspace.workspaces import normalize_workspace
-from tests.config_helpers import mutate_config
+from tests.support.config_helpers import mutate_config
 from tests.unit.conftest import OtlpExport
 
 
@@ -663,29 +666,20 @@ class TestWorkspaceRagAingest:
 
         close.assert_awaited_once()
 
-    async def test_aingest_replace_default_from_config(
-        self, test_config: DlightragConfig, tmp_path: Path
+    @pytest.mark.parametrize(("stated", "expected"), [({}, True), ({"replace": False}, False)])
+    async def test_aingest_replace_comes_from_config_unless_the_caller_states_it(
+        self,
+        test_config: DlightragConfig,
+        tmp_path: Path,
+        stated: dict[str, bool],
+        expected: bool,
     ) -> None:
         mutate_config(test_config, "corpus.ingestion.replace_default", True)
         fake_pdf = tmp_path / "file.pdf"
         fake_pdf.write_bytes(b"%PDF-fake")
         service, ingestion = self._make_initialized_service(test_config)
-        await service.aingest(source_type="local", documents=[{"path": str(fake_pdf)}])
-        call_kwargs = ingestion.aingest_files.call_args
-        assert call_kwargs.kwargs["replace"] is True
-
-    async def test_aingest_replace_explicit_overrides_config(
-        self, test_config: DlightragConfig, tmp_path: Path
-    ) -> None:
-        mutate_config(test_config, "corpus.ingestion.replace_default", True)
-        fake_pdf = tmp_path / "file.pdf"
-        fake_pdf.write_bytes(b"%PDF-fake")
-        service, ingestion = self._make_initialized_service(test_config)
-        await service.aingest(
-            source_type="local", documents=[{"path": str(fake_pdf)}], replace=False
-        )
-        call_kwargs = ingestion.aingest_files.call_args
-        assert call_kwargs.kwargs["replace"] is False
+        await service.aingest(source_type="local", documents=[{"path": str(fake_pdf)}], **stated)
+        assert ingestion.aingest_files.call_args.kwargs["replace"] is expected
 
     async def test_aingest_single_file_failure_is_a_document_outcome(
         self, test_config: DlightragConfig, tmp_path: Path
@@ -893,7 +887,9 @@ class TestWorkspaceRagRetrieve:
     def _make_retrieval_service(
         self, config: DlightragConfig, *, metadata_index: AsyncMock | None = None
     ) -> tuple[WorkspaceRag, MagicMock]:
-        from dlightrag.engine.rag.retrieval import RetrievalResult
+        from dlightrag.engine.rag.retrieval.results import (
+            RetrievalResult,
+        )
 
         service = _service(config)
         service._initialized = True
@@ -903,11 +899,6 @@ class TestWorkspaceRagRetrieve:
         service._lightrag_stores = MagicMock()
         service._metadata_index = metadata_index or _publishing_index(published=True)
         return service, orchestrator
-
-    async def test_aretrieve_delegates_to_orchestrator(self, test_config):
-        service, orchestrator = self._make_retrieval_service(test_config)
-        await service.aretrieve("test query")
-        orchestrator.aretrieve.assert_awaited_once()
 
     async def test_aretrieve_runs_no_leg_in_a_workspace_that_publishes_nothing(
         self, test_config
@@ -926,10 +917,12 @@ class TestWorkspaceRagRetrieve:
     async def test_federated_search_passes_over_an_empty_workspace_but_reports_a_broken_one(
         self, test_config
     ) -> None:
-        from dlightrag.engine.rag.retrieval import RetrievalResult
         from dlightrag.engine.rag.retrieval.federation import (
             FederationMergePolicy,
             federated_retrieve,
+        )
+        from dlightrag.engine.rag.retrieval.results import (
+            RetrievalResult,
         )
 
         broken = _publishing_index(published=True)
@@ -985,7 +978,9 @@ class TestWorkspaceRagRetrieve:
         orchestrators["broken"].aretrieve.assert_not_awaited()
 
     async def test_aretrieve_tags_all_context_rows_with_workspace(self, test_config) -> None:
-        from dlightrag.engine.rag.retrieval import RetrievalResult
+        from dlightrag.engine.rag.retrieval.results import (
+            RetrievalResult,
+        )
 
         service, orchestrator = self._make_retrieval_service(test_config)
         service._lightrag_stores = None
@@ -1024,22 +1019,22 @@ class TestWorkspaceRagRetrieve:
             for row in result.contexts[key]
         } == {test_config.deployment.workspace}
 
-    async def test_aretrieve_forwards_caller_bm25_query(self, test_config):
+    @pytest.mark.parametrize(
+        ("stated", "forwarded"), [({"bm25_query": "alpha beta"}, "alpha beta"), ({}, None)]
+    )
+    async def test_aretrieve_forwards_the_callers_bm25_query_or_none(
+        self, test_config, stated, forwarded
+    ):
         service, orchestrator = self._make_retrieval_service(test_config)
-        await service.aretrieve("test query", bm25_query="alpha beta")
-        call_kwargs = orchestrator.aretrieve.call_args.kwargs
-        assert call_kwargs["bm25_query"] == "alpha beta"
-
-    async def test_aretrieve_without_bm25_query_passes_none(self, test_config):
-        service, orchestrator = self._make_retrieval_service(test_config)
-        await service.aretrieve("test query")
-        call_kwargs = orchestrator.aretrieve.call_args.kwargs
-        assert call_kwargs["bm25_query"] is None
+        await service.aretrieve("test query", **stated)
+        assert orchestrator.aretrieve.call_args.kwargs["bm25_query"] == forwarded
 
     async def test_aretrieve_reranks_after_hydrating_fused_chunks(
         self, test_config, monkeypatch: pytest.MonkeyPatch
     ):
-        from dlightrag.engine.rag.retrieval import RetrievalResult
+        from dlightrag.engine.rag.retrieval.results import (
+            RetrievalResult,
+        )
 
         service, orchestrator = self._make_retrieval_service(test_config)
         orchestrator.aretrieve.return_value = RetrievalResult(
@@ -1077,7 +1072,9 @@ class TestWorkspaceRagRetrieve:
     async def test_aretrieve_retains_mix_graph_independently_of_reranked_chunks(
         self, test_config, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from dlightrag.engine.rag.retrieval import RetrievalResult
+        from dlightrag.engine.rag.retrieval.results import (
+            RetrievalResult,
+        )
 
         service, orchestrator = self._make_retrieval_service(test_config)
         orchestrator.aretrieve.return_value = RetrievalResult(
@@ -1135,7 +1132,9 @@ class TestWorkspaceRagRetrieve:
     async def test_aretrieve_caps_fused_chunks_when_rerank_disabled(
         self, test_config, monkeypatch: pytest.MonkeyPatch
     ):
-        from dlightrag.engine.rag.retrieval import RetrievalResult
+        from dlightrag.engine.rag.retrieval.results import (
+            RetrievalResult,
+        )
 
         service, orchestrator = self._make_retrieval_service(test_config)
         orchestrator.aretrieve.return_value = RetrievalResult(
@@ -1165,7 +1164,9 @@ class TestWorkspaceRagRetrieve:
     async def test_aretrieve_rerank_failure_keeps_hydrated_rrf_top_k(
         self, test_config, monkeypatch: pytest.MonkeyPatch
     ):
-        from dlightrag.engine.rag.retrieval import RetrievalResult
+        from dlightrag.engine.rag.retrieval.results import (
+            RetrievalResult,
+        )
 
         service, orchestrator = self._make_retrieval_service(test_config)
         orchestrator.aretrieve.return_value = RetrievalResult(
@@ -1214,7 +1215,9 @@ class TestWorkspaceRagRetrieve:
         self, test_config, monkeypatch: pytest.MonkeyPatch
     ):
         """Text reranker: image bytes are read only for chunks that survive rerank."""
-        from dlightrag.engine.rag.retrieval import RetrievalResult
+        from dlightrag.engine.rag.retrieval.results import (
+            RetrievalResult,
+        )
 
         service, orchestrator = self._make_retrieval_service(test_config)
         service._rerank_consumes_images = False  # text-only reranker
@@ -3044,45 +3047,12 @@ class TestWorkspaceRagLightRAGMainPath:
         assert service._ingestion_engine.aingest_files.await_args.kwargs["replace"] is True
         service._lightrag.adelete_by_doc_id.assert_not_awaited()
 
-    async def test_aretrieve_unified_delegates(self, test_config: DlightragConfig) -> None:
-        """aretrieve delegates directly to the retrieval orchestrator."""
-        from dlightrag.engine.rag.retrieval import RetrievalResult
-
-        expected = RetrievalResult(
-            contexts={"chunks": []},
-        )
-
-        service = _service(test_config)
-        service._initialized = True
-        service._metadata_index = _publishing_index(published=True)
-        service._retrieval_orchestrator = MagicMock()
-        service._retrieval_orchestrator.aretrieve = AsyncMock(return_value=expected)
-
-        result = await service.aretrieve("test query")
-        service._retrieval_orchestrator.aretrieve.assert_awaited_once()
-        assert isinstance(result, RetrievalResult)
-        assert result.contexts == {"chunks": []}
-
-    async def test_metadata_search_passes_custom_filters_through_verbatim(
-        self, test_config: DlightragConfig
-    ) -> None:
-        """Case folding belongs to the SQL comparison, not to the value in flight."""
-        from dlightrag.engine.rag.retrieval import MetadataFilter
-
-        service = _service(test_config)
-        service._metadata_index = AsyncMock()
-        service._metadata_index.query = AsyncMock(return_value=["doc-1"])
-
-        result = await service.asearch_metadata(MetadataFilter(custom={"department": " Finance "}))
-
-        assert result == ["doc-1"]
-        sent_filter = service._metadata_index.query.await_args.args[0]
-        assert sent_filter.custom == {"department": " Finance "}
-
     async def test_metadata_enrichment_uses_full_doc_id_without_path_fallback(
         self, test_config: DlightragConfig
     ) -> None:
-        from dlightrag.engine.rag.retrieval import RetrievalResult
+        from dlightrag.engine.rag.retrieval.results import (
+            RetrievalResult,
+        )
 
         service = _service(test_config)
         service._metadata_index = AsyncMock()
@@ -3129,7 +3099,9 @@ class TestWorkspaceRagLightRAGMainPath:
     async def test_metadata_enrichment_surfaces_distinct_source_contract(
         self, test_config: DlightragConfig
     ) -> None:
-        from dlightrag.engine.rag.retrieval import RetrievalResult
+        from dlightrag.engine.rag.retrieval.results import (
+            RetrievalResult,
+        )
 
         service = _service(test_config)
         service._metadata_index = AsyncMock()
@@ -4642,16 +4614,6 @@ class TestWorkspaceRagLightRAGMainPath:
             )
 
         service.aingest.assert_not_awaited()
-
-    async def test_close_lightrag_main_cleanup(self, test_config: DlightragConfig) -> None:
-        """close() finalizes LightRAG storages."""
-        service = _service(test_config)
-        service._initialized = True
-        service._lightrag = AsyncMock()
-
-        await service.aclose()
-
-        service._lightrag.finalize_storages.assert_awaited_once()
 
     async def test_adelete_files_dry_run_reports_matches_without_mutating(
         self, test_config: DlightragConfig

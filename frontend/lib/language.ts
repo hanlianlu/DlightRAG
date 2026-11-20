@@ -5,7 +5,7 @@
 export const LANGUAGE_STORAGE_KEY = 'dlightrag-lang';
 
 export type LanguagePreference = 'auto' | 'en' | 'zh';
-export type Locale = 'en' | 'zh';
+type Locale = 'en' | 'zh';
 
 export function parseLanguagePreference(value: string | null | undefined): LanguagePreference {
   return value === 'en' || value === 'zh' ? value : 'auto';

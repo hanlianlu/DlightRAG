@@ -16,7 +16,7 @@ from dlightrag.engine.agent.tool_content import (
     ToolTextPart,
     VisualSource,
 )
-from dlightrag.engine.agent.tools import (
+from dlightrag.engine.agent.tools.contracts import (
     AdmittedBytes,
     AdmittedBytesReader,
     EvidenceSourceFact,
@@ -26,7 +26,9 @@ from dlightrag.engine.agent.tools import (
     ToolRuntime,
 )
 from dlightrag.engine.agent.tools.files import ImagePreparer, ResourceReadRequest, ViewArgs
-from dlightrag.engine.answer.agent_browser import AgentBrowserError
+from dlightrag.engine.answer.agent_browser.contracts import (
+    AgentBrowserError,
+)
 from dlightrag.engine.answer.resources.converters import (
     ConversionLimitError,
     UnsafeArchiveError,
@@ -73,6 +75,22 @@ def _run_scoped_handle_refusal(exc: ResourceNotFoundError) -> str:
         "turn of this conversation, so it cannot be read, viewed, or copied here. Re-attach the "
         "document, or work from the images already replayed in this context."
     )
+
+
+def _placement(resource_id: str, label: str) -> str:
+    """The one line that tells the Model how to put these pixels in front of the reader.
+
+    A Model handed a picture has no way to guess the placement grammar, and until it is told, the
+    only thing it can do with an image it fetched is describe it -- which is what a Research Run on
+    an empty corpus used to do, three turns running, because the Answer had no way to carry an image
+    the Agent had looked at. Naming the placement beside the bytes it addresses keeps the grammar in
+    one place, and mirrors how an Artifact attachment already hands back its own ``artifact:`` link.
+
+    The id named is the attachment's, because those are the pixels this Run prepared and handed over
+    -- so the reader is shown what the Model saw, at the size the Run decided, rather than the
+    original the Run happened to fetch.
+    """
+    return f"\nTo show the reader this image: ![{label}](evidence:{resource_id})"
 
 
 def _stale_cursor_refusal(exc: ResourceCursorError) -> str:
@@ -345,7 +363,15 @@ def make_resource_viewer(
             attachment_id = f"res-view-{identity[:32]}"
             parts.extend(
                 (
-                    ToolTextPart(f"[resource: {resource_id} | {label}]"),
+                    # The handle, and then the one way to put these pixels in front of the reader.
+                    # A Model that has just been handed a picture has no way to guess the placement
+                    # grammar, and until it is told, the only thing it can do with an image it
+                    # fetched is describe it -- which is exactly what a Run on an empty corpus used
+                    # to do. Naming the placement here keeps the grammar in one place, beside the
+                    # bytes it addresses, rather than in a prompt that would have to be kept in step.
+                    ToolTextPart(
+                        f"[resource: {resource_id} | {label}]" + _placement(attachment_id, label)
+                    ),
                     ToolResourceAttachmentPart(
                         resource_id=attachment_id,
                         safe_name=label,

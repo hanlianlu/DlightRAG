@@ -11,6 +11,8 @@ Accepted and implemented. The toolkit is `html-report` beside `echarts-render` i
 built-in Skill `interactive-html` tells an agent when and how to use it, and the chart palette of
 both tools moved to one Mineral source.
 
+Amended 2026-10-19: the Skill starts a report from a fixture, and the toolkit checks a finished one.
+
 ## Context
 
 An HTML Artifact runs, only after the reader activates it, in an iframe sandboxed to
@@ -37,13 +39,20 @@ Nothing in the system gave a report responsive layout, slicers, pages or a sandb
   (narrow, medium, wide) to fonts, legend, grid, labels and aspect through ECharts itself. The
   caption is HTML, made from the option's `title`; the plot never shrinks for the title. Columns of
   charts appear only where each gets its own width.
+- **One column: the page's width is the measure.** A paragraph, a list and a timeline end where a
+  table, a card and a figure end, so text never stops short of the data beneath it and leaves the
+  rest of the row empty. The page's own `max-width` keeps the line readable; it, not a prose cap of
+  its own, is what bounds the measure, and a fragment that wants a narrower one writes it.
 - **One option language.** A chart is the same ECharts option JSON `echarts-render` takes, with
   data as tidy rows, `seriesBy` and `aggregate` to turn rows into series, slicer ids as tokens, and
   a `palette` choice. `core.js` is shared by the browser runtime and the node preview, so they cannot
   diverge.
-- **Mineral is the default look.** The stylesheet uses the product's role names and values for both
-  colour schemes (the report follows the system scheme), hairlines instead of shadows, and the
-  contrast floors of the Web theme. It is a default, not a lock: a fragment may override the CSS
+- **Mineral is the default look, in the reader's own mode.** The stylesheet uses the product's role
+  names and values for both colour schemes, hairlines instead of shadows, and the contrast floors of
+  the Web theme. The document wears the mode on its root (`data-color-mode`): the product's Artifact
+  frame hands over the reader's choice and keeps it current, so an embedded report follows the
+  product rather than the operating system; opened on its own the report follows the system scheme
+  and follows it as it changes. It is a default, not a lock: a fragment may override the CSS
   variables.
 - **One palette, narrow spectrum respected.** Stone plus gold cannot tell eight series apart, so the
   chart palette is designed rather than derived: gold leads a categorical set chosen by measured
@@ -76,3 +85,34 @@ Nothing in the system gave a report responsive layout, slicers, pages or a sandb
 - CI installs `resvg` and the font for the chart and report tests, and the chart toolkit's Node
   dependency, through `scripts/install-chart-tools.sh` and a `chart-render-install` target.
 - A report is built in the Agent Workspace by ordinary tools, then attached like any file.
+
+## Amendment 2026-10-19: the toolkit starts a report from a fixture and checks a finished one
+
+The toolkit assumed a model would read an example and write a fragment. On 2026-10-19 a live Run
+loaded `interactive-html`, then wrote `scripts/build_report.py` to emit a 30 KB self-contained page
+with five inline SVG charts; its reasoning said "no html-report build to avoid schema risk". The
+examples existed and the build was available; neither was used. Reading an example is an
+instruction a model can skip. Starting from the example is a file it can edit.
+
+**Decision — a starter and a check.**
+
+- **Starter.** The Skill copies the nearest example into `report/src.html` with `load_skill`'s
+  `write_to`, which already copies a document's exact bytes into the Agent Workspace. The Agent
+  edits content freely — sections, prose, numbers, charts — and keeps the machine contract: the
+  fragment is built by `html-report`, carries at least one paired chart, and declares its slicers.
+  A copy is not a read (ADR 0057); the example stays a fixture of the browser tests, and an
+  unmodified copy cannot be published as the deliverable because a Skill document is refused by
+  digest (ADR 0046).
+- **Check.** `html-report build` stays permissive about chart count — it is a generic fragment
+  builder, and a chartless fragment is legitimate — and warns at zero. New `html-report check
+  REPORT` inspects a finished document: its `report-source` block is present and rebuilds to the
+  same bytes (ADR 0051), and the fragment carries at least one paired chart. Every failure is an
+  error naming the rebuild, because the Agent can still correct it; the Skill runs `check` before
+  `attach_artifact`, and the platform never blocks (ADR 0058).
+
+Rejected: making `build` error at zero charts. It would put a Skill's delivery rule into a generic
+tool and refuse legitimate chartless reports; the check is the Skill's gate, and the build keeps its
+job.
+
+Consequences: a hand-built page fails `check` with a message that names the build; a page built from
+the starter passes; the examples become starters without a second copy of their shape.

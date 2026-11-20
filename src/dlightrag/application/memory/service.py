@@ -10,6 +10,7 @@ from dlightrag_memory import (
     MemoryKind,
     MemoryOperationReceipt,
     MemoryProvenance,
+    MemoryRunChange,
 )
 from dlightrag_memory.store import default_purge_cutoff
 
@@ -39,6 +40,18 @@ class MemorySettingsStore(Protocol):
     async def bump_epoch(self, *, owner_id: str) -> MemoryCapability: ...
 
 
+class SessionMemoryRestarter(Protocol):
+    """The Run store's part in the memory switch: start an owner's Sessions afresh."""
+
+    async def restart_session_memory(self, *, owner_id: str) -> None:
+        """Move every one of the owner's Sessions to its latest entry, never backwards.
+
+        What each Session holds up to there is neither read by a Session Memory Pass nor shown
+        to a model as context afterwards. A claim a pass holds and a plan it stored are kept.
+        """
+        ...
+
+
 @dataclass(frozen=True, slots=True)
 class MemorySettings:
     """Settings projection; count is absent while the capability is disabled."""
@@ -57,10 +70,12 @@ class MemoryService:
         *,
         memory_list_cursor_secret: bytes,
         settings_store: MemorySettingsStore,
+        sessions: SessionMemoryRestarter,
         superseded_retention_days: int = MEMORY_SUPERSEDE_RETENTION_DAYS,
     ) -> None:
         self._memory = Memory(store)
         self._settings = settings_store
+        self._sessions = sessions
         self._retention_days = superseded_retention_days
         self._memory_list_codec = MemoryListCursorCodec(memory_list_cursor_secret)
 
@@ -115,6 +130,16 @@ class MemoryService:
                 memory_id=UUID(str(next_after[1])),
             )
         return MemoryListPage(records=records, next_cursor=next_cursor)
+
+    async def run_changes(self, *, owner_id: str, run_id: str) -> tuple[MemoryRunChange, ...]:
+        """What one Run's writers left in the owner's profile that is still active.
+
+        Empty, not refused, while the owner's Profile Memory is off: a page asking after a
+        conversation's turns has nothing to show for a switch the owner turned off.
+        """
+        if not (await self.capability(owner_id=owner_id)).enabled:
+            return ()
+        return await self._memory.run_changes(owner_id=owner_id, run_id=run_id)
 
     async def remember(
         self,
@@ -173,12 +198,40 @@ class MemoryService:
             guard=lambda settlement: self._guard_enabled(owner_id=owner_id, settlement=settlement),
         )
 
+    async def fuse(
+        self,
+        *,
+        owner_id: str,
+        memory_ids: tuple[str, ...],
+        body: str,
+        kind: MemoryKind | None,
+        provenance: MemoryProvenance,
+        idempotency_key: str,
+    ) -> MemoryOperationReceipt:
+        """Merge several active records into the sentence the owner supplied."""
+        await self._require_enabled(owner_id=owner_id)
+        return await self._memory.fuse(
+            owner_id=owner_id,
+            memory_ids=memory_ids,
+            body=body,
+            kind=kind,
+            provenance=provenance,
+            idempotency_key=idempotency_key,
+            guard=lambda settlement: self._guard_enabled(owner_id=owner_id, settlement=settlement),
+        )
+
     async def settings(self, *, owner_id: str) -> MemorySettings:
         state = await self.capability(owner_id=owner_id)
         count = await self._memory.count_active(owner_id=owner_id) if state.enabled else None
         return MemorySettings(enabled=state.enabled, epoch=state.epoch, active_count=count)
 
     async def set_enabled(self, *, owner_id: str, enabled: bool) -> MemorySettings:
+        if enabled and not (await self._settings.state(owner_id=owner_id)).enabled:
+            # Off to on, and only then: every Session of the owner starts afresh from its latest
+            # entry, so nothing written while memory was off is ever read or shown as context,
+            # whether or not a pass saw it off. This comes first: if it fails the switch stays
+            # off and a retry does it all again, and memory is never on without it.
+            await self._sessions.restart_session_memory(owner_id=owner_id)
         state = await self._settings.set_enabled(owner_id=owner_id, enabled=enabled)
         count = await self._memory.count_active(owner_id=owner_id) if state.enabled else None
         return MemorySettings(enabled=state.enabled, epoch=state.epoch, active_count=count)
@@ -231,4 +284,5 @@ __all__ = [
     "MemoryService",
     "MemorySettings",
     "MemorySettingsStore",
+    "SessionMemoryRestarter",
 ]

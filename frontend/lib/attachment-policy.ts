@@ -5,7 +5,7 @@
 // byte limits. DOM- and CSS-free so it can be unit-tested in Node;
 // dl-chat-composer renders and wires these decisions.
 
-export type CapabilityStatus = 'supported' | 'unsupported' | 'unknown';
+type CapabilityStatus = 'supported' | 'unsupported' | 'unknown';
 export type AttachmentKind = 'image' | 'document' | 'unsupported';
 
 export interface AttachmentPolicy {
@@ -17,7 +17,7 @@ export interface AttachmentPolicy {
     imageLimit: number;
 }
 
-export interface AttachmentCounts {
+interface AttachmentCounts {
     total: number;
     images: number;
 }

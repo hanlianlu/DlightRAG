@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
-from dlightrag.engine.rag.retrieval import MetadataScope
+from dlightrag.engine.rag.retrieval.models import MetadataScope
 from dlightrag.engine.rag.retrieval.ports import ChunkVectorStore, ScopedChunkReader
 from dlightrag.engine.rag.retrieval.visibility import (
     VisibleDocumentLookup,
@@ -149,10 +149,6 @@ class FilteredVectorStorage:
             if shortfall:
                 stats.visibility_shortfall = shortfall
         return rows
-
-    async def ensure_doc_scope_index(self) -> None:
-        if self._chunk_vectors is not None:
-            await self._chunk_vectors.ensure_document_scope_index()
 
     def __getattr__(self, name: str) -> Any:
         """Proxy all other attributes to original (table_name, workspace, etc.)."""

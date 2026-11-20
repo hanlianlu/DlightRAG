@@ -13,7 +13,7 @@ FRONTEND_STYLES = FRONTEND / "styles"
 
 
 def test_vite_html_has_no_external_script_or_unresolved_theme_placeholder() -> None:
-    for name in ("index.html", "login.html", "design-system.html", "product-showcase.html"):
+    for name in ("index.html", "login.html", "design-system.html"):
         source = (FRONTEND / name).read_text(encoding="utf-8")
         built = (ROOT / "src/dlightrag/adapters/http/browser/static/app" / name).read_text(
             encoding="utf-8"
@@ -78,7 +78,7 @@ def test_web_static_catalog_stylesheet_reaches_only_catalog_pages() -> None:
     )
 
     assert len(catalog) == 1
-    assert referrers == ["design-system.html", "product-showcase.html"]
+    assert referrers == ["design-system.html"]
 
 
 def test_web_static_js_build_has_no_orphan_chunks() -> None:
@@ -89,12 +89,7 @@ def test_web_static_js_build_has_no_orphan_chunks() -> None:
     )
     html = "\n".join(
         (app_root / filename).read_text(encoding="utf-8")
-        for filename in (
-            "index.html",
-            "login.html",
-            "design-system.html",
-            "product-showcase.html",
-        )
+        for filename in ("index.html", "login.html", "design-system.html")
     )
     roots = set(re.findall(r'/static/app/assets/([^"/]+\.js)', html))
     expected = {path.name for path in assets.glob("*.js")}

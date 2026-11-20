@@ -33,7 +33,7 @@ async def pg():
         yield pair
 
 
-@pytest.mark.parametrize("kind", ["multi", "scan", "mixed", "nonlatin", "xlsx"])
+@pytest.mark.parametrize("kind", ["multi", "scan", "mixed", "xlsx"])
 async def test_format_route_host_settlement_and_recovery(pg, monkeypatch, kind):
     store, pool = pg
     session, session_id = await new_run(store)
@@ -79,9 +79,7 @@ async def test_format_route_host_settlement_and_recovery(pg, monkeypatch, kind):
         entries = [e for e in settled.entries if isinstance(e, ToolResultMessageEntry)]
         assert not tool_content_attachments(entries[0].result.parts)
         attachments = [p for e in entries[1:] for p in tool_content_attachments(e.result.parts)]
-        assert (
-            len(attachments) == {"multi": 3, "scan": 2, "mixed": 1, "nonlatin": 2, "xlsx": 3}[kind]
-        )
+        assert len(attachments) == {"multi": 3, "scan": 2, "mixed": 1, "xlsx": 3}[kind]
         assert len({a.source for a in attachments}) == len(attachments)
         for a in attachments:
             assert a.source is not None

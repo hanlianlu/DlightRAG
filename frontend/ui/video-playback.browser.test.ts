@@ -237,6 +237,7 @@ it('shares ownership with a Markdown Artifact Canvas and closing the Canvas tear
     dataUrl: '/web/api/answer/run-1/artifacts/report',
     downloadUrl: '/web/api/answer/run-1/artifacts/report?download=1',
     presentationUrl: '/web/api/answer/run-1/artifacts/report/presentation', issue: null,
+    attestation: null,
   };
   await canvas.open(artifact);
   const play = await until('[data-video-play]', canvas) as HTMLButtonElement;

@@ -17,7 +17,6 @@ const FEATURE_TAGS = new Set([
   'dl-image-lightbox',
   'dl-inspector',
   'dl-settings-dialog',
-  'dl-toast-region',
 ]);
 
 test('shell querySelector targets are Feature custom elements', () => {
@@ -33,6 +32,7 @@ test('shell querySelector targets are Feature custom elements', () => {
     || selector.includes(' ')
   ));
   assert.deepEqual(illegal, []);
+  assert.equal(source.includes('document.getElementById'), false, 'the Shell reaches Features by tag, never by id');
 });
 
 const SHARED_STORES = [
@@ -41,6 +41,10 @@ const SHARED_STORES = [
   'IngestStore',
   'AttachmentStore',
   'AnswerEventCursorStore',
+  'AnswerSubmissionRegistry',
+  'KeptJudgements',
+  'KeptTraces',
+  'RunActivityStore',
 ];
 
 test('createAppHandles is the only constructor of the shared stores', () => {
@@ -59,4 +63,19 @@ test('createAppHandles is the only constructor of the shared stores', () => {
   assert.deepEqual(offenders, []);
   const handles = readFileSync(join(frontend, 'stores', 'app-handles.ts'), 'utf8');
   for (const store of SHARED_STORES) assert.match(handles, new RegExp(`\\bnew ${store}\\(`));
+});
+
+test('no store module holds an instance of its own: state a module keeps is the bag\'s', () => {
+  const frontend = join(dirname(APP), '..');
+  const offenders: string[] = [];
+  for (const name of readdirSync(join(frontend, 'stores'))) {
+    if (!name.endsWith('.ts') || name.endsWith('.test.ts') || name === 'app-handles.ts') continue;
+    const source = readFileSync(join(frontend, 'stores', name), 'utf8');
+    // A top-level `const x = new Thing(` / `let x` / `export const x = new Thing(`: state that outlives
+    // any bag and that no sign-out reset reaches.
+    for (const match of source.matchAll(/^(?:export )?(?:let [a-zA-Z_]\w*|const [a-zA-Z_]\w* = new [A-Z]\w*\()/gm)) {
+      offenders.push(`stores/${name}: ${match[0].trim()}`);
+    }
+  }
+  assert.deepEqual(offenders, []);
 });

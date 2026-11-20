@@ -94,19 +94,30 @@ def test_a_record_names_its_code_location_with_the_stable_attributes(
     is meant to be the runtime's fully-qualified name rather than the bare one.
     """
     logs = start_otlp_logs()
+    # A checkout under a home directory, wherever this suite really runs: the path is masked (D3)
+    # while the basename a reader follows survives.
+    pathname = "/home/operator/checkout/src/dlightrag/engine/answer.py"
+    record = logging.LogRecord(
+        name="dlightrag.engine.answer",
+        level=logging.WARNING,
+        pathname=pathname,
+        lineno=42,
+        msg="the run started",
+        args=(),
+        exc_info=None,
+    )
+    record.funcName = "execute"
 
-    _log("engine.answer", "the run started")
+    logging.getLogger("dlightrag.engine.answer").handle(record)
 
-    (record,) = logs.records()
-    attributes = logs.attributes(record)
+    (exported,) = logs.records()
+    attributes = logs.attributes(exported)
     assert "code.filepath" not in attributes
     assert "code.lineno" not in attributes
-    # This suite runs from a checkout under a home directory, so the path is
-    # masked (D3) while the basename a reader follows survives.
-    assert attributes["code.file.path"] == private_path_placeholder(__file__)
-    assert __file__ not in str(attributes["code.file.path"])
+    assert attributes["code.file.path"] == private_path_placeholder(pathname)
+    assert pathname not in str(attributes["code.file.path"])
     assert attributes["code.line.number"] > 0
-    assert attributes["code.function.name"] == "test_observability_logs._log"
+    assert attributes["code.function.name"] == "answer.execute"
 
 
 def test_a_record_outside_any_home_directory_keeps_its_whole_path() -> None:

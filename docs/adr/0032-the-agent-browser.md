@@ -24,7 +24,7 @@ It amends four earlier statements, each revised when the slice that changes it
 lands:
 
 - [ADR 0005](0005-public-web-resource-acquisition.md)'s closed acquisition set
-  (`direct_http`, `exa_extract`, or `tavily_extract`) gains `browser_render`,
+  (`direct_http`, `exa_extract`, `tavily_extract`, or `deepseek_extract`) gains `browser_render`,
   `browser_capture`, and `browser_download`. The admission origins are unchanged.
 - ADR 0005's closing line, "Browser automation, rendered-page interaction,
   authenticated browsing, and general crawling remain outside this decision", no
@@ -53,7 +53,7 @@ which keeps Fast without tools.
 
 Research reads the public Web through `read(url)` (ADR 0005): an anonymous GET,
 admitted as a Web Resource and Evidence, with the configured hosted Extract chain
-(Exa, then Tavily) supplying text once when the fetch fails or yields no text.
+(Exa, then Tavily, then DeepSeek) supplying text once when the fetch fails or yields no text.
 Three kinds of page stay out of reach.
 
 - **A JavaScript application serves a shell.** The fetch succeeds, often with one
@@ -97,7 +97,7 @@ Resources, Evidence, and image attachments under DlightRAG's own settlement.
 **Reading has four tiers, and the browser is the last automatic one.**
 
 1. `read(url)` over direct HTTP, Host-attested, always first.
-2. The configured hosted Extract chain (Exa, Tavily).
+2. The configured hosted Extract chain (Exa, Tavily, DeepSeek).
 3. A Rendered Read as the last entry of that chain. It runs only on ADR 0005's
    objective triggers — the direct fetch failed, or it produced no text for textual
    content — never on subjective quality and never on a heuristic.
@@ -178,10 +178,11 @@ the npm package `playwright@1.63.0` at build time, because the containers have n
 route to the internet when they run. The server already refuses, with HTTP 428, a
 client whose major or minor version differs; the pin also fixes the patch.
 Observations come from `page.aria_snapshot(mode="ai", depth=…)`, whose `[ref=eN]`
-markers name elements, and actions resolve a ref with
-`page.locator("aria-ref=eN")`. 1.63 does not document that locator, and 1.64
-introduces `get_by_ref`: the version stays pinned, a product test covers the
-behaviour, and the upgrade moves to `get_by_ref`.
+markers name elements, and actions resolve a ref with `page.get_by_ref("eN")`.
+The pin made that migration possible and it is done: 1.63 documented no such
+lookup, so the ref was resolved through the undocumented `aria-ref=` locator,
+and the move to `get_by_ref` landed with the 1.64.0 upgrade
+(`adapters/agent_browser/page.py`).
 
 **A Run's browser is leased in PostgreSQL.** Every process that runs Query workers
 may execute a Research Run, so the lease is shared state in the shape Run claims and
@@ -452,8 +453,8 @@ Residual risks, recorded rather than solved:
   container. Because the server limits no clients, a connection of a holder whose lease
   expired, a worker that stalled rather than died, may still be open when the next Run
   leases the container, and the two browsers then share it until that connection ends.
-- The `aria-ref=` locator is undocumented in 1.63; the pin and a product test hold
-  it until `get_by_ref`.
+- The `aria-ref=` locator was undocumented in 1.63; the pin held the behaviour until
+  `get_by_ref` existed, and the 1.64.0 upgrade moved to it.
 - Rendered and captured content is the browser's assertion. A site can serve a
   browser what it does not serve a GET; a capture records state after interaction
   that its URL may not reproduce; and a script navigation during a Rendered Read
@@ -467,8 +468,19 @@ Residual risks, recorded rather than solved:
   the browser gives it forms as well as URLs to act through; with `trust`, `upload`
   can send a workspace file to a page. As with `bash`, the boundary is the
   deployment's egress, not a filter.
-- The CAPTCHA boundary is a rule the model follows, not a mechanism: nothing detects
-  a CAPTCHA, and a vision model could read one from a screenshot.
+- The CAPTCHA boundary is a rule the model follows, not a mechanism that solves one:
+  a bot filter's answer is now detected and named as `blocked` or
+  `verification_required` with the marker that named it, but a vision model could still
+  read a check from a screenshot, and nothing here defeats a check.
+- A headed browser clears one bot filter, not a reputation. Ctrip's filter answered the
+  headless member with `whaleguard block` and the headed member with the page, and the
+  egress is still a datacentre proxy: a site that gates on the address rather than on the
+  browser identity refuses both, and this decision neither rotates addresses nor paces
+  requests.
+- The headed member costs more memory than a headless one (measured on the development
+  host: ~484 MiB idle against ~88 MiB, and ~661 MiB against ~145 MiB with one browser
+  holding a blank page, most of it one 64 MiB Xvfb and a renderer that is not the
+  headless shell). It is one member, capped by the same `mem_limit` as every other.
 - The network facts were measured on Docker Desktop. A Linux Docker host is expected
   to behave the same and is measured before the deployment moves to one.
 - The pool's size is the deployment-wide limit on Runs browsing at once, and a busy

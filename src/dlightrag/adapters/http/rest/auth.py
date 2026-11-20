@@ -7,12 +7,12 @@ They never know which auth strategy is active.
 
 from fastapi import HTTPException, Request
 
-from dlightrag.application.access import (
+from dlightrag.application.access.authentication import (
     AuthenticationError,
-    UserContext,
     authenticate_bearer_token,
 )
-from dlightrag.application.settings import authentication_settings
+from dlightrag.application.access.principal import UserContext
+from dlightrag.application.settings.projections import authentication_settings
 
 
 def _extract_bearer_token(request: Request) -> str:

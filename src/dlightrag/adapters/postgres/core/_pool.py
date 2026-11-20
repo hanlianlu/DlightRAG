@@ -29,15 +29,10 @@ from dlightrag.adapters.postgres.core._notifications import (
     PGNotificationHub,
     dedicated_connection,
 )
+from dlightrag.adapters.postgres.core._retry import retry_transient
 from dlightrag.adapters.postgres.core._session_settings import domain_pool_server_settings
 
 logger = logging.getLogger(__name__)
-
-_DEFAULT_MIN_SIZE = 2
-_DEFAULT_MAX_SIZE = 10
-_DEFAULT_RETRY_ATTEMPTS = 10
-_DEFAULT_RETRY_BACKOFF = 3.0
-_DEFAULT_RETRY_BACKOFF_MAX = 30.0
 
 T = TypeVar("T")
 
@@ -84,7 +79,7 @@ class PGPool:
     def _active_config(self) -> Any:
         if self._config is not None:
             return self._config
-        from dlightrag.application.config import get_config
+        from dlightrag.application.config.loading import get_config
 
         return get_config()
 
@@ -102,16 +97,16 @@ class PGPool:
             if self._pool is not None:
                 return self._pool
 
-            min_size = getattr(config.storage.postgres, "pool_min_size", _DEFAULT_MIN_SIZE)
-            max_size = getattr(config.storage.postgres, "pool_max_size", _DEFAULT_MAX_SIZE)
-            pool_kwargs = pg_connection_kwargs(config.storage.postgres)
+            postgres = config.storage.postgres
+            min_size = postgres.pool_min_size
+            max_size = postgres.pool_max_size
+            pool_kwargs = pg_connection_kwargs(postgres)
             pool_kwargs["min_size"] = min_size
             pool_kwargs["max_size"] = max_size
-            statement_cache_size = getattr(config.storage.postgres, "statement_cache_size", None)
-            if statement_cache_size is not None:
-                pool_kwargs["statement_cache_size"] = int(statement_cache_size)
-            if config.storage.postgres.command_timeout is not None:
-                pool_kwargs["command_timeout"] = config.storage.postgres.command_timeout
+            if postgres.statement_cache_size is not None:
+                pool_kwargs["statement_cache_size"] = postgres.statement_cache_size
+            if postgres.command_timeout is not None:
+                pool_kwargs["command_timeout"] = postgres.command_timeout
             server_settings = domain_pool_server_settings(config)
             if server_settings:
                 pool_kwargs["server_settings"] = server_settings
@@ -152,58 +147,24 @@ class PGPool:
         disruption for all concurrent callers.
         """
         config = self._active_config()
-        attempts = max(
-            1,
-            int(
-                getattr(
-                    config.storage.postgres,
-                    "connection_retries",
-                    _DEFAULT_RETRY_ATTEMPTS,
-                )
-            ),
-        )
-        backoff = max(
-            0.0,
-            float(
-                getattr(
-                    config.storage.postgres,
-                    "connection_retry_backoff",
-                    _DEFAULT_RETRY_BACKOFF,
-                )
-            ),
-        )
-        backoff_max = max(
-            backoff,
-            float(
-                getattr(
-                    config.storage.postgres,
-                    "connection_retry_backoff_max",
-                    _DEFAULT_RETRY_BACKOFF_MAX,
-                )
-            ),
-        )
+        postgres = config.storage.postgres
+        attempts = postgres.connection_retries
+        backoff = postgres.connection_retry_backoff
+        backoff_max = max(backoff, postgres.connection_retry_backoff_max)
 
-        for attempt in range(1, attempts + 1):
-            try:
-                pool = await self.get()
-                async with pool.acquire(timeout=config.storage.postgres.acquire_timeout) as conn:
-                    return await operation(conn)
-            except Exception as exc:
-                if not is_postgres_unavailable(exc):
-                    raise
-                if attempt >= attempts:
-                    raise
-                sleep_for = min(backoff * (2 ** (attempt - 1)), backoff_max)
-                logger.warning(
-                    "DlightRAG domain store transient PostgreSQL error on attempt %d/%d: %r",
-                    attempt,
-                    attempts,
-                    exc,
-                )
-                if sleep_for > 0:
-                    await asyncio.sleep(sleep_for)
+        async def attempt() -> T:
+            pool = await self.get()
+            async with pool.acquire(timeout=postgres.acquire_timeout) as conn:
+                return await operation(conn)
 
-        raise RuntimeError("unreachable PostgreSQL retry state")
+        return await retry_transient(
+            attempt,
+            is_transient=is_postgres_unavailable,
+            attempts=attempts,
+            backoff=backoff,
+            backoff_max=backoff_max,
+            subject="DlightRAG domain store",
+        )
 
     async def run_once(
         self,

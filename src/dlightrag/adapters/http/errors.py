@@ -22,8 +22,9 @@ from starlette.exceptions import HTTPException
 
 from dlightrag.adapters.http.rest.models import ErrorDetail
 from dlightrag.adapters.validation_errors import describe_invalid_fields, invalid_fields
-from dlightrag.application.access import AccessDeniedError
-from dlightrag.application.corpus_admin import MetadataValidationError
+from dlightrag.application.access.control import AccessDeniedError
+from dlightrag.application.answer_runs.service import ActiveRunLimitError
+from dlightrag.application.corpus_admin.errors import MetadataValidationError
 from dlightrag.application.errors import (
     ApplicationConflictError,
     ApplicationInputError,
@@ -33,8 +34,8 @@ from dlightrag.application.errors import (
     StorageSchemaError,
     WorkspaceWriteFencedError,
 )
-from dlightrag.application.model_catalogue import ModelCatalogueSchemaError
-from dlightrag.application.web_conversations import WebConversationSchemaError
+from dlightrag.application.model_catalogue.service import ModelCatalogueSchemaError
+from dlightrag.application.web_conversations.models import WebConversationSchemaError
 from dlightrag.engine.answer.errors import AnswerInputError, InvalidToolConfigurationError
 
 logger = logging.getLogger(__name__)
@@ -148,6 +149,18 @@ def install_error_handlers(app: FastAPI) -> None:
             exc_info=exc if exc.__cause__ is not None else None,
         )
         return error_response(503, str(exc))
+
+    @app.exception_handler(ActiveRunLimitError)
+    async def active_run_limit(
+        request: Request,  # noqa: ARG001
+        exc: ActiveRunLimitError,
+    ) -> JSONResponse:
+        """The caller's own limit of Answers in progress -> 429, under a kind of its own.
+
+        It is the caller who is over a limit, not the deployment that is out of capacity, so
+        it is not the 503 an outage answers; a client retries once one of its Answers has ended.
+        """
+        return error_response(429, str(exc), error_kind=exc.error_kind)
 
     @app.exception_handler(ApplicationConflictError)
     async def conflict(

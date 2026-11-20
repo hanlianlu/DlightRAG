@@ -5,6 +5,9 @@ import * as v from 'valibot';
 import {csrfHeaders} from './csrf.ts';
 import {apiError, parseWire} from './wire.ts';
 
+/** Every kind a memory may have: what the owner wants, what they are like, what was learned. */
+const memoryKind = v.picklist(['preference', 'fact', 'experience']);
+
 const memorySettings = v.pipe(
   v.object({enabled: v.boolean(), active_count: v.nullable(v.number())}),
   v.transform((w) => ({enabled: w.enabled, activeCount: w.active_count})),
@@ -13,11 +16,11 @@ export type MemorySettings = v.InferOutput<typeof memorySettings>;
 
 const memoryOperationReceipt = v.pipe(
   v.object({
-    action: v.picklist(['remember', 'forget', 'undo']),
+    action: v.picklist(['remember', 'forget', 'undo', 'fuse']),
     outcome: v.picklist(['changed', 'unchanged', 'conflict']),
     change_id: v.string(),
     memory_ids: v.array(v.string()),
-    kind: v.optional(v.nullable(v.picklist(['preference', 'fact']))),
+    kind: v.optional(v.nullable(memoryKind)),
     body: v.string(),
     supersedes_id: v.optional(v.nullable(v.string())),
     target_change_id: v.optional(v.nullable(v.string())),
@@ -33,7 +36,7 @@ const memoryOperationReceipt = v.pipe(
     targetChangeId: w.target_change_id ?? null,
   })),
 );
-export type MemoryOperationReceipt = v.InferOutput<typeof memoryOperationReceipt>;
+type MemoryOperationReceipt = v.InferOutput<typeof memoryOperationReceipt>;
 
 /** A live `memory_operation_settled` Answer event, as the browser projection sends it. */
 const memoryOperationEvent = v.pipe(
@@ -108,8 +111,16 @@ export async function clearMemory(signal?: AbortSignal): Promise<void> {
 }
 
 const memoryRecord = v.pipe(
-  v.object({memory_id: v.string(), kind: v.picklist(['preference', 'fact']), body: v.string()}),
-  v.transform((w) => ({memoryId: w.memory_id, kind: w.kind, body: w.body})),
+  v.object({
+    memory_id: v.string(),
+    kind: memoryKind,
+    body: v.string(),
+  }),
+  v.transform((w) => ({
+    memoryId: w.memory_id,
+    kind: w.kind,
+    body: w.body,
+  })),
 );
 export type MemoryRecord = v.InferOutput<typeof memoryRecord>;
 const memoryPage = v.pipe(
@@ -123,6 +134,42 @@ export async function listMemories(cursor: string | null, signal?: AbortSignal):
   if (cursor) query.set('cursor', cursor);
   const response = await fetch(`/web/api/memory?${query}`, {signal});
   return parseWire(response, memoryPage);
+}
+
+/** One record a Run's writers left in the owner's profile that is still active, with the change that made it. */
+const runMemoryChange = v.pipe(
+  v.object({
+    memory_id: v.string(),
+    kind: memoryKind,
+    body: v.string(),
+    // A new statement, the correction of an earlier one, or the merge of several.
+    action: v.picklist(['add', 'update', 'fuse']),
+    change_id: v.string(),
+    // The Agent's own memory tool during the Run, or the pass that read the conversation after it.
+    writer: v.picklist(['agent', 'conversation']),
+  }),
+  v.transform((w) => ({
+    memoryId: w.memory_id,
+    kind: w.kind,
+    body: w.body,
+    action: w.action,
+    changeId: w.change_id,
+    writer: w.writer,
+  })),
+);
+export type RunMemoryChange = v.InferOutput<typeof runMemoryChange>;
+const runMemoryChanges = v.pipe(
+  v.object({changes: v.array(runMemoryChange)}),
+  v.transform((w) => w.changes),
+);
+
+/** What one Run's writers left in the owner's Profile Memory, oldest first; none while Memory is off. */
+export async function listRunMemoryChanges(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<readonly RunMemoryChange[]> {
+  const response = await fetch(`/web/api/memory/runs/${encodeURIComponent(runId)}/changes`, {signal});
+  return parseWire(response, runMemoryChanges);
 }
 
 export async function forgetMemory(memoryId: string, signal?: AbortSignal): Promise<MemoryOperationReceipt> {

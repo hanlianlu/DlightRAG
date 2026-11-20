@@ -2,12 +2,12 @@
 
 /** Parsing and ghost preview for the `/skill:<name>` and `/name` web directives. */
 
-export interface SkillDirective {
+interface SkillDirective {
   readonly skill: string;
   readonly query: string;
 }
 
-export interface SkillDirectiveState {
+interface SkillDirectiveState {
   /** 'canonical' = `/skill:<name>` path (including partial 'skill' keyword); 'shorthand' = `/name`. */
   readonly kind: 'canonical' | 'shorthand';
   /** Name prefix typed so far (after the colon, or after the slash for shorthand). */
@@ -24,11 +24,13 @@ export function parseSkillDirective(text: string): SkillDirective | null {
   const trimmed = text.trim();
   const canonical = /^\/skill:([a-z0-9-]+)\s*([\s\S]*)$/.exec(trimmed);
   if (canonical !== null) {
-    return {skill: canonical[1]!, query: canonical[2]!.trim()};
+    const [, skill = '', query = ''] = canonical;
+    return {skill, query: query.trim()};
   }
   const shorthand = /^\/([a-z0-9-]+)\s*([\s\S]*)$/.exec(trimmed);
   if (shorthand !== null && !trimmed.startsWith('/skill:')) {
-    return {skill: shorthand[1]!, query: shorthand[2]!.trim()};
+    const [, skill = '', query = ''] = shorthand;
+    return {skill, query: query.trim()};
   }
   return null;
 }
@@ -45,8 +47,9 @@ export function skillDirectiveState(text: string): SkillDirectiveState | null {
     return {kind: 'canonical', typedKeyword: canonical[1] ?? '', prefix: canonical[2] ?? ''};
   }
   const shorthand = SHORTHAND_PARTIAL.exec(trimmed);
-  if (shorthand !== null && !SKILL_KEYWORD_PREFIX.test(shorthand[1]!)) {
-    return {kind: 'shorthand', typedKeyword: '', prefix: shorthand[1]!};
+  if (shorthand !== null) {
+    const [, prefix = ''] = shorthand;
+    if (!SKILL_KEYWORD_PREFIX.test(prefix)) return {kind: 'shorthand', typedKeyword: '', prefix};
   }
   return null;
 }

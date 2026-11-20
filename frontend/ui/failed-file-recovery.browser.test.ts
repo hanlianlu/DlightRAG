@@ -1,6 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {expect} from '@esm-bundle/chai';
+import {setLanguagePreference} from '../i18n/locale.ts';
 import './failed-file-recovery.ts';
 import type {DlFailedFileRecovery} from './failed-file-recovery.ts';
 import {waitFor} from '../testing/dom.ts';
@@ -155,7 +156,11 @@ it('stops polling a status the Corpus Run API refuses', async () => {
   }
   expect(statusReads).to.equal(reads);
   expect(recovery.recovery).to.equal(null);
-  expect(recovery.error).to.equal('Document recovery status is no longer available.');
+  // The panel holds the copy's source, and draws the words in the showing language.
+  expect(recovery.error).to.deep.equal({
+    source: 'Document recovery status is no longer available.',
+    id: 'inspectorFiles.recovery.statusUnavailable',
+  });
 });
 
 function waitingRun() {
@@ -403,4 +408,29 @@ it('refreshes in place without dropping Load more, its count, or the reader\'s f
   expect(more() !== null && more() === document.activeElement, 'focus stays after the page lands')
     .to.equal(true);
   expect(more()!.hasAttribute('aria-disabled')).to.equal(false);
+});
+
+it('writes a failure time in the language of the app, whatever the browser speaks', async () => {
+  window.fetch = async () => Response.json(failedPage());
+  const failureTime = async (): Promise<string> => {
+    const recovery = mount();
+    await waitFor(() => recovery.loading === false && recovery.page !== null);
+    await recovery.updateComplete;
+    const time = recovery.querySelector('time')!;
+    expect(time.getAttribute('datetime')).to.equal('2026-08-31T21:36:15');
+    return time.textContent!.trim();
+  };
+
+  try {
+    await setLanguagePreference('en');
+    expect(await failureTime()).to.contain('Aug 31, 2026');
+    document.body.replaceChildren();
+
+    await setLanguagePreference('zh');
+    const chinese = await failureTime();
+    expect(chinese).to.contain('2026年8月31日');
+    expect(chinese).to.contain('21:36');
+  } finally {
+    await setLanguagePreference('auto');
+  }
 });

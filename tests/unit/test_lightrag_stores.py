@@ -204,7 +204,9 @@ async def test_overwrite_chunk_vectors_respects_batch_record_budget(
 
 
 async def test_resolve_scope_reports_the_probed_count_and_never_widens_an_exact_hit() -> None:
-    from dlightrag.engine.rag.retrieval import MetadataFilter
+    from dlightrag.engine.rag.retrieval.models import (
+        MetadataFilter,
+    )
 
     class FakeTextChunksDB:
         def __init__(self) -> None:
@@ -239,7 +241,9 @@ async def test_resolve_scope_reports_the_probed_count_and_never_widens_an_exact_
 
 
 async def test_resolve_scope_widens_to_contains_only_on_exact_miss() -> None:
-    from dlightrag.engine.rag.retrieval import MetadataFilter
+    from dlightrag.engine.rag.retrieval.models import (
+        MetadataFilter,
+    )
 
     class FakeTextChunksDB:
         def __init__(self) -> None:
@@ -271,7 +275,9 @@ async def test_resolve_scope_widens_to_contains_only_on_exact_miss() -> None:
 
 
 async def test_resolve_scope_reports_the_cap_as_a_non_exact_sentinel() -> None:
-    from dlightrag.engine.rag.retrieval import MetadataFilter
+    from dlightrag.engine.rag.retrieval.models import (
+        MetadataFilter,
+    )
 
     class FakeTextChunksDB:
         def __init__(self) -> None:
@@ -300,7 +306,10 @@ async def test_resolve_scope_reports_the_cap_as_a_non_exact_sentinel() -> None:
 
 
 async def test_read_scoped_chunks_keep_request_order_and_decode_rows() -> None:
-    from dlightrag.engine.rag.retrieval import MetadataFilter, MetadataScope
+    from dlightrag.engine.rag.retrieval.models import (
+        MetadataFilter,
+        MetadataScope,
+    )
 
     class FakeTextChunksDB:
         def __init__(self) -> None:
@@ -353,7 +362,10 @@ async def test_read_scoped_chunks_keep_request_order_and_decode_rows() -> None:
 
 
 async def test_read_scoped_chunks_skips_empty_request() -> None:
-    from dlightrag.engine.rag.retrieval import MetadataFilter, MetadataScope
+    from dlightrag.engine.rag.retrieval.models import (
+        MetadataFilter,
+        MetadataScope,
+    )
 
     class FakeTextChunksDB:
         async def _run_with_retry(self, operation, timing_label=None):  # noqa: ANN001, ANN202
@@ -374,7 +386,10 @@ async def test_read_scoped_chunks_skips_empty_request() -> None:
 
 
 async def test_read_scoped_chunks_skips_storage_for_empty_scope() -> None:
-    from dlightrag.engine.rag.retrieval import MetadataFilter, MetadataScope
+    from dlightrag.engine.rag.retrieval.models import (
+        MetadataFilter,
+        MetadataScope,
+    )
 
     class FakeTextChunksDB:
         async def _run_with_retry(self, operation, timing_label=None):  # noqa: ANN001, ANN202

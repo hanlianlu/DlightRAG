@@ -18,4 +18,9 @@
   --line-height-control: 1.5;
   --line-height-message: 1.58;
   --font-size-lightbox-nav-icon: clamp(30px, 4vw, 42px);
+
+  /* The size a text-entry control takes under a touch pointer. iOS Safari zooms the page in when a field
+     smaller than 16px takes focus, and does not zoom back out. Body text is 15 to 15.5px, so the floor
+     is stated outright rather than as a clamp that would never reach it. */
+  --font-size-touch-entry: 16px;
 }

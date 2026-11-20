@@ -42,9 +42,16 @@ from dlightrag.engine.agent.session.runtime import (
     SteerCommand,
     ToolEffectResult,
 )
+from dlightrag.engine.agent.skill_delivery import DeliveryFindings
 from dlightrag.engine.agent.tool_content import ToolTextPart, tool_content_attachments
-from dlightrag.engine.agent.tools import ToolEffects, ToolResult, ToolRuntime, fit_tool_result
-from dlightrag.engine.agent.tools.contracts import SourceOrder
+from dlightrag.engine.agent.tools.capacity import fit_tool_result
+from dlightrag.engine.agent.tools.contracts import (
+    TOOL_PROGRESS_FACT_KEYS,
+    SourceOrder,
+    ToolEffects,
+    ToolResult,
+    ToolRuntime,
+)
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY, CONTEXT_POLICY_REVISION
 from dlightrag.engine.ai.messages import AssistantTurn
 from dlightrag.engine.ai.providers.base import (
@@ -62,7 +69,7 @@ from dlightrag.engine.answer.evidence import (
     EvidenceLedger,
     has_unrepresentable_text,
 )
-from dlightrag.engine.answer.orchestration import AnswerOrchestrator
+from dlightrag.engine.answer.orchestration.orchestrator import AnswerOrchestrator
 from dlightrag.engine.answer.research.context import carries_pixels
 from dlightrag.engine.answer.research.persistence import (
     ClaimChild,
@@ -103,6 +110,7 @@ from dlightrag.engine.runtime.errors import (
 )
 from dlightrag.engine.runtime.policy import RUN_LEASE_SECONDS
 from dlightrag.engine.runtime.settlements import (
+    AgentspaceInventoryUpdate,
     ArtifactAttachmentUpdate,
     CommittedSpillUpdate,
     CompleteBlobDescriptor,
@@ -112,7 +120,6 @@ from dlightrag.engine.runtime.settlements import (
     MemoryOperationSettlement,
     OpaqueEvidenceWrite,
     OpaqueFetchedResourceWrite,
-    WorkspaceInventoryUpdate,
 )
 
 logger = logging.getLogger(__name__)
@@ -405,6 +412,9 @@ def _artifact_attachment_update(
     raw = details.get("artifact_attachment")
     if not isinstance(raw, Mapping):
         return None
+    sources = raw.get("sources") or ()
+    if not isinstance(sources, (list, tuple)) or not all(isinstance(item, str) for item in sources):
+        raise ValueError("invalid Artifact attachment receipt")
     try:
         return ArtifactAttachmentUpdate(
             relative_path=str(raw["relative_path"]),
@@ -414,6 +424,7 @@ def _artifact_attachment_update(
             presentation=str(raw["presentation"]),
             session_id=session_id.value,
             intent_id=intent_id.value,
+            sources=tuple(sources),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError("invalid Artifact attachment receipt") from exc
@@ -511,7 +522,7 @@ def _build_effect_host_update(
         workspace_inventory=(
             None
             if inventory is None
-            else WorkspaceInventoryUpdate(
+            else AgentspaceInventoryUpdate(
                 upserts=tuple(
                     InventoryPathRecord(
                         relative_path=record.relative_path,
@@ -626,6 +637,11 @@ class ResearchRuntimeEffects:
         self._telemetry = telemetry
         self._session_notes = session_notes
 
+    async def delivery_findings(self, context: RuntimeContext) -> DeliveryFindings:
+        """The pre-delivery evidence for this Run, from the attempt's current ledger."""
+        del context
+        return self._orchestrator.delivery_findings()
+
     async def assemble_request(
         self,
         context: RuntimeContext,
@@ -668,6 +684,7 @@ class ResearchRuntimeEffects:
             )
         )
         emitted: list[str] = []
+        reasoning_emitted = False
 
         async def emit_text(text: str) -> None:
             if not text:
@@ -688,6 +705,13 @@ class ResearchRuntimeEffects:
                 )
             )
 
+        async def emit_reasoning(text: str) -> None:
+            nonlocal reasoning_emitted
+            if not text:
+                return
+            reasoning_emitted = True
+            await self._session.emit_reasoning(text)
+
         requested_at = datetime.now(UTC)
         try:
             assistant = await self._orchestrator.call_runtime_provider(
@@ -695,15 +719,16 @@ class ResearchRuntimeEffects:
                 model_profile=self._prepared.model_profile,
                 model_func=self._prepared.model_func,
                 emit_text=emit_text if self._publish_provider_text else None,
+                emit_reasoning=emit_reasoning if self._publish_provider_text else None,
             )
         except asyncio.CancelledError:
             raise
         except RunCancellationObserved as exc:
-            if emitted:
+            if emitted or reasoning_emitted:
                 await self._session.reset_output()
             raise AgentOperationCancelled(exc) from exc
         except Exception as exc:
-            if emitted:
+            if emitted or reasoning_emitted:
                 await self._session.reset_output()
             if is_provider_context_overflow(exc):
                 raise ProviderContextOverflow from exc
@@ -795,6 +820,9 @@ class ResearchRuntimeEffects:
                         "source_index": item.source_index,
                         "text_chars": len(result.text_content),
                         **({"object_label": result.subject} if result.subject else {}),
+                        # The facts a Tool reports about the call it is answering (the document a
+                        # load_skill read and the window of it), and nothing else in details.
+                        **result.progress_facts,
                     },
                     ephemeral=True,
                 )
@@ -839,11 +867,25 @@ class ResearchRuntimeEffects:
             tool=item.tool_name,
         ) as tool_trace:
             result = await tool.execute(validated, runtime)
-            tool_trace.update(output={"is_error": result.is_error, "cached": result.cached})
+            tool_trace.update(
+                output={
+                    # What the call reports about itself first, then the Runtime's own facts, which
+                    # no tool may state for it: a dashboard reads these to group a tool's calls by
+                    # what they say about themselves.
+                    **(result.telemetry or {}),
+                    "is_error": result.is_error,
+                    "cached": result.cached,
+                }
+            )
         # Everything below reads or writes what the batch shares: the evidence
         # freeze, the trace, the fetched-bytes buffer, and the Session notes.
         await in_source_order()
         observation_capacity = CONTEXT_POLICY.observation_capacity(self._prepared.model_profile)
+        # The passages the result may add are budgeted against the reserve rather than the
+        # ceiling: the reserve is the capacity the runtime guarantees a result plus its
+        # framing, and evidence is framing the runtime adds, so it does not spend the extra
+        # room the ceiling exists to give a long result.
+        result_ceiling = CONTEXT_POLICY.tool_result_ceiling(self._prepared.model_profile)
         evidence = self._prepared.evidence
         if item.intent_id is None:
             raise RuntimeError("executable Tool item lost its IntentId")
@@ -863,7 +905,7 @@ class ResearchRuntimeEffects:
         )
         fitted = fit_tool_result(
             result,
-            max_tokens=observation_capacity,
+            max_tokens=result_ceiling,
         )
         if fitted.text_content != result.text_content:
             # The passages did not fit after all. Re-render them as their
@@ -876,7 +918,7 @@ class ResearchRuntimeEffects:
                 budget_tokens=0,
                 intent_key=intent_key,
             )
-            fitted = fit_tool_result(result, max_tokens=observation_capacity)
+            fitted = fit_tool_result(result, max_tokens=result_ceiling)
         outcome = "failed" if fitted.is_error else "succeeded"
         durable = ToolResultEntry(
             tool_name=item.tool_name,
@@ -885,6 +927,7 @@ class ResearchRuntimeEffects:
             parts=fitted.parts,
             details=fitted.details,
             cached=fitted.cached,
+            facts=fitted.facts,
         )
         self._prepared.trace["tool_observations"].append(
             {
@@ -895,6 +938,10 @@ class ResearchRuntimeEffects:
                 "is_error": fitted.is_error,
                 "content_chars": len(fitted.text_content),
                 "capacity_tokens": observation_capacity,
+                "ceiling_tokens": result_ceiling,
+                # The Runtime's own cut, readable from the event stream: a result that
+                # describes work it did not finish is the defect this records against.
+                "observed_truncated": fitted.observed_truncated,
                 # The Tool's own one-line subject (search query, URL read, command, action), bounded
                 # where ToolResult is constructed; absent when the Tool reports none.
                 **({"subject": subject} if subject else {}),
@@ -1016,12 +1063,20 @@ def _answer_runtime_event_sink(
             "text_chars",
             "attempt_id",
             "object_label",
+            # Set on a settlement only where the Runtime cut the result to the model's residual.
+            "observed_truncated",
+            *TOOL_PROGRESS_FACT_KEYS,
         }
-        payload = {
+        payload: dict[str, Any] = {
             key: value
             for key, value in event.data.items()
             if key in allowed and isinstance(value, (str, int, float, bool))
         }
+        # A result's facts are a bounded structure rather than a scalar, so they pass the
+        # metadata filter whole; the Tool already normalized them where it reported them.
+        reported_facts = event.data.get("facts")
+        if isinstance(reported_facts, Mapping):
+            payload["facts"] = dict(reported_facts)
         if event.commit_sequence is not None:
             payload["session_commit_sequence"] = event.commit_sequence
         await session.emit_tool_event(event_type, payload)
@@ -1392,6 +1447,10 @@ async def run_child_session(
         provider_attempt_limit=plan.provider_attempt_limit,
         event_sink=_answer_runtime_event_sink(session),
         controls=controls,
+        # A Child returns research to its parent; it never attaches the Skill's deliverable.
+        # Running the parent's delivery check here makes every Child wait on a verifier it
+        # cannot satisfy (the observed 3-child failure), so the Child settlement is clean.
+        delivery_check=None,
     )
     accepted = await runtime.accept(
         session_id=child_id,

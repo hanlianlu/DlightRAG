@@ -33,6 +33,11 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
+/** How the older-files control stands to a reader: busy while a page loads, at rest otherwise or gone. */
+function olderFilesState(panel: Element): 'loading' | 'idle' {
+  return panel.querySelector('[data-load-older="files"]')?.getAttribute('aria-busy') === 'true' ? 'loading' : 'idle';
+}
+
 it('clears upload chrome when the panel is paused for close or workspace change', () => {
   const panel = document.createElement('dl-inspector-files') as DlInspectorFiles;
   panel.uploading = true;
@@ -236,7 +241,7 @@ it('rejects a late older page after pause invalidates its generation', async () 
   expect([...panel.querySelectorAll('.file-name')].map((item) => item.textContent)).to.deep.equal([
     'Newest',
   ]);
-  expect(panel.filesLoadMoreState).to.equal('idle');
+  expect(olderFilesState(panel)).to.equal('idle');
 });
 
 it('preserves loaded files and cursor when an upload accepts a durable Run', async () => {
@@ -708,13 +713,13 @@ it('delete Run settlement invalidates an older-page flight without latching load
 
   const olderFlight = panel.loadOlderFiles();
   await panel.updateComplete;
-  expect(panel.filesLoadMoreState).to.equal('loading');
+  expect(olderFilesState(panel)).to.equal('loading');
   panel.querySelector<HTMLButtonElement>('[data-file-delete]')!.click();
   await panel.updateComplete;
   confirmDeleteDialog(panel, 'confirm');
   await waitFor(() => panel.hasActiveMutation);
   await panel.updateComplete;
-  expect(panel.filesLoadMoreState).to.equal('idle');
+  expect(olderFilesState(panel)).to.equal('idle');
   await panel.loadOlderFiles();
   expect(olderRequests).to.equal(1);
 
@@ -730,7 +735,7 @@ it('delete Run settlement invalidates an older-page flight without latching load
   await panel.updateComplete;
 
   expect(panel.snapshot?.files.map((item) => item.filePath)).to.deep.equal(['/replacement']);
-  expect(panel.filesLoadMoreState).to.equal('idle');
+  expect(olderFilesState(panel)).to.equal('idle');
   const button = panel.querySelector<HTMLButtonElement>('[data-load-older="files"]')!;
   expect(button.disabled).to.equal(false);
   expect(button.getAttribute('aria-busy')).to.equal('false');
@@ -778,7 +783,7 @@ it('load older is a no-op while a same-workspace first-page reload is active', a
   const reloadFlight = panel.reload(false);
   await panel.loadOlderFiles();
   expect(olderRequests).to.equal(0);
-  expect(panel.filesLoadMoreState).to.equal('idle');
+  expect(olderFilesState(panel)).to.equal('idle');
 
   reloaded.resolve(new Response(JSON.stringify(snapshot([
     {file_name: 'Fresh', file_path: '/fresh'},
@@ -787,7 +792,7 @@ it('load older is a no-op while a same-workspace first-page reload is active', a
   await panel.updateComplete;
 
   expect(panel.snapshot?.files.map((item) => item.filePath)).to.deep.equal(['/fresh']);
-  expect(panel.filesLoadMoreState).to.equal('idle');
+  expect(olderFilesState(panel)).to.equal('idle');
   const button = panel.querySelector<HTMLButtonElement>('[data-load-older="files"]')!;
   expect(button.disabled).to.equal(false);
   expect(button.getAttribute('aria-busy')).to.equal('false');
@@ -825,7 +830,7 @@ it('failed upload settles loading after superseding a pending visible reload', a
 
   expect(panel.loading).to.equal(false);
   expect(panel.uploading).to.equal(false);
-  expect(panel.error).to.equal('Upload rejected.');
+  expect(panel.error).to.deep.equal({source: 'Upload rejected.', id: null});
   expect(panel.querySelector('.file-error')?.textContent).to.contain('Upload rejected.');
   expect(panel.querySelector('.file-status--loading')).to.equal(null);
   expect(panel.snapshot?.files.map((item) => item.filePath)).to.deep.equal(['/original']);
@@ -837,7 +842,7 @@ it('failed upload settles loading after superseding a pending visible reload', a
   await panel.updateComplete;
 
   expect(panel.loading).to.equal(false);
-  expect(panel.error).to.equal('Upload rejected.');
+  expect(panel.error).to.deep.equal({source: 'Upload rejected.', id: null});
   expect(panel.snapshot?.files.map((item) => item.filePath)).to.deep.equal(['/original']);
 });
 
@@ -872,11 +877,11 @@ it('failed deletion settles loading after superseding a pending visible reload',
   deleteButton.click();
   await panel.updateComplete;
   confirmDeleteDialog(panel, 'confirm');
-  await waitFor(() => panel.error === 'Deletion rejected.');
+  await waitFor(() => panel.error?.source === 'Deletion rejected.');
   await panel.updateComplete;
 
   expect(panel.loading).to.equal(false);
-  expect(panel.error).to.equal('Deletion rejected.');
+  expect(panel.error).to.deep.equal({source: 'Deletion rejected.', id: null});
   expect(panel.querySelector('.file-error')?.textContent).to.contain('Deletion rejected.');
   expect(panel.querySelector('.file-status--loading')).to.equal(null);
   expect(panel.snapshot?.files.map((item) => item.filePath)).to.deep.equal(['/original']);
@@ -888,7 +893,7 @@ it('failed deletion settles loading after superseding a pending visible reload',
   await panel.updateComplete;
 
   expect(panel.loading).to.equal(false);
-  expect(panel.error).to.equal('Deletion rejected.');
+  expect(panel.error).to.deep.equal({source: 'Deletion rejected.', id: null});
   expect(panel.snapshot?.files.map((item) => item.filePath)).to.deep.equal(['/original']);
 });
 
@@ -912,7 +917,11 @@ it('a refused upload without a server reason shows the panel copy in the reader 
     await panel.upload([new File(['report'], 'report.pdf', {type: 'application/pdf'})]);
     await panel.updateComplete;
 
-    expect(panel.error).to.equal('上传失败。');
+    expect(panel.error).to.deep.equal({
+      source: 'Upload failed.',
+      id: 'inspectorFiles.uploadFailed',
+    });
+    expect(panel.querySelector('.file-error')?.textContent).to.contain('上传失败。');
     expect(toasts.at(-1)).to.equal('上传失败。');
   } finally {
     await setLanguagePreference('auto');

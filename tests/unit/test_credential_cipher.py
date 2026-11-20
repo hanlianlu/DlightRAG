@@ -8,7 +8,9 @@ import pytest
 from pydantic import SecretStr
 
 from dlightrag.application.connections.credentials import GRANT_LABEL
-from dlightrag.engine.answer.agent_browser import ACCOUNT_LABEL
+from dlightrag.engine.answer.agent_browser.accounts import (
+    ACCOUNT_LABEL,
+)
 from dlightrag.engine.credential_cipher import (
     KEYRING_FILE,
     CredentialCipher,

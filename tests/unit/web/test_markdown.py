@@ -3,31 +3,40 @@
 import pytest
 
 
-def test_render_markdown_bold():
+@pytest.mark.parametrize(
+    ("markdown", "present"),
+    [
+        ("**bold text**", ("<strong>bold text</strong>",)),
+        ("| A | B |\n|---|---|\n| 1 | 2 |", ("<table>", "<td>1</td>", "<td>2</td>")),
+        ("use `foo()` here", ("<code>foo()</code>",)),
+        ("- item 1\n- item 2\n", ("<li>", "item 1")),
+        # Pygments output is wrapped in <pre class="highlight">.
+        ("```python\nprint('hello')\n```", ('class="highlight"', "print")),
+        # An unknown or missing language falls back to a plain <pre><code>.
+        ("```unknownlang\nfoo bar\n```", ("<code>", "foo bar")),
+        ("```\nplain code\n```", ("<code>", "plain code")),
+        # Dollar-sign math passes through as literal text: MathJax handles it client-side.
+        ("The formula $E=mc^2$ is famous.", ("$E=mc^2$",)),
+        ("$$\\sum_{i=1}^n x_i$$", ("$$",)),
+    ],
+    ids=[
+        "bold",
+        "table",
+        "inline-code",
+        "list",
+        "fenced-code-highlighted",
+        "fenced-code-unknown-language",
+        "fenced-code-no-language",
+        "inline-latex",
+        "display-latex",
+    ],
+)
+def test_render_markdown_renders_each_construct(markdown: str, present: tuple[str, ...]) -> None:
     from dlightrag.adapters.http.browser.markdown import render_markdown
 
-    result = render_markdown("**bold text**")
-    assert "<strong>bold text</strong>" in result
-
-
-def test_render_markdown_gfm_table():
-    from dlightrag.adapters.http.browser.markdown import render_markdown
-
-    md = "| A | B |\n|---|---|\n| 1 | 2 |"
-    result = render_markdown(md)
-    assert "<table>" in result
-    assert "<td>1</td>" in result
-    assert "<td>2</td>" in result
-
-
-def test_render_markdown_fenced_code_highlighted():
-    from dlightrag.adapters.http.browser.markdown import render_markdown
-
-    md = "```python\nprint('hello')\n```"
-    result = render_markdown(md)
-    # Pygments output is wrapped in <pre class="highlight">
-    assert 'class="highlight"' in result
-    assert "print" in result
+    result = render_markdown(markdown)
+    for fragment in present:
+        assert fragment in result
 
 
 def test_render_markdown_no_double_pre_wrapping():
@@ -38,43 +47,34 @@ def test_render_markdown_no_double_pre_wrapping():
     assert result.count("<pre") == 1
 
 
-def test_render_markdown_fenced_code_unknown_lang():
+@pytest.mark.parametrize(
+    ("fence", "present", "absent"),
+    [
+        # A mermaid fence is emitted as a marked source block for client upgrade.
+        (
+            "```mermaid\ngraph TD\n  A-->B\n```",
+            ('class="mermaid-source"', 'data-lang="mermaid"', "graph TD"),
+            (),
+        ),
+        # Markup inside a mermaid fence stays escaped: no HTML smuggling.
+        (
+            '```mermaid\ngraph TD\n  A["<script>alert(1)</script>"]\n```',
+            ('class="mermaid-source"', "&lt;script&gt;"),
+            ("<script>",),
+        ),
+    ],
+    ids=["marked", "escaped"],
+)
+def test_render_markdown_emits_a_mermaid_fence_as_an_escaped_source_block(
+    fence: str, present: tuple[str, ...], absent: tuple[str, ...]
+) -> None:
     from dlightrag.adapters.http.browser.markdown import render_markdown
 
-    md = "```unknownlang\nfoo bar\n```"
-    result = render_markdown(md)
-    # Falls back to plain <pre><code>
-    assert "<code>" in result
-    assert "foo bar" in result
-
-
-def test_render_markdown_fenced_code_no_lang():
-    from dlightrag.adapters.http.browser.markdown import render_markdown
-
-    md = "```\nplain code\n```"
-    result = render_markdown(md)
-    assert "<code>" in result
-    assert "plain code" in result
-
-
-def test_render_markdown_mermaid_fence_marked():
-    """A mermaid fence is emitted as a marked source block for client upgrade."""
-    from dlightrag.adapters.http.browser.markdown import render_markdown
-
-    result = render_markdown("```mermaid\ngraph TD\n  A-->B\n```")
-    assert 'class="mermaid-source"' in result
-    assert 'data-lang="mermaid"' in result
-    assert "graph TD" in result
-
-
-def test_render_markdown_mermaid_source_escaped():
-    """Markup inside a mermaid fence stays escaped (no HTML smuggling)."""
-    from dlightrag.adapters.http.browser.markdown import render_markdown
-
-    result = render_markdown('```mermaid\ngraph TD\n  A["<script>alert(1)</script>"]\n```')
-    assert "<script>" not in result
-    assert "&lt;script&gt;" in result
-    assert 'class="mermaid-source"' in result
+    result = render_markdown(fence)
+    for fragment in present:
+        assert fragment in result
+    for fragment in absent:
+        assert fragment not in result
 
 
 def test_mermaid_marker_survives_nh3():
@@ -93,28 +93,6 @@ def test_mermaid_marker_survives_nh3():
     assert "graph TD" in result
 
 
-def test_render_markdown_inline_code():
-    from dlightrag.adapters.http.browser.markdown import render_markdown
-
-    result = render_markdown("use `foo()` here")
-    assert "<code>foo()</code>" in result
-
-
-def test_render_markdown_latex_passthrough():
-    """Dollar-sign math should pass through as literal text (MathJax handles client-side)."""
-    from dlightrag.adapters.http.browser.markdown import render_markdown
-
-    result = render_markdown("The formula $E=mc^2$ is famous.")
-    assert "$E=mc^2$" in result
-
-
-def test_render_markdown_display_latex_passthrough():
-    from dlightrag.adapters.http.browser.markdown import render_markdown
-
-    result = render_markdown("$$\\sum_{i=1}^n x_i$$")
-    assert "$$" in result
-
-
 def test_render_markdown_xss_script_escaped():
     """Raw HTML <script> must be escaped, not passed through."""
     from dlightrag.adapters.http.browser.markdown import render_markdown
@@ -124,17 +102,11 @@ def test_render_markdown_xss_script_escaped():
     assert "&lt;script&gt;" in result
 
 
-def test_render_markdown_lists():
-    from dlightrag.adapters.http.browser.markdown import render_markdown
-
-    md = "- item 1\n- item 2\n"
-    result = render_markdown(md)
-    assert "<li>" in result
-    assert "item 1" in result
-
-
 def test_reference_label_helpers_are_shared_across_citation_surfaces():
-    from dlightrag.adapters.http.browser.presentation import _reference_aria_label, _reference_label
+    from dlightrag.adapters.http.browser.presentation import (
+        _reference_aria_label,
+        _reference_label,
+    )
 
     assert _reference_label("1") == "1"
     assert _reference_label("1", "2") == "1-2"
@@ -142,49 +114,50 @@ def test_reference_label_helpers_are_shared_across_citation_surfaces():
     assert _reference_aria_label("1", "2") == "Source 1, chunk 2"
 
 
-def test_citation_badges_basic():
-    """[1-2] in plain text becomes a citation badge."""
+@pytest.mark.parametrize(
+    ("text", "sources", "present", "absent"),
+    [
+        (
+            "See [1-2] for details.",
+            {"1": "One"},
+            ('data-ref="1"', 'data-chunk="2"', 'aria-label="Source 1, chunk 2"', ">1-2</cite>"),
+            ("[1-2]</cite>",),
+        ),
+        (
+            "See [3] for details.",
+            {"3": "Three"},
+            ('data-ref="3"', 'aria-label="Source 3"', ">3</cite>"),
+            ("[3]</cite>",),
+        ),
+    ],
+    ids=["chunk-level", "doc-level"],
+)
+def test_a_known_marker_becomes_a_citation_badge(
+    text: str, sources: dict[str, str], present: tuple[str, ...], absent: tuple[str, ...]
+) -> None:
     from dlightrag.adapters.http.browser.presentation import render_answer_html
 
-    result = render_answer_html("See [1-2] for details.", known_sources={"1": "One"})
+    result = render_answer_html(text, known_sources=sources)
     assert 'class="citation-badge"' in result
-    assert 'data-ref="1"' in result
-    assert 'data-chunk="2"' in result
-    assert 'aria-label="Source 1, chunk 2"' in result
-    assert ">1-2</cite>" in result
-    assert "[1-2]</cite>" not in result
+    for fragment in present:
+        assert fragment in result
+    for fragment in absent:
+        assert fragment not in result
 
 
-def test_citation_badges_doc_level():
-    """[3] doc-level citation becomes a badge."""
+@pytest.mark.parametrize(
+    ("markdown", "badges"),
+    [
+        ("Use `array[1-2]` in code.", 0),
+        ("```\narray[1-2] = value\n```\n\nSee [1-2] for info.", 1),
+    ],
+    ids=["inline-code", "fenced-code"],
+)
+def test_a_marker_inside_code_is_never_a_badge(markdown: str, badges: int) -> None:
     from dlightrag.adapters.http.browser.presentation import render_answer_html
 
-    result = render_answer_html("See [3] for details.", known_sources={"3": "Three"})
-    assert 'class="citation-badge"' in result
-    assert 'data-ref="3"' in result
-    assert 'aria-label="Source 3"' in result
-    assert ">3</cite>" in result
-    assert "[3]</cite>" not in result
-
-
-def test_citation_badges_in_inline_code_skipped():
-    """[1-2] inside inline code must NOT become a badge."""
-    from dlightrag.adapters.http.browser.presentation import render_answer_html
-
-    result = render_answer_html("Use `array[1-2]` in code.", known_sources={"1": "One"})
-    # The [1-2] is inside <code>, should not be a badge
-    assert "<code>" in result
-    assert result.count('class="citation-badge"') == 0
-
-
-def test_citation_badges_in_fenced_code_skipped():
-    """[1-2] inside fenced code must NOT become a badge."""
-    from dlightrag.adapters.http.browser.presentation import render_answer_html
-
-    md = "```\narray[1-2] = value\n```\n\nSee [1-2] for info."
-    result = render_answer_html(md, known_sources={"1": "One"})
-    # Only the [1-2] outside code should be a badge
-    assert result.count('class="citation-badge"') == 1
+    result = render_answer_html(markdown, known_sources={"1": "One"})
+    assert result.count('class="citation-badge"') == badges
 
 
 def test_citation_badges_in_table():
@@ -244,76 +217,66 @@ def test_render_markdown_still_escapes_html():
     assert "&lt;table&gt;" in result
 
 
-def test_highlight_content_renders_html_table():
-    """HTML table in chunk content should render, not show raw tags."""
+@pytest.mark.parametrize(
+    ("chunk", "phrases", "present", "absent"),
+    [
+        (
+            "<table><tr><td>Support</td><td>Zoe</td></tr></table>",
+            None,
+            ("<table>", "<td>Support</td>"),
+            ("&lt;table&gt;",),
+        ),
+        ('<script>alert("xss")</script>Normal text', None, ("Normal text",), ("<script>",)),
+        ("Just a simple text chunk.", None, ("Just a simple text chunk.",), ()),
+        ("**bold** text", None, ("<strong>bold</strong>",), ()),
+        (
+            "<table><tr><td>Revenue grew 15%</td></tr></table>",
+            ["Revenue grew 15%"],
+            ('<span class="highlight">', "Revenue grew 15%"),
+            (),
+        ),
+        # A phrase never matches inside an HTML tag attribute.
+        (
+            '<a href="class-info">class info link</a>',
+            ["class info"],
+            ('href="class-info"', '<span class="highlight">class info</span>'),
+            (),
+        ),
+        # Apostrophes and characters that render as entities still match.
+        (
+            "The company's revenue rose.",
+            ["company's revenue"],
+            ('<span class="highlight">company\'s revenue</span>',),
+            (),
+        ),
+        ("Total was 5 < 10 always", ["5 < 10"], ('<span class="highlight">5 &lt; 10</span>',), ()),
+    ],
+    ids=[
+        "html-table-renders",
+        "script-stripped",
+        "plain-text",
+        "markdown-formatting",
+        "phrase-in-table-cell",
+        "phrase-skips-tag-attributes",
+        "phrase-with-quotes",
+        "phrase-with-escaped-entity",
+    ],
+)
+def test_source_chunk_html_renders_the_chunk_and_marks_only_its_phrases(
+    chunk: str,
+    phrases: list[str] | None,
+    present: tuple[str, ...],
+    absent: tuple[str, ...],
+) -> None:
     from dlightrag.adapters.http.browser.presentation import render_source_chunk_html
 
-    html = "<table><tr><td>Support</td><td>Zoe</td></tr></table>"
-    result = render_source_chunk_html(html)
-    assert "<table>" in result
-    assert "<td>Support</td>" in result
-    assert "&lt;table&gt;" not in result
-
-
-def test_highlight_content_xss_stripped():
-    """Script tags must be stripped by nh3 sanitization."""
-    from dlightrag.adapters.http.browser.presentation import render_source_chunk_html
-
-    result = render_source_chunk_html('<script>alert("xss")</script>Normal text')
-    assert "<script>" not in result
-    assert "Normal text" in result
-
-
-def test_highlight_content_phrase_in_table():
-    """Highlight phrase inside a table cell should work."""
-    from dlightrag.adapters.http.browser.presentation import render_source_chunk_html
-
-    html = "<table><tr><td>Revenue grew 15%</td></tr></table>"
-    result = render_source_chunk_html(html, ["Revenue grew 15%"])
-    assert '<span class="highlight">' in result
-    assert "Revenue grew 15%" in result
-
-
-def test_highlight_content_phrase_skips_tag_attrs():
-    """Highlight should not match text inside HTML tag attributes."""
-    from dlightrag.adapters.http.browser.presentation import render_source_chunk_html
-
-    html = '<a href="class-info">class info link</a>'
-    result = render_source_chunk_html(html, ["class info"])
-    assert 'href="class-info"' in result
-    assert '<span class="highlight">class info</span>' in result
-
-
-def test_highlight_content_plain_text():
-    """Plain text (no HTML, no markdown) still renders correctly."""
-    from dlightrag.adapters.http.browser.presentation import render_source_chunk_html
-
-    result = render_source_chunk_html("Just a simple text chunk.")
-    assert "Just a simple text chunk." in result
-
-
-def test_highlight_content_markdown_formatting():
-    """Markdown in chunk content should be rendered."""
-    from dlightrag.adapters.http.browser.presentation import render_source_chunk_html
-
-    result = render_source_chunk_html("**bold** text")
-    assert "<strong>bold</strong>" in result
-
-
-def test_highlight_content_phrase_with_quotes():
-    """Apostrophes and double quotes must not defeat phrase matching."""
-    from dlightrag.adapters.http.browser.presentation import render_source_chunk_html
-
-    result = render_source_chunk_html("The company's revenue rose.", ["company's revenue"])
-    assert '<span class="highlight">company\'s revenue</span>' in result
-
-
-def test_highlight_content_phrase_with_escaped_entity():
-    """Phrases containing characters that render as entities still match."""
-    from dlightrag.adapters.http.browser.presentation import render_source_chunk_html
-
-    result = render_source_chunk_html("Total was 5 < 10 always", ["5 < 10"])
-    assert '<span class="highlight">5 &lt; 10</span>' in result
+    result = (
+        render_source_chunk_html(chunk, phrases) if phrases else render_source_chunk_html(chunk)
+    )
+    for fragment in present:
+        assert fragment in result
+    for fragment in absent:
+        assert fragment not in result
 
 
 def test_highlight_content_overlapping_phrases_not_nested():

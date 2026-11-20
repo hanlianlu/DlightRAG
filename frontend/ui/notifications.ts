@@ -1,5 +1,11 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-/** Notification Offer Feature and browser Notification lifecycle. */
+/** The notification permission Offer Feature.
+
+ * Only the ask lives here: after the reader leaves a running answer and comes back to its finished
+ * one, the answer they missed earns the permission offer once. Either answer is remembered, and a
+ * browser notification is never constructed here: `dl-run-notifications` is the page's one
+ * completion-notification owner, for every conversation and with no duplicate by construction.
+ */
 
 import {msg} from '@lit/localize';
 import {html, type PropertyValues, type TemplateResult} from 'lit';
@@ -57,8 +63,8 @@ export class DlNotificationOffer extends LightElement {
       if (this.running && !previous) {
         this.#missedAnswer = away();
       } else if (!this.running && previous && away()) {
+        // The answer finished while the reader was away: the offer is theirs to see on return.
         this.#missedAnswer = true;
-        if (supported() && Notification.permission === 'granted') this.#notifyAnswerReady();
       }
     }
     this.#syncHost();
@@ -74,21 +80,6 @@ export class DlNotificationOffer extends LightElement {
 
   #syncHost(): void {
     this.hidden = !supported() || !this.visible;
-  }
-
-  #notifyAnswerReady(): void {
-    try {
-      const notification = new Notification(
-        msg('Answer ready', {id: 'notifications.answerReadyTitle'}),
-        {body: msg('DlightRAG finished generating your answer.', {id: 'notifications.answerReadyBody'})},
-      );
-      notification.onclick = () => {
-        window.focus();
-        notification.close();
-      };
-    } catch {
-      // Some browsers reject construction outside a service worker.
-    }
   }
 
   #leftPage = (): void => {

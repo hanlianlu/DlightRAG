@@ -67,9 +67,16 @@ class RerankModel:
         )
         async with self._telemetry.observe(
             "call-rerank-model",
-            metadata={"document_count": len(documents), "top_n": top_n},
+            metadata={
+                "document_count": len(documents),
+                "top_n": top_n,
+                # The strategy is the wire protocol's key, and it stays in this span's
+                # own payload: no provider is known at this call site, and
+                # `gen_ai.provider.name` wants a provider, not `jina_reranker` standing
+                # where one belongs. The attribute is absent rather than wrong.
+                "strategy": self.settings.strategy,
+            },
             model=self.model,
-            provider=self.settings.strategy,
         ) as observation:
             try:
                 response = await self._client.post(

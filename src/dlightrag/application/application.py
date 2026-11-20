@@ -9,22 +9,31 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
-from dlightrag.application.config import DlightragConfig
+from dlightrag.application.config.sections import DlightragConfig
 from dlightrag.application.errors import ApplicationClosedError
+from dlightrag.application.skills import SkillProtection
 
 if TYPE_CHECKING:
-    from dlightrag.application.access import AccessControl
+    from dlightrag.application.access.control import AccessControl
     from dlightrag.application.agent_accounts import AgentAccountMaintenance, AgentAccounts
-    from dlightrag.application.answer_runs import AnswerService
-    from dlightrag.application.connections import Connections
-    from dlightrag.application.corpus_admin import CorpusAdmin, CorpusMutationService
+    from dlightrag.application.answer_runs.service import AnswerService
+    from dlightrag.application.connections.service import Connections
+    from dlightrag.application.corpus_admin.mutations import CorpusMutationService
+    from dlightrag.application.corpus_admin.service import CorpusAdmin
     from dlightrag.application.health import ApplicationHealth, HealthComponentName
-    from dlightrag.application.memory import MemoryService
-    from dlightrag.application.model_catalogue import ModelCatalogueAdmin
-    from dlightrag.application.retrieval import RetrievalService
+    from dlightrag.application.live_browser.service import LiveBrowserService
+    from dlightrag.application.memory.service import MemoryService
+    from dlightrag.application.model_catalogue.service import ModelCatalogueAdmin
+    from dlightrag.application.policies.service import (
+        RuntimePolicies,
+    )
+    from dlightrag.application.privacy import Privacy
+    from dlightrag.application.retrieval.service import RetrievalService
     from dlightrag.application.runs import RunService
-    from dlightrag.application.web_conversations import WebConversationService
+    from dlightrag.application.web_conversations.service import WebConversationService
+    from dlightrag.engine.answer.goal_service import AnswerGoalService
     from dlightrag.engine.dependencies import DependencyComponent
+
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +41,11 @@ logger = logging.getLogger(__name__)
 #: process not ready and leaves the Run coordinator to start once the listener is.
 _LISTENER_STARTUP_WAIT_SECONDS = 30.0
 _LATE_COORDINATOR_START = "Run coordinator start after a late cancellation listener"
+#: How often the recovery process re-runs the goal scan. A settlement observer's task can be
+#: lost with the process that owned it, so startup is not the only scan: the same durable-state
+#: pass runs on this cadence, and CAS plus the pending-round row fence duplicate attempts.
+_GOAL_RECOVERY_INTERVAL_SECONDS = 60.0
+_GOAL_RECOVERY_TASK = "Goal recovery sweep"
 
 
 def _noop_initialize_process(_config: DlightragConfig) -> None:
@@ -39,6 +53,10 @@ def _noop_initialize_process(_config: DlightragConfig) -> None:
 
 
 async def _noop_close_process() -> None:
+    return None
+
+
+def _noop_start_process() -> None:
     return None
 
 
@@ -63,6 +81,8 @@ class _ApplicationComponents:
     validate_active_runs: Callable[[], Awaitable[None]]
     corpora: CorpusAdmin
     access_control: AccessControl
+    policies: RuntimePolicies
+    privacy: Privacy
     retrieval: RetrievalService
     runs: RunService
     answers: AnswerService
@@ -71,6 +91,12 @@ class _ApplicationComponents:
     memory_embedder: Any
     web_conversations: WebConversationService
     agent_accounts: AgentAccounts
+    #: The Session goal's durable service; the harness projects it to clients without reading
+    #: round Run rows. Every components value must inject it: goal continuation is product state,
+    #: not an optional integration.
+    goals: AnswerGoalService
+    #: The live preview of a Run's leased browser; None only where none was composed.
+    live_browser: LiveBrowserService | None = None
     connections: Connections | None = None
     agent_account_maintenance: AgentAccountMaintenance | None = None
     search_toolchain: Any | None = None
@@ -78,7 +104,17 @@ class _ApplicationComponents:
     corpus_mutations: CorpusMutationService | None = None
     initialize_process: Callable[[DlightragConfig], None] = _noop_initialize_process
     close_agent_execution: Callable[[], Awaitable[None]] = _noop_close_process
+    start_session_memory_passes: Callable[[], None] = _noop_start_process
+    #: Take up the active goals the database holds when this process starts (ADR 0077). Composed
+    #: by :mod:`dlightrag._compose`; a components value built without one starts no round.
+    recover_goal_rounds: Callable[[], Awaitable[None]] = _noop_close_process
+    close_session_memory_passes: Callable[[], Awaitable[None]] = _noop_close_process
     close_process: Callable[[], Awaitable[None]] = _noop_close_process
+    #: The reader content gate, composed by :mod:`dlightrag._compose`. A components value
+    #: built without one — a unit test's — must supply its own; the property refuses rather
+    #: than falling back to an unprotected gate, because a deployment that forgot to compose
+    #: one would otherwise hand readers protected text and say nothing.
+    skill_protection: SkillProtection | None = None
 
 
 class Application:
@@ -98,6 +134,7 @@ class Application:
         self._closed = False
         self._close_task: asyncio.Task[None] | None = None
         self._memory_janitor: asyncio.Task[None] | None = None
+        self._goal_recovery_task: asyncio.Task[None] | None = None
         self._late_coordinator_start: asyncio.Task[None] | None = None
 
     @property
@@ -115,9 +152,29 @@ class Application:
         return self._open().answers
 
     @property
+    def skill_protection(self) -> SkillProtection:
+        """The process's content fingerprints of the protected Skill documents.
+
+        Every reader-facing surface asks this one object whether a passage is a Skill
+        author's own text; the model's own transcript never does (ADR 0061).
+        """
+        protection = self._open().skill_protection
+        if protection is None:
+            raise RuntimeError("Reader content protection is not composed")
+        return protection
+
+    @property
     def runs(self) -> RunService:
         """The common owner-scoped durable lifecycle service."""
         return self._open().runs
+
+    @property
+    def live_browser(self) -> LiveBrowserService:
+        """The live preview of a Run's browser, wherever the deployment composes one."""
+        service = self._open().live_browser
+        if service is None:
+            raise RuntimeError("The live browser preview is unavailable")
+        return service
 
     @property
     def connections(self) -> Connections:
@@ -142,7 +199,7 @@ class Application:
 
     @property
     def model_catalogue(self) -> ModelCatalogueAdmin:
-        from dlightrag.application.model_catalogue import ModelCatalogueUnavailableError
+        from dlightrag.application.model_catalogue.service import ModelCatalogueUnavailableError
 
         catalogue = self._open().model_catalogue
         if catalogue is None:
@@ -159,6 +216,17 @@ class Application:
         return self._open().access_control
 
     @property
+    def policies(self) -> RuntimePolicies:
+        """The settings an administrator changes while the deployment runs, read per request."""
+        return self._open().policies
+
+    @property
+    def privacy(self) -> Privacy:
+        """An owner's Conversation Contribution in Settings: whether their conversations may be
+        used to evaluate and train models, and since when."""
+        return self._open().privacy
+
+    @property
     def corpus_mutations(self) -> CorpusMutationService:
         """The sole product acceptance surface for corpus writes."""
         service = self._open().corpus_mutations
@@ -170,6 +238,11 @@ class Application:
     def web_conversations(self) -> WebConversationService:
         """The browser conversation service, guarded by Application lifetime."""
         return self._open().web_conversations
+
+    @property
+    def goals(self) -> AnswerGoalService:
+        """The Session goal service: the durable phase a round continues under."""
+        return self._open().goals
 
     def _open(self) -> _ApplicationComponents:
         if self._closed:
@@ -229,7 +302,12 @@ class Application:
             self._start_promotion_worker()
             await self._start_run_coordinator()
             await self._initialize_web_conversations()
+            await self._recover_goal_rounds()
+            self._start_goal_recovery()
             await self._start_memory_janitor()
+            # Last, once the stores it reads are initialized: the sweep for Sessions whose pass a
+            # restart or a failed model call lost. A store that is not ready only costs it a look.
+            components.start_session_memory_passes()
         except BaseException:
             try:
                 await self.aclose()
@@ -266,7 +344,7 @@ class Application:
         catalogue = self._components.model_catalogue
         if catalogue is None:
             return True
-        from dlightrag.application.model_catalogue import (
+        from dlightrag.application.model_catalogue.service import (
             ModelCatalogueSchemaError,
             ModelCatalogueValidationError,
         )
@@ -308,7 +386,7 @@ class Application:
         """
         from dlightrag.engine.runtime.errors import RunSchemaError
 
-        from .web_conversations import WebConversationSchemaError
+        from .web_conversations.models import WebConversationSchemaError
 
         components = self._components
         validate_only = self._config.is_reader
@@ -439,6 +517,8 @@ class Application:
             return
         self._runs_ready = True
         await self._initialize_web_conversations()
+        await self._recover_goal_rounds()
+        self._start_goal_recovery()
         self._components.health.mark_ready()
         logger.info("Run cancellation listener is ready; the Run coordinator started")
 
@@ -465,6 +545,64 @@ class Application:
     async def _stop_late_coordinator_start(self) -> None:
         task = self._late_coordinator_start
         self._late_coordinator_start = None
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            return
+
+    async def _recover_goal_rounds(self) -> None:
+        """Take up the goals a previous process left active (ADR 0077).
+
+        Runs after the coordinator exists, so a round the driver starts has something to admit it,
+        and after the Web conversations are initialized, so the round can become their next turn.
+        Only a process whose deployment setting asks for it runs the startup scan; the durable row
+        and its compare-and-set fence the rest, so a second process cannot duplicate a round. A
+        failure here costs the continuation, never the boot: the goal stays readable and the next
+        settlement or human turn continues it.
+        """
+        if not self._config.deployment.goal_recovery:
+            return
+        if not self._runs_ready:
+            return
+        try:
+            await self._components.recover_goal_rounds()
+        except Exception:
+            logger.warning("Goal rounds could not be recovered at startup", exc_info=True)
+
+    def _start_goal_recovery(self) -> None:
+        """Start the periodic goal scan in the one process that owns startup recovery.
+
+        Only a process whose ``deployment.goal_recovery`` is true scans; the scan itself reuses
+        the startup pass and CAS + the pending-round row fence a second process's attempts. A
+        components value built without a recovery callback (a unit test's) has nothing to repeat,
+        so no task starts there.
+        """
+        if not self._config.deployment.goal_recovery or not self._runs_ready or self._closed:
+            return
+        if self._components.recover_goal_rounds is _noop_close_process:
+            return
+        if self._goal_recovery_task is None:
+            self._goal_recovery_task = asyncio.create_task(
+                self._goal_recovery_forever(), name=_GOAL_RECOVERY_TASK
+            )
+
+    async def _goal_recovery_forever(self) -> None:
+        """Re-run the goal recovery scan on its cadence; failures cost one pass, never the loop."""
+        while True:
+            await asyncio.sleep(_GOAL_RECOVERY_INTERVAL_SECONDS)
+            try:
+                await self._components.recover_goal_rounds()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning("Periodic goal recovery failed", exc_info=True)
+
+    async def _stop_goal_recovery(self) -> None:
+        task = self._goal_recovery_task
+        self._goal_recovery_task = None
         if task is None:
             return
         task.cancel()
@@ -545,12 +683,20 @@ class Application:
                 else _noop_close_process,
             ),
             (
+                "live browser sessions",
+                components.live_browser.aclose
+                if components.live_browser is not None
+                else _noop_close_process,
+            ),
+            (
                 "Agent Account maintenance",
                 components.agent_account_maintenance.aclose
                 if components.agent_account_maintenance is not None
                 else _noop_close_process,
             ),
             ("memory janitor", self._stop_memory_janitor),
+            ("goal recovery sweep", self._stop_goal_recovery),
+            ("Session Memory Passes", components.close_session_memory_passes),
             ("the late Run coordinator start", self._stop_late_coordinator_start),
             ("corpus admin promotion worker", components.corpora.aclose),
             ("the durable run coordinator", components.coordinator.aclose),

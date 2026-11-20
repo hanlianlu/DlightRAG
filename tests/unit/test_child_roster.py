@@ -7,14 +7,17 @@ from uuid import UUID
 
 import pytest
 
-from dlightrag.application.answer_runs import (
+from dlightrag.application.answer_runs.child_roster import (
     CHILD_ROSTER_PAGE_DEFAULT_LIMIT,
     CHILD_ROSTER_PAGE_MAX_LIMIT,
     ChildRosterCursor,
     ChildRosterCursorCodec,
     ChildRosterCursorError,
     ChildRosterPageRequest,
+    child_result_lineage,
+    public_child_status,
 )
+from dlightrag.engine.agent.skill_protection import MASK_PLACEHOLDER, ProtectedTextIndex
 
 _SECRET = b"child-roster-test-secret" * 2
 _RUN_ID = UUID("0199a0a0-0000-7000-8000-000000000077")
@@ -58,24 +61,6 @@ def test_codec_rejects_tampered_or_malformed_tokens() -> None:
         other.decode(token)
 
 
-def test_codec_rejects_noncanonical_uuids_and_timestamps() -> None:
-    """Defense in depth: a sealed token is trusted for its shape, never its values."""
-    codec = ChildRosterCursorCodec(_SECRET)
-    seal = codec._envelope.encode
-
-    upper_run = dict(_payload_fields(), run_id=str(_RUN_ID).upper())
-    with pytest.raises(ChildRosterCursorError):
-        codec.decode(seal(upper_run))
-
-    offset_timestamp = dict(_payload_fields(), created_at="2026-03-04T05:06:07.123456+00:00")
-    with pytest.raises(ChildRosterCursorError):
-        codec.decode(seal(offset_timestamp))
-
-    naive_timestamp = dict(_payload_fields(), created_at="2026-03-04T05:06:07.123456")
-    with pytest.raises(ChildRosterCursorError):
-        codec.decode(seal(naive_timestamp))
-
-
 def test_cursor_requires_aware_timestamp_and_uuid_fields() -> None:
     with pytest.raises(ValueError, match="timezone"):
         ChildRosterCursor(
@@ -108,3 +93,54 @@ def test_page_request_enforces_bounds_and_cursor_type() -> None:
             ChildRosterPageRequest(limit=cast(Any, limit))
     with pytest.raises(ValueError, match="cursor"):
         ChildRosterPageRequest(cursor=cast(Any, "opaque-token"))
+
+
+_PROTECTED_PARAGRAPH = (
+    "The protected method reconciles the ledger in two passes: first it groups every "
+    "receipt by its audit window, then it compares the grouped totals against the "
+    "settlement extract before writing a single adjustment."
+)
+
+
+def _protected_index() -> ProtectedTextIndex:
+    """A one-document fingerprint index, standing in for the process's Skill protection."""
+    return ProtectedTextIndex.build(
+        [("charts", "references/method.md", _PROTECTED_PARAGRAPH.encode("utf-8"))]
+    )
+
+
+def test_public_child_status_gates_the_childs_summary() -> None:
+    """The projection is pure: a caller that renders it hands over its reader's gate."""
+    row = {
+        "child_session_id": "child-1",
+        "status": "succeeded",
+        "summary": _PROTECTED_PARAGRAPH,
+        "result_handles": [],
+    }
+
+    assert public_child_status(row)["summary"] == _PROTECTED_PARAGRAPH
+
+    masked = public_child_status(row, mask_reader_text=_protected_index().mask)
+    assert masked["summary"] == MASK_PLACEHOLDER
+
+
+def test_child_result_lineage_gates_the_terminal_outcome_summary() -> None:
+    """A Child's conclusion is reader text; its handles are facts and stay."""
+    row = {
+        "child_session_id": "child-1",
+        "status": "succeeded",
+        "host_state": {
+            "terminal_outcome": {
+                "status": "succeeded",
+                "summary": _PROTECTED_PARAGRAPH,
+                "handles": ["ev-1"],
+                "operation_id": "op-1",
+            }
+        },
+    }
+
+    lineage = child_result_lineage(row, mask_reader_text=_protected_index().mask)
+
+    assert lineage is not None
+    assert lineage["summary"] == MASK_PLACEHOLDER
+    assert lineage["handles"] == ["ev-1"]

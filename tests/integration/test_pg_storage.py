@@ -91,8 +91,8 @@ async def _delete_test_workspaces(registry: Any, *extra_workspaces: str) -> None
 
 def _corpus_admin(config: Any) -> Any:
     from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
-    from dlightrag.application.corpus_admin import CorpusAdmin
-    from dlightrag.application.settings import corpus_admin_settings
+    from dlightrag.application.corpus_admin.service import CorpusAdmin
+    from dlightrag.application.settings.projections import corpus_admin_settings
 
     backend = build_pg_corpus_backend(config)
     return CorpusAdmin(
@@ -115,7 +115,7 @@ def _test_config(**overrides: Any) -> Any:
     paths must target the same database the raw test pools use (honoring
     PGHOST/PGPORT overrides).
     """
-    from dlightrag.application.config import DlightragConfig
+    from dlightrag.application.config.sections import DlightragConfig
 
     storage = dict(overrides.pop("storage", {}))
     storage["postgres"] = {
@@ -141,7 +141,7 @@ async def test_file_panel_traverses_null_and_timestamp_groups_without_gaps() -> 
     import asyncpg
 
     from dlightrag.adapters.postgres.corpus.file_panel import PGFilePanelStore
-    from dlightrag.application.corpus_admin import (
+    from dlightrag.application.corpus_admin.file_panel import (
         FilePanelCursor,
         FilePanelPageRequest,
     )
@@ -378,7 +378,7 @@ class TestPGWorkspaceDiscovery:
     async def test_discovers_workspaces_from_workspace_meta(self) -> None:
         """list_workspaces() returns workspaces found in dlightrag_workspace_meta."""
         from dlightrag.adapters.postgres.core._pool import pg_pool
-        from dlightrag.application.config import set_config
+        from dlightrag.application.config.loading import set_config
         from dlightrag.engine.ai.settings import EmbeddingSettings
 
         pool, registry = await _open_workspace_registry()
@@ -423,7 +423,7 @@ class TestPGWorkspaceDiscovery:
     async def test_empty_table_returns_default_workspace(self) -> None:
         """Empty workspace metadata falls back to config.deployment.workspace."""
         from dlightrag.adapters.postgres.core._pool import pg_pool
-        from dlightrag.application.config import set_config
+        from dlightrag.application.config.loading import set_config
         from dlightrag.engine.ai.settings import EmbeddingSettings
 
         pool, registry = await _open_workspace_registry()
@@ -468,11 +468,13 @@ async def test_metadata_search_traverses_contains_fallback_without_gaps() -> Non
     import asyncpg
 
     from dlightrag.adapters.postgres.corpus.pg_metadata_search import PGMetadataSearchStore
-    from dlightrag.application.corpus_admin import (
+    from dlightrag.application.corpus_admin.metadata_search import (
         MetadataSearchCursor,
         MetadataSearchPageRequest,
     )
-    from dlightrag.engine.rag.retrieval import MetadataFilter
+    from dlightrag.engine.rag.retrieval.models import (
+        MetadataFilter,
+    )
 
     workspace = "test_pg_metadata_search"
     other_workspace = "test_pg_metadata_search_other"
@@ -602,7 +604,7 @@ async def test_child_roster_traverses_newest_first_with_timestamp_ties() -> None
     import asyncpg
 
     from dlightrag.adapters.postgres.runtime.run_store import PGRunStore
-    from dlightrag.application.answer_runs import (
+    from dlightrag.application.answer_runs.child_roster import (
         ChildRosterCursor,
         ChildRosterPageRequest,
     )

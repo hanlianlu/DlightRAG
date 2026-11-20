@@ -1,0 +1,57 @@
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
+
+/* Settings → Privacy: under the switch, what a contribution covers, in three plain statements. */
+
+@layer features {
+  /* A note on the tint Profile Memory's note wears, holding terms and the statements they name. The
+   * terms read like the navigation's group labels: small, bold, muted. */
+  .scope {
+    align-items: baseline;
+    background: var(--color-bg-hover);
+    border-radius: var(--radius-card);
+    display: grid;
+    gap: var(--space-component);
+    grid-template-columns: max-content minmax(0, 1fr);
+    margin: 0;
+    padding: var(--space-component);
+  }
+
+  .term {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    font-weight: 600;
+    line-height: var(--line-height-control);
+  }
+
+  .statement {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-detail);
+    line-height: var(--line-height-control);
+    margin: 0;
+    overflow-wrap: anywhere;
+
+    /* Two or three lines the owner decides on break evenly, so none ends on a lone word. Chromium,
+     * Firefox and WebKit all balance them. */
+    text-wrap: balance;
+  }
+
+  /* ── Phone ── */
+
+  /* The terms sit over their statements, and a wider gap sets one pair off from the next. The lines
+   * there are short and already nearly full, so a break lands where the words fall, and not in the
+   * middle of "turn it on" or of a Chinese word to even out the lines. */
+  @media (width <= 720px), (height <= 480px) {
+    .scope {
+      grid-template-columns: minmax(0, 1fr);
+      row-gap: var(--space-inline);
+    }
+
+    .statement {
+      text-wrap: wrap;
+    }
+
+    .statement + .term {
+      margin-block-start: var(--space-tight);
+    }
+  }
+}

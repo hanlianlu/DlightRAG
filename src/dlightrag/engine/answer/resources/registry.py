@@ -30,10 +30,18 @@ from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from dlightrag.engine.agent.session.ids import IntentId
-from dlightrag.engine.agent.tools import AdmittedBytes, ResourceAttachmentBytes
+from dlightrag.engine.agent.tools.contracts import (
+    AdmittedBytes,
+    DeclaredSource,
+    ResourceAttachmentBytes,
+)
 from dlightrag.engine.ai.media import verify_web_image_bytes
 from dlightrag.engine.ai.tokens import estimate_tokens
-from dlightrag.engine.answer.agent_browser import AgentBrowserError, RenderedPage, browser_failure
+from dlightrag.engine.answer.agent_browser.contracts import (
+    AgentBrowserError,
+    RenderedPage,
+    browser_failure,
+)
 from dlightrag.engine.answer.resources.converters import (
     ConversionLimitError,
     ExtractedVisual,
@@ -67,7 +75,9 @@ from dlightrag.engine.answer.resources.text import (
     decode_text,
 )
 from dlightrag.engine.answer.resources.visual import ResourceViewError, pdf_page_count
-from dlightrag.engine.answer.web_sources import WebExtractResult
+from dlightrag.engine.answer.web_sources.contracts import (
+    WebExtractResult,
+)
 from dlightrag.engine.public_http import (
     PublicHttpPolicyError,
     PublicHttpPresentation,
@@ -87,7 +97,7 @@ _PDF_MIME = "application/pdf"
 _CURSOR_VERSION = 1
 _CURSOR_SIGNATURE_BYTES = 8
 _CURSOR_PLACEHOLDER = "x" * 34
-_EXTRACT_ACQUISITIONS = frozenset({"exa_extract", "tavily_extract"})
+_EXTRACT_ACQUISITIONS = frozenset({"exa_extract", "tavily_extract", "deepseek_extract"})
 #: What an Agent Session's page yields beside a Rendered Read: the page as it stands, and a
 #: file it downloaded. Each is its own Resource, never a representation of a URL's snapshot.
 BROWSER_CAPTURE = "browser_capture"
@@ -199,9 +209,16 @@ class _Registered:
     stored_view_only: bool = False
     #: Where a rendered representation's page ended; provenance, never an identity.
     final_url: str | None = None
+    #: What the page answered the browser, so a read of it says a 403 or a 429 was a page.
+    http_status: int | None = None
+    #: Whether the page had gone quiet when it was serialized; a partial page says so.
+    settled: bool = True
     #: The public URL a browser capture or download is cited by; none where ADR 0005 keeps
     #: its URL private, and the Resource is cited by its handle.
     citable_url: str | None = None
+    #: What a published product was built from, carried through an adoption so reopening the
+    #: product also returns what rebuilds it (ADR 0052).
+    sources: tuple[DeclaredSource, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -498,6 +515,7 @@ class ResourceRegistry:
         view: ConversionSnapshot | None,
         record: Callable[[str, ConversionSnapshot | None], Awaitable[None]],
         needs_text: bool = False,
+        sources: tuple[DeclaredSource, ...] = (),
     ) -> str:
         """Hold another Run's bytes under ``alias`` once ``record`` made them durable.
 
@@ -531,6 +549,10 @@ class ResourceRegistry:
             ):
                 raise ResourceNotConvertedError(resource.filename or alias, resource.declared_mime)
             canonical = self._register(resource, admission_origin="caller", stored_view_only=True)
+            if sources and not self._resources[canonical].sources:
+                # First provenance wins, as in restore_adopted: the same bytes can be reached
+                # by more than one path, and the product they belong to is the one that says so.
+                self._resources[canonical].sources = sources
             try:
                 binds = self._alias_binds(alias, canonical)
                 adopted = (
@@ -571,6 +593,7 @@ class ResourceRegistry:
         mime_type: str,
         content: bytes,
         aliases: tuple[str, ...] = (),
+        sources: tuple[DeclaredSource, ...] = (),
     ) -> None:
         """Hydrate one recorded adoption under the handle it was recorded with.
 
@@ -601,6 +624,8 @@ class ResourceRegistry:
             self._caller_dedup.add(key)
             self._total_bytes += len(content)
         canonical = resource_id if held is None else held.resource_id
+        if sources and not self._resources[canonical].sources:
+            self._resources[canonical].sources = sources
         for alias in (resource_id, *aliases):
             self._bind_alias(alias, canonical)
 
@@ -884,7 +909,11 @@ class ResourceRegistry:
             )
         content = await self._materialize_bytes(resource, effect_owner=effect_owner)
         return AdmittedBytes(
-            resource.resource_id, resource.declared_mime or "application/octet-stream", content
+            resource.resource_id,
+            resource.declared_mime or "application/octet-stream",
+            content,
+            resource.filename,
+            resource.sources,
         )
 
     async def read(
@@ -2201,7 +2230,11 @@ class ResourceRegistry:
         if len(page.html) > self._max_attachment_bytes:
             raise browser_failure("too_large", limit=self._max_attachment_bytes)
         rendered = _rendered_representation(
-            resource, page.html, final_url=normalize_public_http_url_identity(page.final_url)
+            resource,
+            page.html,
+            final_url=normalize_public_http_url_identity(page.final_url),
+            status=page.status,
+            settled=page.settled,
         )
         # Registered first, because adopting its conversion names it by its own id.
         self._rendered[resource.resource_id] = rendered
@@ -2475,11 +2508,28 @@ def _rendered_note(resource: _Registered, rendering: _Registered) -> str:
     note = f"Rendered view from the Agent Browser ({BROWSER_RENDER})"
     if rendering.final_url != resource.url:
         note += f"; the page ended at {rendering.final_url}"
+    if rendering.http_status is not None and rendering.http_status >= 400:
+        note += f"; the page answered HTTP {rendering.http_status}"
+    if not rendering.settled:
+        note += "; the page had not gone quiet when it was read"
     return f"{note}."
 
 
-def _rendered_representation(parent: _Registered, html: bytes, *, final_url: str) -> _Registered:
-    """The rendering of ``parent``: the page's serialized DOM, with the parent's admission."""
+def _rendered_representation(
+    parent: _Registered,
+    html: bytes,
+    *,
+    final_url: str,
+    status: int | None = None,
+    settled: bool = True,
+) -> _Registered:
+    """The rendering of ``parent``: the page's serialized DOM, with the parent's admission.
+
+    ``status`` is what the page answered, which a read repeats when it is an error: a 429
+    or a 403 body is read as the page it is rather than as a page that read empty.
+    ``settled`` is whether the page had gone quiet when it was serialized, so a read of a
+    page that never did says its text may be partial.
+    """
     return _Registered(
         resource_id=f"{parent.resource_id}{RENDERED_REPRESENTATION_SUFFIX}",
         filename=_RENDERED_FILENAME,
@@ -2491,6 +2541,8 @@ def _rendered_representation(parent: _Registered, html: bytes, *, final_url: str
         admission_origin=parent.admission_origin,
         acquisition=BROWSER_RENDER,
         final_url=final_url,
+        http_status=status,
+        settled=settled,
     )
 
 

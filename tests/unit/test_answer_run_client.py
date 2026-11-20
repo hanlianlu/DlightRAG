@@ -11,14 +11,18 @@ import httpx
 import pytest
 
 import dlightrag.adapters.http.client.client as client_module
-from dlightrag.adapters.http.client import (
+from dlightrag.adapters.http.client.attachments import (
+    AnswerAttachmentUpload,
+)
+from dlightrag.adapters.http.client.client import (
     EVENT_READ_IDLE_SECONDS,
     MAX_RECONNECT_ATTEMPTS,
-    AnswerAttachmentUpload,
     AnswerRunClient,
+    parse_sse_frames,
+)
+from dlightrag.application.runs import (
     RunCancelledError,
     RunFailedError,
-    parse_sse_frames,
 )
 
 _DESCRIPTOR = {

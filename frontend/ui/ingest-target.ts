@@ -36,7 +36,7 @@ export class DlIngestTarget extends LightElement {
         this.handles = productionHandles();
         this.active = false;
         /** Store reads: workspaces.records, ingest.workspace. */
-        new StoreController(this, this.handles.workspaces, this.handles.ingest);
+        new StoreController(this, () => [this.handles.workspaces, this.handles.ingest]);
     }
 
     protected override updated(): void {
@@ -64,7 +64,7 @@ export class DlIngestTarget extends LightElement {
                     this.#popup.close(true);
                 }}
             >
-                <span class=${`${ingestStyles['ingest-target-popover-radio']}${selected ? ` ${ingestStyles.on}` : ''}`}></span>
+                <span class="dl-popover-radio" aria-hidden="true"></span>
                 <span>${record.displayName}</span>
             </button>
         `;

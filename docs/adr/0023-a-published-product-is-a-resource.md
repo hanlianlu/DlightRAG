@@ -84,7 +84,11 @@ through the one surface.
 
 A conversation can iterate on one deliverable: read the published version by handle,
 edit it in the working copy, attach again, and publish a new version, each keeping its
-authoring Run, digest, Evidence, and place in the conversation. A fork shares its
+authoring Run, digest, Evidence, and place in the conversation. An unchanged earlier
+version is published again in one call, `attach_artifact(resource_id="artifact-…")`,
+which restores its bytes to `artifacts/` and attaches them. An Answer never links an
+earlier Run's Artifact in place: that link would die with the earlier Run, while the
+new row pins the same content-addressed Blob and costs no bytes. A fork shares its
 Session, so it inherits that reachability; another conversation — or another owner —
 cannot reach the bytes at all.
 

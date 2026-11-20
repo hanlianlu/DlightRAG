@@ -11,14 +11,23 @@ import pytest
 from dlightrag.adapters.agent_browser import leased_browser, page
 from dlightrag.adapters.agent_browser.leased_browser import PlaywrightLeasedBrowser
 from dlightrag.adapters.agent_browser.page import PlaywrightAgentPage
-from dlightrag.engine.answer.agent_browser import (
+from dlightrag.engine.answer.agent_browser.contracts import (
     AgentBrowserError,
     BrowserHolder,
-    FilledPasswords,
     PageLimits,
+)
+from dlightrag.engine.answer.agent_browser.passwords import (
+    FilledPasswords,
+)
+from dlightrag.engine.answer.agent_browser.run import (
     RunAgentBrowser,
 )
-from tests.support.agent_browser import FakeLease, FakeProvider, browser_settings
+from tests.support.agent_browser import (
+    FakeLease,
+    FakeProvider,
+    browser_settings,
+    client_connection,
+)
 
 HOLDER = BrowserHolder("owner", "11111111-1111-1111-1111-111111111111", "worker-1", 1)
 PAGE = "http://slow.example/"
@@ -54,6 +63,8 @@ class _Context:
 
 
 class _WedgedBrowser:
+    _impl_obj = client_connection()
+
     def __init__(self) -> None:
         self.closed = 0
 

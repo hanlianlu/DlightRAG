@@ -17,4 +17,31 @@
     white-space: nowrap;
     width: 1px;
   }
+
+  /* Under a touch pointer a field the reader types into is never smaller than 16px. iOS Safari zooms
+     the page in when it focuses a smaller one and leaves it zoomed, and the viewport stays zoomable
+     (no maximum-scale) because the reader's own zoom is an accessibility feature. This is the one rule
+     for every field, so it sits in the layer that outranks the sizes the primitives and features give
+     their own; a field that lays text out beside itself, such as the composer's mirror, reads
+     --font-size-touch-entry too. The inputs that take no typing keep their size. */
+  @media (pointer: coarse) {
+    :is(
+      textarea,
+      select,
+      input:not(
+        [type='button' i],
+        [type='checkbox' i],
+        [type='color' i],
+        [type='file' i],
+        [type='hidden' i],
+        [type='image' i],
+        [type='radio' i],
+        [type='range' i],
+        [type='reset' i],
+        [type='submit' i]
+      )
+    ) {
+      font-size: var(--font-size-touch-entry);
+    }
+  }
 }

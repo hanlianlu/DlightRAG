@@ -22,7 +22,7 @@ function summary(id: string, updated = '2026-08-20T00:00:00Z'): ConversationSumm
 }
 
 function history(id: string): ConversationHistory {
-  return {conversation: summary(id), turns: [], nextCursor: null};
+  return {conversation: summary(id), turns: [], commands: [], nextCursor: null};
 }
 
 function page(items: ConversationSummary[], nextCursor: string | null = null): ConversationPage {
@@ -46,6 +46,8 @@ function turn(number: number) {
     errorKind: null,
     errorMessage: null,
     childCount: 0,
+    answerSequence: null,
+    feedback: null,
     createdAt: '2026-08-20T00:00:00Z',
   };
 }
@@ -262,6 +264,7 @@ test('message history traverses 205 turns by prepend with coalescing and overlap
           {length: page.end - page.start + 1},
           (_, index) => turn(page.start + index),
         ),
+        commands: [],
         nextCursor: page.next,
       };
     },
@@ -290,6 +293,7 @@ test('a recent refresh replaces a disconnected loaded range and restores its old
         turns: request === 1
           ? Array.from({length: 40}, (_, index) => turn(index + 1))
           : Array.from({length: 40}, (_, index) => turn(index + 51)),
+        commands: [],
         nextCursor: request === 1 ? null : 'before-51',
       };
     },
@@ -318,7 +322,7 @@ for (const asked of ['before', 'during'] as const) {
           if (cursor === null) {
             recentRequests += 1;
             if (recentRequests === 1) {
-              return {conversation: summary(id), turns: [turn(41), turn(42)], nextCursor: 'before-41'};
+              return {conversation: summary(id), turns: [turn(41), turn(42)], commands: [], nextCursor: 'before-41'};
             }
             return refresh.promise;
           }
@@ -338,11 +342,11 @@ for (const asked of ['before', 'during'] as const) {
         olderLoad = store.loadOlderMessages();
       }
       const landRefresh = async (): Promise<void> => {
-        refresh.resolve({conversation: summary('one'), turns: [turn(42), turn(43)], nextCursor: 'before-42'});
+        refresh.resolve({conversation: summary('one'), turns: [turn(42), turn(43)], commands: [], nextCursor: 'before-42'});
         assert.equal(await refreshing, 'ready');
       };
       const landOlder = async (): Promise<void> => {
-        older.resolve({conversation: summary('one'), turns: [turn(40)], nextCursor: null});
+        older.resolve({conversation: summary('one'), turns: [turn(40)], commands: [], nextCursor: null});
         await olderLoad;
       };
       if (landing === 'refresh first') {
@@ -373,7 +377,7 @@ test('a refresh that cannot join the loaded range drops the older page it was ex
       if (cursor === null) {
         recentRequests += 1;
         if (recentRequests === 1) {
-          return {conversation: summary(id), turns: [turn(41), turn(42)], nextCursor: 'before-41'};
+          return {conversation: summary(id), turns: [turn(41), turn(42)], commands: [], nextCursor: 'before-41'};
         }
         return refresh.promise;
       }
@@ -385,9 +389,9 @@ test('a refresh that cannot join the loaded range drops the older page it was ex
 
   const refreshing = store.refreshActive();
   const olderLoad = store.loadOlderMessages();
-  refresh.resolve({conversation: summary('one'), turns: [turn(90), turn(91)], nextCursor: 'before-90'});
+  refresh.resolve({conversation: summary('one'), turns: [turn(90), turn(91)], commands: [], nextCursor: 'before-90'});
   await refreshing;
-  older.resolve({conversation: summary('one'), turns: [turn(40)], nextCursor: null});
+  older.resolve({conversation: summary('one'), turns: [turn(40)], commands: [], nextCursor: null});
   await olderLoad;
 
   assert.equal(olderSignal?.aborted, true);
@@ -515,4 +519,60 @@ test('delete mutates the server before removing the local summary', async () => 
   assert.deepEqual(calls, ['one']);
   assert.deepEqual(store.conversations, []);
   assert.equal(store.mutationPending, false);
+});
+
+test('a deletion refused because another change is under way leaves the conversation still loading to finish', async () => {
+  const reading = deferred<ConversationHistory>();
+  const renamed = deferred<ConversationSummary>();
+  const sent: string[] = [];
+  const store = new ConversationStore(api({
+    history: () => reading.promise,
+    rename: () => renamed.promise,
+    delete: async (id) => { sent.push(`delete ${id}`); },
+    deleteAll: async () => { sent.push('delete all'); },
+  }));
+  const opening = store.open('one');
+  const renaming = store.rename('one', 'Another title');
+  assert.equal(store.mutationPending, true);
+
+  assert.equal(await store.delete('one'), 'error');
+  assert.equal(await store.deleteAll(), 'error');
+  assert.deepEqual(sent, [], 'a refused deletion was sent');
+
+  // The read that fills the view was not ended by the refusals, so it still lands: the view is not left
+  // saying it is loading with nothing to say it stopped.
+  reading.resolve(history('one'));
+  assert.equal(await opening, 'ready');
+  assert.equal(store.viewState, 'ready');
+  renamed.resolve({...summary('one'), title: 'Another title'});
+  assert.equal(await renaming, 'ok');
+});
+
+test('a deletion that goes ahead ends the read filling the view for the conversation it deletes', async () => {
+  const reading = deferred<ConversationHistory>();
+  const store = new ConversationStore(api({history: () => reading.promise}));
+  const opening = store.open('one');
+
+  assert.equal(await store.delete('one'), 'ok');
+  reading.resolve(history('one'));
+
+  assert.equal(await opening, 'stale', 'the read of a conversation just deleted was drawn');
+  assert.equal(store.viewState, 'unavailable');
+});
+
+test('a read that fails after the view has moved on is as stale as one that succeeds', async () => {
+  const slow = deferred<ConversationHistory>();
+  const later = deferred<ConversationHistory>();
+  const reads = [slow, later];
+  const store = new ConversationStore(api({history: () => reads.shift()!.promise}));
+
+  const failing = store.open('one');
+  const replacing = store.open('two');
+  later.resolve(history('two'));
+  assert.equal(await replacing, 'ready');
+  slow.reject(new ApiError(500));
+
+  assert.equal(await failing, 'stale');
+  assert.equal(store.viewState, 'ready');
+  assert.equal(store.activeConversationId, 'two');
 });

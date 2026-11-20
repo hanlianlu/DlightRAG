@@ -1,18 +1,33 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 #
-# Pre-commit hooks — install once with:  pre-commit install
+# Pre-commit and pre-push hooks — install once with:  make hooks
 #
-# Every hook runs in <5s.  Slow checks (pytest, E2E) belong in CI.
+# Every commit hook runs in <5s.  The pre-push hooks run the frontend gate (typecheck, node tests,
+# the Chromium browser suite) in about 25s whenever a push touches frontend/, so a push never lands
+# what `make frontend-ci` would refuse.  Slow checks (pytest, E2E) belong in CI.
+#
+# The commit hooks check the change — the files the commit touches.  The whole-repository gates
+# (`make lint`, `make lint-security`, `make format-check`, `make typecheck`,
+# `make architecture-check`) run in CI's fast job, which sees the committed repository.  A
+# repository-wide gate in a commit hook turns baseline debt left by an older release into a blocked
+# commit for every agent on the branch; the change itself should be what a hook judges.
 #
 # Usage:
-#   pre-commit run --all-files     # run all hooks now (first-time)
-#   pre-commit run ruff            # run a single hook
-#   SKIP=pyright git commit -m …   # skip one hook for this commit
+#   pre-commit run --all-files                 # run all commit hooks now (first-time)
+#   pre-commit run ruff                        # run a single hook
+#   pre-commit run --hook-stage pre-push --all-files   # run the push hooks now
+#   SKIP=pyright git commit -m …               # skip one hook for this commit
+#   SKIP=frontend-browser-test git push        # skip one hook for this push
+
+# A bare `pre-commit install` installs both, so the push hooks are never silently absent; the
+# commit hooks stay commit-only, and each push hook names its own stage.
+default_install_hook_types: [pre-commit, pre-push]
+default_stages: [pre-commit]
 
 repos:
   # ── ruff (lint + format) ──────────────────────────────────────────
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.0
+    rev: v0.17.6
     hooks:
       - id: ruff
       - id: ruff-format
@@ -21,18 +36,20 @@ repos:
   - repo: local
     hooks:
       - id: ruff-security
-        name: ruff (security / bandit)
-        entry: make lint-security
+        name: ruff (security / bandit, changed files)
+        entry: uv run ruff check --select S
         language: system
         types: [python]
-        pass_filenames: false
+        # Mirror `make lint-security`'s paths: tests assert by design, and `S101` is not a finding
+        # in a test file; the security gate covers the product code the commit touches.
+        exclude: ^tests/
 
       - id: pyright
-        name: pyright (strict type-check)
+        name: pyright (strict type-check, changed files)
         entry: uv run pyright
         language: system
         types: [python]
-        pass_filenames: false
+        require_serial: true
 
       - id: import-linter
         name: architecture (import-linter)
@@ -46,4 +63,31 @@ repos:
         entry: make frontend-lint
         language: system
         files: ^frontend/.*\.(ts|mjs|css|json|html)$
+        pass_filenames: false
+
+      # ── pre-push: the frontend gate ─────────────────────────────────
+      # Run only when the pushed range touches the frontend: `files` is matched against what the range
+      # changed, so a push of Python alone skips the half minute these take together.
+      - id: frontend-typecheck
+        name: frontend (tsc)
+        entry: make frontend-typecheck
+        language: system
+        files: ^frontend/
+        stages: [pre-push]
+        pass_filenames: false
+
+      - id: frontend-test
+        name: frontend (node tests)
+        entry: make frontend-test
+        language: system
+        files: ^frontend/
+        stages: [pre-push]
+        pass_filenames: false
+
+      - id: frontend-browser-test
+        name: frontend (Chromium browser tests)
+        entry: npm --prefix frontend run test:browser
+        language: system
+        files: ^frontend/
+        stages: [pre-push]
         pass_filenames: false

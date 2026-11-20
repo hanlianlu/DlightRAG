@@ -33,23 +33,28 @@ from dlightrag.adapters.http.rest.models import (
     AnswerResponse,
     RunDescriptor,
 )
-from dlightrag.application.access import AccessAction, UserContext, owner_id_from_user
-from dlightrag.application.answer_runs import (
-    CHILD_ROSTER_PAGE_DEFAULT_LIMIT,
-    CHILD_ROSTER_PAGE_MAX_LIMIT,
-    ChildRosterCursorError,
-    ChildRosterPageRequest,
-    child_control_receipt_payload,
-    child_control_succeeded,
+from dlightrag.application.access.control import AccessAction
+from dlightrag.application.access.principal import (
+    UserContext,
+    owner_id_from_user,
 )
-from dlightrag.application.answer_runs import AnswerRequest as ServiceAnswerRequest
+from dlightrag.application.answer.provenance import attest_projected_artifacts
 from dlightrag.application.answer_runs.artifacts import (
     artifact_descriptor,
     published_artifact_descriptor,
 )
-from dlightrag.application.config import AnswerConfig
-from dlightrag.application.corpus_admin import safe_source_filename
-from dlightrag.application.retrieval import RetrievalOptions
+from dlightrag.application.answer_runs.child_roster import (
+    CHILD_ROSTER_PAGE_DEFAULT_LIMIT,
+    CHILD_ROSTER_PAGE_MAX_LIMIT,
+    ChildRosterCursorError,
+    ChildRosterPageRequest,
+)
+from dlightrag.application.answer_runs.service import AnswerRequest as ServiceAnswerRequest
+from dlightrag.application.answer_runs.service import (
+    child_control_receipt_payload,
+    child_control_succeeded,
+)
+from dlightrag.application.config.sections import AnswerConfig
 from dlightrag.engine.answer.citations.sources import SourceDownloadLinkBuilder
 from dlightrag.engine.answer.client_contracts import conversation_history_as_dicts
 from dlightrag.engine.answer.execution.input import ResourceInput
@@ -59,6 +64,10 @@ from dlightrag.engine.answer.results import (
     project_answer_result,
     project_artifact_sources,
 )
+from dlightrag.engine.rag.corpus.sources.source_contract import (
+    safe_source_filename,
+)
+from dlightrag.engine.rag.retrieval.models import RetrievalOptions
 
 from .deps import (
     authorized_workspaces,
@@ -219,7 +228,7 @@ def _service_request(
     workspaces: list[str],
 ) -> ServiceAnswerRequest:
     """Project one validated wire request into the Answer application contract."""
-    from dlightrag.application.retrieval import MetadataFilter
+    from dlightrag.engine.rag.retrieval.models import MetadataFilter
 
     resources = answer_link_resources(body.attachments)
     resources.extend(
@@ -276,6 +285,15 @@ async def list_answer_artifacts(
         record.result,
         run_id=run_id,
         artifact_url_prefix="/answer",
+        mask_reader_text=application.skill_protection.mask,
+    )
+    projected = await attest_projected_artifacts(
+        projected,
+        runs=application.runs,
+        config=application.config,
+        owner_id=owner_id,
+        run_id=run_id,
+        records_pruned=record.events_trimmed_at is not None,
     )
     return {"artifacts": projected["artifacts"], "artifact_outcome": projected["artifact_outcome"]}
 
@@ -326,6 +344,15 @@ async def read_answer_artifact_presentation(
         visual_workspaces=visual,
         run_id=run_id,
         artifact_url_prefix="/answer",
+        mask_reader_text=application.skill_protection.mask,
+    )
+    projected = await attest_projected_artifacts(
+        projected,
+        runs=application.runs,
+        config=application.config,
+        owner_id=owner_id,
+        run_id=run_id,
+        records_pruned=record.events_trimmed_at is not None,
     )
     artifact_sources = project_artifact_sources(
         record.result or {},
@@ -333,12 +360,13 @@ async def read_answer_artifact_presentation(
         source_link_builder=SourceDownloadLinkBuilder(),
         downloadable_workspaces=downloadable,
         visual_workspaces=visual,
+        mask_reader_text=application.skill_protection.mask,
     )
     projected.update(
-        answer=markdown,
+        answer=application.skill_protection.mask(markdown),
         artifact_bindings=dict((descriptor or {}).get("artifact_bindings") or {}),
         parts=answer_parts_from_markdown(
-            markdown,
+            application.skill_protection.mask(markdown),
             artifacts=projected["artifacts"],
             evidence_images=[],
             artifact_bindings=dict((descriptor or {}).get("artifact_bindings") or {}),
@@ -368,6 +396,8 @@ async def read_answer_artifact(
     descriptor = published_artifact_descriptor(record.result if record else None, resource_id)
     if descriptor is None:
         raise HTTPException(status_code=404, detail="artifact not found")
+    # The Artifact's bytes are its publication, so a deployment that requires attestation does
+    # not serve them: the refusal names the Run, the Artifact and the vocabulary's own reason.
     header = request.headers.get("range", "").strip()
     total = await application.answers.artifact_size(
         owner_id=owner_id,
@@ -420,6 +450,7 @@ async def create_answer_run(
     creation = await application.answers.create(
         request=_service_request(body, uploads, workspaces=workspaces),
         owner_id=owner_id_from_user(user),
+        caller=user,
         idempotency_key=idempotency_key(request),
     )
     return run_descriptor(creation.run)
@@ -517,6 +548,7 @@ async def _continue_answer_run(
     method = answers.follow_up if operation == "follow-up" else answers.fork
     creation = await method(
         owner_id=owner_id,
+        caller=user,
         run_id=run_id,
         query=body.content,
         idempotency_key=idempotency_key(request),
@@ -627,3 +659,53 @@ async def observe_answer_child(
 
 
 __all__ = ["router"]
+
+
+@router.get("/answer/{run_id}/goal")
+async def answer_goal(
+    run_id: str,
+    request: Request,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """The Session goal one Run executes under, plus the Session's newest Run.
+
+    A goal round is a separate Answer Run. A client that only reads the round's status sees a
+    ``succeeded`` Run at the end of every round and cannot tell a terminal Answer from an interim
+    one; the goal projection is the harness fact that settles it. ``latest_run`` is the Session's
+    newest Answer Run, so a driver can continue to the next round without scanning parent links.
+    """
+    application = get_application(request)
+    owner_id = owner_id_from_user(user)
+    view = await application.runs.get(owner_id=owner_id, run_id=run_id)
+    if view is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    session_id = str(view.request.get("agent_session_id") or "")
+    if not session_id:
+        raise HTTPException(status_code=404, detail="Run has no Session goal")
+    goal = await application.goals.get(owner_id=owner_id, session_id=session_id)
+    if goal is None:
+        raise HTTPException(status_code=404, detail="No goal in this Session")
+    runs = await application.runs.list(owner_id=owner_id, limit=100, newest_first=True)
+    session_runs = [
+        run for run in runs if str(run.request.get("agent_session_id") or "") == session_id
+    ]
+    latest = session_runs[0] if session_runs else view
+    latest_descriptor = run_descriptor(latest)
+    return {
+        "session_id": session_id,
+        "goal": {
+            "goal_id": goal.id,
+            "revision": goal.revision,
+            "phase": goal.phase.value,
+            "max_rounds": goal.max_rounds,
+            "rounds_started": goal.rounds_started,
+            "rounds_left": goal.rounds_left,
+            "blocked_reason": goal.blocked_reason,
+        },
+        "latest_run": {
+            **latest_descriptor,
+            "phase": latest.phase,
+            "created_at": latest.created_at.isoformat(),
+            "finished_at": latest.finished_at.isoformat() if latest.finished_at else None,
+        },
+    }

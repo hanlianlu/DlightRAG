@@ -115,6 +115,14 @@ class ToolResultEntry:
     parts: ToolContent
     details: JsonValue | None = None
     cached: bool = False
+    facts: JsonValue | None = None
+    """Bounded structured facts the Tool reported, as the reader's step card shows them.
+
+    The Tool's ``facts`` are already normalized by ``bounded_tool_facts`` before settlement, so
+    this field is a structure a projection can trust: it holds no text excerpt and no argument
+    payload, only the few facts a card states a call with. Absent on results written before the
+    field existed, and on calls no Tool reported facts for.
+    """
 
     def __post_init__(self) -> None:
         if not self.tool_name.strip():
@@ -132,6 +140,7 @@ class ToolResultEntry:
         text: str,
         details: JsonValue | None = None,
         cached: bool = False,
+        facts: JsonValue | None = None,
     ) -> ToolResultEntry:
         """Build the common text-only durable result."""
         from dlightrag.engine.agent.tool_content import ToolTextPart
@@ -143,6 +152,7 @@ class ToolResultEntry:
             parts=(ToolTextPart(text),),
             details=details,
             cached=cached,
+            facts=facts,
         )
 
     @property

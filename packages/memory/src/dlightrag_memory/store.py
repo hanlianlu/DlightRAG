@@ -13,7 +13,9 @@ from uuid import NAMESPACE_URL, uuid5
 from dlightrag_memory.models import (
     MemoryOperation,
     MemoryOperationReceipt,
+    MemoryOriginKind,
     MemoryRecord,
+    MemoryRunChange,
 )
 from dlightrag_memory.policy import MEMORY_SUPERSEDE_RETENTION_DAYS
 from dlightrag_memory.ports import SearchCandidate
@@ -45,11 +47,25 @@ class MemoryStore(Protocol):
 
     async def get(self, *, owner_id: str, memory_id: str) -> MemoryRecord | None: ...
 
-    async def list_preferences(self, *, owner_id: str, limit: int) -> tuple[MemoryRecord, ...]: ...
+    async def list_standing(
+        self, *, owner_id: str, limit: int
+    ) -> tuple[tuple[MemoryRecord, ...], int]:
+        """The newest active standing records, and how many standing records there are."""
+        ...
 
-    async def search_facts(
-        self, *, owner_id: str, query: str, limit: int
-    ) -> tuple[SearchCandidate, ...]: ...
+    async def search(self, *, owner_id: str, query: str, limit: int) -> tuple[SearchCandidate, ...]:
+        """Active records of every kind each leg has evidence for, in per-leg rank order."""
+        ...
+
+    async def list_session_records(
+        self, *, owner_id: str, session_id: str, origin_kind: MemoryOriginKind
+    ) -> tuple[MemoryRecord, ...]:
+        """The active records one origin wrote for one Session, newest first."""
+        ...
+
+    async def list_run_changes(self, *, owner_id: str, run_id: str) -> tuple[MemoryRunChange, ...]:
+        """The active records one Run's writers left, oldest first, each with its change."""
+        ...
 
     async def list_active_page(
         self,
@@ -76,7 +92,7 @@ def operation_record_id(owner_id: str, change_id: str, *, index: int = 0) -> str
 
 
 def operation_fingerprint(operation: MemoryOperation) -> str:
-    payload = {
+    payload: dict[str, object] = {
         "action": operation.action,
         "body": operation.body.strip(),
         "kind": operation.kind,
@@ -91,6 +107,12 @@ def operation_fingerprint(operation: MemoryOperation) -> str:
         "supersedes_id": operation.supersedes_id,
         "target_change_id": operation.target_change_id,
     }
+    # Added only when present, so every fingerprint journaled before fuse or quotes existed
+    # still matches its own replay.
+    if operation.source_ids:
+        payload["source_ids"] = list(operation.source_ids)
+    if operation.quote is not None:
+        payload["quote"] = operation.quote
     encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 

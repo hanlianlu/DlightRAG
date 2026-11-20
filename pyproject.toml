@@ -2,8 +2,8 @@
 
 [project]
 name = "dlightrag"
-version = "2.1.0"
-description = "Multimodal RAG with knowledge graph and contextual intelligence"
+version = "3.0.0"
+description = "An agent that runs long, reads deep, and remembers — frontier RAG and durable memory, with the harness that keeps both running"
 readme = "README.md"
 requires-python = ">=3.14"
 license = "Apache-2.0"
@@ -11,12 +11,12 @@ license-files = ["LICENSE", "NOTICE"]
 maintainers = [{ name = "HanlianLyu" }, { name = "hllyu" }]
 dependencies = [
     # Standalone workspace packages
-    "dlightrag-memory==2.1.0",
-    "dlightrag-observability==2.1.0",
+    "dlightrag-memory==3.0.0",
+    "dlightrag-observability==3.0.0",
     # Built-in model providers (batteries included)
-    "openai>=3.3.0",
-    "anthropic>=1.9.0",
-    "google-genai>=2.25.0",
+    "openai>=3.31.0",
+    "anthropic>=1.13.0",
+    "google-genai>=2.30.1",
     "json-repair>=0.63.4",
     # Built-in RAG and source capabilities
     "lightrag-hku>=1.5.7",
@@ -26,11 +26,11 @@ dependencies = [
     "botocore>=1.43.75",
     "lingua-language-detector>=2.2.0",
     # PostgreSQL
-    "asyncpg>=0.31.0",
+    "asyncpg>=0.32.0",
     "numpy>=2.5.0",
     "pgvector>=0.5.0",
     # Config
-    "pydantic>=2.13.5",
+    "pydantic>=2.14.1",
     "pydantic-settings>=2.15.0",
     "python-dotenv>=1.2.1",
     "ruamel.yaml>=0.19.1",
@@ -38,14 +38,14 @@ dependencies = [
     "httpx>=0.28.1",
     "pillow>=12.3.0",
     # Request-local lexical retrieval for Web Composer documents.
-    "bm25s>=0.3.11",
+    "bm25s>=0.3.13",
     # LightRAG paragraph_semantic chunker fallback
     "langchain-text-splitters",
     # MCP server
     "mcp>=2.2.0",
     # REST API server
     "PyJWT>=2.14.0",
-    "fastapi>=0.142.2",
+    "fastapi>=0.143.0",
     "uvicorn[standard]>=0.52.1",
     "python-multipart>=0.0.22",
     # Web frontend
@@ -66,18 +66,22 @@ dependencies = [
     # Deterministic binary answer-resource readers (selected extras only).
     "markitdown[docx,pdf,pptx,xlsx]>=0.1.8",
     # Qualified PDF/DOCX/XLSX text; independent assets and offline fallback retained.
-    "firecrawl-anydoc==0.2.4",
+    "firecrawl-anydoc==0.2.5",
     # Content identification for published video Artifacts (ADR 0026); already
     # present as an anydoc dependency, declared here because publication imports it.
     "magika>=0.6.2",
     "pypdfium2>=5.13.0",
+    # PDF Artifacts the Agent writes from its Workspace. Pure Python (fonttools,
+    # defusedxml, Pillow); embeds the image's Noto Sans SC OTF as a subset. Shipping
+    # it here keeps an Agent from fetching wheels and fonts into its Workspace.
+    "fpdf2>=2.8.9",
     "openpyxl>=3.1.5",
     "cryptography>=46.0.0",
     "jsonschema>=4.26.0",
     "httpx2>=2.13.1",
     # The Agent Browser's Playwright client (ADR 0032). The pool image pins the same
     # version; scripts/verify_release_contract.py holds every pin together.
-    "playwright==1.63.0",
+    "playwright==1.65.1",
     # The Public Suffix List behind an Agent Account's site (ADR 0034). Its snapshot ships in
     # the wheel and is never fetched or refreshed, so this pin is the list a deployment runs.
     "tldextract==5.4.0",
@@ -91,6 +95,10 @@ milvus = ["pymilvus>=2.6.2"]
 [dependency-groups]
 dev = [
     "bandit>=1.9.4",
+    # The host-side MinerU sidecar manager (ADR 0054): a development tool, not a
+    # runtime dependency -- the image has no launchd, systemd or uv, and MinerU
+    # runs on the host.
+    "dlightrag-mineru",
     "import-linter>=2.15",
     "pre-commit>=4.6.0",
     "pyright>=1.1.414",
@@ -103,6 +111,9 @@ dev = [
     "pyyaml>=6.0.3",
     "ruff>=0.16.8",
     "shellcheck-py>=0.10",
+    # Tokenizes a Skill hub in its unit test. The budget is published in tokens, and a word
+    # count misreads a Chinese hub by several times, so the measurement has to be real.
+    "tiktoken>=0.14.0",
 ]
 
 [project.urls]
@@ -115,8 +126,11 @@ dlightrag-mcp = "dlightrag.adapters.mcp.cli:main"
 dlightrag-api = "dlightrag.adapters.http.server:main"
 dlight-tools = "dlightrag.engine.agent.environment.toolchain:main"
 dlightrag-workspace-audit = "dlightrag.adapters.postgres.workspace_audit:main"
+dlightrag-owner-data = "dlightrag.adapters.postgres.owner_data:main"
 dlightrag-rebuild-bm25 = "dlightrag.adapters.postgres.rebuild_bm25:main"
 dlightrag-rebuild-vdb = "dlightrag.adapters.postgres.rebuild_vdb:main"
+# Resolves the title model's reasoning dialect, then writes MinerU's config (ADR 0054).
+dlightrag-mineru-title-aided = "dlightrag.engine.rag.corpus.mineru_title_aided:main"
 
 [build-system]
 # Forward-only policy: CI verifies new backend releases; do not add an upper bound.
@@ -124,10 +138,11 @@ requires = ["uv_build>=0.11.21"]
 build-backend = "uv_build"
 
 [tool.uv.workspace]
-members = ["packages/memory", "packages/observability"]
+members = ["packages/memory", "packages/mineru", "packages/observability"]
 
 [tool.uv.sources]
 dlightrag-memory = { workspace = true }
+dlightrag-mineru = { workspace = true }
 dlightrag-observability = { workspace = true }
 
 [tool.uv.build-backend]
@@ -155,22 +170,95 @@ markers = [
 ]
 
 [tool.importlinter]
-root_packages = ["dlightrag", "dlightrag_memory", "dlightrag_observability"]
+root_packages = [
+    "dlightrag",
+    "dlightrag_memory",
+    "dlightrag_mineru",
+    "dlightrag_observability",
+]
 include_external_packages = true
+
+[[tool.importlinter.contracts]]
+id = "goal-domain-independence"
+name = "The Goal state and its tools name no Skill content, Tool package or Application module"
+type = "forbidden"
+source_modules = [
+    "dlightrag.engine.answer.goal",
+    "dlightrag.engine.answer.goal_service",
+    "dlightrag.engine.answer.tools.goals",
+]
+forbidden_modules = [
+    "dlightrag.engine.agent.skills",
+    "dlightrag.engine.agent.skill_reads",
+    "dlightrag.engine.agent.skill_delivery",
+    "dlightrag.engine.agent.skill_protection",
+    "dlightrag.engine.agent.builtin_skills",
+    "dlightrag.engine.answer.tools",
+    "dlightrag.application",
+]
+
+[[tool.importlinter.contracts]]
+id = "goal-driver-names-no-skill-provider"
+name = "The goal round driver depends on the checkpoint interface, never a Skill implementation"
+type = "forbidden"
+source_modules = ["dlightrag.application.answer.goal_rounds"]
+forbidden_modules = [
+    "dlightrag.application.answer.provenance",
+]
 
 [[tool.importlinter.contracts]]
 id = "memory-package-independence"
 name = "Memory package stays host-neutral"
 type = "forbidden"
 source_modules = ["dlightrag_memory"]
-forbidden_modules = ["dlightrag", "dlightrag_observability", "lightrag", "fastapi"]
+forbidden_modules = [
+    "dlightrag",
+    "dlightrag_mineru",
+    "dlightrag_observability",
+    "lightrag",
+    "fastapi",
+]
 
 [[tool.importlinter.contracts]]
 id = "observability-package-independence"
 name = "Observability package stays host-neutral and states no product vocabulary"
 type = "forbidden"
 source_modules = ["dlightrag_observability"]
-forbidden_modules = ["dlightrag", "dlightrag_memory", "lightrag", "fastapi", "asyncpg", "mcp"]
+forbidden_modules = [
+    "dlightrag",
+    "dlightrag_memory",
+    "dlightrag_mineru",
+    "lightrag",
+    "fastapi",
+    "asyncpg",
+    "mcp",
+]
+
+[[tool.importlinter.contracts]]
+id = "mineru-is-a-host-tool"
+name = "Only the title-aided composition imports the MinerU host tool"
+type = "forbidden"
+source_modules = ["dlightrag"]
+forbidden_modules = ["dlightrag_mineru"]
+# The one edge: the application resolves the title model's reasoning dialect from its
+# own catalogue and hands it to the package (ADR 0054). Every other import would break
+# the image, whose sync excludes the development group.
+ignore_imports = [
+    "dlightrag.engine.rag.corpus.mineru_title_aided -> dlightrag_mineru.title_aided",
+]
+
+[[tool.importlinter.contracts]]
+id = "mineru-package-independence"
+name = "MinerU package stays host-neutral"
+type = "forbidden"
+source_modules = ["dlightrag_mineru"]
+forbidden_modules = [
+    "dlightrag",
+    "dlightrag_memory",
+    "dlightrag_observability",
+    "lightrag",
+    "fastapi",
+]
 
 [[tool.importlinter.contracts]]
 id = "bm25-lightrag-independence"
@@ -263,6 +351,18 @@ name = "Application Answer Runs owns durable run acceptance"
 type = "forbidden"
 source_modules = ["dlightrag.application.answer_runs"]
 forbidden_modules = ["dlightrag.application.access", "dlightrag.application.config", "dlightrag.application.settings", "dlightrag.adapters", "asyncpg", "fastapi", "mcp"]
+
+[[tool.importlinter.contracts]]
+id = "asyncpg-is-private-to-the-postgres-adapters"
+name = "Only the PostgreSQL adapters of the application and of Memory import asyncpg"
+type = "forbidden"
+source_modules = ["dlightrag", "dlightrag_memory", "dlightrag_mineru"]
+forbidden_modules = ["asyncpg"]
+allow_indirect_imports = true
+ignore_imports = [
+    "dlightrag.adapters.postgres.** -> asyncpg",
+    "dlightrag_memory._storage.** -> asyncpg",
+]
 
 [[tool.importlinter.contracts]]
 id = "postgres-adapter-owner-direction"
@@ -367,4 +467,7 @@ source_modules = ["dlightrag.engine", "dlightrag.application", "dlightrag.adapte
 forbidden_modules = ["playwright"]
 # The transports reach composition through the package root, and composition is the one
 # place that names the adapter.
-ignore_imports = ["dlightrag._compose -> dlightrag.adapters.agent_browser"]
+ignore_imports = [
+    "dlightrag._compose -> dlightrag.adapters.agent_browser.live",
+    "dlightrag._compose -> dlightrag.adapters.agent_browser.pool",
+]

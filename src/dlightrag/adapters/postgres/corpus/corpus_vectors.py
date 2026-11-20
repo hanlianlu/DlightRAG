@@ -16,8 +16,8 @@ from dlightrag.adapters.postgres.corpus.pg_metadata_index import (
     metadata_match_conditions,
     metadata_visibility_condition,
 )
-from dlightrag.engine.rag.retrieval import MetadataScope
 from dlightrag.engine.rag.retrieval.filtering import current_filter_stats
+from dlightrag.engine.rag.retrieval.models import MetadataScope
 from dlightrag.engine.rag.retrieval.visibility import (
     MAX_VISIBILITY_CANDIDATES,
     bounded_visibility_candidate_limit,

@@ -3,28 +3,34 @@
 
 from pathlib import Path
 
-from dlightrag.application.access import (
-    AccessRule,
-    AccessSettings,
+from dlightrag.application.access.authentication import (
     AuthenticationSettings,
 )
-from dlightrag.application.config import DlightragConfig
-from dlightrag.application.corpus_admin import CorpusAdminSettings
-from dlightrag.application.retrieval import RetrievalSettings
+from dlightrag.application.access.control import (
+    AccessRule,
+    AccessSettings,
+)
+from dlightrag.application.config.sections import DlightragConfig
+from dlightrag.application.corpus_admin.service import CorpusAdminSettings
+from dlightrag.application.retrieval.service import RetrievalSettings
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.catalog import resolve_model_profile
 from dlightrag.engine.ai.fingerprints import model_endpoint_fingerprint
 from dlightrag.engine.ai.reasoning import resolve_reasoning
 from dlightrag.engine.ai.settings import ChatModelSelector, ModelSettings
-from dlightrag.engine.answer.agent_browser import AgentBrowserSettings
+from dlightrag.engine.answer.agent_browser.contracts import (
+    AgentBrowserSettings,
+)
+from dlightrag.engine.answer.agent_browser.live import (
+    LivePreviewBudget,
+    LivePreviewSettings,
+)
 from dlightrag.engine.answer.capabilities import (
     AnswerCapabilitySettings,
     AnswerImagePolicySettings,
 )
-from dlightrag.engine.answer.execution import (
-    AnswerExecutorSettings,
-    AnswerResourceSettings,
-)
+from dlightrag.engine.answer.execution.executor import AnswerExecutorSettings
+from dlightrag.engine.answer.execution.resources import AnswerResourceSettings
 from dlightrag.engine.answer.highlights import SemanticHighlightSettings
 from dlightrag.engine.answer.model_runtime import (
     AnswerModelRuntimeSettings,
@@ -133,6 +139,7 @@ def answer_model_runtime_settings(config: DlightragConfig) -> AnswerModelRuntime
         web_sources=WebSourceRuntimeSettings(
             exa_api_key=web.exa.api_key,
             tavily_api_key=web.tavily.api_key,
+            deepseek_api_key=web.deepseek.api_key,
             search_providers=web.search_order(),
             extract_providers=config.answer.extract_chain(),
         ),
@@ -148,6 +155,7 @@ def agent_browser_settings(config: DlightragConfig) -> AgentBrowserSettings | No
         return None
     return AgentBrowserSettings(
         endpoints=browser.endpoints,
+        headed_endpoints=browser.headed_endpoints,
         egress_proxy=browser.egress_proxy,
         chromium_sandbox=browser.chromium_sandbox,
         connect_timeout_seconds=browser.connect_timeout_seconds,
@@ -159,6 +167,20 @@ def agent_browser_settings(config: DlightragConfig) -> AgentBrowserSettings | No
         # A download is admitted under the bound of any fetched Resource.
         max_download_bytes=config.answer.generation.max_attachment_bytes,
         idle_release_seconds=browser.idle_release_seconds,
+    )
+
+
+def live_preview_settings(config: DlightragConfig) -> LivePreviewSettings:
+    """Snapshot the one live preview budget of the deployment's Agent Browser."""
+    live = config.answer.agent.browser.live
+    return LivePreviewSettings(
+        budget=LivePreviewBudget(
+            frames_per_second=live.budget.frames_per_second,
+            max_width=live.budget.max_width,
+            jpeg_quality=live.budget.jpeg_quality,
+        ),
+        session_seconds=live.session_seconds,
+        control_idle_seconds=live.control_idle_seconds,
     )
 
 

@@ -9,14 +9,23 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from pydantic import ValidationError
 
+from dlightrag.application.policies.service import (
+    AGENT_EFFORT_CEILING,
+    RuntimePolicies,
+)
 from dlightrag.engine.agent.session.fold import PriorTurns
 from dlightrag.engine.agent.session.ids import OperationId, SessionId
-from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelCapabilityError, ModelProfile
+from dlightrag.engine.ai.capacity import (
+    CONTEXT_POLICY_REVISION,
+    ModelCapabilityError,
+    ModelProfile,
+)
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import model_invocation_fingerprint
 from dlightrag.engine.ai.messages import AssistantTurn
 from dlightrag.engine.ai.reasoning import (
     ReasoningLevel,
+    ReasoningProfile,
     best_effort_reasoning_profile,
     merge_reasoning_kwargs,
     resolve_reasoning,
@@ -28,8 +37,11 @@ from dlightrag.engine.ai.settings import (
     ModelSettings,
 )
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
-from dlightrag.engine.answer.agent_browser import RunBrowsing
+from dlightrag.engine.answer.agent_browser.run import (
+    RunBrowsing,
+)
 from dlightrag.engine.answer.capabilities import RequestModelContext
+from dlightrag.engine.answer.client_contracts import AnswerEffort
 from dlightrag.engine.answer.execution.executor import AnswerExecutorSettings
 from dlightrag.engine.answer.execution.input import (
     PinnedModelProfile,
@@ -45,10 +57,14 @@ from dlightrag.engine.answer.tools.subagents import (
     SubagentHost,
     subagent_tools,
 )
-from dlightrag.engine.rag.retrieval import RetrievalOptions
+from dlightrag.engine.rag.retrieval.models import (
+    RetrievalOptions,
+)
 from dlightrag.engine.runtime.errors import IncompatibleActiveRunError
 from dlightrag.engine.runtime.settlements import EffectHostUpdate
-from tests.in_memory_session_repository import MemoryAgentSessionRepository
+from tests.support.callers import ANONYMOUS as _ANON
+from tests.support.in_memory_session_repository import MemoryAgentSessionRepository
+from tests.support.policy_store import InMemoryPolicyStore
 from tests.unit.test_answer_executor import _executor
 from tests.unit.test_answer_model_runtime import _runtime
 from tests.unit.test_subagents import _context_snapshot, _FakeSession
@@ -84,7 +100,11 @@ def _roles():
     )
 
 
-def _pins(roles):
+#: Every level named, as an endpoint the catalogue does not know is taken to have.
+_EVERY_LEVEL = best_effort_reasoning_profile("openrouter")
+
+
+def _pins(roles, reasoning: ReasoningProfile | None = _EVERY_LEVEL):
     return tuple(
         PinnedModelProfile(
             role=role,
@@ -93,7 +113,7 @@ def _pins(roles):
                 context_window_tokens=100_000,
                 max_output_tokens=64_000,
                 supports_images=role == "vlm",
-                reasoning=best_effort_reasoning_profile("openrouter"),
+                reasoning=reasoning,
             ),
             reasoning_settings=model_reasoning_settings(roles.resolve(role)),
         )
@@ -124,7 +144,8 @@ def test_spawn_guidance_uses_serialized_effective_profiles_not_tier_guarantees()
     pins = _pins(_roles())
     restored = tuple(PinnedModelProfile.from_json(pin.as_json()) for pin in pins)
     assert restored == pins
-    tool = subagent_tools(host=SubagentHost(model_guidance=child_model_guidance(restored)))[0]
+    guidance = child_model_guidance(restored, effort_ceiling="max")
+    tool = subagent_tools(host=SubagentHost(model_guidance=guidance))[0]
     assert tool.contract_version == 5
     assert tool.input_model is SpawnAgentInput
     assert "default: general-purpose tier below query" in tool.description
@@ -139,7 +160,40 @@ def test_spawn_guidance_uses_serialized_effective_profiles_not_tier_guarantees()
         else pin
         for pin in pins
     )
-    assert "model=visual; images=False" in child_model_guidance(narrowed)
+    assert "model=visual; images=False" in child_model_guidance(narrowed, effort_ceiling="max")
+
+
+#: What the spawn tool told the model before ceilings existed, for these pins, to the byte.
+_GUIDANCE_WITHOUT_A_CEILING = (
+    "Model selectors are recommendations, not task categories or permissions; objectives are unrestricted. query is the default selector. Effective configured capabilities follow (tiers are intent, not guarantees):\n"
+    "extract: routine extraction, normalization and structured work; model=routine; images=False; context_tokens=100000; agentic_reasoning_request=medium; agentic_reasoning_effective=medium.\n"
+    "keyword: lightweight keywords, labels and query rewriting; model=general; images=False; context_tokens=100000; agentic_reasoning_request=low; agentic_reasoning_effective=low.\n"
+    "query: preferred strongest reasoning tier: hardest research, planning, evidence adjudication and final review; model=strongest; images=False; context_tokens=100000; agentic_reasoning_request=high; agentic_reasoning_effective=high.\n"
+    "vlm: visual evidence, images, charts and document pages; not inherently cheap or fast; model=visual; images=True; context_tokens=100000; agentic_reasoning_request=max; agentic_reasoning_effective=max.\n"
+    "default: general-purpose tier below query: ordinary analysis, synthesis, drafting and routine review; model=general; images=False; context_tokens=100000; agentic_reasoning_request=low; agentic_reasoning_effective=low.\n"
+    "Reasoning max is a configured request level, not a universal capability guarantee. Image support follows the effective profile, not the vlm label. All selectors use the supported tool-calling wrapper; provider rejection is explicit."
+)
+
+
+def test_spawn_guidance_without_a_ceiling_is_the_text_it_always_was():
+    assert (
+        child_model_guidance(_pins(_roles()), effort_ceiling="max") == _GUIDANCE_WITHOUT_A_CEILING
+    )
+
+
+@pytest.mark.parametrize("ceiling", ["low", "high"])
+def test_spawn_guidance_under_a_ceiling_adds_one_sentence_naming_it(ceiling):
+    lines = _GUIDANCE_WITHOUT_A_CEILING.split("\n")
+    sentence = (
+        f"This Run's effort ceiling is {ceiling}: the agentic_reasoning values listed are what "
+        f"each role is configured with, and a sub-agent runs at no higher than {ceiling}, "
+        "except a role that sets its own reasoning options."
+    )
+
+    guidance = child_model_guidance(_pins(_roles()), effort_ceiling=ceiling)
+
+    # The configured values stay as they are and the sentence comes after the roles it qualifies.
+    assert guidance.split("\n") == [*lines[:-1], sentence, lines[-1]]
 
 
 async def _prepared_executor(
@@ -149,9 +203,12 @@ async def _prepared_executor(
     registry: ResourceRegistry | None = None,
     browsing: RunBrowsing | None = None,
     settings: AnswerExecutorSettings | None = None,
+    effort_ceiling: AnswerEffort = "max",
+    roles: ModelRoleSettings | None = None,
+    reasoning: ReasoningProfile | None = _EVERY_LEVEL,
 ):
-    roles = _roles()
-    pins = _pins(roles)
+    roles = roles or _roles()
+    pins = _pins(roles, reasoning)
     profiles = {cast(Any, pin.role): pin.profile for pin in pins}
     models = RequestModelContext(
         extract=profiles["extract"], query=profiles["query"], vlm=profiles["vlm"]
@@ -195,6 +252,7 @@ async def _prepared_executor(
         resource_identity=new_resource_identity(),
         pinned_models=pins,
         agent_effort=agent_effort,
+        effort_ceiling=effort_ceiling,
         browsing=browsing,
     )
     return executor, run.orchestrator, provider, pins
@@ -379,13 +437,20 @@ async def test_nonvisual_selected_model_rejects_image_inputs_without_provider_io
         await executor._models.aclose()
 
 
-async def test_acceptance_and_execution_share_pinned_five_model_spawn_guidance(monkeypatch):
+@pytest.mark.parametrize("ceiling", ["low", "high", "max"])
+async def test_acceptance_and_execution_share_pinned_five_model_spawn_guidance(
+    monkeypatch, ceiling
+):
+    """The text is pinned with the Agent Plan and compared at execution, so the two ends must
+    render it alike under every ceiling: a Run accepted under one is executed under the same."""
     from dlightrag.engine.answer.execution.input import AnswerRunInput
     from tests.unit.test_answer_service import _OWNER, _request, _service
 
     roles = _roles()
     pins = _pins(roles)
-    service = _service()
+    policies = RuntimePolicies(store=InMemoryPolicyStore())
+    await policies.write(AGENT_EFFORT_CEILING, {"default": ceiling}, "admin")
+    service = _service(policies=policies)
     service._models.model_settings = roles.resolve
     service._model_invocation_fingerprint_for_role = lambda role: model_invocation_fingerprint(
         roles.resolve(role)
@@ -401,18 +466,23 @@ async def test_acceptance_and_execution_share_pinned_five_model_spawn_guidance(m
         injected=options["injected"],
         subagents=subagent_declarations(model_guidance=options["model_guidance"]),
     )
-    await service.create(request=_request(mode="research"), owner_id=_OWNER)
+    await service.create(request=_request(mode="research"), owner_id=_OWNER, caller=_ANON)
     accepted = AnswerRunInput.from_request(cast(Any, service._store).created[0]["prepared_input"])
     assert accepted.pinned_models == pins
+    assert accepted.effort_ceiling == ceiling
     assert accepted.agent_run_plan is not None
     accepted_spawn = next(
         tool for tool in accepted.agent_run_plan.tools if tool.name == "spawn_agent"
     )
-    executor, orchestrator, _, _ = await _prepared_executor(monkeypatch)
+    executor, orchestrator, _, _ = await _prepared_executor(monkeypatch, effort_ceiling=ceiling)
     try:
         parent = orchestrator.prepare_run("parent")
         runtime_spawn = next(tool for tool in parent.tools if tool.name == "spawn_agent")
         assert accepted_spawn.definition == asdict(runtime_spawn.definition)
+        # Not vacuous: a ceiling is in the text both ends compared, and no ceiling leaves it be.
+        assert (f"effort ceiling is {ceiling}" in runtime_spawn.definition.description) == (
+            ceiling != "max"
+        )
         assert accepted_spawn.input_schema_digest == runtime_spawn.input_schema_digest
         assert accepted_spawn.contract_version == runtime_spawn.contract_version == 5
     finally:

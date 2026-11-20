@@ -73,7 +73,7 @@ _USAGE = f"usage: <python> confinement.py {_RULES_OPTION} <json-rules> -- <comma
 __all__ = [
     "ConfinementPolicy",
     "DeclaredLayer",
-    "WorkspaceConfinement",
+    "AgentspaceConfinement",
     "landlock_abi",
     "main",
 ]
@@ -160,9 +160,9 @@ class ConfinementPolicy:
         )
         return tuple(root for root in roots if root.is_dir())
 
-    def for_workspace(
+    def for_agentspace(
         self, workspace: Path, *, owner_id: str | None = None
-    ) -> WorkspaceConfinement:
+    ) -> AgentspaceConfinement:
         """Return the grants one Run's processes receive."""
         for layer in self.for_owner(owner_id):
             self.refuse(layer.path, layer.capability)
@@ -174,7 +174,7 @@ class ConfinementPolicy:
         merged: dict[Path, int] = {}
         for path, access in grants:
             merged[path] = merged.get(path, 0) | access
-        return WorkspaceConfinement(workspace=workspace, rules=tuple(merged.items()))
+        return AgentspaceConfinement(workspace=workspace, rules=tuple(merged.items()))
 
     def for_owner(self, owner_id: str | None) -> tuple[DeclaredLayer, ...]:
         """Return the layers this Run's owner adds to the process-wide ones."""
@@ -189,7 +189,7 @@ class ConfinementPolicy:
 
 
 @dataclass(frozen=True, slots=True)
-class WorkspaceConfinement:
+class AgentspaceConfinement:
     """The grants one Run's processes receive, and the way to apply them."""
 
     workspace: Path

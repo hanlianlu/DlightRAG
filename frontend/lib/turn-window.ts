@@ -4,7 +4,7 @@
 export const TURN_WINDOW_PAD = 20;
 export const TURN_PLACEHOLDER_MIN_PX = 96;
 
-export interface TurnWindowInput {
+interface TurnWindowInput {
   readonly count: number;
   readonly heights: readonly number[];
   readonly scrollTop: number;
@@ -12,7 +12,7 @@ export interface TurnWindowInput {
   readonly alwaysOn: ReadonlySet<number>;
 }
 
-export interface TurnWindow {
+interface TurnWindow {
   readonly start: number;
   readonly end: number;
 }

@@ -19,15 +19,20 @@ from dlightrag.adapters.postgres.answer.agent_accounts import (
     PGAgentAccountSettingsStore,
     PGAgentAccountStore,
 )
-from dlightrag.adapters.postgres.runtime import PGRunBlobStore
+from dlightrag.adapters.postgres.runtime.run_blob_store import PGRunBlobStore
 from dlightrag.adapters.postgres.runtime.run_store import PGRunStore
 from dlightrag.application.agent_accounts import AgentAccounts
-from dlightrag.application.answer_runs import AnswerRequest, AnswerService
+from dlightrag.application.answer_runs.service import AnswerRequest, AnswerService
+from dlightrag.application.policies.service import (
+    RuntimePolicies,
+)
 from dlightrag.engine.agent.session.plan import AgentToolPlan
 from dlightrag.engine.ai.settings import ModelSettings
-from dlightrag.engine.answer.agent_browser import (
+from dlightrag.engine.answer.agent_browser.accounts import (
     MAY_REGISTER_PIN,
     AgentAccountsBinding,
+)
+from dlightrag.engine.answer.agent_browser.contracts import (
     AgentBrowserBinding,
 )
 from dlightrag.engine.answer.execution.input import AnswerRunInput
@@ -42,6 +47,7 @@ from tests.integration.test_answer_run_api_pg import (
     _StoreScheduler,
 )
 from tests.support.agent_browser import FakeProvider, browser_settings
+from tests.support.callers import ANONYMOUS as _ANON
 from tests.support.pg import skip_without_postgres
 from tests.unit.test_answer_executor import _executor
 
@@ -67,6 +73,7 @@ class Deployment:
         created = await self.service.create(
             request=AnswerRequest(query="Find it", workspaces=("default",), mode="research"),
             owner_id=owner,
+            caller=_ANON,
         )
         record = await self.runs.get_run(owner_id=owner, run_id=created.run.run_id)
         assert record is not None and record.prepared_input is not None
@@ -118,7 +125,9 @@ async def deployment(allowed: bool) -> AsyncIterator[Deployment]:
             model_invocation_fingerprint_for_role=_fingerprint,
             research_tool_declarations=executor.research_tool_declarations,
             agent_may_register=accounts.may_register,
+            policies=RuntimePolicies(store=runs),
             child_roster_cursor_secret=b"registration-pin-child-roster-test",
+            protected_skill_documents=lambda: frozenset(),
         )
         yield Deployment(runs, accounts, service)
 

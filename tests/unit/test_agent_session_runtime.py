@@ -5,7 +5,8 @@ import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from pydantic import BaseModel
@@ -15,6 +16,7 @@ from dlightrag.engine.agent.session.entries import (
     AssistantMessageEntry,
     CompactionEntry,
     ControlMessageEntry,
+    DeliveryWarningEntry,
     ToolResultMessageEntry,
     UserMessageEntry,
 )
@@ -79,16 +81,21 @@ from dlightrag.engine.agent.session.transactions import (
     TransactionLeaseLost,
     TransactionOutcome,
 )
+from dlightrag.engine.agent.skill_delivery import DeliveryFindings
 from dlightrag.engine.agent.tool_content import tool_content_text
-from dlightrag.engine.agent.tools import AgentTool, ToolResult
-from dlightrag.engine.agent.tools.contracts import SourceOrder
+from dlightrag.engine.agent.tools.contracts import (
+    AgentTool,
+    SourceOrder,
+    ToolResult,
+)
 from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
 from dlightrag.engine.ai.providers.openai_response import response_input
 from dlightrag.engine.ai.replay import bind_provider_replay, messages_for_model
 from dlightrag.engine.answer.evidence import has_unrepresentable_text
+from dlightrag.engine.answer.research.runtime import ResearchRuntimeEffects
 from dlightrag.engine.dependencies import ProviderUnavailableError
-from tests.in_memory_session_repository import MemoryAgentSessionRepository
+from tests.support.in_memory_session_repository import MemoryAgentSessionRepository
 
 
 class _Args(BaseModel):
@@ -124,6 +131,7 @@ class _Effects:
     crash_tool: bool = False
     compaction_required: bool = False
     tool_duration_ms: int | None = None
+    tool_details: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         self.provider_attempts: list[AttemptId] = []
@@ -193,6 +201,7 @@ class _Effects:
                 call_id=item.call_id,
                 outcome="succeeded",
                 text=f"result:{arguments['value']}",
+                details=self.tool_details,
             ),
             host_delta={"source_index": item.source_index},
             duration_ms=self.tool_duration_ms,
@@ -227,12 +236,21 @@ class _Effects:
         )
 
 
-def _assistant(*calls: ToolCall, text: str = "", stop: str | None = None) -> AssistantTurn:
+def _assistant(
+    *calls: ToolCall,
+    text: str = "",
+    stop: str | None = None,
+    provider_state: dict[str, Any] | None = None,
+) -> AssistantTurn:
     return AssistantTurn(
         text=text,
         tool_calls=tuple(calls),
         stop_reason=stop or ("tool_use" if calls else "stop"),  # type: ignore[arg-type]
+        provider_state=provider_state,
     )
+
+
+_LABEL = "Unsealed research memo / 未封存研究备忘"
 
 
 def _runtime(
@@ -241,6 +259,7 @@ def _runtime(
     *tools: AgentTool,
     events: list[AgentSessionEvent] | None = None,
     controls: Any = None,
+    delivery_check: Any = None,
 ) -> AgentSessionRuntime[dict[str, Any]]:
     async def collect(event: AgentSessionEvent) -> None:
         if events is not None:
@@ -254,6 +273,7 @@ def _runtime(
         holder="run",
         event_sink=collect,
         controls=controls,
+        delivery_check=delivery_check,
     )
 
 
@@ -300,6 +320,49 @@ async def test_tool_settlement_publishes_call_identity_and_measured_elapsed() ->
     assert [event.data["source_index"] for event in settlements] == [0, 1]
     assert [event.data.get("duration_ms") for event in settlements] == [None, 1234]
     assert all(event.commit_sequence is not None for event in settlements)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("details", "published"),
+    [
+        (None, False),
+        ({"observed_truncated": False}, False),
+        ({"cached_from": "elsewhere"}, False),
+        ({"observed_truncated": True, "cached_from": "elsewhere"}, True),
+    ],
+)
+async def test_a_settlement_says_so_only_when_the_runtime_cut_the_result(
+    details: dict[str, Any] | None, published: bool
+) -> None:
+    """The model was given less than the Tool returned, and only the settlement can say so.
+
+    The fact is the Runtime's metadata bool, read from the result before the durable entry strips
+    its ``details``; no other key of ``details`` rides the event.
+    """
+    tool = _agent_tool()
+    effects = _Effects(
+        [_assistant(ToolCall("ok", "lookup", {"value": "x"})), _assistant(text="done")],
+        tool_details=details,
+    )
+    events: list[AgentSessionEvent] = []
+    runtime = _runtime(MemoryAgentSessionRepository[dict[str, Any]](), effects, tool, events=events)
+    session_id = SessionId.new()
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="run-cut",
+        content="question",
+        plan=_plan(tool),
+    )
+
+    await runtime.drive(session_id=session_id, operation_id=accepted.operation_id)
+
+    (settlement,) = [event for event in events if event.kind == "tool_result_committed"]
+    assert ("observed_truncated" in settlement.data) is published
+    if published:
+        assert settlement.data["observed_truncated"] is True
+    assert "cached_from" not in settlement.data
 
 
 @pytest.mark.asyncio
@@ -1153,7 +1216,7 @@ async def _seed_counted_history(
 
 
 async def test_seeded_runtime_first_accept_refreshes_lane_fork_from_canonical_boundary() -> None:
-    from dlightrag.engine.answer.fast import ensure_session_lane
+    from dlightrag.engine.answer.fast.session_host import ensure_session_lane
 
     tool = _agent_tool()
     repository = _CountingSnapshotRepository()
@@ -2457,6 +2520,516 @@ async def test_a_stale_group_worker_reports_its_lost_lease_and_writes_nothing() 
         (1, "outcome_unknown"),
     ]
     assert not any(record.ref.kind == "session_fault" for record in after.registers)
+
+
+async def test_a_child_notification_is_stored_as_a_marked_user_message() -> None:
+    tool = _agent_tool()
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
+    runtime = _runtime(store, _Effects([_assistant(text="spawned"), _assistant(text="done")]), tool)
+    session_id = SessionId.new()
+    asked = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="answer-run:run-1",
+        content="question",
+        plan=_plan(tool),
+    )
+    await runtime.drive(session_id=session_id, operation_id=asked.operation_id)
+    notified = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="child-results:intent-1:abc",
+        content="Child 0190a1b2-0000-7000-8000-000000000001 [succeeded]: found it",
+        plan=_plan(tool),
+        origin="child_notification",
+    )
+    await runtime.drive(session_id=session_id, operation_id=notified.operation_id)
+
+    users = [
+        entry
+        for entry in (await store.load(session_id)).entries
+        if isinstance(entry, UserMessageEntry)
+    ]
+
+    assert [entry.origin for entry in users] == [None, "child_notification"]
+    assert "origin" not in users[0].canonical_payload()
+    assert users[1].canonical_payload() == {
+        "content": "Child 0190a1b2-0000-7000-8000-000000000001 [succeeded]: found it",
+        "origin": "child_notification",
+    }
+
+
+async def test_the_origin_of_an_input_is_not_part_of_what_a_recovery_must_match() -> None:
+    """An Operation accepted before the origin existed is accepted again by a recovered attempt."""
+    tool = _agent_tool()
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
+    runtime = _runtime(store, _Effects([]), tool)
+    session_id = SessionId.new()
+    first = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="child-results:intent-1:abc",
+        content="Child 0190a1b2-0000-7000-8000-000000000001 [succeeded]: found it",
+        plan=_plan(tool),
+    )
+
+    again = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="child-results:intent-1:abc",
+        content="Child 0190a1b2-0000-7000-8000-000000000001 [succeeded]: found it",
+        plan=_plan(tool),
+        origin="child_notification",
+    )
+
+    assert again.created is False
+    assert again.operation_id == first.operation_id
+    entries = (await store.load(session_id)).entries
+    assert [entry.origin for entry in entries if isinstance(entry, UserMessageEntry)] == [None]
+
+
+@pytest.mark.asyncio
+async def test_a_delivery_warning_reopens_the_turn_and_the_model_can_revise() -> None:
+    tool = _agent_tool()
+    effects = _Effects([_assistant(text="first answer"), _assistant(text="revised answer")])
+    checks: list[int] = []
+
+    async def delivery_check(_context: RuntimeContext) -> DeliveryFindings:
+        checks.append(1)
+        # The record is unchanged by the revision, so the label stays; the evidence line does not.
+        return DeliveryFindings(
+            lines=("not read: references/gate-audit.md (before delivery)",)
+            if len(checks) == 1
+            else (),
+            unsealed_labels=(_LABEL,),
+        )
+
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
+    runtime = _runtime(store, effects, tool, delivery_check=delivery_check)
+    session_id = SessionId.new()
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="delivery-revise",
+        content="question",
+        plan=_plan(tool),
+    )
+
+    final = await runtime.drive(session_id=session_id, operation_id=accepted.operation_id)
+
+    assert isinstance(final.state, OperationCompleted)
+    snapshot = await store.load(session_id)
+    warnings = [entry for entry in snapshot.entries if isinstance(entry, DeliveryWarningEntry)]
+    assert len(warnings) == 1
+    assert warnings[0].operation_id == accepted.operation_id.value
+    assert warnings[0].attempt == 1
+    assert [turn.text for turn in effects.provider_turns] == []  # both consumed
+    revised = [
+        getattr(entry, "content", "")
+        for entry in snapshot.entries
+        if entry.entry_type == "assistant_message"
+        and "revised answer" in getattr(entry, "content", "")
+    ]
+    assert revised and revised[-1] == f"**{_LABEL}**\n\nrevised answer"
+
+
+@pytest.mark.asyncio
+async def test_a_warning_without_a_label_does_not_stamp_the_answer() -> None:
+    """A missing reference read or an unsigned page warns the model, not the reader.
+
+    Ordinary answers were once labelled "Unsealed research memo" because a Skill that declares no
+    sealed artifact had a warned delivery record. The label follows the declared sealed artifact,
+    so a warning that carries none leaves the reader's answer as the model wrote it.
+    """
+    tool = _agent_tool()
+    effects = _Effects([_assistant(text="first answer"), _assistant(text="revised answer")])
+    checks: list[int] = []
+
+    async def delivery_check(_context: RuntimeContext) -> DeliveryFindings:
+        checks.append(1)
+        return (
+            DeliveryFindings(lines=("not read: references/gate-audit.md (before delivery)",))
+            if len(checks) == 1
+            else DeliveryFindings()
+        )
+
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
+    runtime = _runtime(store, effects, tool, delivery_check=delivery_check)
+    session_id = SessionId.new()
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="delivery-ordinary",
+        content="question",
+        plan=_plan(tool),
+    )
+
+    final = await runtime.drive(session_id=session_id, operation_id=accepted.operation_id)
+
+    assert isinstance(final.state, OperationCompleted)
+    snapshot = await store.load(session_id)
+    warnings = [entry for entry in snapshot.entries if isinstance(entry, DeliveryWarningEntry)]
+    assert len(warnings) == 1
+    answers = [
+        entry.content
+        for entry in snapshot.entries
+        if isinstance(entry, AssistantMessageEntry) and entry.content == "revised answer"
+    ]
+    assert answers == ["revised answer"]
+
+
+@pytest.mark.asyncio
+async def test_a_relabelled_answer_drops_replay_state_its_rewrite_invalidated() -> None:
+    """A delivery warning rewrites the answer; the provider's replay state must not outlive it.
+
+    The Responses transport replays a turn only while its native output text equals the
+    canonical content. Keeping the state on a relabelled entry made the Run's own repair
+    request unsendable: the provider rejected it before transmission and the Operation failed
+    after its answer had already streamed (live Run 01a16ce8-6124-76a0-afc0-03721f1b8fd6).
+    """
+    native = "The case is sealed."
+    replay = {
+        "response_replay": {
+            "v": 1,
+            "items": [
+                {
+                    "id": "01a16d04-056e-7625-ad45-37b59ee41eb4",
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": native}],
+                }
+            ],
+        }
+    }
+    tool = _agent_tool()
+    effects = _Effects(
+        [
+            _assistant(text=native, provider_state=replay),
+            _assistant(text="revised answer"),
+        ]
+    )
+
+    async def delivery_check(_context: RuntimeContext) -> DeliveryFindings:
+        return DeliveryFindings(unsealed_labels=(_LABEL,))
+
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
+    runtime = _runtime(store, effects, tool, delivery_check=delivery_check)
+    session_id = SessionId.new()
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="delivery-replay",
+        content="question",
+        plan=_plan(tool),
+    )
+
+    final = await runtime.drive(session_id=session_id, operation_id=accepted.operation_id)
+
+    assert isinstance(final.state, OperationCompleted)
+    snapshot = await store.load(session_id)
+    relabelled = [
+        entry
+        for entry in snapshot.entries
+        if isinstance(entry, AssistantMessageEntry) and _LABEL in entry.content
+    ]
+    assert relabelled and relabelled[0].content != native
+    assert relabelled[0].provider_state is None
+    # The repair request the Run folds after the rewrite is one the transport can send.
+    folded = project_session_messages(snapshot.tree.ancestry(), snapshot.active_projection)
+    assert response_input(folded)
+
+
+@pytest.mark.asyncio
+async def test_two_delivery_warnings_deliver_with_the_record_instead_of_a_third_retry() -> None:
+    tool = _agent_tool()
+    effects = _Effects(
+        [
+            _assistant(text="answer one"),
+            _assistant(text="answer two"),
+            _assistant(text="answer three"),
+        ]
+    )
+
+    async def delivery_check(_context: RuntimeContext) -> DeliveryFindings:
+        return DeliveryFindings(lines=("not read: references/gate-audit.md (before delivery)",))
+
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
+    runtime = _runtime(store, effects, tool, delivery_check=delivery_check)
+    session_id = SessionId.new()
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="delivery-cap",
+        content="question",
+        plan=_plan(tool),
+    )
+
+    final = await runtime.drive(session_id=session_id, operation_id=accepted.operation_id)
+
+    assert isinstance(final.state, OperationCompleted)
+    snapshot = await store.load(session_id)
+    warnings = [entry for entry in snapshot.entries if isinstance(entry, DeliveryWarningEntry)]
+    assert [entry.attempt for entry in warnings] == [1, 2]
+    assert final.state.assistant_entry_id == snapshot.entries[-1].entry_id
+
+
+@pytest.mark.asyncio
+async def test_an_earlier_turns_delivery_warning_does_not_label_a_later_clean_answer() -> None:
+    """A delivery warning belongs to the operation that produced it, never to the whole session.
+
+    The live Volvo conversation reported this: turn 1 warned about its delivery record, and every
+    later turn was then labelled an unsealed memo -- including turn 7, whose validator reported
+    ``blocking 0`` and sealed its case. Each turn is a new Run with its own ledger; a clean ledger
+    carries no label, so the answer keeps the claim it made.
+    """
+    tool = _agent_tool()
+    effects = _Effects(
+        [
+            _assistant(text="first answer"),
+            _assistant(text="revised answer"),
+            _assistant(text="The case is sealed."),
+        ]
+    )
+    checks: list[str] = []
+
+    async def delivery_check(context: RuntimeContext) -> DeliveryFindings:
+        checks.append(context.operation_id.value)
+        # Only the first turn's first attempt warns; every later check finds a clean record.
+        return (
+            DeliveryFindings(
+                lines=("not read: references/gate-audit.md (before delivery)",),
+                unsealed_labels=(_LABEL,),
+            )
+            if len(checks) == 1
+            else DeliveryFindings()
+        )
+
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
+    runtime = _runtime(store, effects, tool, delivery_check=delivery_check)
+    session_id = SessionId.new()
+    first = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="warned-turn",
+        content="question",
+        plan=_plan(tool),
+    )
+    completed = await runtime.drive(session_id=session_id, operation_id=first.operation_id)
+    assert isinstance(completed.state, OperationCompleted)
+
+    second = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="clean-turn",
+        content="follow-up",
+        plan=_plan(tool),
+    )
+    final = await runtime.drive(session_id=session_id, operation_id=second.operation_id)
+
+    assert isinstance(final.state, OperationCompleted)
+    snapshot = await store.load(session_id)
+    answers = [
+        entry.content for entry in snapshot.entries if isinstance(entry, AssistantMessageEntry)
+    ]
+    assert answers[0].startswith(f"**{_LABEL}**")  # the warned turn is labelled
+    assert answers[-1] == "The case is sealed."  # the clean turn keeps its claim
+
+
+class _ReasoningThenFailingOrchestrator:
+    """A provider call that streams reasoning, then dies before any answer text."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[Any, Any]] = []
+
+    async def call_runtime_provider(
+        self,
+        request: Any,
+        *,
+        model_profile: Any = None,
+        model_func: Any = None,
+        emit_text: Any = None,
+        emit_reasoning: Any = None,
+    ) -> Any:
+        del request, model_profile, model_func
+        self.calls.append((emit_text, emit_reasoning))
+        if emit_reasoning is not None:
+            await emit_reasoning("thinking about the page")
+        raise RuntimeError("provider connection lost")
+
+
+class _ReasoningRecordingSession:
+    """The RunSession surface ``call_provider`` reaches, recording the control calls."""
+
+    fencing_epoch = 0
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    async def check_cancelled(self) -> None:
+        return None
+
+    async def enter_phase(self, phase: str) -> None:
+        self.calls.append(("phase", phase))
+
+    async def emit_token(self, text: str) -> None:
+        self.calls.append(("token", text))
+
+    async def emit_reasoning(self, text: str) -> None:
+        self.calls.append(("reasoning", text))
+
+    async def reset_output(self) -> None:
+        self.calls.append(("reset", ""))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("publish_provider_text", [True, False])
+async def test_a_failed_attempt_that_streamed_reasoning_resets_the_streamed_draft(
+    publish_provider_text: bool,
+) -> None:
+    """Reasoning-only output is still a draft: a failed attempt must clear it before a retry."""
+    session = _ReasoningRecordingSession()
+    orchestrator = _ReasoningThenFailingOrchestrator()
+    prepared = SimpleNamespace(
+        streamed_terminal_text=None,
+        model_profile=None,
+        model_func=None,
+        tools=[],
+        agent_turn_count=0,
+        trace={},
+    )
+    effects = ResearchRuntimeEffects(
+        orchestrator=cast(Any, orchestrator),
+        telemetry=cast(Any, object()),
+        prepared=cast(Any, prepared),
+        session=cast(Any, session),
+        session_id=SessionId.new(),
+        fetched_buffer=cast(Any, object()),
+        persist_child_intent=None,
+        publish_provider_text=publish_provider_text,
+    )
+    context = cast(
+        Any,
+        SimpleNamespace(
+            session_id=SessionId.new(),
+            lane_id=LaneId.main(),
+            operation_id=OperationId.new(),
+        ),
+    )
+
+    async def emit_ephemeral(_event: Any) -> None:
+        return None
+
+    with pytest.raises(ProviderAttemptFailed):
+        await effects.call_provider(context, cast(Any, object()), AttemptId.new(), emit_ephemeral)
+
+    if publish_provider_text:
+        # The committed reasoning stays durable, then the reset clears the reader's draft.
+        assert session.calls == [
+            ("reasoning", "thinking about the page"),
+            ("reset", ""),
+        ]
+    else:
+        # A child agent never publishes provider text, so there is nothing to reset.
+        assert session.calls == []
+        assert orchestrator.calls == [(None, None)]
+
+
+@pytest.mark.asyncio
+async def test_call_runtime_provider_forwards_a_reasoning_callback_to_a_streaming_model() -> None:
+    """The orchestrator seam routes both callbacks through ``stream_turn`` when provided."""
+    from tests.unit.test_answer_orchestrator import _orchestrator
+
+    class _StreamingModel:
+        def __init__(self) -> None:
+            self.kwargs: dict[str, Any] | None = None
+
+        async def stream_turn(self, **kwargs: Any) -> AssistantTurn:
+            self.kwargs = kwargs
+            await kwargs["emit_text"]("answer")
+            await kwargs["emit_reasoning"]("thinking")
+            return _assistant(text="answer")
+
+    model = _StreamingModel()
+    emitted: list[str] = []
+    reasoned: list[str] = []
+
+    async def emit_text(text: str) -> None:
+        emitted.append(text)
+
+    async def emit_reasoning(text: str) -> None:
+        reasoned.append(text)
+
+    request = RequestSnapshot.from_values(
+        operation_id=OperationId.new(),
+        turn_number=1,
+        plan_digest="a" * 64,
+        model_role="query",
+        messages=[{"role": "user", "content": "q"}],
+        tools=[],
+        tool_choice="auto",
+        max_tokens=None,
+    )
+    turn = await _orchestrator(mode="research").call_runtime_provider(
+        request,
+        model_func=cast(Any, model),
+        emit_text=emit_text,
+        emit_reasoning=emit_reasoning,
+    )
+
+    assert turn.text == "answer"
+    assert emitted == ["answer"]
+    assert reasoned == ["thinking"]
+    assert model.kwargs is not None
+    assert model.kwargs["emit_text"] is emit_text
+    assert model.kwargs["emit_reasoning"] is emit_reasoning
+
+
+def test_the_label_is_prefixed_once_and_the_body_is_never_rewritten() -> None:
+    from dlightrag.engine.agent.session.runtime import _label_unsealed
+
+    body = "The case is not sealed. Appendix: this is sealed-bid data. 已封存?"
+    labelled = _label_unsealed(body, (_LABEL,))
+
+    assert labelled == f"**{_LABEL}**\n\n{body}"
+    assert _label_unsealed(labelled, (_LABEL,)) == labelled  # a revised answer adds nothing
+    own = f"{_LABEL}\n\n{body}"  # a model that opened with the label itself is left alone
+    assert _label_unsealed(own, (_LABEL,)) == own
+    heading = f"\n## > **{_LABEL}**\n\n{body}"  # whatever markup it wore
+    assert _label_unsealed(heading, (_LABEL,)) == heading
+    assert _label_unsealed(body, ()) == body
+    assert _label_unsealed("  \n", (_LABEL,)) == "  \n"  # an empty answer is still empty
+    deeper = f"Summary first.\n\n{_LABEL}\n\n{body}"  # the label further down is prose
+    assert _label_unsealed(deeper, (_LABEL,)) == f"**{_LABEL}**\n\n{deeper}"
+
+
+@pytest.mark.asyncio
+async def test_the_label_opens_the_answer_when_no_evidence_line_is_raised() -> None:
+    """A sealed claim with nothing attached has no delivery to warn about; the label still follows."""
+    tool = _agent_tool()
+    effects = _Effects([_assistant(text="The case is sealed.")])
+
+    async def delivery_check(_context: RuntimeContext) -> DeliveryFindings:
+        return DeliveryFindings(unsealed_labels=(_LABEL,))
+
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
+    runtime = _runtime(store, effects, tool, delivery_check=delivery_check)
+    session_id = SessionId.new()
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="label-no-warning",
+        content="question",
+        plan=_plan(tool),
+    )
+
+    final = await runtime.drive(session_id=session_id, operation_id=accepted.operation_id)
+
+    assert isinstance(final.state, OperationCompleted)
+    snapshot = await store.load(session_id)
+    assert not [entry for entry in snapshot.entries if isinstance(entry, DeliveryWarningEntry)]
+    answers = [e.content for e in snapshot.entries if isinstance(e, AssistantMessageEntry)]
+    assert answers == [f"**{_LABEL}**\n\nThe case is sealed."]
 
 
 # ---- the repeated-call guard: refuse the duplicate, then stop the Run that keeps repeating ----

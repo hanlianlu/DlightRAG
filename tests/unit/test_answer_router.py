@@ -28,9 +28,18 @@ def test_auto_with_both_modes_needs_the_router() -> None:
     )
 
 
-async def test_router_accepts_structured_mode() -> None:
+@pytest.mark.parametrize(
+    "output",
+    [
+        '{"mode":"research"}',
+        '{\n  "mode": "research",\n  "response": "long leftover answer"\n}',
+        "research",
+    ],
+    ids=["structured", "extra-json-fields-ignored", "bare-token"],
+)
+async def test_router_reads_the_mode_out_of_the_models_reply(output: str) -> None:
     async def llm(**_kwargs: object) -> str:
-        return '{"mode":"research"}'
+        return output
 
     chosen = await AnswerModeRouter(llm).choose(
         query="compare the filings",
@@ -115,28 +124,6 @@ async def test_router_reads_the_conversation_without_the_tool_work_between_turns
         # The router's model reads words: an image in the history is not sent to it.
         {"role": "user", "content": "and this one"},
     ]
-
-
-async def test_router_ignores_extra_json_fields() -> None:
-    async def llm(**_kwargs: object) -> str:
-        return '{\n  "mode": "research",\n  "response": "long leftover answer"\n}'
-
-    chosen = await AnswerModeRouter(llm).choose(
-        query="evaluate my resume",
-        valid_modes=("fast", "research"),
-    )
-    assert chosen == "research"
-
-
-async def test_router_accepts_a_bare_mode_token() -> None:
-    async def llm(**_kwargs: object) -> str:
-        return "research"
-
-    chosen = await AnswerModeRouter(llm).choose(
-        query="write a poem",
-        valid_modes=("fast", "research"),
-    )
-    assert chosen == "research"
 
 
 async def test_router_rejects_invalid_structured_output_without_echoing_it() -> None:

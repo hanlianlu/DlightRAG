@@ -3,13 +3,15 @@
 
 5-phase cleanup:
 0. Cancel pending tasks
-1. Drop LightRAG storages (dynamic discovery)
+1. Drop LightRAG storages (dynamic discovery), then delete this workspace's records
+   from LightRAG's configuration container if every drop succeeded
 2. Drop DlightRAG domain stores (metadata index)
 3. Clear remaining corpus rows, promotion jobs, and ingest counters
 4. Remove filesystem artifacts
 """
 
 import asyncio
+import importlib
 import logging
 import shutil
 from pathlib import Path
@@ -63,7 +65,13 @@ async def areset(
     # Phase 1: LightRAG storages -- dynamic discovery
     lr = lightrag
     if lr is not None:
+        drop_failed = False
         for attr in vars(lr):
+            # LightRAG 1.5.8's configuration container is one shared by every
+            # workspace of the deployment (its identity row included): dropping it
+            # would erase them all and refuse every later start.
+            if attr == _CONFIGURATION_STORAGE_ATTR:
+                continue
             storage = getattr(lr, attr, None)
             if storage is None:
                 continue
@@ -83,8 +91,20 @@ async def areset(
                     raise RuntimeError(str(outcome.get("message") or "drop reported an error"))
                 stats["lightrag_storages_dropped"] += 1
             except Exception as exc:
+                drop_failed = True
                 errors.append(f"Phase 1 ({attr}): {exc}")
                 logger.warning("areset Phase 1 failed for %s: %s", attr, exc)
+        # Configuration goes last and only after every drop succeeded: data gone with
+        # its records kept is recoverable, records gone with data kept is not.
+        configuration = getattr(lr, _CONFIGURATION_STORAGE_ATTR, None)
+        if configuration is not None and not drop_failed:
+            try:
+                # By name: the module exists only where the attribute above does.
+                config_store = importlib.import_module("lightrag.config_store")
+                await config_store.delete_workspace_configuration(configuration, lr.workspace)
+            except Exception as exc:
+                errors.append(f"Phase 1 (configuration): {exc}")
+                logger.warning("areset Phase 1 failed for the workspace configuration: %s", exc)
 
     # Phase 2: DlightRAG domain stores
     if metadata_index is not None:
@@ -125,6 +145,8 @@ async def areset(
 
 
 # -- Internal helpers ----------------------------------------------------------
+
+_CONFIGURATION_STORAGE_ATTR = "configuration_storage"
 
 
 def _reset_workspace_input(input_root: Path, workspace: str) -> int:

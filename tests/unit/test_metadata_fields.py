@@ -7,7 +7,6 @@ from typing import Any
 
 import pytest
 
-from dlightrag.engine.rag.retrieval import MetadataFilter
 from dlightrag.engine.rag.retrieval.metadata_fields import (
     FILTER_FIELD_COLUMNS,
     INGEST_FINALIZATION_COMPLETE_FIELD,
@@ -16,6 +15,7 @@ from dlightrag.engine.rag.retrieval.metadata_fields import (
     extract_system_metadata,
     normalize_user_metadata,
 )
+from dlightrag.engine.rag.retrieval.models import MetadataFilter
 
 
 def _writer_settings() -> Any:

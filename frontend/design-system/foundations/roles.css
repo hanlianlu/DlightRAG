@@ -4,7 +4,6 @@
 
 :root {
   --focus-ring-color: var(--color-control-ring);
-  --focus-ring-shadow: 0 0 0 3px var(--color-control-ring-soft);
   --control-hit-target: 2.75rem;
   --split-divider-size: 1px;
   --split-hit-target: 12px;

@@ -1,22 +1,34 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """REST Adapter for owner Profile Memory."""
 
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
+from uuid import UUID
 
-from dlightrag_memory import MemoryProvenance
+from dlightrag_memory import MemoryKind, MemoryProvenance
+from dlightrag_memory.policy import (
+    MEMORY_BODY_LIMIT,
+    MEMORY_FUSE_MAX_SOURCES,
+    MEMORY_FUSE_MIN_SOURCES,
+)
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from dlightrag.adapters.http.rest.auth import get_current_user
-from dlightrag.application.access import UserContext, owner_id_from_user
-from dlightrag.application.memory import (
+from dlightrag.application.access.principal import (
+    UserContext,
+    owner_id_from_user,
+)
+from dlightrag.application.memory.memory_list import (
     MEMORY_LIST_PAGE_DEFAULT_LIMIT,
     MEMORY_LIST_PAGE_MAX_LIMIT,
     MemoryListCursorError,
     MemoryListPageRequest,
-    MemorySettings,
 )
-from dlightrag.application.memory.projections import memory_receipt_payload
+from dlightrag.application.memory.projections import (
+    memory_receipt_payload,
+    memory_run_changes_payload,
+)
+from dlightrag.application.memory.service import MemorySettings
 
 from .deps import get_application
 
@@ -27,9 +39,19 @@ IdempotencyKey = Annotated[str, Header(alias="Idempotency-Key", min_length=1, ma
 class RememberMemoryInput(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    kind: Literal["preference", "fact"]
-    body: str = Field(min_length=1, max_length=500)
-    supersedes_id: str | None = None
+    kind: MemoryKind
+    body: str = Field(min_length=1, max_length=MEMORY_BODY_LIMIT)
+    supersedes_id: UUID | None = None
+
+
+class FuseMemoryInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    memory_ids: list[UUID] = Field(
+        min_length=MEMORY_FUSE_MIN_SOURCES, max_length=MEMORY_FUSE_MAX_SOURCES
+    )
+    body: str = Field(min_length=1, max_length=MEMORY_BODY_LIMIT)
+    kind: MemoryKind | None = None
 
 
 class MemorySettingsInput(BaseModel):
@@ -62,9 +84,16 @@ async def list_memories(
         owner_id=owner_id_from_user(user),
         page=page_request,
     )
+    mask_reader_text = application.skill_protection.mask
     return {
         "memories": [
-            {"memory_id": row.memory_id, "kind": row.kind, "body": row.body} for row in page.records
+            {
+                "memory_id": row.memory_id,
+                "kind": row.kind,
+                "body": mask_reader_text(row.body),
+                "origin_kind": row.provenance.origin_kind,
+            }
+            for row in page.records
         ],
         "next_cursor": (
             application.memory.memory_list_cursor_codec.encode(page.next_cursor)
@@ -72,6 +101,18 @@ async def list_memories(
             else None
         ),
     }
+
+
+@router.get("/memory/runs/{run_id}/changes")
+async def run_memory_changes(
+    run_id: str,
+    request: Request,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """What this Run's writers left in the owner's Profile Memory, still active; empty while off."""
+    application = get_application(request)
+    changes = await application.memory.run_changes(owner_id=owner_id_from_user(user), run_id=run_id)
+    return memory_run_changes_payload(changes, mask_reader_text=application.skill_protection.mask)
 
 
 @router.post("/memory")
@@ -86,16 +127,16 @@ async def remember_memory(
         owner_id=owner_id_from_user(user),
         kind=body.kind,
         body=body.body,
-        supersedes_id=body.supersedes_id,
+        supersedes_id=None if body.supersedes_id is None else str(body.supersedes_id),
         provenance=_management_provenance(idempotency_key),
         idempotency_key=f"rest:{idempotency_key}",
     )
-    return memory_receipt_payload(receipt)
+    return memory_receipt_payload(receipt, mask_reader_text=application.skill_protection.mask)
 
 
 @router.delete("/memory/{memory_id}")
 async def forget_memory(
-    memory_id: str,
+    memory_id: UUID,
     request: Request,
     idempotency_key: IdempotencyKey,
     user: UserContext = Depends(get_current_user),
@@ -103,16 +144,35 @@ async def forget_memory(
     application = get_application(request)
     receipt = await application.memory.forget(
         owner_id=owner_id_from_user(user),
-        memory_id=memory_id,
+        memory_id=str(memory_id),
         provenance=_management_provenance(idempotency_key),
         idempotency_key=f"rest:{idempotency_key}",
     )
-    return memory_receipt_payload(receipt)
+    return memory_receipt_payload(receipt, mask_reader_text=application.skill_protection.mask)
+
+
+@router.post("/memory/fuse")
+async def fuse_memories(
+    body: FuseMemoryInput,
+    request: Request,
+    idempotency_key: IdempotencyKey,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    application = get_application(request)
+    receipt = await application.memory.fuse(
+        owner_id=owner_id_from_user(user),
+        memory_ids=tuple(str(memory_id) for memory_id in body.memory_ids),
+        body=body.body,
+        kind=body.kind,
+        provenance=_management_provenance(idempotency_key),
+        idempotency_key=f"rest:{idempotency_key}",
+    )
+    return memory_receipt_payload(receipt, mask_reader_text=application.skill_protection.mask)
 
 
 @router.post("/memory/changes/{change_id}/undo")
 async def undo_memory_change(
-    change_id: str,
+    change_id: UUID,
     request: Request,
     idempotency_key: IdempotencyKey,
     user: UserContext = Depends(get_current_user),
@@ -120,11 +180,11 @@ async def undo_memory_change(
     application = get_application(request)
     receipt = await application.memory.undo(
         owner_id=owner_id_from_user(user),
-        change_id=change_id,
+        change_id=str(change_id),
         provenance=_undo_provenance(idempotency_key),
         idempotency_key=f"rest:{idempotency_key}",
     )
-    return memory_receipt_payload(receipt)
+    return memory_receipt_payload(receipt, mask_reader_text=application.skill_protection.mask)
 
 
 @router.get("/memory/settings")

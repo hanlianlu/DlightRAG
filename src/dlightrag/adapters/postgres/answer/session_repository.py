@@ -31,7 +31,10 @@ from dlightrag.adapters.postgres.core._operations import ConnectionPool
 from dlightrag.adapters.postgres.core._pool import pg_pool
 from dlightrag.adapters.postgres.runtime._lease import hold_run_lease, lock_leased_run
 from dlightrag.adapters.postgres.runtime._terminal import finish_fenced_run
-from dlightrag.adapters.postgres.runtime.run_blob_store import BlobSizeConflict, write_complete_blob
+from dlightrag.adapters.postgres.runtime.run_blob_store import (
+    BlobSizeConflict,
+    write_complete_blob,
+)
 from dlightrag.engine.agent.session.effects import JsonValue
 from dlightrag.engine.agent.session.entries import (
     SessionEntry,
@@ -108,6 +111,20 @@ VALUES ($1, $2, $3, 0, $4)
 ON CONFLICT (owner_id, session_id) DO NOTHING
 """
 
+
+async def ensure_agent_session(
+    conn: Any, *, owner_id: str, session_id: str, lease_run_id: str
+) -> None:
+    """Materialise a Session's row before its first Run claims the Lane.
+
+    A Web conversation is its Agent Session from creation, but the Session row otherwise appears only
+    when a Run claims it. Session-owned state that can exist before any Run (a goal) needs the row to
+    hang from, so the conversation materializes it with a placeholder lease the first real claim
+    replaces, because that run is not active.
+    """
+    await conn.execute(_CREATE_SESSION, owner_id, _uuid(session_id), _uuid(lease_run_id), 1)
+
+
 _ACTIVE_SESSION_RUN = """
 SELECT 1
 FROM dlightrag_runs
@@ -118,10 +135,25 @@ WHERE owner_id = $1 AND run_id = $2
 _INSERT_ENTRIES = """
 INSERT INTO dlightrag_agent_session_entries (
     owner_id, session_id, sequence, entry_id, parent_entry_id,
-    entry_type, schema_version, timestamp, payload_json
+    entry_type, schema_version, timestamp, payload_json, search_text, run_id
 )
 SELECT $1, $2, input.sequence, input.entry_id, input.parent_entry_id,
-       input.entry_type, input.schema_version, input.entry_timestamp, input.payload_json
+       input.entry_type, input.schema_version, input.entry_timestamp, input.payload_json,
+       -- The words of one entry as a reader sees them: a message keeps its own text, and a Tool
+       -- result keeps content parts, so its own text parts are what a search reads. It is stored
+       -- rather than derived on every read, so a search can be served by an index.
+       CASE WHEN input.entry_type = 'tool_result'
+            THEN coalesce((
+                   SELECT string_agg(part->>'text', E'\n')
+                   FROM jsonb_array_elements(input.payload_json->'content') AS part
+                   WHERE part ? 'text'
+                 ), '')
+            WHEN jsonb_typeof(input.payload_json->'content') = 'string'
+            THEN input.payload_json->>'content'
+            ELSE ''
+       END,
+       -- This repository is the Run's: one writer, so no caller can forget to state it.
+       $4
 FROM jsonb_to_recordset($3::jsonb) AS input(
     sequence BIGINT,
     entry_id UUID,
@@ -1034,6 +1066,7 @@ class PGAgentSessionRepository:
                 self._owner_id,
                 _uuid(session_id.value),
                 json.dumps(payload, ensure_ascii=False),
+                _uuid(str(self._run_id)),
             ),
             surface="Session Entry",
         )
@@ -1156,13 +1189,13 @@ class PGAgentSessionRepository:
             writes=tuple(write for fetched in update.fetched for write in fetched.evidence),
         )
 
-        from dlightrag.adapters.postgres.answer.workspace import (
+        from dlightrag.adapters.postgres.answer.agentspace import (
             write_committed_spill,
             write_inventory,
         )
 
         if update.committed_outputs:
-            from dlightrag.engine.runtime.workspace import CommittedSpillRecord
+            from dlightrag.engine.runtime.agentspace import CommittedSpillRecord
 
             for output in update.committed_outputs:
                 await write_committed_spill(
@@ -1196,12 +1229,13 @@ class PGAgentSessionRepository:
             await conn.execute(
                 "INSERT INTO dlightrag_answer_artifact_attachments ("
                 " owner_id, run_id, relative_path, label, content_digest, size_bytes,"
-                " presentation, session_id, intent_id)"
-                " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
+                " presentation, session_id, intent_id, sources)"
+                " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
                 " ON CONFLICT (owner_id, run_id, relative_path) DO UPDATE SET"
                 " label = EXCLUDED.label, content_digest = EXCLUDED.content_digest,"
                 " size_bytes = EXCLUDED.size_bytes, presentation = EXCLUDED.presentation,"
                 " session_id = EXCLUDED.session_id, intent_id = EXCLUDED.intent_id,"
+                " sources = EXCLUDED.sources,"
                 " attachment_order = EXCLUDED.attachment_order,"
                 " attached_at = EXCLUDED.attached_at",
                 self._owner_id,
@@ -1213,6 +1247,7 @@ class PGAgentSessionRepository:
                 attachment.presentation,
                 _uuid(attachment.session_id),
                 _uuid(attachment.intent_id),
+                list(attachment.sources),
             )
         return _host_update_digest(update)
 
@@ -1566,6 +1601,7 @@ def _host_update_digest(update: EffectHostUpdate) -> str:
                 "presentation": update.artifact_attachment.presentation,
                 "session_id": update.artifact_attachment.session_id,
                 "intent_id": update.artifact_attachment.intent_id,
+                "sources": list(update.artifact_attachment.sources),
             }
         ),
         "memory_operation": (

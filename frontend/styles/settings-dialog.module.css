@@ -136,6 +136,20 @@
     display: none;
   }
 
+  /* A page that keeps a window of its own fills the pane beside the description: the window scrolls
+   * and the pane never does. The description stays above it, where every page's is. */
+  .paneFill {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .pageFill {
+    display: flex;
+    flex: 1 1 0;
+    flex-direction: column;
+    min-block-size: 0;
+  }
+
   /* ── Phone: full screen, a section list, then a page ── */
 
   @media (width <= 720px), (height <= 480px) {

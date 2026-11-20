@@ -1,5 +1,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""One accepted run may re-level its own answering agent and nothing else."""
+"""One accepted run may re-level its own answering agent and nothing else.
+
+How far it may go is the ceiling pinned with the run (tests/unit/test_agent_effort_ceiling.py);
+what a caller is offered and what the trace states are held here.
+"""
 
 from dataclasses import replace
 from types import SimpleNamespace
@@ -10,6 +14,10 @@ import pytest
 from pydantic import ValidationError
 
 from dlightrag.adapters.http.rest.models import AnswerRequest
+from dlightrag.application.policies.service import (
+    AGENT_EFFORT_CEILING,
+    RuntimePolicies,
+)
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.reasoning import ReasoningLevel
 from dlightrag.engine.ai.settings import ModelSettings
@@ -19,6 +27,8 @@ from dlightrag.engine.answer.client_contracts import (
     normalize_answer_effort,
 )
 from dlightrag.engine.answer.execution.input import AnswerRunRequest
+from tests.support.callers import ANONYMOUS as _ANON
+from tests.support.policy_store import InMemoryPolicyStore
 from tests.unit.test_answer_model_runtime import _runtime
 from tests.unit.test_answer_service import _Store
 from tests.unit.test_child_model_roles import _prepared_executor, _roles
@@ -134,7 +144,7 @@ def test_the_offer_names_only_levels_the_answering_model_can_express():
     assert offered_answer_efforts(no_reasoning) == ()
 
 
-def test_the_offer_states_the_levels_and_the_deployment_default():
+async def test_the_offer_states_the_levels_and_the_deployment_default():
     """One call states both, so a control cannot mark a default it does not offer."""
     from dlightrag.engine.ai.reasoning import ReasoningLevels, ReasoningProfile
     from tests.unit.test_answer_service import _service as answer_service
@@ -165,33 +175,69 @@ def test_the_offer_states_the_levels_and_the_deployment_default():
         ),
     )
 
-    def offer(profile: ModelProfile, *, configured: ReasoningLevel | None = None, **settings: Any):
-        service = cast(Any, answer_service())
+    async def offer(
+        profile: ModelProfile,
+        *,
+        configured: ReasoningLevel | None = None,
+        ceiling: str = "max",
+        **settings: Any,
+    ):
+        policies = RuntimePolicies(store=InMemoryPolicyStore())
+        await policies.write(AGENT_EFFORT_CEILING, {"default": ceiling}, "admin")
+        service = cast(Any, answer_service(policies=policies))
         service.answering_model_profile = lambda: profile
         service._models = SimpleNamespace(
             model_settings=lambda role: ModelSettings(
                 model="test", agentic_reasoning=configured, **settings
             )
         )
-        return service.agent_effort_offer()
+        return await service.agent_effort_offer(_ANON)
 
     # The deployment's own level is the default only where the model can express it.
-    assert offer(every_level, configured="high").default == "high"
-    assert offer(without_max, configured="max").default is None
-    assert offer(every_level, configured="xhigh").default is None
-    assert offer(every_level).default is None
-    assert offer(without_max).levels == ("low", "high")
+    assert (await offer(every_level, configured="high")).default == "high"
+    assert (await offer(without_max, configured="max")).default is None
+    assert (await offer(every_level, configured="xhigh")).default is None
+    assert (await offer(every_level)).default is None
+    assert (await offer(without_max)).levels == ("low", "high")
 
     # A role that owns its reasoning through raw provider fields applies no typed level
     # at all, so it offers none and marks no default — the control hides.
     # Configuration validation makes these two mutually exclusive, so a role in this
     # state necessarily configures no typed level.
-    raw = offer(
+    raw = await offer(
         every_level,
         agentic_model_kwargs={"chat_template_kwargs": {"enable_thinking": True}},
     )
     assert raw.levels == ()
     assert raw.default is None
+
+    # A ceiling takes the levels above it away, and the default is the level a Run that
+    # chose nothing will run at: the deployment's own, lowered to the ceiling, and a model
+    # left on its provider's level is held to it. Where the ceiling makes a level nameable
+    # that the deployment's own was not (`xhigh`), it is the one the control marks.
+    for configured, default in [
+        ("max", "high"),
+        ("xhigh", "high"),
+        ("high", "high"),
+        ("low", "low"),
+        (None, "high"),
+    ]:
+        under_high = await offer(every_level, configured=configured, ceiling="high")
+        assert (under_high.levels, under_high.default) == (("low", "high"), default)
+    assert (await offer(every_level, configured="max", ceiling="low")).default == "low"
+    # A model that offers nothing at or below the ceiling offers nothing to choose, though
+    # its Runs still run, at its lowest level.
+    only_high = replace(
+        every_level,
+        reasoning=ReasoningProfile(
+            "openai",
+            ReasoningLevels(
+                off="none", minimal=None, low=None, medium=None, high="high", xhigh=None, max=None
+            ),
+        ),
+    )
+    floor = await offer(only_high, configured="high", ceiling="low")
+    assert (floor.levels, floor.default) == ((), None)
 
 
 @pytest.mark.asyncio
@@ -216,6 +262,7 @@ async def test_a_raw_kwargs_role_admits_the_effort_and_ignores_it():
     creation = await service.create(
         request=service_request(mode="research", effort="max"),
         owner_id="owner-1",
+        caller=_ANON,
     )
 
     assert creation.run.run_id
@@ -266,28 +313,107 @@ def test_the_run_trace_states_what_was_chosen_and_what_actually_ran():
         ),
     )
 
-    assert _agent_effort_trace(None, "research", clamped) is None
-    assert _agent_effort_trace("max", "research", clamped) == {
+    # Nothing chosen and no ceiling: nothing to state.
+    assert _agent_effort_trace(None, "max", "research", clamped) is None
+    assert _agent_effort_trace("max", "max", "research", clamped) == {
         "requested": "max",
+        "ceiling": "max",
         "effective": "xhigh",
     }
-    assert _agent_effort_trace("high", "research", clamped) == {
+    assert _agent_effort_trace("high", "max", "research", clamped) == {
         "requested": "high",
+        "ceiling": "max",
         "effective": "high",
     }
-    assert _agent_effort_trace("max", "research", no_levels) == {
+    assert _agent_effort_trace("max", "max", "research", no_levels) == {
         "requested": "max",
+        "ceiling": "max",
         "effective": None,
         "ignored": "no_level",
     }
-    assert _agent_effort_trace("max", "research", clamped, ("chat_template_kwargs",)) == {
+    assert _agent_effort_trace("max", "max", "research", clamped, ("chat_template_kwargs",)) == {
         "requested": "max",
+        "ceiling": "max",
         "effective": None,
         "ignored": "raw_kwargs",
     }
     # Fast runs no agent turn, so it claims no effective agentic level.
-    assert _agent_effort_trace("max", "fast", clamped) == {
+    assert _agent_effort_trace("max", "max", "fast", clamped) == {
         "requested": "max",
+        "ceiling": "max",
         "effective": None,
         "ignored": "fast",
+    }
+
+
+def test_the_run_trace_states_the_ceiling_and_what_it_did():
+    """A ceiling that lowered the Run says so, one that held it back says what ran instead,
+    and one the model could not go under says that too."""
+    from dlightrag.engine.ai.reasoning import ReasoningLevels, ReasoningProfile
+    from dlightrag.engine.answer.execution.executor import _agent_effort_trace
+
+    def profile(**levels: str | None) -> ModelProfile:
+        every = (
+            dict.fromkeys(("off", "minimal", "low", "medium", "high", "xhigh", "max"), None)
+            | levels
+        )
+        return ModelProfile(
+            context_window_tokens=100_000,
+            max_output_tokens=8_000,
+            reasoning=ReasoningProfile("openai", ReasoningLevels(**every)),  # type: ignore[arg-type]
+        )
+
+    ladder = profile(off="none", low="low", high="high", max="max")
+
+    # A choice above the ceiling ran at the ceiling's level.
+    assert _agent_effort_trace("max", "low", "research", ladder) == {
+        "requested": "max",
+        "ceiling": "low",
+        "effective": "low",
+    }
+    # The deployment's own level, lowered, is stated though nobody chose anything.
+    assert _agent_effort_trace(None, "low", "research", ladder, (), "high") == {
+        "requested": None,
+        "ceiling": "low",
+        "effective": "low",
+    }
+    # A model left on its provider's level runs at the ceiling's.
+    assert _agent_effort_trace(None, "high", "research", ladder, (), None) == {
+        "requested": None,
+        "ceiling": "high",
+        "effective": "high",
+    }
+    # A ceiling the deployment's own level is already under changes nothing, and says so.
+    assert _agent_effort_trace(None, "high", "research", ladder, (), "low") == {
+        "requested": None,
+        "ceiling": "high",
+        "effective": "low",
+    }
+    # A model that offers nothing at or below the ceiling runs at its lowest level.
+    only_high = profile(off="none", high="high", max="max")
+    assert _agent_effort_trace("max", "low", "research", only_high) == {
+        "requested": "max",
+        "ceiling": "low",
+        "effective": "high",
+        "above_ceiling": True,
+    }
+    # Neither a Fast answer, nor a role that owns its reasoning, nor a model that names no
+    # level can be held to a ceiling, and each says so.
+    assert _agent_effort_trace(None, "low", "fast", ladder) == {
+        "requested": None,
+        "ceiling": "low",
+        "effective": None,
+        "ignored": "fast",
+    }
+    assert _agent_effort_trace(None, "low", "research", ladder, ("chat_template_kwargs",)) == {
+        "requested": None,
+        "ceiling": "low",
+        "effective": None,
+        "ignored": "raw_kwargs",
+    }
+    assert _agent_effort_trace(None, "low", "research", profile(off="none"), (), "high") == {
+        "requested": None,
+        "ceiling": "low",
+        "effective": None,
+        "ignored": "no_level",
     }

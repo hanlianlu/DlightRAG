@@ -1,103 +1,47 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-/** One child agent in the Child agents dock: what it is doing, what it concluded, and the one box
- * that steers or continues it.
+/** One agent of a Run, as the Inspector reads it: what it is doing, what it concluded, what it was
+ *  asked, and the activity timeline it worked through.
  *
- * The element shows one child at a time and is handed the next through `childSessionId`, so what the
- * reader typed for a child waits while they look at another. It observes the child and sends the
- * commands; once a command has settled it tells the roster, which refreshes the child's row.
+ *  The page is read-only. Steering, continuing, cancelling, and answering a child all belong to the
+ *  conversation's composer — the surface a reader acts on — so this page states, and never commands;
+ *  a question to the parent reads as who it asks and when it lapses, with no box to answer it here.
  */
 
 import {msg, str} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {keyed} from 'lit/directives/keyed.js';
-import {live} from 'lit/directives/live.js';
 import {repeat} from 'lit/directives/repeat.js';
-import {
-  ChildControlRejectedError,
-  type AgentChildStatus,
-  type ChildControlReceipt,
-  type ChildControlRecord,
-  type ChildObservation,
-  type ChildQuestion,
+import type {
+  ActivityMessage,
+  AgentChildStatus,
+  ChildControlRecord,
+  ChildObservation,
+  ChildQuestion,
 } from '../api/conversations.ts';
 import {ApiError} from '../api/wire.ts';
 import {icon} from '../design-system/index.ts';
-import {getLocale} from '../i18n/locale.ts';
-import {raise} from '../lib/dom.ts';
+import {ClockController} from '../lib/clock.ts';
 import {isAbortError} from '../lib/errors.ts';
 import {LightElement} from '../lib/lit-host.ts';
-import {MAIN_AGENT} from '../lib/main-agent.ts';
+import {agentIdOf, MAIN_AGENT, RUN_AGENT, sameAgent} from '../lib/agent-id.ts';
+import {agentName} from '../lib/agent-name.ts';
+import {type AppHandles, productionHandles} from '../stores/app-handles.ts';
+import type {TracesSource} from '../stores/traces-source.ts';
 import styles from '../styles/agent-session.module.css';
-import {senderText, type DlActivity} from './activity.ts';
-import {agentElapsed, agentGlyph, agentStateText} from './agent-status.ts';
+import {type DlActivity, senderText } from './activity.ts';
+import {agentElapsed, agentGlyph, agentIsCounting, agentStateText} from './agent-status.ts';
+import './answer-feedback.ts';
 import {evidenceFold} from './evidence-fold.ts';
-import type {TracesSource} from './inspector-traces.ts';
+import {tokenCountLabel} from './token-count.ts';
 
 const MINUTE_MILLISECONDS = 60_000;
 
-type ChildAction = 'steer' | 'continue' | 'cancel' | 'reply';
-
-/** What the reader has typed for one box, kept until its command is accepted. */
-interface Draft {
-  text: string;
-  reauthorize: boolean;
-}
-
-const NO_DRAFT: Draft = {text: '', reauthorize: false};
 const NO_CONTROLS: readonly ChildControlRecord[] = [];
-
-/** What a command answered, and the child and Operation it answered for. */
-interface Outcome {
-  code: string;
-  childSessionId: string;
-  operationId: string | null;
-}
-
-function modelText(role: string | undefined): string {
-  switch (role) {
-    case undefined:
-    case '': return '';
-    case 'query': return msg('Query model', {id: 'agentSession.model.query'});
-    case 'extract': return msg('Extract model', {id: 'agentSession.model.extract'});
-    case 'keyword': return msg('Keyword model', {id: 'agentSession.model.keyword'});
-    case 'vlm': return msg('Vision model', {id: 'agentSession.model.vlm'});
-    case 'default': return msg('Default model', {id: 'agentSession.model.default'});
-    default: return role;
-  }
-}
 
 function tokensText(child: AgentChildStatus): string {
   const total = child.usage?.total_tokens;
   if (typeof total !== 'number' || !Number.isFinite(total)) return '';
-  const count = new Intl.NumberFormat(getLocale(), {notation: 'compact', maximumFractionDigits: 1}).format(total);
-  return msg(str`${count} tokens`, {id: 'agentSession.tokens'});
-}
-
-function outcomeText(code: string): string {
-  switch (code) {
-    case 'queued': return msg('Queued. The child has not necessarily followed it yet.', {id: 'agentSession.outcome.queued'});
-    case 'consumed': return msg('Consumed at a safe checkpoint. This does not prove the model complied.', {id: 'agentSession.outcome.consumed'});
-    case 'accepted': return msg('Continuation accepted as a new operation.', {id: 'agentSession.outcome.accepted'});
-    case 'cancellation_requested': return msg('Cancellation requested.', {id: 'agentSession.outcome.cancellationRequested'});
-    case 'replied': return msg('Reply sent.', {id: 'agentSession.outcome.replied'});
-    case 'terminal_child': return msg('This child is already terminal and was not revived.', {id: 'agentSession.outcome.terminalChild'});
-    case 'run_terminal': return msg('The parent run is terminal, so this child cannot continue.', {id: 'agentSession.outcome.runTerminal'});
-    case 'child_running': return msg('This child is still running.', {id: 'agentSession.outcome.childRunning'});
-    case 'reauthorization_required': return msg('User-cancelled work needs explicit reauthorization.', {id: 'agentSession.outcome.reauthorizationRequired'});
-    case 'queue_full': return msg('The pending control queue is full.', {id: 'agentSession.outcome.queueFull'});
-    case 'idempotency_conflict': return msg('This submission id was already used for a different request.', {id: 'agentSession.outcome.idempotencyConflict'});
-    case 'already_replied': return msg('This question was already answered.', {id: 'agentSession.outcome.alreadyReplied'});
-    case 'expired': return msg('This question expired before the reply arrived.', {id: 'agentSession.outcome.expired'});
-    case 'cancelled': return msg('This question was cancelled.', {id: 'agentSession.outcome.cancelled'});
-    case 'unknown_outcome': return msg('The child outcome is unknown.', {id: 'agentSession.outcome.unknownOutcome'});
-    case 'failed': return msg('The child intervention could not be sent.', {id: 'agentSession.interventionFailed'});
-    default: return code;
-  }
-}
-
-/** What a Run that is over says in the place of the box that would steer or continue its children. */
-function finishedText(): string {
-  return msg('This answer has finished, so its child agents can no longer be steered or continued.', {id: 'agentSession.finished'});
+  return tokenCountLabel(total);
 }
 
 /** Whether a row of this child differs from the last one in what an observation shows. */
@@ -111,67 +55,78 @@ function rowChanged(before: AgentChildStatus | null | undefined, after: AgentChi
 
 export class DlAgentSession extends LightElement {
   static properties = {
+    handles: {attribute: false},
     source: {attribute: false},
     childSessionId: {attribute: false},
     entry: {attribute: false},
-    now: {attribute: false},
-    commandable: {attribute: false},
+    answerFeedbackEnabled: {attribute: false},
     observation: {state: true},
     failed: {state: true},
     missing: {state: true},
-    outcome: {state: true},
     objectiveOpen: {state: true},
-    confirming: {state: true},
-    answering: {state: true},
+    // What a search hands this page; the transcript view needs them to redraw at all.
+    terms: {attribute: false},
+    found: {attribute: false},
+    // The step a finding asked this page to show, when it belongs to this agent. (`focus` is the
+    // DOM's own method, so the step a finding names is `stepFocus`.)
+    stepFocus: {attribute: false},
   };
 
+  declare handles: AppHandles;
   declare source: TracesSource | null;
-  /** The child to show; empty while the roster shows its list instead. */
+  /** The agent to show; the Run's own agent is spelled `main`. */
   declare childSessionId: string;
-  /** The roster's row for this child, which heads the page before its observation arrives. A child the
-   * roster no longer lists is null. */
+  /** The roster's row for this agent, which heads the page before its observation arrives. A child
+   *  the roster no longer lists is null. */
   declare entry: AgentChildStatus | null;
-  /** The roster's clock, in epoch milliseconds. */
-  declare now: number;
-  /** Whether the Run can still be steered. Once it is over the page has no box and no Cancel: the server
-   * would refuse what they send. */
-  declare commandable: boolean;
+
+  /** The messages a search found in this agent, which are the pane while it is on. */
+  declare found: readonly ActivityMessage[] | null;
+  /** The words being searched for, marked in what is shown. */
+  declare terms: readonly string[];
+
+  /** The step a finding sent the reader to, when it belongs to this agent: its agent's wire key and
+   *  its sequence in that agent's own Session. The activity pane scrolls to it and rings it. Named
+   *  `stepFocus` because `focus` is the DOM's own method on an element. */
+  declare stepFocus: {agent: string; sequence: number} | null;
+  /** Whether the reader is offered the thumbs for what a child answered. */
+  declare answerFeedbackEnabled: boolean;
   declare observation: ChildObservation | null;
   /** The first observation of this child failed, so there is nothing to show yet. */
   declare failed: boolean;
   /** The server no longer knows this child. */
   declare missing: boolean;
-  declare outcome: Outcome | null;
   declare objectiveOpen: boolean;
-  declare confirming: boolean;
-  /** The question whose reply box is open. */
-  declare answering: string | null;
 
   #observing: {controller: AbortController; again: boolean} | null = null;
-  readonly #drafts = new Map<string, Draft>();
-  readonly #sending = new Set<string>();
-  #allowNextLineBreak = false;
-  /** The Run ended while this page was open to its children, which the page says out loud. */
-  #runEnded = false;
   /** Measures the title's clamp again whenever the title is resized: a settled child has no clock to redraw
    * the page, and the dock can be narrowed at any time. */
   readonly #titleSize = new ResizeObserver(() => { this.#measureTitle(); });
   #watched: HTMLElement | null = null;
+  /** The clock every time this page draws is drawn against: the page owns it, so a dock that no longer
+   *  re-renders every second still shows a running time move. */
+  #now = Date.now();
+  /** Whether the roster has listed this agent: a null `entry` then means it dropped off, while one
+   *  before the roster's first page is the page still waiting for it. */
+  #listed = false;
 
   constructor() {
     super();
+    // The host holds the controller for as long as the element lives, so it needs no field here.
+    new ClockController(this, () => this.#moving());
+    this.handles = productionHandles();
     this.source = null;
     this.childSessionId = '';
     this.entry = null;
-    this.now = Date.now();
-    this.commandable = true;
+    this.answerFeedbackEnabled = false;
     this.observation = null;
     this.failed = false;
     this.missing = false;
-    this.outcome = null;
     this.objectiveOpen = false;
-    this.confirming = false;
-    this.answering = null;
+    // See DlActivity: a class field would shadow Lit's accessor and updates would stop firing.
+    this.terms = [];
+    this.found = null;
+    this.stepFocus = null;
   }
 
   override connectedCallback(): void {
@@ -182,36 +137,45 @@ export class DlAgentSession extends LightElement {
     }, {once: true});
   }
 
-  /** Give the title focus: where a reader who has opened this child belongs. */
+  /** Give the title focus: where a reader who has opened this agent belongs. */
   focusTitle(): void {
     this.querySelector<HTMLElement>('[data-title]')?.focus();
   }
 
+  /** Read again what this page shows, for a Run that the dock follows: the child's own row and details,
+   *  and the activity pane either way. The dock's events say the Run moved, not which agent did, so the
+   *  page reads when the dock asks rather than on every render. */
+  refresh(): void {
+    if (!this.source || !this.childSessionId) return;
+    this.#reobserve();
+  }
+
   protected override willUpdate(changed: PropertyValues<this>): void {
-    // A Run's children share nothing with another's: what was typed for one is gone with it.
-    if (changed.has('source')) this.#drafts.clear();
+    // One answer per frame for every time this render draws, the tick's and the dock's redraws alike.
+    this.#now = Date.now();
     if (changed.has('source') || changed.has('childSessionId')) {
       this.#observing?.controller.abort();
       this.#observing = null;
       this.observation = null;
       this.failed = false;
       this.missing = false;
-      this.outcome = null;
       this.objectiveOpen = false;
-      this.confirming = false;
-      this.answering = null;
+      this.#listed = this.entry !== null && this.entry.childSessionId === this.childSessionId;
       if (this.source && this.childSessionId) void this.#observe();
     } else if (changed.has('entry') && this.entry && this.entry.childSessionId === this.childSessionId) {
-      // A fresh row: a running child's transcript grows without its row changing.
+      this.#listed = true;
+      // Only a row that states something new is worth a read. A dock that re-renders hands a new row
+      // object every time, and reading on identity alone was one transcript read per render; a running
+      // child's transcript is refreshed when the dock says the Run moved, through refresh().
       const before = changed.get('entry') as AgentChildStatus | null | undefined;
-      if (this.entry.status === 'running' || rowChanged(before, this.entry)) this.#reobserve();
+      if (rowChanged(before, this.entry)) this.#reobserve();
     }
-    // The Run ending under a reader who has its children open is said once; opening a child of a Run
-    // that is already over says nothing, since the note on the page is there to read.
-    if (changed.has('commandable')) this.#runEnded = !this.commandable && changed.get('commandable') === true;
-    // Only a running child of a Run that is still going can be cancelled, so a question about it lapses
-    // when either ends.
-    if (this.confirming && (!this.commandable || this.#child()?.status !== 'running')) this.confirming = false;
+  }
+
+  /** Whether this page draws a time that still moves, which is the only reason it needs a clock. */
+  #moving(): boolean {
+    const child = this.#child();
+    return child !== null && agentIsCounting(child);
   }
 
   protected override updated(changed: PropertyValues<this>): void {
@@ -222,7 +186,6 @@ export class DlAgentSession extends LightElement {
       this.#watched = title;
       if (title) this.#titleSize.observe(title);
     }
-    for (const field of this.querySelectorAll<HTMLTextAreaElement>('textarea')) this.#fit(field);
     // A child opens on its title.
     if (changed.has('source') || changed.has('childSessionId')) {
       this.querySelector<HTMLElement>('[data-scroller]')?.scrollTo({top: 0});
@@ -282,227 +245,27 @@ export class DlAgentSession extends LightElement {
     return this.observation?.child ?? this.entry;
   }
 
-  /** No child to show: the roster's latest first page no longer lists it (`entry` is null; the server may
-   * still know it, but a Run has a handful of children, so a listed child does not drop off a page), or
-   * the server answered 404 (`missing`). */
+  /** No child to show: the roster that had listed it no longer does (`entry` is null; the server may
+   *  still know it, but a Run has a handful of children, so a listed child does not drop off a page),
+   *  or the server answered 404 (`missing`). A null `entry` before the roster arrives is a page that
+   *  is still loading, not a missing child: the dock mounts the page and the roster together. */
   #gone(): boolean {
-    return this.missing || this.entry === null;
+    return this.missing || (this.#listed && this.entry === null);
   }
 
-  /** The box of a child's Operation. It steers the Operation while the child runs and continues it once the
-   * child settles, so what was typed stays with the Operation when the child settles under the reader. */
-  #composerKey(operationId: string | null): string {
-    return `${this.childSessionId}:${operationId ?? ''}`;
-  }
-
-  #replyKey(requestId: string): string {
-    return `${this.childSessionId}:reply:${requestId}`;
-  }
-
-  #draft(key: string): Draft {
-    return this.#drafts.get(key) ?? NO_DRAFT;
-  }
-
-  // The page holds what the reader typed and binds it with `live()`, which writes a box only when the
-  // box differs from the draft: writing back text the box already holds, such as an IME's composition,
-  // would interrupt the composition.
-  #typed = (event: Event): void => {
-    const field = event.currentTarget as HTMLTextAreaElement;
-    const key = field.dataset.draft!;
-    this.#drafts.set(key, {...this.#draft(key), text: field.value});
-    this.requestUpdate();
-  };
-
-  #reauthorized = (event: Event): void => {
-    const box = event.currentTarget as HTMLInputElement;
-    const key = box.dataset.draft!;
-    this.#drafts.set(key, {...this.#draft(key), reauthorize: box.checked});
-    this.requestUpdate();
-  };
-
-  // Enter sends and Shift+Enter breaks the line, as in the chat composer; Enter that commits an
-  // IME composition is the composition's, never a send.
-  #keydown = (event: KeyboardEvent): void => {
-    if (event.key === 'Enter') this.#allowNextLineBreak = event.shiftKey;
-  };
-
-  #beforeInput = (event: InputEvent): void => {
-    if (event.inputType !== 'insertLineBreak') return;
-    if (event.isComposing || this.#allowNextLineBreak) {
-      this.#allowNextLineBreak = false;
-      return;
-    }
-    event.preventDefault();
-    this.#allowNextLineBreak = false;
-    (event.currentTarget as HTMLTextAreaElement).form?.requestSubmit();
-  };
-
-  #keyup = (event: KeyboardEvent): void => {
-    if (event.key === 'Enter') this.#allowNextLineBreak = false;
-  };
-
-  /** Grow a box with what it holds, up to the height the stylesheet allows, then scroll it. */
-  #fit(field: HTMLTextAreaElement): void {
-    const limit = Number.parseFloat(getComputedStyle(field).maxHeight);
-    field.style.height = 'auto';
-    field.style.height = `${Number.isFinite(limit) ? Math.min(field.scrollHeight, limit) : field.scrollHeight}px`;
-    field.style.overflowY = Number.isFinite(limit) && field.scrollHeight > limit ? 'auto' : 'hidden';
-  }
-
-  #submitComposer = (event: Event): void => {
-    event.preventDefault();
-    const child = this.#child();
-    if (!child) return;
-    const action = child.status === 'running' ? 'steer' : 'continue';
-    const key = this.#composerKey(child.operationId);
-    const {text, reauthorize} = this.#draft(key);
-    const content = text.trim();
-    if (!content) return;
-    void this.#execute(action, null, key, (source) => source.control(
-      this.childSessionId, action, content, action === 'continue' && reauthorize, child.operationId,
-    ));
-  };
-
-  #cancelChild = (): void => {
-    const child = this.#child();
-    if (!child) return;
-    void this.#execute('cancel', null, null, (source) => source.control(
-      this.childSessionId, 'cancel', '', false, child.operationId,
-    ));
-  };
-
-  #submitReply = (event: Event): void => {
-    event.preventDefault();
-    const requestId = (event.currentTarget as HTMLFormElement).dataset.request!;
-    const key = this.#replyKey(requestId);
-    const content = this.#draft(key).text.trim();
-    if (!content) return;
-    void this.#execute('reply', requestId, key, (source) => source.reply(requestId, content));
-  };
-
-  /** Send one command and show what came of it, unless the reader has moved on to another child or
-   * Operation by then; one command at a time goes out for each child, Operation, and question. */
-  async #execute(
-    action: ChildAction,
-    requestId: string | null,
-    draftKey: string | null,
-    send: (source: TracesSource) => Promise<ChildControlReceipt>,
-  ): Promise<void> {
-    const source = this.source;
-    const childSessionId = this.childSessionId;
-    const operationId = this.#child()?.operationId ?? null;
-    const key = this.#commandKey(action, requestId);
-    if (!source || this.#sending.has(key)) return;
-    const shown = (): boolean => this.source === source
-      && this.childSessionId === childSessionId
-      && (this.#child()?.operationId ?? null) === operationId;
-    this.#sending.add(key);
-    this.outcome = null;
-    this.requestUpdate();
-    try {
-      const receipt = await send(source);
-      // What was typed for an accepted command is spent, wherever the reader is by now.
-      if (draftKey) this.#drafts.delete(draftKey);
-      if (this.source !== source) return;
-      raise(this, 'dl-child-command-settled');
-      if (!shown()) return;
-      this.outcome = {
-        code: receipt.outcome,
-        childSessionId,
-        // A continuation that was accepted started the Operation the child shows next.
-        operationId: action === 'continue' && receipt.outcome === 'accepted' && receipt.operationId
-          ? receipt.operationId
-          : operationId,
-      };
-      if (action === 'reply') this.#closeReply();
-      if (action === 'cancel') {
-        this.confirming = false;
-        void this.updateComplete.then(() => { this.focusTitle(); });
-      }
-      this.#reobserve();
-    } catch (error) {
-      if (this.source !== source || isAbortError(error)) return;
-      // A refusal means the child or the question is not as the page shows it, so the roster is told and
-      // the page reads the child again.
-      const refused = error instanceof ChildControlRejectedError;
-      if (refused) raise(this, 'dl-child-command-settled');
-      if (!shown()) return;
-      if (error instanceof ApiError && error.status === 404) {
-        this.missing = true;
-      } else {
-        this.outcome = {code: refused ? error.outcome : 'failed', childSessionId, operationId};
-        if (refused) {
-          // A reply is refused because its question is no longer open, so the box has nothing left to send.
-          if (action === 'reply') this.#closeReply();
-          this.#reobserve();
-        }
-      }
-    } finally {
-      this.#sending.delete(key);
-      this.requestUpdate();
-    }
-  }
-
-  /** What one command is called while it is in flight: its child, Operation, and question. */
-  #commandKey(action: ChildAction, requestId: string | null): string {
-    return `${this.childSessionId}:${action}:${this.#child()?.operationId ?? ''}:${requestId ?? ''}`;
-  }
-
-  #sendingNow(action: ChildAction, requestId: string | null = null): boolean {
-    return this.#sending.has(this.#commandKey(action, requestId));
-  }
-
-  /** What the page says out loud: that the child is gone, else the latest answer to a command. */
+  /** What the page says out loud: the one state a reader who was reading it should hear. */
   #announcement(): string {
-    if (this.#gone()) return msg('That child is no longer available.', {id: 'agentSession.gone'});
-    if (this.#runEnded && !this.#main()) return finishedText();
-    const outcome = this.outcome;
-    const shown = outcome
-      && outcome.childSessionId === this.childSessionId
-      && outcome.operationId === (this.#child()?.operationId ?? null);
-    return shown ? outcomeText(outcome.code) : '';
+    return this.#gone() ? msg('That child is no longer available.', {id: 'agentSession.gone'}) : '';
   }
 
   #toggleObjective = (): void => {
     this.objectiveOpen = !this.objectiveOpen;
   };
 
-  #askConfirmation = (): void => {
-    this.confirming = true;
-    void this.updateComplete.then(() => { this.querySelector<HTMLElement>('[data-keep]')?.focus(); });
-  };
-
-  #keepRunning = (): void => {
-    this.confirming = false;
-    void this.updateComplete.then(() => { this.querySelector<HTMLElement>('[data-cancel]')?.focus(); });
-  };
-
-  #openAnswer = (event: Event): void => {
-    this.answering = (event.currentTarget as HTMLElement).dataset.request!;
-    void this.updateComplete.then(() => { this.querySelector<HTMLTextAreaElement>('[data-reply]')?.focus(); });
-  };
-
-  /** Close the reply box once its question is settled. A reader who was in the box, or nowhere, goes to the
-   * title: the box takes their focus with it, and the sheet on a phone traps Tab only from inside. */
-  #closeReply(): void {
-    const active = document.activeElement;
-    const stranded = active === document.body || this.contains(active);
-    this.answering = null;
-    if (stranded) void this.updateComplete.then(() => { this.focusTitle(); });
-  }
-
-  #closeAnswer = (): void => {
-    const requestId = this.answering;
-    this.answering = null;
-    void this.updateComplete.then(() => {
-      this.querySelector<HTMLElement>(`[data-request="${CSS.escape(requestId ?? '')}"]`)?.focus();
-    });
-  };
-
   /** A question the parent is still waiting to answer. */
   #live(question: ChildQuestion): boolean {
     return question.status === 'pending'
-      && (question.expiresAt === null || Date.parse(question.expiresAt) > this.now);
+      && (question.expiresAt === null || Date.parse(question.expiresAt) > this.#now);
   }
 
   protected override render(): TemplateResult | typeof nothing {
@@ -512,8 +275,7 @@ export class DlAgentSession extends LightElement {
   }
 
   #view(): TemplateResult {
-    const child = this.#child();
-    if (this.#gone() || !child) {
+    if (this.#gone()) {
       return html`
         <div class=${styles.gone}>
           <p class=${styles.goneTitle}>${msg('That child is no longer available.', {id: 'agentSession.gone'})}</p>
@@ -521,24 +283,46 @@ export class DlAgentSession extends LightElement {
         </div>
       `;
     }
-    const running = child.status === 'running';
+    const child = this.#child();
+    // The dock mounts this page as soon as the Run opens, with the roster read beside it, so a page
+    // whose roster row has not arrived is still a page: the quiet line stands where the row will, and
+    // the activity below reads its transcript now rather than after the roster.
     return html`
       <section class=${styles.session} aria-labelledby="agent-session-title">
         <div class=${styles.scroll} data-scroller>
           ${keyed(this.childSessionId, html`
-            ${this.#heading(child)}
-            ${this.#statusLine(child, running)}
-            ${this.confirming ? this.#confirmation() : nothing}
-            ${this.observation ? this.#questions(this.observation) : nothing}
-            ${running ? nothing : this.#result(child)}
-            ${this.observation || this.#main() ? nothing : this.#pending()}
-            <dl-activity .source=${this.source} .agent=${this.#main() ? null : this.childSessionId}
-              .objective=${this.#main() ? '' : child.objective ?? ''} .controls=${this.observation?.controls ?? NO_CONTROLS}></dl-activity>
-            ${this.observation ? this.#history(this.observation) : nothing}
+            ${child === null ? this.#waiting() : html`
+              ${this.#heading(child)}
+              ${this.#statusLine(child)}
+              ${this.observation ? this.#questions(this.observation) : nothing}
+              ${child.status === 'running' ? nothing : this.#result(child)}
+              ${this.observation || this.#main() ? nothing : this.#pending()}
+              ${this.observation ? this.#history(this.observation) : nothing}
+            `}
+            ${this.#activity(child)}
           `)}
         </div>
-        ${this.#main() ? nothing : this.commandable ? this.#composer(child, running) : this.#finished()}
       </section>
+    `;
+  }
+
+  /** The page before the roster's row or the child's own observation has arrived: a heading that names
+   *  the agent the dock asked for, and the quiet line that says its details are being read. */
+  #waiting(): TemplateResult {
+    return html`
+      <h3 id="agent-session-title" class=${styles.title} data-title tabindex="-1">${agentName(agentIdOf(this.childSessionId))}</h3>
+      <p class="dl-note ${styles.quiet}" role="status">${msg('Loading child details…', {id: 'agentSession.loading'})}</p>
+    `;
+  }
+
+  /** The activity pane, which reads its own transcript: it mounts with the page so the transcript and
+   *  the roster load in parallel, and it is the same pane whether the rest of the page is waiting or not. */
+  #activity(child: AgentChildStatus | null): TemplateResult {
+    return html`
+      <dl-activity .source=${this.source} .terms=${this.terms} .found=${this.found}
+        .brief=${child?.summary ?? ''} .now=${this.#now} .focusSequence=${this.#focusSequence()}
+        .agent=${this.#main() ? null : this.childSessionId}
+        .objective=${this.#main() ? '' : child?.objective ?? ''} .controls=${this.observation?.controls ?? NO_CONTROLS}></dl-activity>
     `;
   }
 
@@ -547,46 +331,51 @@ export class DlAgentSession extends LightElement {
     return this.childSessionId === MAIN_AGENT;
   }
 
+  /** The step this page is asked to ring, when the focus names the agent this page shows. */
+  #focusSequence(): number | null {
+    const focus = this.stepFocus;
+    if (focus === null) return null;
+    return sameAgent(agentIdOf(focus.agent), agentIdOf(this.childSessionId)) ? focus.sequence : null;
+  }
+
   #heading(child: AgentChildStatus): TemplateResult {
     return html`
-      ${this.#main() ? html`<p class=${styles.label}>${msg('Main agent', {id: 'tracesPanel.lead'})}</p>` : nothing}
+      ${this.#main() ? html`<p class=${styles.label}>${agentName(RUN_AGENT)}</p>` : nothing}
       <h3 id="agent-session-title" class="${styles.title} ${this.objectiveOpen ? '' : styles.clamped}"
-          data-title tabindex="-1">${child.objective || this.childSessionId}</h3>
-      <button type="button" class=${styles.more} data-more hidden
+          data-title tabindex="-1">${child.objective || agentName(agentIdOf(this.childSessionId))}</h3>
+      <button type="button" class="dl-text-action dl-text-action--disclosure ${styles.more}" data-more hidden
               aria-expanded=${this.objectiveOpen ? 'true' : 'false'}
               aria-controls="agent-session-title" @click=${this.#toggleObjective}>
         ${this.objectiveOpen
           ? msg('Show less', {id: 'agentSession.showLess'})
           : msg('Show full objective', {id: 'agentSession.showFull'})}
+        ${icon('chevron-down', {size: 'xs'})}
       </button>
     `;
   }
 
-  #statusLine(child: AgentChildStatus, running: boolean): TemplateResult {
-    const meta = [agentElapsed(child, this.now), modelText(child.modelRole), tokensText(child)]
+  #statusLine(child: AgentChildStatus): TemplateResult {
+    const meta = [agentElapsed(child, this.#now), tokensText(child)]
       .filter(Boolean).join(' · ');
     return html`
       <div class=${styles.status}>
         ${agentGlyph(child)}
         <b class=${styles.state}>${agentStateText(child)}</b>
         <span>${meta}</span>
-        ${running && this.commandable && !this.confirming && !this.#main() ? html`
-          <button type="button" class="dl-btn dl-btn-danger-text ${styles.cancel}" data-cancel
-                  @click=${this.#askConfirmation}>${msg('Cancel child', {id: 'agentSession.cancel'})}</button>
-        ` : nothing}
+        ${this.#feedback(child)}
       </div>
     `;
   }
 
-  #confirmation(): TemplateResult {
-    const busy = this.#sendingNow('cancel');
+  /** The thumbs for what a child answered, once it has settled and the server has said which message that
+   *  is. The Run's own agent is judged under the chat's turn, not here. */
+  #feedback(child: AgentChildStatus): TemplateResult | typeof nothing {
+    const runId = this.source?.runId;
+    if (!runId || this.#main() || child.status !== 'succeeded' || child.resultSequence === null) return nothing;
     return html`
-      <div class=${styles.confirm} role="group" aria-labelledby="agent-session-confirm">
-        <p id="agent-session-confirm">${msg('Cancel this child? Its work so far is kept.', {id: 'agentSession.cancelConfirm'})}</p>
-        <button type="button" class="dl-btn dl-btn-danger-text" aria-disabled=${busy ? 'true' : nothing}
-                @click=${() => { if (!busy) this.#cancelChild(); }}>${msg('Cancel child', {id: 'agentSession.cancel'})}</button>
-        <button type="button" class="dl-btn" data-keep @click=${this.#keepRunning}>${msg('Keep running', {id: 'agentSession.keepRunning'})}</button>
-      </div>
+      <dl-answer-feedback layout="block" .handles=${this.handles} .runId=${runId} .agent=${this.childSessionId}
+        .sequence=${child.resultSequence} .judgement=${child.feedback}
+        .enabled=${this.answerFeedbackEnabled}></dl-answer-feedback>
     `;
   }
 
@@ -596,56 +385,45 @@ export class DlAgentSession extends LightElement {
     return html`${repeat(waiting, (question) => question.requestId, (question) => this.#card(question))}`;
   }
 
+  /** A question a child asked its parent: a state a reader can see, answered from the conversation's own
+   *  composer, never from this review surface. */
   #card(question: ChildQuestion): TemplateResult {
     const minutes = question.expiresAt === null
       ? 0
-      : Math.max(1, Math.ceil((Date.parse(question.expiresAt) - this.now) / MINUTE_MILLISECONDS));
+      : Math.max(1, Math.ceil((Date.parse(question.expiresAt) - this.#now) / MINUTE_MILLISECONDS));
     const label = question.expiresAt === null
       ? msg('Asking the parent', {id: 'agentSession.asking'})
       : msg(str`Asking the parent · expires in ${minutes} min`, {id: 'agentSession.askingExpires'});
-    const key = this.#replyKey(question.requestId);
-    const draft = this.#draft(key);
-    const busy = this.#sendingNow('reply', question.requestId);
     return html`
       <div class=${styles.card} role="group" aria-labelledby=${`child-question-${question.requestId}`}>
         <p class=${styles.cap} id=${`child-question-${question.requestId}`}>${label}</p>
         <p class=${styles.asked}>${question.question}</p>
-        ${this.answering === question.requestId ? html`
-          <form class=${styles.reply} data-request=${question.requestId} @submit=${this.#submitReply}>
-            <div class=${styles.field}>
-              <textarea rows="1" class=${styles.input} data-reply data-draft=${key}
-                        aria-label=${msg('Your answer', {id: 'agentSession.answerLabel'})}
-                        .value=${live(draft.text)} ?readonly=${busy}
-                        @input=${this.#typed} @keydown=${this.#keydown}
-                        @beforeinput=${this.#beforeInput} @keyup=${this.#keyup}></textarea>
-              ${this.#sendButton(draft.text, busy)}
-            </div>
-            <button type="button" class="dl-btn" @click=${this.#closeAnswer}>${msg('Cancel answer', {id: 'agentSession.cancelAnswer'})}</button>
-          </form>
-        ` : html`
-          <button type="button" class="dl-btn" data-request=${question.requestId}
-                  @click=${this.#openAnswer}>${msg('Answer instead', {id: 'agentSession.answerInstead'})}</button>
-        `}
       </div>
     `;
   }
 
-  #sendButton(text: string, busy: boolean): TemplateResult {
-    return html`
-      <button type="submit" class=${styles.send} aria-label=${msg('Send', {id: 'agentSession.send'})}
-              aria-disabled=${busy || !text.trim() ? 'true' : nothing}>${icon('send', {size: 'sm'})}</button>
-    `;
-  }
-
+  /** What a Run failed at, and what a child produced.
+   *
+   *  The Run's own agent says nothing here about its answer: the chat shows that answer and the
+   *  sources it cites, and this pane stands beside the chat. What a reader of traces is asking
+   *  instead is why a Run stopped, so a failure is said here too. A child's evidence is said
+   *  nowhere else — the references beside the answer are the Run's, not a child's — so a child
+   *  keeps its own, and says nothing else.
+   */
   #result(child: AgentChildStatus): TemplateResult | typeof nothing {
-    const summary = child.summary || this.observation?.result?.summary || '';
+    const main = this.#main();
+    const failed = main && child.status === 'failed';
+    const words = failed ? child.summary || '' : '';
     const handles = this.observation?.result?.handles ?? child.resultHandles;
-    if (!summary && handles.length === 0) return nothing;
+    const evidence = main ? [] : handles;
+    if (!words && evidence.length === 0) return nothing;
     return html`
       <section class=${styles.section}>
-        <h4 class=${styles.label}>${msg('Result', {id: 'agentSession.result'})}</h4>
-        ${summary ? html`<p class=${styles.resultText} tabindex="0">${summary}</p>` : nothing}
-        ${handles.length > 0 ? evidenceFold(this, handles, this.source?.presentation() ?? null) : nothing}
+        ${words
+          ? html`<h4 class=${styles.label}>${msg('Result', {id: 'agentSession.result'})}</h4>
+              <p class=${styles.resultText} tabindex="0">${words}</p>`
+          : nothing}
+        ${evidence.length > 0 ? evidenceFold(this, evidence, this.source?.presentation() ?? null) : nothing}
       </section>
     `;
   }
@@ -658,7 +436,7 @@ export class DlAgentSession extends LightElement {
           <p role="alert">${msg('Child details could not be loaded.', {id: 'agentSession.loadFailed'})}</p>
           <button type="button" class="dl-btn" @click=${this.#retry}>${msg('Retry', {id: 'agentSession.retry'})}</button>
         </div>`
-      : html`<p class=${styles.quiet}>${msg('Loading child details…', {id: 'agentSession.loading'})}</p>`;
+      : html`<p class="dl-note ${styles.quiet}">${msg('Loading child details…', {id: 'agentSession.loading'})}</p>`;
   }
 
   #history(observation: ChildObservation): TemplateResult {
@@ -676,15 +454,15 @@ export class DlAgentSession extends LightElement {
       ${controls.length > 0 ? html`
         <details class=${styles.fold}>
           <summary class=${styles.summary}>${icon('disclosure', {size: 'xs', className: styles.chevron})}
-            ${msg(str`Control history · ${controls.length}`, {id: 'agentSession.controlHistory'})}</summary>
+            ${msg(str`Instructions received · ${controls.length}`, {id: 'agentSession.instructionsReceived'})}</summary>
           <ul class=${styles.history}>
             ${controls.map((record) => html`
               <li>
                 <p class=${styles.meta}>${[
-                  record.consumed
-                    ? msg('Consumed', {id: 'agentSession.control.consumed'})
-                    : msg('Queued', {id: 'agentSession.control.queued'}),
                   senderText(record.origin),
+                  record.consumed
+                    ? msg('Handled', {id: 'agentSession.control.handled'})
+                    : msg('Pending', {id: 'agentSession.control.pending'}),
                 ].filter(Boolean).join(' · ')}</p>
                 <p class=${styles.toldText}>${record.content}</p>
               </li>
@@ -711,44 +489,6 @@ export class DlAgentSession extends LightElement {
       </li>
     `;
   }
-
-  #finished(): TemplateResult {
-    return html`<p class=${styles.finished}>${finishedText()}</p>`;
-  }
-
-  #composer(child: AgentChildStatus, running: boolean): TemplateResult {
-    const mode = running ? 'steer' : 'continue';
-    const key = this.#composerKey(child.operationId);
-    const draft = this.#draft(key);
-    const busy = this.#sendingNow(mode);
-    const userCancelled = !running && child.status === 'cancelled' && child.cancellationOrigin === 'user';
-    const placeholder = running
-      ? msg('Steer this child…', {id: 'agentSession.steerPlaceholder'})
-      : msg('Continue this child…', {id: 'agentSession.continuePlaceholder'});
-    const said = this.#announcement();
-    return html`
-      <form class=${styles.composer} @submit=${this.#submitComposer}>
-        ${said ? html`<p class=${styles.outcome}>${said}</p>` : nothing}
-        ${userCancelled ? html`
-          <label class="dl-dialog-checkbox ${styles.reauthorize}">
-            <input type="checkbox" data-draft=${key} .checked=${live(draft.reauthorize)} @change=${this.#reauthorized}>
-            ${msg('Reauthorize this user-cancelled work', {id: 'agentSession.reauthorize'})}
-          </label>
-        ` : nothing}
-        <div class=${styles.field}>
-          <textarea rows="1" class=${styles.input} data-draft=${key} aria-label=${placeholder}
-                    aria-describedby="agent-session-hint" placeholder=${placeholder}
-                    .value=${live(draft.text)} ?readonly=${busy}
-                    @input=${this.#typed} @keydown=${this.#keydown}
-                    @beforeinput=${this.#beforeInput} @keyup=${this.#keyup}></textarea>
-          ${this.#sendButton(draft.text, busy)}
-        </div>
-        <p class=${styles.hint} id="agent-session-hint">${running
-          ? msg('Delivered at the child\'s next safe checkpoint.', {id: 'agentSession.steerHint'})
-          : msg('Starts a new operation on this child.', {id: 'agentSession.continueHint'})}</p>
-      </form>
-    `;
-  }
 }
 
 customElements.define('dl-agent-session', DlAgentSession);
@@ -756,9 +496,5 @@ customElements.define('dl-agent-session', DlAgentSession);
 declare global {
   interface HTMLElementTagNameMap {
     'dl-agent-session': DlAgentSession;
-  }
-
-  interface HTMLElementEventMap {
-    'dl-child-command-settled': CustomEvent<void>;
   }
 }

@@ -17,7 +17,12 @@ from typing import Any
 
 from dlightrag.adapters.postgres.core._migrations import TableRequirement
 from dlightrag.adapters.postgres.core._operations import ConnectionPool, PostgresOperationRunner
-from dlightrag.engine.answer.agent_browser import BrowserHolder
+from dlightrag.engine.answer.agent_browser.contracts import (
+    BrowserHolder,
+)
+from dlightrag.engine.answer.agent_browser.live import (
+    LiveControlState,
+)
 from dlightrag.engine.runtime.records import parse_run_id
 
 _CREATE_AGENT_BROWSER_LEASES = """
@@ -28,6 +33,10 @@ CREATE TABLE IF NOT EXISTS dlightrag_agent_browser_leases (
     lease_owner   TEXT,
     fencing_epoch BIGINT,
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- Who drives the leased browser (``agent`` or ``human``), and since when. An operator
+    -- reads it to see a live co-drive; it is written on a handover only, never per input.
+    control_state TEXT,
+    control_changed_at TIMESTAMPTZ,
     PRIMARY KEY (endpoint),
     CONSTRAINT dlightrag_agent_browser_leases_holder_check CHECK (
         (owner_id IS NULL) = (run_id IS NULL)
@@ -40,7 +49,16 @@ AGENT_BROWSER_LEASES_DDL = (_CREATE_AGENT_BROWSER_LEASES,)
 
 AGENT_BROWSER_LEASES_SCHEMA_TABLE = TableRequirement(
     name="dlightrag_agent_browser_leases",
-    columns=("endpoint", "owner_id", "run_id", "lease_owner", "fencing_epoch", "updated_at"),
+    columns=(
+        "endpoint",
+        "owner_id",
+        "run_id",
+        "lease_owner",
+        "fencing_epoch",
+        "updated_at",
+        "control_state",
+        "control_changed_at",
+    ),
     primary_key=("endpoint",),
     checks=("dlightrag_agent_browser_leases_holder_check",),
 )
@@ -90,7 +108,8 @@ candidate AS (
 ),
 claimed AS (
     UPDATE dlightrag_agent_browser_leases l
-    SET owner_id = $1, run_id = $2, lease_owner = $3, fencing_epoch = $4, updated_at = NOW()
+    SET owner_id = $1, run_id = $2, lease_owner = $3, fencing_epoch = $4, updated_at = NOW(),
+        control_state = NULL, control_changed_at = NULL
     FROM candidate
     WHERE l.endpoint = candidate.endpoint
     RETURNING l.endpoint
@@ -103,8 +122,29 @@ LIMIT 1
 
 _RELEASE = """
 UPDATE dlightrag_agent_browser_leases
-SET owner_id = NULL, run_id = NULL, lease_owner = NULL, fencing_epoch = NULL, updated_at = NOW()
+SET owner_id = NULL, run_id = NULL, lease_owner = NULL, fencing_epoch = NULL, updated_at = NOW(),
+    control_state = NULL, control_changed_at = NULL
 WHERE endpoint = $1 AND owner_id = $2 AND run_id = $3 AND lease_owner = $4 AND fencing_epoch = $5
+"""
+
+# What a live session is opened against: the holder of a Run that still holds its own lease.
+# Read-only, and the same freedom rule the claim uses, so a Run that died holds nothing.
+_HOLDER_FOR = """
+SELECT l.owner_id, l.run_id, l.lease_owner, l.fencing_epoch
+FROM dlightrag_agent_browser_leases l
+WHERE l.owner_id = $1 AND l.run_id = $2
+  AND EXISTS (
+      SELECT 1 FROM dlightrag_runs r
+      WHERE r.owner_id = l.owner_id AND r.run_id = l.run_id
+        AND r.status = 'running' AND r.lease_owner = l.lease_owner
+        AND r.fencing_epoch = l.fencing_epoch AND r.lease_expires_at > NOW())
+LIMIT 1
+"""
+
+_RECORD_CONTROL = """
+UPDATE dlightrag_agent_browser_leases
+SET control_state = $5, control_changed_at = NOW()
+WHERE owner_id = $1 AND run_id = $2 AND lease_owner = $3 AND fencing_epoch = $4
 """
 
 
@@ -150,6 +190,43 @@ class PGAgentBrowserLeaseStore(PostgresOperationRunner):
             return None if row is None else str(row["endpoint"])
 
         return await self._run(operation)
+
+    async def holder_for(self, *, owner_id: str, run_id: str) -> BrowserHolder | None:
+        """The holder that Run leases an endpoint through, or None while it holds none."""
+        run = parse_run_id(run_id)
+        if run is None:
+            return None
+
+        async def operation(conn: Any) -> BrowserHolder | None:
+            row = await conn.fetchrow(_HOLDER_FOR, owner_id, run)
+            if row is None:
+                return None
+            return BrowserHolder(
+                owner_id=str(row["owner_id"]),
+                run_id=str(row["run_id"]),
+                worker_id=str(row["lease_owner"]),
+                fencing_epoch=int(row["fencing_epoch"]),
+            )
+
+        return await self._run(operation)
+
+    async def set_control(self, holder: BrowserHolder, state: LiveControlState) -> None:
+        """Record who drives the holder's browser, for operators, on a handover."""
+        run_id = parse_run_id(holder.run_id)
+        if run_id is None:
+            return
+
+        async def operation(conn: Any) -> None:
+            await conn.execute(
+                _RECORD_CONTROL,
+                holder.owner_id,
+                run_id,
+                holder.worker_id,
+                holder.fencing_epoch,
+                state,
+            )
+
+        await self._run(operation)
 
     async def release(self, holder: BrowserHolder, endpoint: str) -> None:
         """Give ``endpoint`` back; a lease the holder no longer holds is left alone."""

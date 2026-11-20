@@ -8,8 +8,11 @@ from dlightrag.engine.agent.tool_content import (
     ToolTextPart,
     VisualSource,
 )
-from dlightrag.engine.agent.tools import ToolEffects, ToolResult
-from dlightrag.engine.agent.tools.contracts import EvidenceSourceFact
+from dlightrag.engine.agent.tools.contracts import (
+    EvidenceSourceFact,
+    ToolEffects,
+    ToolResult,
+)
 from dlightrag.engine.answer.citations.indexer import CitationIndexer
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.excerpts import (
@@ -19,7 +22,9 @@ from dlightrag.engine.answer.excerpts import (
 )
 from dlightrag.engine.answer.tools.composition import _resource_rows
 from dlightrag.engine.answer.tools.web_search import web_context_rows
-from dlightrag.engine.answer.web_sources import WebSearchHit
+from dlightrag.engine.answer.web_sources.contracts import (
+    WebSearchHit,
+)
 
 
 def _heading_and_label(row: dict) -> tuple[str, str]:

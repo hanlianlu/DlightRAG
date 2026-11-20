@@ -16,7 +16,7 @@ from aiobotocore.session import AioSession
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
-from dlightrag.engine.answer.agent_browser import (
+from dlightrag.engine.answer.agent_browser.mailbox import (
     MAX_LISTED,
     AgentMailboxError,
     MailListing,

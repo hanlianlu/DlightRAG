@@ -6,7 +6,14 @@ import datetime
 import hashlib
 import logging
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Collection,
+    Mapping,
+    Sequence,
+)
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
@@ -14,13 +21,15 @@ from typing import Any, Protocol, cast
 
 from dlightrag_memory import Memory, MemoryStore
 
-from dlightrag.engine.agent.environment import (
+from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
+from dlightrag.engine.agent.environment.execution import (
     ExecutionMode,
-    SearchToolchain,
     confinement_state,
     resolve_execution_adapter,
 )
-from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
+from dlightrag.engine.agent.environment.toolchain import (
+    SearchToolchain,
+)
 from dlightrag.engine.agent.session.effects import (
     canonical_json,
 )
@@ -76,17 +85,17 @@ from dlightrag.engine.agent.session.transactions import (
     SessionTransaction,
     TransactionLeaseLost,
 )
+from dlightrag.engine.agent.skill_protection import ProtectedTextIndex
 from dlightrag.engine.agent.skills import SkillsBundle, SkillsBundleFactory
-from dlightrag.engine.agent.tools import (
-    AgentTool,
-)
-from dlightrag.engine.agent.tools.contracts import ToolDeclaration
+from dlightrag.engine.agent.tools.contracts import AgentTool, ToolDeclaration
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY, CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.reasoning import (
+    REASONING_LEVELS,
     ReasoningConfigurationError,
     ReasoningLevel,
+    request_under_ceiling,
     resolve_reasoning,
 )
 from dlightrag.engine.ai.scheduler import model_call_scope
@@ -97,13 +106,30 @@ from dlightrag.engine.ai.telemetry import (
     bounded_telemetry_text,
     safe_log_text,
 )
-from dlightrag.engine.answer.agent_browser import (
-    AgentBrowserBinding,
-    BrowserHolder,
-    RunAgentBrowser,
-    RunBrowsing,
+from dlightrag.engine.answer.agent_browser.accounts import (
     has_mailbox,
     run_agent_accounts,
+)
+from dlightrag.engine.answer.agent_browser.contracts import (
+    AgentBrowserBinding,
+    BrowserHolder,
+)
+from dlightrag.engine.answer.agent_browser.run import (
+    RunAgentBrowser,
+    RunBrowsing,
+)
+from dlightrag.engine.answer.agentspace import (
+    AgentspaceHeadTarget,
+    AgentspaceIntegrityError,
+    AgentspaceSeed,
+    RunAgentspace,
+    archive_carried_agentspace,
+    bind_run_agentspace,
+    carried_manifest_digest,
+    head_run_agentspace,
+    prune_session_head_trees,
+    session_heads_root,
+    stage_session_head,
 )
 from dlightrag.engine.answer.attachment_replay import AttachmentReplaySelection
 from dlightrag.engine.answer.capabilities import AnswerCapabilityCoordinator
@@ -115,6 +141,8 @@ from dlightrag.engine.answer.compaction import CompactionCoordinator
 from dlightrag.engine.answer.continuation_handles import compose_session_notes
 from dlightrag.engine.answer.errors import (
     ROUTING_FAILED,
+    SESSION_BUSY,
+    SESSION_BUSY_MESSAGE,
     AnswerInputError,
     InvalidToolConfigurationError,
     classify_answer_error,
@@ -127,6 +155,8 @@ from dlightrag.engine.answer.execution.acceptance import (
     routing_resources,
 )
 from dlightrag.engine.answer.execution.connection_binding import (
+    ConnectionResourceOperations,
+    ConnectionSurface,
     ResearchConnectionToolResolver,
     ResearchToolClaim,
 )
@@ -140,26 +170,36 @@ from dlightrag.engine.answer.execution.input import (
     validate_active_answer_input,
 )
 from dlightrag.engine.answer.execution.lineage import LineageResourceStore, RetainedResourceLoader
+from dlightrag.engine.answer.execution.mcp_resource_host import RunMcpResourceHost
 from dlightrag.engine.answer.execution.resources import AnswerResourceResolver
-from dlightrag.engine.answer.fast import (
-    FastRunBoundaries,
+from dlightrag.engine.answer.fast.boundaries import FastRunBoundaries
+from dlightrag.engine.answer.fast.session_host import (
     FastSessionHost,
     ensure_session_lane,
     projection_from_compaction_at,
 )
-from dlightrag.engine.answer.highlights import SemanticHighlightSettings, enrich_semantic_highlights
+from dlightrag.engine.answer.goal import GoalPhase
+from dlightrag.engine.answer.goal_service import AnswerGoalService
+from dlightrag.engine.answer.highlights import (
+    SemanticHighlightSettings,
+    enrich_semantic_highlights,
+)
 from dlightrag.engine.answer.history import HistoryProjectionTarget
 from dlightrag.engine.answer.links.cards import collect_link_cards
-from dlightrag.engine.answer.media import evidence_images_from_sources
+from dlightrag.engine.answer.media import (
+    evidence_images_from_sources,
+    held_evidence_images,
+)
 from dlightrag.engine.answer.memory import render_auto_recall
 from dlightrag.engine.answer.mode import ResolvedMode
 from dlightrag.engine.answer.model_runtime import AnswerModelRuntime
-from dlightrag.engine.answer.orchestration import AnswerOrchestrator
+from dlightrag.engine.answer.orchestration.orchestrator import AnswerOrchestrator
 from dlightrag.engine.answer.publication import (
     ArtifactAttachment,
     PublicationLimits,
     PublicationPlan,
     StagedArtifact,
+    artifact_resource_id,
     is_empty_answer,
     run_artifact_check,
     validate_publication,
@@ -185,16 +225,21 @@ from dlightrag.engine.answer.research.runtime import (
     _usage_from_snapshot_entries,
 )
 from dlightrag.engine.answer.resource_settlement import attached_resource_update
-from dlightrag.engine.answer.resources import ResourceInput, ResourceRegistry
 from dlightrag.engine.answer.resources.converters import MAX_CONVERSION_SECONDS, is_convertible
-from dlightrag.engine.answer.resources.lineage import LINEAGE_ADOPTION_KIND, LineageResourceLoader
+from dlightrag.engine.answer.resources.lineage import (
+    LINEAGE_ADOPTION_KIND,
+    LineageResourceLoader,
+    declared_sources,
+)
 from dlightrag.engine.answer.resources.models import (
+    ResourceInput,
     ResourceRegistryError,
 )
 from dlightrag.engine.answer.resources.registry import (
     BROWSER_ACQUISITIONS,
     BROWSER_RENDER,
     FetchedBytesSink,
+    ResourceRegistry,
     ResourceStateMismatchError,
 )
 from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
@@ -208,6 +253,8 @@ from dlightrag.engine.answer.session_notes import (
     read_working_copy_or_reason,
 )
 from dlightrag.engine.answer.tools.browser import BrowserToolHost
+from dlightrag.engine.answer.tools.goals import GoalHost
+from dlightrag.engine.answer.tools.mcp_resources import McpResourceHost
 from dlightrag.engine.answer.tools.memory import MemoryHost
 from dlightrag.engine.answer.tools.resources import (
     make_admitted_bytes_reader,
@@ -219,11 +266,6 @@ from dlightrag.engine.answer.tools.subagents import (
     ChildContextSnapshot,
     SubagentHost,
 )
-from dlightrag.engine.answer.workspace import (
-    RunWorkspace,
-    WorkspaceIntegrityError,
-    bind_run_workspace,
-)
 from dlightrag.engine.dependencies import (
     DependencyComponent,
     DependencyRetriesExhausted,
@@ -231,14 +273,24 @@ from dlightrag.engine.dependencies import (
     dependency_component_from_checkpoint,
     next_dependency_retry,
 )
-from dlightrag.engine.rag.retrieval import (
+from dlightrag.engine.rag.retrieval.models import (
     MetadataFilter,
-    RetrievalContexts,
     RetrievalOptions,
+)
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalContexts,
     RetrievalResult,
 )
 from dlightrag.engine.rag.workspace.lifecycle import defer_cancellation
 from dlightrag.engine.rag.workspace.pool import WorkspacePool
+from dlightrag.engine.runtime.agentspace import (
+    DEFAULT_SESSION_NOTES_LIMITS,
+    AgentspaceHeadCommit,
+    AgentspaceHeadReader,
+    AgentspaceStore,
+    SessionNoteRecord,
+    SessionNotesLimits,
+)
 from dlightrag.engine.runtime.coordinator import (
     LeaseLostError,
     RunCancellationObserved,
@@ -262,12 +314,7 @@ from dlightrag.engine.runtime.settlements import (
     ArtifactAttachmentUpdate,
     EffectHostUpdate,
 )
-from dlightrag.engine.runtime.workspace import (
-    DEFAULT_SESSION_NOTES_LIMITS,
-    SessionNoteRecord,
-    SessionNotesLimits,
-    WorkspaceStore,
-)
+from dlightrag.engine.runtime.subscription import EventReader
 
 logger = logging.getLogger(__name__)
 _FAST_COMPACTION_ATTEMPT_LIMIT = 3
@@ -275,6 +322,22 @@ _DEPENDENCY_DEFER_BASE_SECONDS = 5
 _DEPENDENCY_DEFER_MAX_SECONDS = 60
 
 type DependencyStateCallback = Callable[[DependencyComponent], None]
+
+
+async def _run_tool_events(
+    store: EventReader, *, owner_id: str, run_id: str
+) -> list[tuple[str, Mapping[str, Any]]]:
+    """The Run's durable Tool events so far: what its earlier attempts did, empty for a first one."""
+    events: list[tuple[str, Mapping[str, Any]]] = []
+    cursor = 0
+    while page := await store.read_event_page(
+        owner_id=owner_id, run_id=run_id, after_sequence=cursor
+    ):
+        cursor = page[-1].sequence
+        events.extend(
+            (event.event_type, event.payload) for event in page if "call_id" in event.payload
+        )
+    return events
 
 
 def _incomplete_operation_error(operation: Any, *, message: str) -> RunExecutionError:
@@ -293,15 +356,6 @@ def _incomplete_operation_error(operation: Any, *, message: str) -> RunExecution
             "durable store cannot keep.",
         )
     return RunExecutionError("run_execution_failed", message)
-
-
-def _require_current_child_lifecycle(plan: AgentRunPlan | None) -> None:
-    """Refuse a Research plan whose pinned spawn contract predates asynchronous Children."""
-    if plan is None:
-        raise IncompatibleActiveRunError("Research answer run is missing its accepted Agent Plan")
-    spawn = next((tool for tool in plan.tools if tool.name == "spawn_agent"), None)
-    if spawn is not None and spawn.contract_version != 5:
-        raise IncompatibleActiveRunError("Research answer run uses an unsupported child lifecycle")
 
 
 class RunBlobReader(Protocol):
@@ -330,7 +384,12 @@ class ArtifactReader(Protocol):
 
 
 class AnswerExecutionStore(
-    ArtifactReader, AnswerRoutingStore, ResearchRunStore, LineageResourceStore, Protocol
+    ArtifactReader,
+    AnswerRoutingStore,
+    EventReader,
+    ResearchRunStore,
+    LineageResourceStore,
+    Protocol,
 ):
     """Answer execution persistence, including required Research child operations."""
 
@@ -408,8 +467,8 @@ async def _memory_recall_allowed(
 ) -> bool:
     """Whether answer injection may use this owner's memory.
 
-    A missing checker means the composition has no settings store and memory
-    stays enabled — the historical default.
+    A missing checker means the composition has no settings store, and memory
+    stays enabled.
     """
     return checker is None or await checker(owner_id=owner_id)
 
@@ -441,10 +500,13 @@ class AnswerExecutor:
         search_toolchain: SearchToolchain,
         working_dir: str = "./dlightrag_storage",
         memory_store: MemoryStore | None = None,
+        goal_service: AnswerGoalService | None = None,
         memory_recall_enabled: Callable[..., Awaitable[bool]] | None = None,
         memory_capability_current: Callable[..., Awaitable[bool]] | None = None,
         connection_tool_resolver: ResearchConnectionToolResolver | None = None,
+        connection_resource_operations: ConnectionResourceOperations | None = None,
         skills_bundle_factory: SkillsBundleFactory | None = None,
+        protected_index: Callable[[], ProtectedTextIndex] | None = None,
         browser: AgentBrowserBinding | None = None,
         now: Callable[[], datetime.datetime] | None = None,
         on_dependency_unavailable: DependencyStateCallback | None = None,
@@ -472,10 +534,16 @@ class AnswerExecutor:
         self._working_dir = working_dir
         self._memory_store = memory_store
         self._memory = Memory(memory_store) if memory_store is not None else None
+        #: The durable goal capable of this deployment; ``None`` composes no goal tools.
+        self._goal_service = goal_service
         self._memory_recall_enabled = memory_recall_enabled
         self._memory_capability_current = memory_capability_current
         self._connection_tool_resolver = connection_tool_resolver
+        self._connection_resource_operations = connection_resource_operations
         self._skills_bundle_factory = skills_bundle_factory
+        #: The reader's content gate for a text deliverable (ADR 0061); the composition hands
+        #: in a lazy accessor so this process builds the index only when one is validated.
+        self._protected_index = protected_index
         self._browser = browser
         self._now = now or (lambda: datetime.datetime.now(datetime.UTC))
         self._on_dependency_unavailable = on_dependency_unavailable
@@ -509,6 +577,7 @@ class AnswerExecutor:
         agent_may_register: bool,
         model_guidance: str,
         injected: Sequence[ToolDeclaration],
+        mcp_resources: bool = False,
     ) -> tuple[ToolDeclaration, ...]:
         """Project configured capabilities without constructing execution dependencies.
 
@@ -530,12 +599,14 @@ class AnswerExecutor:
             artifact_publication=self._execution_adapter is not None,
             subagents=subagent_declarations(model_guidance=model_guidance),
             memory=memory and self._memory_store is not None,
+            goals=self._goal_service is not None,
             skills=(
                 self._skills_bundle_factory.declarations(child=False)
                 if self._skills_bundle_factory is not None
                 else ()
             ),
             injected=injected,
+            mcp_resources=mcp_resources,
         )
 
     async def execute(self, session: RunSession) -> RunExecutionOutcome:
@@ -819,13 +890,19 @@ class AnswerExecutor:
             )
         return head, reconstructed
 
-    async def _claim_run_workspace(
+    async def _claim_run_agentspace(
         self,
         *,
         session: RunSession,
-        workspace_store: WorkspaceStore | None,
+        workspace_store: AgentspaceStore | None,
         session_id: str | None,
-    ) -> tuple[RunWorkspace | None, SessionNotesBinding, SessionNotesPlane | None]:
+        research: bool = False,
+    ) -> tuple[
+        RunAgentspace | None,
+        SessionNotesBinding,
+        SessionNotesPlane | None,
+        AgentspaceHeadTarget | None,
+    ]:
         """Bind this Run's Agent Workspace epoch and materialize the Session's notes.
 
         Fast composes no tools, so its workspace is inert: it exists so a later
@@ -844,10 +921,24 @@ class AnswerExecutor:
             working_dir=self._working_dir,
         )
         if root is None:
-            return None, SessionNotesBinding(), None
+            return None, SessionNotesBinding(), None, None
         binding = SessionNotesBinding()
         notes: tuple[SessionNoteRecord, ...] = ()
         plane: SessionNotesPlane | None = None
+        prepared = session.prepared_input if isinstance(session.prepared_input, Mapping) else {}
+        lane_id = str(prepared.get("agent_lane_id") or "main")
+        parent_run_id = str(prepared["parent_run_id"]) if prepared.get("parent_run_id") else None
+        fork_point_run_id = parent_run_id if prepared.get("source_lane_id") is not None else None
+        head_target: AgentspaceHeadTarget | None = None
+        seed: AgentspaceSeed | None = None
+        expected_head_run_id: str | None = None
+        lineage_parent: str | None = None
+        if session_id:
+            head_target = AgentspaceHeadTarget(
+                heads_root=session_heads_root(root, session.owner_id, session_id),
+                session_id=session_id,
+                expected_head_run_id=None,
+            )
         if workspace_store is not None and session_id:
             plane = SessionNotesPlane(
                 store=workspace_store,
@@ -859,8 +950,80 @@ class AnswerExecutor:
             if session.workspace_epoch is None:
                 binding = await plane.load()
                 notes = binding.records
+        reader = (
+            cast(AgentspaceHeadReader, workspace_store)
+            if workspace_store is not None
+            and hasattr(workspace_store, "load_session_agentspace_head")
+            else None
+        )
+        branch_head = None
+        if research and head_target is not None and reader is not None:
+            branch_head = await reader.load_session_agentspace_head(
+                session_id=head_target.session_id, lane_id=lane_id
+            )
+            expected_head_run_id = branch_head.head_run_id if branch_head is not None else None
+        if (
+            research
+            and session.workspace_epoch is None
+            and head_target is not None
+            and reader is not None
+        ):
+            seed_run_id: str | None = None
+            seed_digest: str | None = None
+            if fork_point_run_id is not None:
+                # A fork branches from the snapshot of the Run it took its turn at; the
+                # branch head may be newer than that Run, so the fork point wins.
+                snapshot = await reader.load_run_agentspace_snapshot(run_id=fork_point_run_id)
+                if snapshot is not None:
+                    seed_run_id = snapshot.run_id
+                    seed_digest = snapshot.manifest_digest
+                else:
+                    logger.warning(
+                        "Fork point %s has no workspace snapshot; using the branch head",
+                        fork_point_run_id,
+                    )
+            if seed_run_id is None and parent_run_id is not None and branch_head is not None:
+                seed_run_id = branch_head.head_run_id
+                seed_digest = branch_head.manifest_digest
+            if seed_run_id is not None and seed_digest is not None:
+                seed = AgentspaceSeed(
+                    head_run_id=seed_run_id,
+                    manifest_digest=seed_digest,
+                    workspace=head_run_agentspace(head_target.heads_root, seed_run_id),
+                )
+                lineage_parent = seed_run_id
+        if head_target is not None:
+            head_target = replace(
+                head_target,
+                expected_head_run_id=expected_head_run_id,
+                seeded_manifest_digest=(seed.manifest_digest if seed is not None else None),
+                lane_id=lane_id,
+                parent_run_id=lineage_parent,
+            )
+            if session.workspace_epoch is None:
+                # A fresh epoch is the safe moment to collect head trees no row names:
+                # this attempt holds the lane and has just read the authoritative head.
+                try:
+                    kept = {expected_head_run_id} if expected_head_run_id else set()
+                    if hasattr(workspace_store, "load_session_snapshot_run_ids"):
+                        snapshot_ids = await workspace_store.load_session_snapshot_run_ids(  # type: ignore[attr-defined]
+                            session_id=head_target.session_id
+                        )
+                        if isinstance(snapshot_ids, (list, tuple)):
+                            kept.update(str(run_id) for run_id in snapshot_ids)
+                    await asyncio.to_thread(
+                        prune_session_head_trees,
+                        head_target.heads_root,
+                        keep_run_ids=frozenset(kept),
+                    )
+                except Exception:
+                    logger.warning(
+                        "Could not prune stale Session workspace heads for run %s",
+                        session.run_id,
+                        exc_info=True,
+                    )
         try:
-            bound = await bind_run_workspace(
+            bound = await bind_run_agentspace(
                 workspace_root=root,
                 owner_id=session.owner_id,
                 run_id=session.run_id,
@@ -869,8 +1032,9 @@ class AnswerExecutor:
                 store=workspace_store,
                 execution_adapter=self._execution_adapter,
                 notes=(notes if session.workspace_epoch is None else ()),
+                seed=seed,
             )
-        except WorkspaceIntegrityError as exc:
+        except AgentspaceIntegrityError as exc:
             # Reading again reads the same content, so the Run fails. What was refused
             # stays in the server log; the public error names no path or internal text.
             logger.warning("Agent Workspace of run %s refused: %s", session.run_id, exc)
@@ -892,7 +1056,97 @@ class AnswerExecutor:
                 degraded_reason=(binding.degraded_reason or reason or bound.notes_degraded),
             )
             plane.rebind(workspace=bound.workspace, records=binding.records)
-        return bound, binding, plane
+        return bound, binding, plane, head_target
+
+    async def _stage_session_head(
+        self, *, session: RunSession, bound: RunAgentspace, target: AgentspaceHeadTarget
+    ) -> None:
+        """Copy this succeeded attempt's tree out as the Session's candidate head.
+
+        The copy happens before the terminal transaction, so the pointer applied there can
+        only ever name a tree that already exists; a failure here costs the next round its
+        carry-over, never this answer, and leaves the previous head in place. A round that changed
+        nothing commits nothing: the head it read already carries the same bytes.
+        """
+        if target.seeded_manifest_digest is not None:
+            try:
+                current = await asyncio.to_thread(carried_manifest_digest, bound.workspace)
+            except Exception:
+                current = None
+            if current == target.seeded_manifest_digest:
+                return
+        try:
+            staged = await asyncio.to_thread(
+                stage_session_head,
+                workspace=bound.workspace,
+                heads_root=target.heads_root,
+                run_id=session.run_id,
+            )
+        except Exception:
+            logger.warning(
+                "Could not stage the Session workspace head for run %s",
+                session.run_id,
+                exc_info=True,
+            )
+            return
+        session.pending_workspace_head = AgentspaceHeadCommit(
+            session_id=target.session_id,
+            lane_id=target.lane_id,
+            head_run_id=session.run_id,
+            manifest_digest=staged.manifest_digest,
+            expected_head_run_id=target.expected_head_run_id,
+            parent_run_id=target.parent_run_id,
+            manifest=staged.files,
+        )
+
+    async def _archive_completed_goal(
+        self, *, session: RunSession, bound: RunAgentspace, session_id: str
+    ) -> None:
+        """Publish the finished goal's carried workspace as one Resource.
+
+        A completed goal is the one moment the Session's working tree becomes the product
+        rather than the process: archive exactly what a Session head carries (no scratch, no
+        memory) under the Artifact handle namespace, so a later Run of this Session can adopt
+        the finished state. A goal that completes without files has nothing to archive.
+        """
+        if self._goal_service is None:
+            return
+        try:
+            goal = await self._goal_service.get(owner_id=session.owner_id, session_id=session_id)
+        except Exception:
+            logger.warning(
+                "Could not read the goal of run %s for its workspace archive",
+                session.run_id,
+                exc_info=True,
+            )
+            return
+        if goal is None or goal.phase != GoalPhase.COMPLETE:
+            return
+        try:
+            archive = await asyncio.to_thread(archive_carried_agentspace, bound.workspace)
+        except Exception:
+            logger.warning(
+                "Could not archive the completed goal workspace of run %s",
+                session.run_id,
+                exc_info=True,
+            )
+            return
+        if archive is None:
+            return
+        relative_path = "workspace-snapshot.tar.gz"
+        session.pending_publications.append(
+            PendingPublication(
+                resource_id=artifact_resource_id(relative_path),
+                reference_kind="published_artifact",
+                filename=relative_path,
+                mime_type="application/gzip",
+                content=archive,
+                session_id=session_id,
+                relative_path=relative_path,
+                presentation="download",
+                label="Completed goal workspace",
+            )
+        )
 
     async def _execute_run(
         self,
@@ -921,6 +1175,17 @@ class AnswerExecutor:
             RunExecutionError,
         ):
             raise
+        except OperationConflictError as exc:
+            # The Session's one agent lane was taken between admission and acceptance. Nothing of
+            # this request ran, so it is retryable and is said so; the client can also send it as a
+            # queue while the winning answer works.
+            logger.warning(
+                "Answer run %s lost the agent lane (%s): %s",
+                session.run_id,
+                type(exc).__name__,
+                exc,
+            )
+            raise RunExecutionError(SESSION_BUSY, SESSION_BUSY_MESSAGE) from exc
         except Exception as exc:
             component = classify_transient_dependency(exc, component_hint="providers")
             if component is not None:
@@ -942,9 +1207,9 @@ class AnswerExecutor:
                     next_attempt_at=self._now() + datetime.timedelta(seconds=delay),
                 )
             logger.warning(
-                "Answer run %s execution failed",
+                "Answer run %s execution failed (%s)",
                 session.run_id,
-                extra={"error_type": type(exc).__name__},
+                type(exc).__name__,
             )
             message = (
                 exc.public_message
@@ -1044,7 +1309,7 @@ class AnswerExecutor:
         accepted_user_entry_id: EntryId,
         targets: Sequence[HistoryProjectionTarget],
         compaction_model_profile: ModelProfile,
-        workspace_store: WorkspaceStore | None = None,
+        workspace_store: AgentspaceStore | None = None,
     ) -> tuple[PriorTurns, dict[str, Any], bool]:
         """Commit one canonical projection satisfying every reachable Fast serializer."""
         snapshot = await host.snapshot(session_id, selected_lane_id=lane_id)
@@ -1176,6 +1441,17 @@ class AnswerExecutor:
             "Fast Answer could not compact the conversation within model capacity.",
         )
 
+    def _protected_digests(self, session: RunSession, request: AnswerRunInput) -> frozenset[str]:
+        """The Skill documents this Run may not publish, or none where no Skill is served.
+
+        Read from the same catalog the Run's Skills come from, so a Skill the owner
+        published a moment ago is protected with the rest.
+        """
+        if self._skills_bundle_factory is None:
+            return frozenset()
+        catalog = self._skills_bundle_factory(session.owner_id, request.requested_skill).catalog()
+        return frozenset() if catalog is None else catalog.protected_digests()
+
     async def _execute(self, session: RunSession, run_trace: Observation) -> RunExecutionOutcome:
         request = AnswerRunInput.from_prepared_input(session.prepared_input)
         model_profiles = self.validate_pinned_model_profiles(request)
@@ -1277,27 +1553,41 @@ class AnswerExecutor:
         agent_operations: list[dict[str, Any]] = []
 
         fetched_buffer = FetchedResourceBuffer()
-        if resolved_mode == "research":
-            _require_current_child_lifecycle(request.agent_run_plan)
 
         connection_tools: tuple[AgentTool, ...] = ()
-        if resolved_mode == "research" and request.run_connection_bindings:
-            if self._connection_tool_resolver is None:
-                raise IncompatibleActiveRunError("Research Connection resolver unavailable")
-            if any(
-                binding.owner_id != session.owner_id for binding in request.run_connection_bindings
-            ):
-                raise IncompatibleActiveRunError("Research Connection owner mismatch")
-            connection_tools = await self._connection_tool_resolver(
-                bindings=request.run_connection_bindings,
-                claim=ResearchToolClaim(
-                    owner_id=session.owner_id,
-                    run_id=session.run_id,
-                    worker_id=session.worker_id,
-                    fencing_epoch=session.fencing_epoch,
-                    check_cancelled=session.check_cancelled,
-                ),
+        connection_surface: tuple[ConnectionSurface, ...] = ()
+        mcp_resource_host: RunMcpResourceHost | None = None
+        if resolved_mode == "research":
+            connection_surface = tuple(request.connection_surface)
+            claim = ResearchToolClaim(
+                owner_id=session.owner_id,
+                run_id=session.run_id,
+                worker_id=session.worker_id,
+                fencing_epoch=session.fencing_epoch,
+                check_cancelled=session.check_cancelled,
             )
+            if request.run_connection_bindings:
+                if self._connection_tool_resolver is None:
+                    raise IncompatibleActiveRunError("Research Connection resolver unavailable")
+                if any(
+                    binding.owner_id != session.owner_id
+                    for binding in request.run_connection_bindings
+                ):
+                    raise IncompatibleActiveRunError("Research Connection owner mismatch")
+                connection_tools = await self._connection_tool_resolver(
+                    bindings=request.run_connection_bindings,
+                    claim=claim,
+                )
+            if connection_surface:
+                if self._connection_resource_operations is None:
+                    raise IncompatibleActiveRunError(
+                        "Research Connection resource port unavailable"
+                    )
+                mcp_resource_host = RunMcpResourceHost(
+                    surface=connection_surface,
+                    operations=self._connection_resource_operations,
+                    claim=claim,
+                )
 
         browsing = self._run_browsing(session, resolved_mode)
         agent_browser = None if browsing is None else browsing.browser
@@ -1305,6 +1595,7 @@ class AnswerExecutor:
             run = await self.prepare_orchestrated_run(
                 query=request.query,
                 agent_effort=request.effort,
+                effort_ceiling=request.effort_ceiling,
                 worst_case_memory=_worst_case_recall_block(session.prepared_input),
                 workspaces=list(request.workspaces),
                 retrieval=request.retrieval,
@@ -1318,6 +1609,8 @@ class AnswerExecutor:
                 model_profiles=model_profiles,
                 pinned_models=request.pinned_models,
                 connection_tools=connection_tools,
+                connection_surface=connection_surface,
+                mcp_resource_host=mcp_resource_host,
                 lineage_loader=self._lineage_loader(session, agent_session_id),
                 skills=(
                     self._skills_bundle_factory(session.owner_id, request.requested_skill)
@@ -1386,10 +1679,11 @@ class AnswerExecutor:
                 # A Fork Point that could not open a branch is a stale point, not a
                 # Session race: the caller asked for a state that is no longer there.
                 raise RunExecutionError("fork_point_stale", exc.public_message) from exc
-            bound, notes_binding, notes_plane = await self._claim_run_workspace(
+            bound, notes_binding, notes_plane, head_target = await self._claim_run_agentspace(
                 session=session,
                 workspace_store=workspace_store,
                 session_id=agent_session_id.value,
+                research=(resolved_mode == "research"),
             )
             if notes_binding.degraded_reason is not None:
                 # Memory is not worth failing a Run over, so the degradation is stated
@@ -1405,7 +1699,7 @@ class AnswerExecutor:
             prepared_early: Any = None
             if resolved_mode == "research":
                 if bound is not None:
-                    run.orchestrator.bind_workspace(
+                    run.orchestrator.bind_agentspace(
                         bound,
                         workspace_store,
                         session_notes=notes_binding.records,
@@ -1422,6 +1716,27 @@ class AnswerExecutor:
                     epoch=memory_epoch,
                     capability_current=self._memory_capability_current,
                 )
+                if self._goal_service is not None:
+                    # A goal round is a Run the round driver started from the durable goal; the
+                    # goal tools read the round number off it, and a direct human turn has none.
+                    goal_round = None
+                    if request.continuation_kind == "goal_round":
+                        current = await self._goal_service.get(
+                            owner_id=session.owner_id, session_id=agent_session_id.value
+                        )
+                        # Fail closed: a round whose goal is gone is still a round, so the
+                        # human-only actions stay refused even though there is no row to check.
+                        goal_round = 1 if current is None else current.rounds_started
+                    run.orchestrator.bind_goal(
+                        GoalHost(
+                            service=self._goal_service,
+                            owner_id=session.owner_id,
+                            run_id=session.run_id,
+                            session_id=agent_session_id.value,
+                            goal_round=goal_round,
+                            completion_refusal=run.orchestrator.goal_completion_refusal,
+                        )
+                    )
                 # Keep partial's fence keywords explicit: expanding a dict here
                 # makes Pyright erase the remaining callback parameters.
                 persist_child_runtime = _check_child_write(
@@ -1452,6 +1767,7 @@ class AnswerExecutor:
                     persist=persist_child_runtime,
                     load_child=store.load_child_session,
                     list_children=store.list_child_sessions,
+                    load_transcript=store.load_agent_transcript,
                     finish_child=_check_child_write(
                         partial(
                             store.finish_child_session,
@@ -1581,6 +1897,13 @@ class AnswerExecutor:
                 )
                 self.validate_pinned_model_profiles(request)
                 self.validate_pinned_agent_run_plan(request, prepared_early.tools)
+                # A continued attempt starts a new ledger; what the Run's earlier attempts loaded
+                # is in its durable events, and the answer's label follows it.
+                run.orchestrator.restore_delivery_record(
+                    await _run_tool_events(
+                        self._store, owner_id=session.owner_id, run_id=session.run_id
+                    )
+                )
                 if not is_new_session:
                     await _restore_durable_evidence(prepared_early, repository, session_id)
                     if run.registry is not None:
@@ -1623,6 +1946,7 @@ class AnswerExecutor:
                     provider_attempt_limit=plan.provider_attempt_limit,
                     event_sink=_answer_runtime_event_sink(session),
                     controls=controls,
+                    delivery_check=effects.delivery_findings,
                     initial_snapshot=AgentSessionSnapshotSeed(
                         repository=repository,
                         session_id=session_id,
@@ -1738,6 +2062,7 @@ class AnswerExecutor:
                         idempotency_key=next_input[0],
                         content=next_input[1],
                         plan=plan,
+                        origin="child_notification" if next_purpose == "child_result" else None,
                     )
                     accepted_purpose = next_purpose
                     research_operation_id = accepted.operation_id
@@ -1905,6 +2230,14 @@ class AnswerExecutor:
                     attachments=artifact_attachments,
                     limits=self._settings.publication,
                     contexts=contexts,
+                    # Read only where there is a root to publish into.
+                    protected_digests=(
+                        self._protected_digests(session, request)
+                        if artifact_root is not None
+                        else frozenset()
+                    ),
+                    protected_index=self._protected_index,
+                    protected_text_exempt_names=_sealed_artifact_names(run.orchestrator),
                 )
                 finalized.answer = publication.answer
                 if (
@@ -1982,6 +2315,14 @@ class AnswerExecutor:
                         attachments=artifact_attachments,
                         limits=self._settings.publication,
                         contexts=contexts,
+                        # Read only where there is a root to publish into.
+                        protected_digests=(
+                            self._protected_digests(session, request)
+                            if artifact_root is not None
+                            else frozenset()
+                        ),
+                        protected_index=self._protected_index,
+                        protected_text_exempt_names=_sealed_artifact_names(run.orchestrator),
                     )
                     finalized.answer = publication.answer
                     correction_record["publication_outcome"] = publication.outcome
@@ -2008,9 +2349,11 @@ class AnswerExecutor:
                 trace["agent_shell_confinement"] = confinement_state(self._execution_environment)
                 trace["agent_effort"] = _agent_effort_trace(
                     request.effort,
+                    request.effort_ceiling,
                     resolved_mode,
                     None if prepared is None else prepared.model_profile,
                     self._models.model_settings("query").raw_agentic_reasoning_keys,
+                    _pin_for(request.pinned_models, "query").agentic_reasoning,
                 )
                 if fast_compaction_trace:
                     trace.update(fast_compaction_trace)
@@ -2037,7 +2380,20 @@ class AnswerExecutor:
                 trace["query_image_description_count"] = len(run.image_descriptions)
                 trace["memory_recall_record_count"] = memory_recall_record_count
                 trace["memory_recall_chars"] = memory_recall_chars
-                images = evidence_images_from_sources(finalized.sources, contexts=contexts)
+                cited_images = evidence_images_from_sources(finalized.sources, contexts=contexts)
+                images = [
+                    *cited_images,
+                    # What the Agent looked at, on top of what retrieval selected. A Research Run on
+                    # an empty corpus still holds the screenshots and page images it read, and the
+                    # Answer can only place them if the projection carries them. Retrieval's own
+                    # ids are passed in so the two provenances cannot claim one id between them.
+                    *held_evidence_images(
+                        finalized.answer,
+                        cited=cited_images,
+                        held=await self._held_image_ids(session, finalized.answer),
+                        run_id=session.run_id,
+                    ),
+                ]
                 answer_output = answer_trace_output(
                     finalized.answer,
                     finalized.sources,
@@ -2112,6 +2468,14 @@ class AnswerExecutor:
                         result_digest=canonical_json(stored),
                     )
                     return AlreadyCommittedTerminal(terminal)
+                if resolved_mode == "research" and bound is not None and head_target is not None:
+                    await self._stage_session_head(session=session, bound=bound, target=head_target)
+                if resolved_mode == "research" and bound is not None:
+                    await self._archive_completed_goal(
+                        session=session,
+                        bound=bound,
+                        session_id=agent_session_id.value,
+                    )
                 return Succeeded(stored)
         except BaseException as exc:
             cancel_children_on_exit = not isinstance(exc, LeaseLostError) and not (
@@ -2183,7 +2547,11 @@ class AnswerExecutor:
         skills: SkillsBundle | None = None,
         pinned_models: tuple[PinnedModelProfile, ...],
         agent_effort: ReasoningLevel | None = None,
+        #: The highest effort any agent of this Run may run at, pinned at acceptance.
+        effort_ceiling: AnswerEffort = "max",
         connection_tools: tuple[AgentTool, ...] = (),
+        connection_surface: Sequence[ConnectionSurface] = (),
+        mcp_resource_host: McpResourceHost | None = None,
         lineage_loader: LineageResourceLoader | None = None,
         browsing: RunBrowsing | None = None,
     ) -> OrchestratorRun:
@@ -2243,7 +2611,16 @@ class AnswerExecutor:
             model_func: Callable[..., Any] | None = None
             stream_model_func: Callable[..., AsyncIterator[str]] | None = None
             if resolved_mode == "research":
-                tool_model = self._models.query_tool_model(agentic_reasoning=agent_effort)
+                tool_model = self._models.query_tool_model(
+                    agentic_reasoning=_agent_reasoning_request(
+                        child_pins["query"],
+                        chosen=agent_effort,
+                        ceiling=effort_ceiling,
+                        owns_reasoning=bool(
+                            self._models.model_settings("query").raw_agentic_reasoning_keys
+                        ),
+                    )
+                )
                 model_func = tool_model
                 stream_model_func = tool_model.stream_text
 
@@ -2255,10 +2632,22 @@ class AnswerExecutor:
                 selected_role = cast(ChatModelSelector, role)
                 pin = child_pins[role]
                 profile = pin.profile
-                selected = self._models.tool_model(selected_role)
+                configured = self._models.model_settings(selected_role)
+                # A child runs at the level its role was configured with, under the same
+                # ceiling as the Run's own agent; the binding it is checked against is the
+                # configuration, never the level it was lowered to.
+                selected = self._models.tool_model(
+                    selected_role,
+                    agentic_reasoning=_agent_reasoning_request(
+                        pin,
+                        chosen=None,
+                        ceiling=effort_ceiling,
+                        owns_reasoning=bool(configured.raw_agentic_reasoning_keys),
+                    ),
+                )
                 if (
                     selected.fingerprint != pin.fingerprint
-                    or model_reasoning_settings(selected.settings) != pin.reasoning_settings
+                    or model_reasoning_settings(configured) != pin.reasoning_settings
                 ):
                     raise IncompatibleActiveRunError("child model binding changed after acceptance")
                 return selected, selected.stream_text, profile
@@ -2277,7 +2666,10 @@ class AnswerExecutor:
                 )
                 if browsing is not None:
                     browser = BrowserToolHost(
-                        browsing.browser, resolved.registry, resource_reader, browsing.accounts
+                        browsing.browser,
+                        resolved.registry,
+                        resource_reader,
+                        browsing.accounts,
                     )
             orchestrator = AnswerOrchestrator(
                 synthesizer=self._models.answer_synthesizer(query_profile),
@@ -2307,7 +2699,9 @@ class AnswerExecutor:
                     SubagentHost(
                         max_concurrency=self._settings.child_concurrency,
                         guidance_timeout_seconds=self._settings.child_guidance_timeout_seconds,
-                        model_guidance=child_model_guidance(pinned_models),
+                        model_guidance=child_model_guidance(
+                            pinned_models, effort_ceiling=effort_ceiling
+                        ),
                     )
                     if resolved_mode == "research"
                     else None
@@ -2334,6 +2728,9 @@ class AnswerExecutor:
                     for pin in pinned_models
                 },
                 skills=skills,
+                protected_index=self._protected_index,
+                connection_surface=connection_surface,
+                mcp_resource_host=mcp_resource_host,
             )
             orchestrated_run = OrchestratorRun(
                 orchestrator=orchestrator,
@@ -2406,6 +2803,25 @@ class AnswerExecutor:
             content_by_resource[reference.resource_id] = content
         return content_by_resource
 
+    async def _held_image_ids(self, session: RunSession, answer: str) -> frozenset[str]:
+        """The ids of the images this Run attached for its Model, as its run-resource route serves.
+
+        Read from the Run's stored rows rather than any one tool's memory, so a screenshot, a viewed
+        picture, a workspace image and a Child's attachment count alike, in a Fast Run as in a
+        Research Run. Only an Answer that places an ``evidence:`` id needs them.
+        """
+        if "evidence:" not in answer.casefold():
+            return frozenset()
+        rows = await self._store.list_fetched_resources(
+            owner_id=session.owner_id, run_id=session.run_id
+        )
+        return frozenset(
+            row.resource_id
+            for row in rows
+            if row.capabilities.get("resource_kind") == "tool_attachment"
+            and row.mime_type.lower().startswith("image/")
+        )
+
     async def _restore_registry_fetches(
         self,
         registry: ResourceRegistry,
@@ -2459,6 +2875,7 @@ class AnswerExecutor:
                     mime_type=resource.mime_type,
                     content=content,
                     aliases=raw_aliases,
+                    sources=declared_sources(capabilities),
                 )
                 continue
             origin = str(capabilities.get("admission_origin") or "")
@@ -2496,7 +2913,12 @@ class AnswerExecutor:
                         "A durable Web resource catalog entry is invalid.",
                     ) from exc
                 continue
-            if acquisition not in {"direct_http", "exa_extract", "tavily_extract"}:
+            if acquisition not in {
+                "direct_http",
+                "exa_extract",
+                "tavily_extract",
+                "deepseek_extract",
+            }:
                 raise RunExecutionError(
                     "run_execution_failed",
                     "A durable Web resource catalog entry is invalid.",
@@ -2687,7 +3109,7 @@ def _stream_call(stream: object) -> dict[str, Any] | None:
     """The ``call`` a Fast answer's stream states for the answer it produced, if it states one.
 
     Fast answers on the query role; the stream holds the request's digests and, once it has
-    ended, the model and parameters of the attempt that made it (ADR 0041).
+    ended, the model and parameters of the attempt that made it (ADR 0043).
     """
     pending = getattr(stream, "call", None)
     return pending.payload(role="query") if isinstance(pending, PendingCall) else None
@@ -2954,9 +3376,18 @@ def _publication_attachments(
             content_digest=record.content_digest,
             size_bytes=record.size_bytes,
             presentation=record.presentation,  # type: ignore[arg-type]
+            sources=record.sources,
         )
         for record in records
     )
+
+
+def _sealed_artifact_names(orchestrator: object | None) -> frozenset[str]:
+    """The built-in sealed artifact names, or empty when this fake/child has no catalog."""
+    getter = getattr(orchestrator, "sealed_artifact_names", None)
+    if not callable(getter):
+        return frozenset()
+    return frozenset(cast("frozenset[str]", getter()))
 
 
 async def _publication_plan(
@@ -2966,6 +3397,9 @@ async def _publication_plan(
     attachments: Sequence[ArtifactAttachment],
     limits: PublicationLimits,
     contexts: RetrievalContexts,
+    protected_digests: Collection[str] = frozenset(),
+    protected_index: Callable[[], ProtectedTextIndex] | None = None,
+    protected_text_exempt_names: Collection[str] = (),
 ) -> PublicationPlan:
     if not isinstance(root, Path):
         return PublicationPlan(answer=answer)
@@ -2978,6 +3412,9 @@ async def _publication_plan(
         attachments=attachments,
         limits=limits,
         contexts=contexts,
+        protected_digests=protected_digests,
+        protected_index=protected_index,
+        protected_text_exempt_names=protected_text_exempt_names,
     )
 
 
@@ -3050,6 +3487,7 @@ def _stage_publications(
                 relative_path=item.relative_path,
                 presentation=item.presentation,
                 label=labels.get(item.resource_id) or item.filename,
+                declared_sources=tuple(plan.sources_by_root.get(item.resource_id, ())),
                 view=(
                     tuple(
                         attached_resource_update(effect, session_id=session_id, intent_id=None)
@@ -3137,33 +3575,66 @@ __all__ = [
 ]
 
 
+def _pin_for(pins: tuple[PinnedModelProfile, ...], role: ChatModelSelector) -> PinnedModelProfile:
+    """The pin a Run holds for one model role; an accepted Run holds one for every role."""
+    return next(pin for pin in pins if pin.role == role)
+
+
+def _agent_reasoning_request(
+    pin: PinnedModelProfile,
+    *,
+    chosen: ReasoningLevel | None,
+    ceiling: AnswerEffort,
+    owns_reasoning: bool,
+) -> ReasoningLevel | None:
+    """The level to override one role's model with, or None to leave it at its own.
+
+    An agent runs at the level its caller chose, else at the one its role was configured with,
+    and never above the ceiling pinned with its Run. A role that owns its reasoning through raw
+    model kwargs takes no typed level at all, so neither a choice nor a ceiling reaches it.
+    """
+    if owns_reasoning:
+        return None
+    configured = pin.agentic_reasoning
+    level = request_under_ceiling(pin.profile.reasoning, chosen or configured, ceiling)
+    return level if chosen is not None or level != configured else None
+
+
 def _agent_effort_trace(
     effort: AnswerEffort | None,
+    ceiling: AnswerEffort,
     resolved_mode: ResolvedMode,
     profile: ModelProfile | None,
     raw_reasoning_keys: tuple[str, ...] = (),
-) -> dict[str, str | None] | None:
-    """Return the chosen agent effort and what the answering model did with it.
+    configured: ReasoningLevel | None = None,
+) -> dict[str, str | bool | None] | None:
+    """Return the chosen agent effort, the ceiling over it, and what the model did with them.
 
     A chosen effort never fails a run: it is applied, clamped to the nearest level the
-    model's ladder has, or ignored. Every ending is stated, because the stored effort
-    alone misreports a clamped run and says nothing about a choice that never applied —
-    a Fast answer enters no agent loop, a role that owns reasoning through raw model
-    kwargs takes no typed level, and a model that names no level has nothing to clamp to.
+    model's ladder has, lowered to the ceiling, or ignored. Every ending is stated, because
+    the stored effort alone misreports a clamped run and says nothing about a choice that
+    never applied — a Fast answer enters no agent loop, a role that owns reasoning through
+    raw model kwargs takes no typed level, and a model that names no level has nothing to
+    clamp to. A model that offers nothing at or below the ceiling runs at its lowest level,
+    which ``above_ceiling`` says. A Run that chose nothing and has no ceiling says nothing.
     """
-    if effort is None:
+    if effort is None and ceiling == "max":
         return None
+    stated: dict[str, str | bool | None] = {"requested": effort, "ceiling": ceiling}
     if resolved_mode != "research":
-        return {"requested": effort, "effective": None, "ignored": "fast"}
+        return {**stated, "effective": None, "ignored": "fast"}
     if raw_reasoning_keys:
-        return {"requested": effort, "effective": None, "ignored": "raw_kwargs"}
+        return {**stated, "effective": None, "ignored": "raw_kwargs"}
     if profile is None:
-        return {"requested": effort, "effective": None}
+        return {**stated, "effective": None}
+    level = request_under_ceiling(profile.reasoning, effort or configured, ceiling)
     try:
-        resolved = resolve_reasoning(profile.reasoning, effort)
+        resolved = resolve_reasoning(profile.reasoning, level)
     except ReasoningConfigurationError:
-        return {"requested": effort, "effective": None, "ignored": "no_level"}
-    return {
-        "requested": effort,
-        "effective": None if resolved is None else resolved.effective,
-    }
+        return {**stated, "effective": None, "ignored": "no_level"}
+    if resolved is None:
+        return {**stated, "effective": None, "ignored": "no_level"}
+    stated["effective"] = resolved.effective
+    if REASONING_LEVELS.index(resolved.effective) > REASONING_LEVELS.index(ceiling):
+        stated["above_ceiling"] = True
+    return stated

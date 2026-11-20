@@ -10,10 +10,9 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from dlightrag.application.retrieval import (
-    PinnedRetrievalModel,
+from dlightrag.application.retrieval.execution import PinnedRetrievalModel, RetrievalExecutor
+from dlightrag.application.retrieval.service import (
     ProjectedRetrieval,
-    RetrievalExecutor,
     RetrievalInputError,
     RetrievalService,
     RetrievalSettings,
@@ -25,7 +24,9 @@ from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY, NoopTelemetry
 from dlightrag.engine.dependencies import DependencyRetriesExhausted, ProviderUnavailableError
-from dlightrag.engine.rag.retrieval import RetrievalResult
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalResult,
+)
 from dlightrag.engine.runtime.errors import RunExecutionError
 from dlightrag.engine.runtime.records import (
     Deferred,

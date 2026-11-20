@@ -21,8 +21,10 @@ import pytest
 from docx import Document
 
 from dlightrag.adapters.postgres.runtime.run_blob_store import PGRunBlobStore
-from dlightrag.engine.agent.environment import SearchToolchain
 from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
+from dlightrag.engine.agent.environment.toolchain import (
+    SearchToolchain,
+)
 from dlightrag.engine.agent.session.fold import PriorTurns, project_session_messages
 from dlightrag.engine.agent.session.ids import LaneId
 from dlightrag.engine.agent.tool_content import tool_content_attachments
@@ -55,7 +57,7 @@ from dlightrag.engine.answer.execution.resources import (
     AnswerResourceResolver,
     AnswerResourceSettings,
 )
-from dlightrag.engine.answer.fast import ensure_session_lane
+from dlightrag.engine.answer.fast.session_host import ensure_session_lane
 from dlightrag.engine.answer.highlights import SemanticHighlightSettings
 from dlightrag.engine.answer.images import AnswerImageBudget, AnswerImagePolicy
 from dlightrag.engine.answer.model_runtime import (
@@ -63,7 +65,7 @@ from dlightrag.engine.answer.model_runtime import (
     AnswerModelRuntimeSettings,
     WebSourceRuntimeSettings,
 )
-from dlightrag.engine.answer.orchestration import AnswerOrchestrator
+from dlightrag.engine.answer.orchestration.orchestrator import AnswerOrchestrator
 from dlightrag.engine.answer.research.persistence import ResearchRunStore
 from dlightrag.engine.answer.research.runtime import (
     FetchedResourceBuffer,
@@ -83,8 +85,12 @@ from dlightrag.engine.answer.resources.registry import (
 from dlightrag.engine.answer.runs.routing import RoutingAcceptance
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 from dlightrag.engine.answer.tools.subagents import SubagentHost
-from dlightrag.engine.answer.web_sources import WebExtractResult
-from dlightrag.engine.rag.retrieval import RetrievalResult
+from dlightrag.engine.answer.web_sources.contracts import (
+    WebExtractResult,
+)
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalResult,
+)
 from dlightrag.engine.runtime.coordinator import RunCoordinator
 from tests.integration.run_runtime_pg_harness import run_envelope
 from tests.integration.test_attachment_replay_pg import (  # noqa: F401

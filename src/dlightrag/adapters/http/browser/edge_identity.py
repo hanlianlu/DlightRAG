@@ -14,14 +14,14 @@ missing or unverifiable credential is a rejection.
 from collections.abc import Callable
 from typing import Literal
 
-from starlette.requests import Request
+from starlette.requests import HTTPConnection
 
-from dlightrag.application.access import UserContext
 from dlightrag.application.access.authentication import (
     AuthenticationError,
     AuthenticationSettings,
     authenticate_bearer_token,
 )
+from dlightrag.application.access.principal import UserContext
 
 type EdgeIdentityErrorKind = Literal[
     "missing_credential",
@@ -39,23 +39,23 @@ class EdgeIdentityError(RuntimeError):
         self.kind: EdgeIdentityErrorKind = kind
 
 
-def _cloudflare_token(request: Request) -> str | None:
+def _cloudflare_token(request: HTTPConnection) -> str | None:
     """Cloudflare Access: the ``Cf-Access-Jwt-Assertion`` header, else the ``CF_Authorization`` cookie."""
     return request.headers.get("Cf-Access-Jwt-Assertion") or request.cookies.get("CF_Authorization")
 
 
-def _azure_token(request: Request) -> str | None:
+def _azure_token(request: HTTPConnection) -> str | None:
     """Azure Easy Auth forwards the AAD ID token; its unsigned principal header is never read."""
     return request.headers.get("X-MS-TOKEN-AAD-ID-TOKEN")
 
 
-def _aws_token(request: Request) -> str | None:
+def _aws_token(request: HTTPConnection) -> str | None:
     """Amplify Hosting auth and CloudFront Authorization@Edge forward the IdP JWT as a bearer."""
     header = request.headers.get("Authorization", "")
     return header.removeprefix("Bearer ") if header.startswith("Bearer ") else None
 
 
-_EDGE_TOKENS: dict[str, Callable[[Request], str | None]] = {
+_EDGE_TOKENS: dict[str, Callable[[HTTPConnection], str | None]] = {
     "cloudflare": _cloudflare_token,
     "azure": _azure_token,
     "aws": _aws_token,
@@ -68,7 +68,7 @@ _ERROR_KINDS: dict[str, EdgeIdentityErrorKind] = {
 
 
 def authenticate_edge(
-    request: Request, *, edge: str, settings: AuthenticationSettings
+    request: HTTPConnection, *, edge: str, settings: AuthenticationSettings
 ) -> UserContext:
     """Verify the token the edge put on this request into the caller it names."""
     raw_token = _EDGE_TOKENS[edge](request)

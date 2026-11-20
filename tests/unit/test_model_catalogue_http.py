@@ -11,9 +11,9 @@ from fastapi.testclient import TestClient
 
 from dlightrag.adapters.http.errors import install_error_handlers
 from dlightrag.adapters.http.rest.routes import model_catalogue as routes
-from dlightrag.application.access import UserContext
-from dlightrag.application.config import DlightragConfig
-from dlightrag.application.model_catalogue import (
+from dlightrag.application.access.principal import UserContext
+from dlightrag.application.config.sections import DlightragConfig
+from dlightrag.application.model_catalogue.service import (
     ModelCatalogueEntryView,
     ModelCatalogueReadOnlyError,
     ModelCatalogueRevisionConflict,

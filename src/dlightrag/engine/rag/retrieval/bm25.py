@@ -7,9 +7,19 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from dlightrag.engine.rag.retrieval import ContextRow, MetadataScope, format_bm25_top, rrf_fuse
 from dlightrag.engine.rag.retrieval.filtering import current_filter_stats
-from dlightrag.engine.rag.retrieval.language import BM25LanguageClassifier, normalize_language_code
+from dlightrag.engine.rag.retrieval.fusion import (
+    format_bm25_top,
+    rrf_fuse,
+)
+from dlightrag.engine.rag.retrieval.language import (
+    BM25LanguageClassifier,
+    normalize_language_code,
+)
+from dlightrag.engine.rag.retrieval.models import (
+    ContextRow,
+    MetadataScope,
+)
 from dlightrag.engine.rag.retrieval.ports import BM25ProfileSearch
 
 logger = logging.getLogger(__name__)

@@ -14,14 +14,21 @@ from httpx import ASGITransport, AsyncClient
 
 from dlightrag.adapters.http.rest.auth import get_current_user
 from dlightrag.adapters.http.server import create_app
-from dlightrag.application.access import UserContext, owner_id_from_user
-from dlightrag.application.answer_runs import (
-    AnswerConnectionsChangedError,
-    ChildRosterCursorCodec,
-    ChildRosterPage,
+from dlightrag.application.access.principal import (
+    UserContext,
+    owner_id_from_user,
 )
-from dlightrag.application.config import DlightragConfig
+from dlightrag.application.answer_runs.child_roster import ChildRosterCursorCodec, ChildRosterPage
+from dlightrag.application.answer_runs.service import (
+    ActiveRunLimitError,
+    AnswerConnectionsChangedError,
+)
+from dlightrag.application.config.sections import DlightragConfig
+from dlightrag.application.policies.service import (
+    PolicyUnreadableError,
+)
 from dlightrag.application.runs import IdempotencyKeyConflict, RunCancellation, RunView
+from dlightrag.engine.answer.errors import ACTIVE_RUN_LIMIT_MESSAGE
 from dlightrag.engine.runtime.records import (
     RunAccessScope,
     RunCreation,
@@ -175,6 +182,7 @@ class _RunApplication:
         request: Any,
         *,
         owner_id: str,
+        caller: Any,
         idempotency_key: str | None = None,
         auth_mode: str = "none",
     ) -> RunCreation:
@@ -186,6 +194,7 @@ class _RunApplication:
         self.created.append(
             {
                 "owner_id": owner_id,
+                "caller": caller,
                 "request": request,
                 "idempotency_key": idempotency_key,
             }
@@ -369,12 +378,6 @@ def _sse_frames(text: str) -> list[dict[str, str]]:
 # ---------------------------------------------------------------------------
 
 
-def test_answer_request_has_no_stream_field() -> None:
-    from dlightrag.adapters.http.rest.models import AnswerRequest
-
-    assert "stream" not in AnswerRequest.model_fields
-
-
 class TestCreate:
     async def test_json_create_returns_202_descriptor(
         self, client: AsyncClient, run_application: _RunApplication
@@ -391,6 +394,7 @@ class TestCreate:
             "status_url": f"/runs/{_RUN_ID}",
             "events_url": f"/runs/{_RUN_ID}/events",
             "cancel_url": f"/runs/{_RUN_ID}",
+            "session_id": None,
             "parent_run_id": None,
             "continuation_kind": None,
         }
@@ -488,6 +492,49 @@ class TestCreate:
 
         assert response.status_code == 409
         assert response.json() == {"detail": detail, "error_type": "conflict"}
+
+    async def test_the_callers_own_limit_is_a_429_under_its_own_kind(
+        self, client: AsyncClient, run_application: _RunApplication
+    ) -> None:
+        run_application.acceptance_error = ActiveRunLimitError(2)
+
+        response = await client.post("/answer", json={"query": "hello"})
+
+        assert response.status_code == 429
+        assert response.json() == {
+            "detail": ACTIVE_RUN_LIMIT_MESSAGE,
+            "error_type": "unavailable",
+            "error_kind": "active_run_limit",
+        }
+
+    async def test_a_policy_that_cannot_be_read_refuses_the_submission_as_unavailable(
+        self, client: AsyncClient, run_application: _RunApplication
+    ) -> None:
+        run_application.acceptance_error = PolicyUnreadableError(
+            "The stored 'agent_effort_ceiling' runtime policy no longer fits its document "
+            "(default); it is unavailable until an administrator replaces it"
+        )
+
+        response = await client.post("/answer", json={"query": "hello"})
+
+        assert response.status_code == 503
+        assert response.json()["error_type"] == "unavailable"
+        assert "agent_effort_ceiling" in response.json()["detail"]
+
+    async def test_the_submission_is_made_for_the_caller_the_token_names(
+        self, _app: FastAPI, client: AsyncClient, run_application: _RunApplication
+    ) -> None:
+        """A Runtime Policy names people by their verified claims, so acceptance is handed
+        the caller itself, and not only the owner their identity projects to."""
+        signed_in_as = UserContext(
+            user_id="intern", auth_mode="jwt", claims={"email": "intern@example.com"}
+        )
+        _app.dependency_overrides[get_current_user] = lambda: signed_in_as
+
+        response = await client.post("/answer", json={"query": "hello"})
+
+        assert response.status_code == 202
+        assert run_application.created[0]["caller"] == signed_in_as
 
     @pytest.mark.parametrize("key", ["", "   "])
     async def test_a_blank_idempotency_key_is_no_key(
@@ -1045,6 +1092,43 @@ async def test_svg_artifact_is_inline_only_under_an_inert_document_policy(
     assert response.headers["x-content-type-options"] == "nosniff"
 
 
+async def test_pdf_artifact_streams_inline_without_a_sandboxed_document_policy(
+    client: AsyncClient, run_application: _RunApplication
+) -> None:
+    """The PDF view depends on this route, not on a sandboxed frame.
+
+    Chromium refuses its PDF viewer in a sandboxed frame, so the browser shows the frame
+    unsandboxed and what keeps it a document is only what is asserted here: the media type
+    the browser trusts, `inline` so it is displayed rather than downloaded, and `nosniff` so
+    the bytes can never be re-read as HTML. A `Content-Security-Policy: sandbox` here would
+    put the viewer back to a broken-page icon.
+    """
+    content = b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n"
+    _publish_test_artifact(
+        run_application,
+        media_type="application/pdf",
+        presentation="pdf",
+        filename="report.pdf",
+        content=content,
+    )
+
+    response = await client.get(f"/answer/{_RUN_ID}/artifacts/{_ARTIFACT_ID}")
+
+    assert response.status_code == 200
+    assert response.content == content
+    assert response.headers["content-type"].startswith("application/pdf")
+    assert response.headers["content-disposition"].startswith("inline")
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["accept-ranges"] == "bytes"
+    assert "content-security-policy" not in response.headers
+
+    attachment = await client.get(
+        f"/answer/{_RUN_ID}/artifacts/{_ARTIFACT_ID}", params={"download": "1"}
+    )
+
+    assert attachment.headers["content-disposition"].startswith("attachment")
+
+
 async def test_video_artifact_streams_inline_for_a_native_player(
     client: AsyncClient, run_application: _RunApplication
 ) -> None:
@@ -1082,46 +1166,31 @@ async def test_video_artifact_streams_inline_for_a_native_player(
     assert downloaded.headers["content-disposition"].startswith("attachment")
 
 
-async def test_open_ended_range_returns_206_with_a_content_range(
-    client: AsyncClient, run_application: _RunApplication
+@pytest.mark.parametrize(
+    ("range_header", "window", "content_range"),
+    [
+        ("bytes=5-", b"56789", "bytes 5-9/10"),
+        ("bytes=-4", b"6789", "bytes 6-9/10"),
+        ("bytes=2-5", b"2345", "bytes 2-5/10"),
+    ],
+    ids=["open-ended", "suffix", "closed"],
+)
+async def test_a_satisfiable_range_returns_206_with_exactly_its_window(
+    client: AsyncClient,
+    run_application: _RunApplication,
+    range_header: str,
+    window: bytes,
+    content_range: str,
 ) -> None:
     _publish_test_artifact(run_application)
 
     response = await client.get(
-        f"/answer/{_RUN_ID}/artifacts/{_ARTIFACT_ID}", headers={"Range": "bytes=5-"}
+        f"/answer/{_RUN_ID}/artifacts/{_ARTIFACT_ID}", headers={"Range": range_header}
     )
 
     assert response.status_code == 206
-    assert response.content == b"56789"
-    assert response.headers["content-range"] == "bytes 5-9/10"
-
-
-async def test_suffix_range_returns_the_last_bytes(
-    client: AsyncClient, run_application: _RunApplication
-) -> None:
-    _publish_test_artifact(run_application)
-
-    response = await client.get(
-        f"/answer/{_RUN_ID}/artifacts/{_ARTIFACT_ID}", headers={"Range": "bytes=-4"}
-    )
-
-    assert response.status_code == 206
-    assert response.content == b"6789"
-    assert response.headers["content-range"] == "bytes 6-9/10"
-
-
-async def test_closed_range_returns_exactly_the_window(
-    client: AsyncClient, run_application: _RunApplication
-) -> None:
-    _publish_test_artifact(run_application)
-
-    response = await client.get(
-        f"/answer/{_RUN_ID}/artifacts/{_ARTIFACT_ID}", headers={"Range": "bytes=2-5"}
-    )
-
-    assert response.status_code == 206
-    assert response.content == b"2345"
-    assert response.headers["content-range"] == "bytes 2-5/10"
+    assert response.content == window
+    assert response.headers["content-range"] == content_range
 
 
 async def test_unsatisfiable_range_is_416_with_the_total(
@@ -1164,6 +1233,8 @@ class TestAgentControls:
         assert transcript.json()["messages"] == [{"role": "user", "content": "hi"}]
         assert children.json()["children"][0]["child_session_id"] == "child-1"
         assert run_application.controls == ["focus", "follow:next", "fork:branch"]
+        # A continuation is accepted under the Runtime Policies of whoever continues.
+        assert [item["caller"] for item in run_application.continuations] == [_ANON, _ANON]
 
     async def test_rest_child_control_and_guidance_reply_require_idempotency(
         self, client: AsyncClient, run_application: _RunApplication
@@ -1345,7 +1416,7 @@ async def test_child_control_rejects_empty_content_before_application(
 async def test_answer_control_input_errors_are_the_callers_to_fix(
     _app: FastAPI, test_config: DlightragConfig
 ) -> None:
-    from dlightrag.application.answer_runs import AnswerRequestError
+    from dlightrag.application.answer_runs.service import AnswerRequestError
 
     application = application_double(test_config)
     application.answers.control_child.side_effect = AnswerRequestError(

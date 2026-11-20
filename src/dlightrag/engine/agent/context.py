@@ -4,8 +4,6 @@
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from dlightrag.engine.ai.tokens import estimate_messages_tokens
-
 type ContextAuthority = Literal[
     "system",
     "conversation",
@@ -56,16 +54,11 @@ class ContextContribution:
         if not self.source.strip():
             raise ValueError("context contribution source cannot be empty")
 
-    @property
-    def estimated_tokens(self) -> int:
-        return estimate_messages_tokens(list(self.messages))
-
 
 @dataclass(frozen=True, slots=True)
 class ProjectedContext:
     messages: tuple[dict[str, Any], ...]
     sources: tuple[str, ...]
-    estimated_tokens: int
 
 
 class ContextProjector:
@@ -80,7 +73,6 @@ class ContextProjector:
         return ProjectedContext(
             messages=messages,
             sources=tuple(item.source for _, item in ordered),
-            estimated_tokens=estimate_messages_tokens(list(messages)),
         )
 
 

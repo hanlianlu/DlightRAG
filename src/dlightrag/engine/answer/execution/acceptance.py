@@ -12,20 +12,21 @@ once rather than remembered by each side.
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from dlightrag.engine.agent.session.fold import PriorTurns, WorkingContextProjection
-from dlightrag.engine.agent.tools import ToolDeclaration
+from dlightrag.engine.agent.tools.contracts import ToolDeclaration, declaration_tokens
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ContextPolicy, ModelProfile
 from dlightrag.engine.ai.settings import ChatModelSelector
-from dlightrag.engine.ai.tokens import estimate_tokens
 from dlightrag.engine.answer.errors import AnswerInputOverflowError, UnsupportedAnswerModeError
 from dlightrag.engine.answer.evidence import EvidenceLedger
-from dlightrag.engine.answer.execution.connection_binding import is_connection_tool
+from dlightrag.engine.answer.execution.connection_binding import (
+    ConnectionSurface,
+    is_connection_tool,
+)
 from dlightrag.engine.answer.execution.input import AttachmentReference
 from dlightrag.engine.answer.history import (
     HistoryInputMeasure,
@@ -40,6 +41,8 @@ from dlightrag.engine.answer.research.context import ContextAssembler
 from dlightrag.engine.answer.resources.models import ResourceManifestEntry
 from dlightrag.engine.answer.router import AnswerModeRouter
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
+from dlightrag.engine.answer.tools.mcp_resources import RESOURCE_TOOL_NAMES
+from dlightrag.engine.answer.tools.memory import MEMORY_REMEMBER
 
 if TYPE_CHECKING:
     from dlightrag.engine.rag.retrieval.planner import RetrievalPlanner
@@ -93,18 +96,12 @@ def research_history_input_measure(
     resource_manifest: tuple[ResourceManifestEntry, ...],
     image_budget: AnswerImageBudget | None,
     tools: Sequence[ToolDeclaration],
+    connection_surface: Sequence[ConnectionSurface] = (),
     memory_text: str = "",
     episodic_summary: str = "",
 ) -> Callable[..., int]:
     """Return the exact zero-evidence Research seed serializer used at acceptance."""
-    tool_schema_tokens = estimate_tokens(
-        json.dumps(
-            [asdict(tool.definition) for tool in tools],
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-    )
+    tool_schema_tokens = declaration_tokens(tool.definition for tool in tools)
 
     def measure(
         history: list[dict[str, Any]],
@@ -123,11 +120,13 @@ def research_history_input_measure(
             query_images=query_images,
             resource_manifest=resource_manifest,
             memory_text=memory_text,
-            profile_memory_write=any(tool.name == "remember" for tool in tools),
+            profile_memory_write=any(tool.name == MEMORY_REMEMBER for tool in tools),
             artifact_publication=any(tool.name == "attach_artifact" for tool in tools),
             # The measurement must carry the same habit the run's own request does.
             run_notes=any(tool.name == "write" for tool in tools),
             connection_tools=any(is_connection_tool(tool.name) for tool in tools),
+            connection_surface=connection_surface,
+            mcp_resources=any(tool.name in RESOURCE_TOOL_NAMES for tool in tools),
         )
         return (
             context.measure_control_input(
@@ -148,6 +147,7 @@ class ResearchSeed:
     query_images: list[dict[str, Any]] | None
     resource_manifest: tuple[ResourceManifestEntry, ...]
     image_budget: AnswerImageBudget | None
+    connection_surface: tuple[ConnectionSurface, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,6 +220,7 @@ class AnswerHistoryBudget:
                     resource_manifest=seed.resource_manifest,
                     image_budget=seed.image_budget,
                     tools=seed.tools,
+                    connection_surface=seed.connection_surface,
                     memory_text=self.memory_text,
                     episodic_summary=self.episodic_summary,
                 ),

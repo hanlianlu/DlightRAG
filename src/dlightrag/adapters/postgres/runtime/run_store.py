@@ -10,6 +10,7 @@ one universal operational-storage interface.
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -18,11 +19,15 @@ from typing import Any, Literal, cast
 import asyncpg
 
 from dlightrag.adapters.postgres.answer.agent_accounts import (
-    AGENT_ACCOUNT_ACTIVITY_AND_SIGN_UPS_DDL,
     AGENT_ACCOUNT_SETTINGS_DDL,
     AGENT_ACCOUNT_SETTINGS_SCHEMA_TABLE,
     AGENT_ACCOUNTS_DDL,
     AGENT_ACCOUNTS_SCHEMA_TABLE,
+)
+from dlightrag.adapters.postgres.answer.agentspace import PGAgentspaceStore
+from dlightrag.adapters.postgres.answer.goals import (
+    ANSWER_GOALS_DDL,
+    ANSWER_GOALS_SCHEMA_TABLE,
 )
 from dlightrag.adapters.postgres.answer.memory_settings import (
     MEMORY_SETTINGS_DDL,
@@ -33,7 +38,6 @@ from dlightrag.adapters.postgres.answer.session_repository import (
     PGProgressStore,
     write_fetched_resources,
 )
-from dlightrag.adapters.postgres.answer.workspace import PGWorkspaceStore
 from dlightrag.adapters.postgres.connections import PGConnectionPinWriter
 from dlightrag.adapters.postgres.core._channels import RUN_CANCEL_CHANNEL
 from dlightrag.adapters.postgres.core._migrations import (
@@ -53,14 +57,26 @@ from dlightrag.adapters.postgres.runtime._child import (
     _LOCK_CHILD_SESSION,
     _LOCK_CONTROL_RUN,
     _NEXT_CONTROL_SEQUENCE,
-    _SELECT_AGENT_TRANSCRIPT,
+    _SELECT_AGENT_TRANSCRIPT_LANE,
+    _SELECT_AGENT_TRANSCRIPT_RUN,
     _SELECT_PENDING_CHILD_CONTROLS,
     _SELECT_PENDING_PARENT_CONTROLS,
+    _SELECT_RUN_TIMELINE_STEPS,
+    _SELECT_RUN_TIMELINE_VERSION,
+    _SELECT_TIMELINE_ENTRIES,
     PENDING_CONTROL_READ_LIMIT,
     ChildRunStoreMixin,
     cancellation_notify_key,
 )
+from dlightrag.adapters.postgres.runtime._feedback import FeedbackRunStoreMixin
 from dlightrag.adapters.postgres.runtime._lease import hold_run_lease
+from dlightrag.adapters.postgres.runtime._policies import PolicyRunStoreMixin
+from dlightrag.adapters.postgres.runtime._privacy import PrivacyRunStoreMixin
+from dlightrag.adapters.postgres.runtime._session_memory import (
+    SESSION_MEMORY_PROGRESS_DDL,
+    SESSION_MEMORY_PROGRESS_SCHEMA_TABLE,
+    SessionMemoryRunStoreMixin,
+)
 from dlightrag.adapters.postgres.runtime._terminal import (
     SETTLE_TERMINATED_RUN_CHILDREN,
     TerminalStatus,
@@ -70,22 +86,30 @@ from dlightrag.adapters.postgres.runtime.browser_leases import (
     AGENT_BROWSER_LEASES_DDL,
     AGENT_BROWSER_LEASES_SCHEMA_TABLE,
 )
-from dlightrag.adapters.postgres.runtime.run_blob_store import BlobSizeConflict, write_blob_content
+from dlightrag.adapters.postgres.runtime.run_blob_store import (
+    BlobSizeConflict,
+    write_blob_content,
+)
+from dlightrag.application.answer_runs.child_roster import stamp
+from dlightrag.application.answer_runs.service import TranscriptScope
+from dlightrag.application.runs import RunToolCall
 from dlightrag.engine.agent.session.ids import SessionId
 from dlightrag.engine.agent.tool_content import decode_tool_content, tool_content_message_fields
 from dlightrag.engine.answer.attachment_replay import AttachmentReplaySelection
 from dlightrag.engine.answer.execution.connection_binding import RunConnectionBinding
 from dlightrag.engine.answer.execution.lineage import ADOPTABLE_LINEAGE_KINDS
+from dlightrag.engine.answer.resources.lineage import declared_sources_capability
 from dlightrag.engine.answer.runs.routing import RoutingAcceptance, RoutingRecord
+from dlightrag.engine.runtime.agentspace import AgentspaceHeadCommit
 from dlightrag.engine.runtime.contracts import RunKind, RunLane, RunPhase
 from dlightrag.engine.runtime.errors import RunSchemaError
 from dlightrag.engine.runtime.policy import (
-    DEFAULT_RUN_RETENTION_SECONDS,
     MAX_RECLAIMS_WITHOUT_PROGRESS,
     RUN_ABANDONED_ERROR_KIND,
     RUN_LEASE_SECONDS,
 )
 from dlightrag.engine.runtime.records import (
+    ActiveRunLimitExceededError,
     CancellationOutcome,
     ClaimedRun,
     DeletedRun,
@@ -119,6 +143,8 @@ from dlightrag.engine.runtime.settlements import (
 
 RUN_MIGRATION_SCOPE = "runs"
 
+logger = logging.getLogger(__name__)
+
 # Resource kinds a later Run may adopt from an earlier Run on the same Session.
 #: What a later Run of the same Session may adopt by naming a handle. It lives in
 #: the engine beside the loader that gates on it, and one declaration drives both
@@ -135,15 +161,26 @@ def _parse_uuid(value: str) -> uuid.UUID | None:
 
 _ABANDONED_ERROR_MESSAGE = "Run exceeded its reclaim-without-progress bound."
 _BATCH_LIMIT = 200
+#: How long a finished Run keeps its evidence whole and the working state its children
+#: ran on, before the maintenance passes may drop what no reader needs again.
+FINISHED_RUN_GRACE_SECONDS = 900.0
 _EVENT_PAGE_LIMIT = 500
 DEFAULT_QUERY_MAX_NONTERMINAL_RUNS = 30_000
 # Validated by the deterministic bounded-control-plane campaign; see
 # docs/run-runtime.md#load-evidence.
 DEFAULT_CORPUS_MUTATION_MAX_NONTERMINAL_RUNS = 1_000
 
-# Every index the runs scope owns, declared once. The baseline creates each one; a
-# later migration that introduced an index repeats its statement for databases
-# initialized before it; readers verify every one by name.
+# Every index the runs scope owns, declared once: the baseline creates each one and readers
+# verify every one by name.
+_SESSION_ENTRIES_SEARCH_INDEX = IndexRequirement(
+    # A search reads the words the writer stored; trigrams serve patterns of three characters or
+    # more, which is every Latin word and phrase and no single Han character.
+    "idx_dlightrag_agent_session_entries_search",
+    "dlightrag_agent_session_entries",
+    # The operator class is qualified: a migration must not depend on the session's search_path,
+    # and every DlightRAG extension lives in `public`.
+    "USING gin (search_text public.gin_trgm_ops)",
+)
 _RUNS_CLAIM_INDEX = IndexRequirement(
     # Claim and sweep scan nonterminal rows oldest-first across every owner.
     "idx_dlightrag_runs_claim",
@@ -157,7 +194,7 @@ _RUNS_SUBMISSION_INDEX = IndexRequirement(
     unique=True,
 )
 # The one uniqueness of a bare run id; the Corpus Mutation window table's foreign
-# key to dlightrag_runs (run_id) relies on it (see the baseline below).
+# key to dlightrag_runs (run_id) relies on it.
 _RUNS_GLOBAL_ID_INDEX = IndexRequirement(
     "idx_dlightrag_runs_global_id", "dlightrag_runs", "(run_id)", unique=True
 )
@@ -179,6 +216,15 @@ _RUNS_MUTATION_FIFO_INDEX = IndexRequirement(
     "dlightrag_runs",
     "(owner_id, created_at, run_id)"
     " WHERE lane = 'corpus_mutation' AND status IN ('queued', 'running')",
+)
+_RUNS_OWNER_ACTIVE_INDEX = IndexRequirement(
+    # An owner's active-answer limit counts that owner's queued and running Answers under the
+    # lane's acceptance lock. Without this the count walks every non-terminal row of the
+    # deployment, or every Run the owner ever had; a deployment that tells no owners apart has
+    # one owner for all of them.
+    "idx_dlightrag_runs_owner_active",
+    "dlightrag_runs",
+    "(owner_id) WHERE run_kind = 'answer' AND status IN ('queued', 'running')",
 )
 _RUN_EVENTS_TERMINAL_INDEX = IndexRequirement(
     # Exactly one terminal event per run, enforced durably rather than by convention.
@@ -241,13 +287,29 @@ _CHILD_GUIDANCE_PENDING_INDEX = IndexRequirement(
     "dlightrag_answer_child_guidance",
     "(owner_id, run_id, status, expires_at)",
 )
+_SESSION_ENTRIES_RUN_INDEX = IndexRequirement(
+    "idx_dlightrag_agent_session_entries_run",
+    "dlightrag_agent_session_entries",
+    "(owner_id, run_id, sequence)",
+)
+_ROUTING_SESSION_INDEX = IndexRequirement(
+    # A Session's Answer Runs, found by the Session: the Session Memory sweep asks of each Session
+    # that is behind for its newest succeeded Run and whether any of its Runs is still live.
+    "idx_dlightrag_answer_run_routing_session",
+    "dlightrag_answer_run_routing",
+    "(owner_id, agent_session_id)",
+)
 _RUN_INDEXES = (
+    _ROUTING_SESSION_INDEX,
+    _SESSION_ENTRIES_RUN_INDEX,
     _RUNS_CLAIM_INDEX,
+    _SESSION_ENTRIES_SEARCH_INDEX,
     _RUNS_SUBMISSION_INDEX,
     _RUNS_GLOBAL_ID_INDEX,
     _RUNS_RETENTION_INDEX,
     _RUNS_CANCEL_PENDING_INDEX,
     _RUNS_MUTATION_FIFO_INDEX,
+    _RUNS_OWNER_ACTIVE_INDEX,
     _RUN_EVENTS_TERMINAL_INDEX,
     _RUN_ARTIFACTS_DIGEST_INDEX,
     _EVIDENCE_RUN_INDEX,
@@ -262,20 +324,8 @@ _RUN_INDEXES = (
 )
 
 # ─────────────────────────────────────────────────────────────────
-# Final clean-break baseline schema
+# Baseline schema
 # ─────────────────────────────────────────────────────────────────
-
-# A database that still holds dlightrag_answer_runs (created by releases 2.0.0
-# through 2.0.5 and never started by a later release) is not migrated: development
-# data is reset instead (docs/postgresql.md), so that table refuses startup with the
-# remedy.
-_PRE_RUNTIME_ANSWER_SCHEMA = "SELECT to_regclass('dlightrag_answer_runs') IS NOT NULL"
-_PRE_RUNTIME_ANSWER_SCHEMA_ERROR = (
-    "this database still holds dlightrag_answer_runs (created by DlightRAG 2.0.0-2.0.5 "
-    "and never started by a later release), which is not migrated; run a full "
-    "development reset (scripts/reset_development.py) and start a writer on the empty "
-    "database"
-)
 
 _CREATE_RUNS = """
 CREATE TABLE IF NOT EXISTS dlightrag_runs (
@@ -484,6 +534,10 @@ CREATE TABLE IF NOT EXISTS dlightrag_agent_session_entries (
     schema_version INTEGER     NOT NULL,
     timestamp      TIMESTAMPTZ NOT NULL,
     payload_json   JSONB       NOT NULL,
+    search_text    TEXT,
+    -- The Run that wrote this entry. A conversation's agent is one Session across all its Runs,
+    -- so without this fact every reader of one Run has to infer where that Run began.
+    run_id         UUID,
     PRIMARY KEY (owner_id, session_id, sequence),
     UNIQUE (entry_id),
     UNIQUE (owner_id, session_id, entry_id),
@@ -496,7 +550,7 @@ CREATE TABLE IF NOT EXISTS dlightrag_agent_session_entries (
     CONSTRAINT dlightrag_agent_session_entries_sequence_check CHECK (sequence >= 1),
     CONSTRAINT dlightrag_agent_session_entries_type_check CHECK (entry_type IN (
         'user_message', 'assistant_message', 'tool_result',
-        'control_message', 'compaction'
+        'control_message', 'delivery_warning', 'compaction'
     )),
     CONSTRAINT dlightrag_agent_session_entries_version_check CHECK (schema_version >= 1)
 )
@@ -554,6 +608,7 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_evidence (
     locator_digest  TEXT        NOT NULL,
     content         BYTEA       NOT NULL,
     locator         BYTEA       NOT NULL,
+    content_slimmed BOOLEAN     NOT NULL DEFAULT FALSE,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (owner_id, run_id, session_id, intent_id, result_ordinal),
     FOREIGN KEY (owner_id, run_id)
@@ -564,10 +619,6 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_evidence (
 )
 """
 
-# Nothing writes kind 'accepted_blob' any more: an accepted upload is its Run's
-# current_attachment artifact, which also holds its Blob. The checks still admit
-# the kind, because databases created before then keep those rows and those
-# checks, and narrowing them would need a migration.
 _CREATE_RESOURCES = """
 CREATE TABLE IF NOT EXISTS dlightrag_answer_resources (
     owner_id       TEXT        NOT NULL,
@@ -589,11 +640,9 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_resources (
     FOREIGN KEY (owner_id, run_id)
         REFERENCES dlightrag_runs (owner_id, run_id) ON DELETE CASCADE,
     CONSTRAINT dlightrag_answer_resources_kind_check
-        CHECK (kind IN ('accepted_blob', 'evidence', 'fetched_blob', 'committed_spill',
-                        'published_artifact')),
+        CHECK (kind IN ('evidence', 'fetched_blob', 'committed_spill', 'published_artifact')),
     CONSTRAINT dlightrag_answer_resources_blob_link_check
-        CHECK ((kind = 'accepted_blob' AND blob_digest IS NOT NULL)
-               OR (kind = 'fetched_blob'
+        CHECK ((kind = 'fetched_blob'
                    AND blob_digest IS NOT NULL AND locator_digest IS NOT NULL
                    AND (capabilities->>'resource_kind' IS DISTINCT FROM 'web'
                         OR source_locator IS NOT NULL))
@@ -823,6 +872,99 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_child_guidance (
 
 _CREATE_INDEXES = tuple(index.ddl for index in _RUN_INDEXES)
 
+_CREATE_SESSION_WORKSPACE_HEADS = """
+CREATE TABLE IF NOT EXISTS dlightrag_session_workspace_heads (
+    owner_id        TEXT        NOT NULL,
+    session_id      UUID        NOT NULL,
+    lane_id         TEXT        NOT NULL DEFAULT 'main',
+    head_run_id     UUID        NOT NULL,
+    manifest_digest TEXT        NOT NULL,
+    revision        BIGINT      NOT NULL DEFAULT 1,
+    committed_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (owner_id, session_id, lane_id),
+    FOREIGN KEY (owner_id, session_id)
+        REFERENCES dlightrag_agent_sessions (owner_id, session_id) ON DELETE CASCADE,
+    CONSTRAINT dlightrag_session_workspace_heads_revision_check CHECK (revision >= 1),
+    CONSTRAINT dlightrag_session_workspace_heads_digest_check
+        CHECK (manifest_digest ~ '^[0-9a-f]{64}$')
+)
+"""
+
+_CREATE_SESSION_WORK_HEADS = """
+CREATE TABLE IF NOT EXISTS dlightrag_session_work_heads (
+    owner_id      TEXT        NOT NULL,
+    session_id    UUID        NOT NULL,
+    active_run_id UUID,
+    revision      BIGINT      NOT NULL DEFAULT 1,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (owner_id, session_id),
+    CONSTRAINT dlightrag_session_work_heads_revision_check CHECK (revision >= 1)
+)
+"""
+
+_CREATE_SESSION_WORKSPACE_SNAPSHOTS = """
+CREATE TABLE IF NOT EXISTS dlightrag_session_workspace_snapshots (
+    owner_id        TEXT        NOT NULL,
+    session_id      UUID        NOT NULL,
+    run_id          UUID        NOT NULL,
+    parent_run_id   UUID,
+    manifest_digest TEXT        NOT NULL,
+    manifest_json   JSONB       NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (owner_id, session_id, run_id),
+    CONSTRAINT dlightrag_session_workspace_snapshots_session_fkey
+        FOREIGN KEY (owner_id, session_id)
+        REFERENCES dlightrag_agent_sessions (owner_id, session_id) ON DELETE CASCADE,
+    CONSTRAINT dlightrag_session_workspace_snapshots_digest_check
+        CHECK (manifest_digest ~ '^[0-9a-f]{64}$')
+)
+"""
+
+#: Every settled research Run keeps a restorable tree of what it left; the head pointer
+#: then names one of these snapshots. Written in the same terminal transaction.
+_INSERT_WORKSPACE_SNAPSHOT = """
+INSERT INTO dlightrag_session_workspace_snapshots
+    (owner_id, session_id, run_id, parent_run_id, manifest_digest, manifest_json)
+VALUES ($1, $2::uuid, $3::uuid, $4::uuid, $5, $6::jsonb)
+ON CONFLICT (owner_id, session_id, run_id) DO NOTHING
+"""
+
+#: One succeeded Run's staged tree becomes the Session's head only if the head is the
+#: one this Run read: a missing row is the first head, and a row that moved on is a CAS
+#: miss. The terminal transaction that settles the Run runs this, so a failed or
+#: cancelled Run can never move the pointer.
+_COMMIT_WORKSPACE_HEAD = """
+INSERT INTO dlightrag_session_workspace_heads AS heads (
+    owner_id, session_id, lane_id, head_run_id, manifest_digest, revision, committed_at
+)
+VALUES ($1, $2::uuid, $4, $3::uuid, $5, 1, NOW())
+ON CONFLICT (owner_id, session_id, lane_id) DO UPDATE SET
+    head_run_id = EXCLUDED.head_run_id,
+    manifest_digest = EXCLUDED.manifest_digest,
+    revision = heads.revision + 1,
+    committed_at = NOW()
+WHERE heads.head_run_id = $6::uuid
+RETURNING revision
+"""
+
+#: One restorable snapshot per settled phase is kept; the oldest beyond the bound are
+#: dropped here, and the next claim's prune removes their trees. The bound is a product
+#: constant like the Run tree clock: history enough to fork from, not a backup.
+_WORKSPACE_SNAPSHOT_HISTORY = 32
+
+_PRUNE_WORKSPACE_SNAPSHOTS = """
+DELETE FROM dlightrag_session_workspace_snapshots
+WHERE owner_id = $1
+  AND session_id = $2::uuid
+  AND run_id NOT IN (
+      SELECT run_id
+      FROM dlightrag_session_workspace_snapshots
+      WHERE owner_id = $1 AND session_id = $2::uuid
+      ORDER BY created_at DESC, run_id DESC
+      LIMIT $3
+  )
+"""
+
 _CREATE_WORKSPACE_INVENTORY = """
 CREATE TABLE IF NOT EXISTS dlightrag_answer_workspace_inventory (
     owner_id        TEXT        NOT NULL,
@@ -853,6 +995,9 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_artifact_attachments (
     presentation    TEXT        NOT NULL,
     session_id      UUID        NOT NULL,
     intent_id       UUID        NOT NULL,
+    -- The Artifact-root-relative paths this root was built from, published with it so a
+    -- later Run that reopens the product can re-run what produced it (ADR 0052).
+    sources         TEXT[]      NOT NULL DEFAULT '{}',
     attachment_order BIGINT     NOT NULL DEFAULT nextval(
         'dlightrag_answer_artifact_attachment_order_seq'
     ),
@@ -926,16 +1071,74 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_session_notes (
 )
 """
 
-# The baseline bakes the current schema directly into CREATE statements, so a fresh
-# database is complete once it has run. Later migrations advance databases
-# initialized before them, and each is a no-op on a fresh baseline; an integration
-# test holds both properties. Nothing here migrates a pre-RunRuntime schema.
+# What a thumb down has to say: one of the reasons the reader is offered, or words of their own. A
+# thumb up says nothing and is held to that above.
+_FEEDBACK_SAYS_WHY = "value = 'up' OR cardinality(reasons) >= 1 OR btrim(coalesce(note, '')) <> ''"
+
+# One reader's judgement of one answered message: the vote, why, and any words of their own.
+# It hangs off the Run, so deleting the Run takes the judgement with it, and it is keyed by the
+# message's own place in its Session, which never moves.
+_CREATE_ANSWER_FEEDBACK = f"""
+CREATE TABLE IF NOT EXISTS dlightrag_answer_feedback (
+    owner_id   TEXT        NOT NULL,
+    run_id     UUID        NOT NULL,
+    agent      TEXT        NOT NULL,
+    sequence   BIGINT      NOT NULL,
+    value      TEXT        NOT NULL,
+    reasons    TEXT[]      NOT NULL DEFAULT '{{}}',
+    note       TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (owner_id, run_id, agent, sequence),
+    FOREIGN KEY (owner_id, run_id)
+        REFERENCES dlightrag_runs (owner_id, run_id) ON DELETE CASCADE,
+    CONSTRAINT dlightrag_answer_feedback_value_check CHECK (value IN ('up', 'down')),
+    CONSTRAINT dlightrag_answer_feedback_note_check CHECK (note IS NULL OR length(note) <= 2000),
+    CONSTRAINT dlightrag_answer_feedback_says_why_check CHECK ({_FEEDBACK_SAYS_WHY}),
+    CONSTRAINT dlightrag_answer_feedback_sequence_check CHECK (sequence >= 1)
+)
+"""
+
+# The settings an administrator changes while the deployment runs: one document per policy,
+# replaced whole, which every request that depends on a policy reads afresh. A key is one the
+# application registers, so the table says only what a document is, and the application owns
+# what each one must hold.
+_CREATE_RUNTIME_POLICIES = """
+CREATE TABLE IF NOT EXISTS dlightrag_runtime_policies (
+    key        TEXT        NOT NULL,
+    value      JSONB       NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_by TEXT        NOT NULL,
+    PRIMARY KEY (key),
+    CONSTRAINT dlightrag_runtime_policies_key_check CHECK (length(key) BETWEEN 1 AND 64),
+    CONSTRAINT dlightrag_runtime_policies_value_check CHECK (jsonb_typeof(value) = 'object')
+)
+"""
+
+# Each owner's Conversation Contribution: whether their conversations may be used to evaluate and
+# train models, and since when. A row exists only once the owner has chosen, and an owner with none
+# contributes nothing. The permission is the moment it began, so the flag and the moment cannot
+# disagree: turning it off clears the moment, and the table refuses a row that says otherwise.
+_CREATE_PRIVACY_SETTINGS = """
+CREATE TABLE IF NOT EXISTS dlightrag_privacy_settings (
+    owner_id         TEXT        NOT NULL,
+    contribute       BOOLEAN     NOT NULL DEFAULT FALSE,
+    contribute_since TIMESTAMPTZ,
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (owner_id),
+    CONSTRAINT dlightrag_privacy_settings_since_check
+        CHECK (contribute = (contribute_since IS NOT NULL))
+)
+"""
 
 RUN_MIGRATIONS = (
     Migration(
-        "run_runtime_v1",
-        "Create the operation-neutral RunRuntime schema",
+        "baseline",
+        "Create the RunRuntime and Answer projection schema",
         (
+            # One of the current indexes is a trigram index, so the extension it needs is created
+            # first: a fresh database is complete once this runs.
+            "CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public",
             _CREATE_RUNS,
             _CREATE_EVENTS,
             _ENFORCE_RUN_EVENT_CONSTRAINTS,
@@ -945,6 +1148,7 @@ RUN_MIGRATIONS = (
             _CREATE_SESSION_REGISTERS,
             _CREATE_STAGES,
             _CREATE_EVIDENCE,
+            _CREATE_ANSWER_FEEDBACK,
             _CREATE_RESOURCES,
             _CREATE_BLOBS,
             _CREATE_BLOB_CHUNKS,
@@ -955,214 +1159,29 @@ RUN_MIGRATIONS = (
             _CREATE_CHILD_OPERATIONS,
             _CREATE_CHILD_GUIDANCE,
             *_CREATE_INDEXES,
-            # Its foreign key to dlightrag_runs (run_id) is backed by the unique global-id
-            # index created above. On databases created before the baseline dropped the
-            # duplicate UNIQUE (run_id), the key is backed by that constraint's index,
-            # dlightrag_runs_run_id_key, instead: repoint the key before dropping it.
             _CREATE_CORPUS_MUTATION_WINDOWS,
             _CREATE_WORKSPACE_INVENTORY,
+            _CREATE_SESSION_WORKSPACE_HEADS,
+            _CREATE_SESSION_WORK_HEADS,
+            _CREATE_SESSION_WORKSPACE_SNAPSHOTS,
             _CREATE_ARTIFACT_ATTACHMENT_ORDER,
             _CREATE_ARTIFACT_ATTACHMENTS,
             _CREATE_COMMITTED_SPILLS,
             _CREATE_SESSION_NOTES,
             *MEMORY_SETTINGS_DDL,
+            *ANSWER_GOALS_DDL,
             *AGENT_BROWSER_LEASES_DDL,
             *AGENT_ACCOUNTS_DDL,
             *AGENT_ACCOUNT_SETTINGS_DDL,
+            _CREATE_RUNTIME_POLICIES,
+            _CREATE_PRIVACY_SETTINGS,
+            *SESSION_MEMORY_PROGRESS_DDL,
         ),
-    ),
-    Migration(
-        "child_roster_index",
-        "Index child sessions for bounded newest-first roster pages",
-        (_CHILD_ROSTER_INDEX.ddl,),
-    ),
-    Migration(
-        "worker_cancel_pending_index",
-        "Index bounded worker-local cancellation rescans",
-        (_RUNS_CANCEL_PENDING_INDEX.ddl,),
-    ),
-    Migration(
-        "write_model_published_artifact_kind",
-        "Restrict durable output references to the unified publication kind",
-        (
-            "ALTER TABLE dlightrag_answer_run_artifacts "
-            "DROP CONSTRAINT dlightrag_answer_run_artifacts_kind_check",
-            "ALTER TABLE dlightrag_answer_run_artifacts "
-            "ADD CONSTRAINT dlightrag_answer_run_artifacts_kind_check "
-            "CHECK (reference_kind IN "
-            "('current_attachment', 'history_attachment', 'fetched_resource', "
-            "'published_artifact'))",
-        ),
-    ),
-    Migration(
-        "write_model_root_artifact_attachments",
-        "Stage root Artifact attachments through settled Agent tool effects",
-        (_CREATE_ARTIFACT_ATTACHMENT_ORDER, _CREATE_ARTIFACT_ATTACHMENTS),
-    ),
-    Migration(
-        "write_model_web_resource_catalog",
-        "Persist fetched Web locators for process-independent resource recovery",
-        (
-            "ALTER TABLE dlightrag_answer_resources ADD COLUMN IF NOT EXISTS source_locator BYTEA",
-            "ALTER TABLE dlightrag_answer_resources "
-            "DROP CONSTRAINT dlightrag_answer_resources_blob_link_check",
-            "ALTER TABLE dlightrag_answer_resources "
-            "ADD CONSTRAINT dlightrag_answer_resources_blob_link_check "
-            "CHECK ((kind = 'accepted_blob' AND blob_digest IS NOT NULL) "
-            "OR (kind = 'fetched_blob' AND blob_digest IS NOT NULL "
-            "AND locator_digest IS NOT NULL "
-            "AND (capabilities->>'resource_kind' IS DISTINCT FROM 'web' "
-            "OR source_locator IS NOT NULL)) "
-            "OR (kind = 'evidence' AND locator_digest IS NOT NULL) "
-            "OR (kind = 'committed_spill' AND blob_digest IS NULL "
-            "AND locator_digest IS NULL))",
-        ),
-    ),
-    Migration(
-        "corpus_mutation_runtime",
-        "Add fenced Corpus Mutation checkpoints",
-        (
-            "ALTER TABLE dlightrag_runs ADD COLUMN IF NOT EXISTS handoff_started_at TIMESTAMPTZ",
-            "ALTER TABLE dlightrag_runs ADD COLUMN IF NOT EXISTS superseded_by_run_id UUID",
-            _CREATE_CORPUS_MUTATION_WINDOWS,
-            _RUNS_MUTATION_FIFO_INDEX.ddl,
-        ),
-    ),
-    Migration(
-        "normalize_run_event_constraints",
-        "Enforce event sequence, parent lifecycle, and terminal payload integrity",
-        (_ENFORCE_RUN_EVENT_CONSTRAINTS, _CREATE_RUN_EVENT_CONSTRAINT_TRIGGER),
-    ),
-    Migration(
-        "remove_run_active_permit",
-        "Remove the obsolete Run occupancy column",
-        (
-            "ALTER TABLE dlightrag_runs "
-            "DROP CONSTRAINT IF EXISTS dlightrag_runs_permit_check, "
-            "DROP COLUMN IF EXISTS active_permit",
-        ),
-    ),
-    Migration(
-        "interactive_child_async_lifecycle",
-        "Persist Child cancellation intent before closing its Agent Operation",
-        (
-            "ALTER TABLE dlightrag_answer_child_sessions "
-            "ADD COLUMN IF NOT EXISTS cancel_requested_at TIMESTAMPTZ",
-        ),
-    ),
-    Migration(
-        "interactive_child_controls",
-        "Address Child controls and persist same-Session Operations and guidance",
-        (
-            "ALTER TABLE dlightrag_agent_controls "
-            "ADD COLUMN IF NOT EXISTS target_session_id UUID, "
-            "ADD COLUMN IF NOT EXISTS target_operation_id UUID, "
-            "ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'user', "
-            "ADD COLUMN IF NOT EXISTS submission_key TEXT, "
-            "ADD COLUMN IF NOT EXISTS request_fingerprint TEXT",
-            "ALTER TABLE dlightrag_agent_controls "
-            "DROP CONSTRAINT IF EXISTS dlightrag_agent_controls_target_check, "
-            "ADD CONSTRAINT dlightrag_agent_controls_target_check CHECK ("
-            "(target_session_id IS NULL AND target_operation_id IS NULL) OR "
-            "(target_session_id IS NOT NULL AND target_operation_id IS NOT NULL))",
-            "ALTER TABLE dlightrag_agent_controls "
-            "DROP CONSTRAINT IF EXISTS dlightrag_agent_controls_origin_check, "
-            "ADD CONSTRAINT dlightrag_agent_controls_origin_check "
-            "CHECK (origin IN ('user', 'parent'))",
-            _CREATE_CHILD_OPERATIONS,
-            _CREATE_CHILD_GUIDANCE,
-            _CHILD_OPERATIONS_STATUS_INDEX.ddl,
-            _CHILD_CONTROLS_SUBMISSION_INDEX.ddl,
-            _PARENT_CONTROLS_SUBMISSION_INDEX.ddl,
-            _CHILD_GUIDANCE_PENDING_INDEX.ddl,
-        ),
-    ),
-    Migration(
-        "child_cancel_submission_receipts",
-        "Retain consumed owner cancellation controls bound to their original Operation",
-        (
-            "ALTER TABLE dlightrag_agent_controls "
-            "DROP CONSTRAINT IF EXISTS dlightrag_agent_controls_kind_check, "
-            "ADD CONSTRAINT dlightrag_agent_controls_kind_check "
-            "CHECK (kind IN ('steer', 'follow_up', 'cancel'))",
-        ),
-    ),
-    Migration(
-        "attachment_occurrence_reference_index",
-        "Find retained exact Entry occurrences without scanning an owner's Run catalogue",
-        (_ATTACHMENT_OCCURRENCE_INDEX.ddl,),
-    ),
-    Migration(
-        "write_model_fork_points",
-        "Record the Lane head and projection each Answer Run settled at",
-        (
-            "ALTER TABLE dlightrag_answer_run_routing "
-            "ADD COLUMN IF NOT EXISTS fork_point_entry_id TEXT",
-            "ALTER TABLE dlightrag_answer_run_routing "
-            "ADD COLUMN IF NOT EXISTS fork_point_projection_id TEXT",
-        ),
-    ),
-    Migration(
-        "answer_session_notes",
-        "Give each Agent Session a note plane, so memory outlives the Run that wrote it",
-        (_CREATE_SESSION_NOTES,),
-    ),
-    Migration(
-        "published_artifact_resources",
-        "Register a published Artifact as a Resource its Session may adopt",
-        (
-            "ALTER TABLE dlightrag_answer_resources "
-            "DROP CONSTRAINT dlightrag_answer_resources_kind_check",
-            "ALTER TABLE dlightrag_answer_resources "
-            "ADD CONSTRAINT dlightrag_answer_resources_kind_check "
-            "CHECK (kind IN ('accepted_blob', 'evidence', 'fetched_blob', 'committed_spill', "
-            "'published_artifact'))",
-            "ALTER TABLE dlightrag_answer_resources "
-            "DROP CONSTRAINT dlightrag_answer_resources_blob_link_check",
-            "ALTER TABLE dlightrag_answer_resources "
-            "ADD CONSTRAINT dlightrag_answer_resources_blob_link_check "
-            "CHECK ((kind = 'accepted_blob' AND blob_digest IS NOT NULL) "
-            "OR (kind = 'fetched_blob' "
-            "AND blob_digest IS NOT NULL AND locator_digest IS NOT NULL "
-            "AND (capabilities->>'resource_kind' IS DISTINCT FROM 'web' "
-            "OR source_locator IS NOT NULL)) "
-            "OR (kind = 'evidence' AND locator_digest IS NOT NULL) "
-            "OR (kind = 'committed_spill' "
-            "AND blob_digest IS NULL AND locator_digest IS NULL) "
-            "OR (kind = 'published_artifact' AND blob_digest IS NOT NULL))",
-        ),
-    ),
-    Migration(
-        "artifact_attachment_video_presentation",
-        "Admit a playable video Attachment presentation",
-        (
-            "ALTER TABLE dlightrag_answer_artifact_attachments "
-            "DROP CONSTRAINT dlightrag_answer_artifact_attachments_presentation_check",
-            "ALTER TABLE dlightrag_answer_artifact_attachments "
-            "ADD CONSTRAINT dlightrag_answer_artifact_attachments_presentation_check "
-            "CHECK (presentation IN "
-            "('image', 'video', 'markdown', 'html', 'pdf', 'text', 'download'))",
-        ),
-    ),
-    Migration(
-        "agent_browser_leases",
-        "Lease Agent Browser endpoints to Runs",
-        AGENT_BROWSER_LEASES_DDL,
-    ),
-    Migration(
-        "agent_accounts",
-        "Keep each owner's Agent Accounts, sealed under the key ring",
-        AGENT_ACCOUNTS_DDL,
-    ),
-    Migration(
-        "agent_account_activity_and_sign_ups",
-        "Record when each Agent Account was registered and last used, and each owner's sign-up "
-        "switch",
-        AGENT_ACCOUNT_ACTIVITY_AND_SIGN_UPS_DDL,
     ),
 )
 
 _RUN_TABLES = (
+    ANSWER_GOALS_SCHEMA_TABLE,
     TableRequirement(
         name="dlightrag_answer_session_notes",
         columns=(
@@ -1298,6 +1317,8 @@ _RUN_TABLES = (
             "schema_version",
             "timestamp",
             "payload_json",
+            "search_text",
+            "run_id",
         ),
         primary_key=("owner_id", "session_id", "sequence"),
         unique=(
@@ -1380,6 +1401,7 @@ _RUN_TABLES = (
             "locator_digest",
             "content",
             "locator",
+            "content_slimmed",
             "created_at",
         ),
         primary_key=("owner_id", "run_id", "session_id", "intent_id", "result_ordinal"),
@@ -1479,6 +1501,55 @@ _RUN_TABLES = (
         ),
     ),
     TableRequirement(
+        name="dlightrag_session_workspace_heads",
+        columns=(
+            "owner_id",
+            "session_id",
+            "lane_id",
+            "head_run_id",
+            "manifest_digest",
+            "revision",
+            "committed_at",
+        ),
+        primary_key=("owner_id", "session_id", "lane_id"),
+        foreign_keys=(
+            ForeignKeyRequirement(
+                columns=("owner_id", "session_id"),
+                references="dlightrag_agent_sessions",
+            ),
+        ),
+        checks=(
+            "dlightrag_session_workspace_heads_revision_check",
+            "dlightrag_session_workspace_heads_digest_check",
+        ),
+    ),
+    TableRequirement(
+        name="dlightrag_session_workspace_snapshots",
+        columns=(
+            "owner_id",
+            "session_id",
+            "run_id",
+            "parent_run_id",
+            "manifest_digest",
+            "manifest_json",
+            "created_at",
+        ),
+        primary_key=("owner_id", "session_id", "run_id"),
+        foreign_keys=(
+            ForeignKeyRequirement(
+                columns=("owner_id", "session_id"),
+                references="dlightrag_agent_sessions",
+            ),
+        ),
+        checks=("dlightrag_session_workspace_snapshots_digest_check",),
+    ),
+    TableRequirement(
+        name="dlightrag_session_work_heads",
+        columns=("owner_id", "session_id", "active_run_id", "revision", "updated_at"),
+        primary_key=("owner_id", "session_id"),
+        checks=("dlightrag_session_work_heads_revision_check",),
+    ),
+    TableRequirement(
         name="dlightrag_answer_artifact_attachments",
         columns=(
             "owner_id",
@@ -1490,6 +1561,7 @@ _RUN_TABLES = (
             "presentation",
             "session_id",
             "intent_id",
+            "sources",
             "attachment_order",
             "attached_at",
         ),
@@ -1671,6 +1743,7 @@ _RUN_TABLES = (
         ),
     ),
     MEMORY_SETTINGS_SCHEMA_TABLE,
+    SESSION_MEMORY_PROGRESS_SCHEMA_TABLE,
     AGENT_BROWSER_LEASES_SCHEMA_TABLE,
     AGENT_ACCOUNTS_SCHEMA_TABLE,
     AGENT_ACCOUNT_SETTINGS_SCHEMA_TABLE,
@@ -1689,6 +1762,45 @@ _RUN_TABLES = (
         foreign_keys=(
             ForeignKeyRequirement(columns=("owner_id", "run_id"), references="dlightrag_runs"),
         ),
+    ),
+    TableRequirement(
+        name="dlightrag_answer_feedback",
+        columns=(
+            "owner_id",
+            "run_id",
+            "agent",
+            "sequence",
+            "value",
+            "reasons",
+            "note",
+            "created_at",
+            "updated_at",
+        ),
+        primary_key=("owner_id", "run_id", "agent", "sequence"),
+        foreign_keys=(
+            ForeignKeyRequirement(columns=("owner_id", "run_id"), references="dlightrag_runs"),
+        ),
+        checks=(
+            "dlightrag_answer_feedback_value_check",
+            "dlightrag_answer_feedback_note_check",
+            "dlightrag_answer_feedback_says_why_check",
+            "dlightrag_answer_feedback_sequence_check",
+        ),
+    ),
+    TableRequirement(
+        name="dlightrag_runtime_policies",
+        columns=("key", "value", "updated_at", "updated_by"),
+        primary_key=("key",),
+        checks=(
+            "dlightrag_runtime_policies_key_check",
+            "dlightrag_runtime_policies_value_check",
+        ),
+    ),
+    TableRequirement(
+        name="dlightrag_privacy_settings",
+        columns=("owner_id", "contribute", "contribute_since", "updated_at"),
+        primary_key=("owner_id",),
+        checks=("dlightrag_privacy_settings_since_check",),
     ),
 )
 
@@ -1746,6 +1858,11 @@ _LIST_RUNS = f"""
 SELECT {_RUN_COLUMNS}
 FROM dlightrag_runs
 WHERE owner_id = $1 ORDER BY created_at, run_id LIMIT $2
+"""  # noqa: S608 - interpolates only the trusted _RUN_COLUMNS constant
+_LIST_RUNS_NEWEST = f"""
+SELECT {_RUN_COLUMNS}
+FROM dlightrag_runs
+WHERE owner_id = $1 ORDER BY created_at DESC, run_id DESC LIMIT $2
 """  # noqa: S608 - interpolates only the trusted _RUN_COLUMNS constant
 _LIST_RUNS_AFTER = f"""
 SELECT {_RUN_COLUMNS}
@@ -1852,6 +1969,13 @@ SELECT COUNT(*) FROM dlightrag_runs
 WHERE lane = $1 AND status IN ('queued', 'running')
 """
 
+# The predicate repeats the one of idx_dlightrag_runs_owner_active literally: a plan can use a
+# partial index only for a query it can show to imply the index's predicate.
+_COUNT_OWNER_ACTIVE_ANSWERS = """
+SELECT COUNT(*) FROM dlightrag_runs
+WHERE owner_id = $1 AND run_kind = 'answer' AND status IN ('queued', 'running')
+"""
+
 _SELECT_RUN = f"""
 SELECT {_RUN_COLUMNS}
 FROM dlightrag_runs
@@ -1904,6 +2028,34 @@ FROM dlightrag_run_events
 WHERE owner_id = $1 AND run_id = $2 AND event_sequence > $3
 ORDER BY event_sequence
 LIMIT $4
+"""
+
+#: The bounded subjects the live Tool Activity already showed, one row per call id.
+#: Only the two text fields are read, and a streaming call that reported no subject yet is skipped:
+#: a bash call can update one progress row a second, and none of those rows is a subject source.
+_SELECT_TOOL_PROGRESS_SUBJECTS = """
+SELECT DISTINCT ON (payload->>'call_id')
+       payload->>'call_id' AS call_id,
+       payload->>'object_label' AS subject
+FROM dlightrag_run_events
+WHERE owner_id = $1 AND run_id = $2
+  AND event_type = 'tool_progress'
+  AND payload->>'call_id' = ANY($3::text[])
+  AND COALESCE(payload->>'object_label', '') <> ''
+ORDER BY payload->>'call_id', event_sequence
+"""
+
+#: The full arguments each recorded Tool call was executed with, from the Session transcript.
+#: The Assistant entry is the one durable record that holds them; the Run's event log holds only
+#: the bounded subject, so an attestation reader joins these to the log by call id. Read in
+#: sequence order: a later duplicate id (a retried turn) keeps the first, matching how the event
+#: log names the call the runtime first admitted.
+_SELECT_TOOL_CALL_ARGUMENTS = """
+SELECT payload_json->'tool_calls' AS tool_calls
+FROM dlightrag_agent_session_entries
+WHERE owner_id = $1 AND run_id = $2 AND entry_type = 'assistant_message'
+  AND jsonb_typeof(payload_json->'tool_calls') = 'array'
+ORDER BY sequence
 """
 
 _SELECT_CLAIM_CANDIDATE = """
@@ -2021,7 +2173,8 @@ RETURNING (cancel_requested_at IS NOT NULL) AS cancel_requested
 # be reclaimed by another worker; it does not say when its own worker stopped owning it, which only
 # a reclaim (the epoch bump) can say. A worker that stalled past the window and came back therefore
 # finishes its write and extends its lease, while a worker whose Run was reclaimed is refused by the
-# epoch.
+# epoch. Renewal used to require an unexpired lease here as well, which turned a busy process into a
+# dead one on its first write after a long tool call.
 _WRITE_CHECKPOINT = """
 UPDATE dlightrag_runs
 SET checkpoint_json = $5::jsonb,
@@ -2286,9 +2439,21 @@ FROM dlightrag_answer_resources
 WHERE owner_id = $1 AND run_id = $2 AND resource_id = $3
 """
 
+# The newest attachment a tool stored under one name: what a reader is shown when the
+# Run's browser has nothing live to show any more. Only an image can be shown.
+_SELECT_LATEST_RUN_ATTACHMENT = """
+SELECT resource_id, ordinal, blob_digest, safe_name, media_type, source_locator, capabilities
+FROM dlightrag_answer_resources
+WHERE owner_id = $1 AND run_id = $2 AND kind = 'fetched_blob'
+  AND capabilities->>'resource_kind' = 'tool_attachment'
+  AND safe_name = $3 AND media_type LIKE 'image/%'
+ORDER BY created_at DESC, resource_id DESC
+LIMIT 1
+"""
+
 _SELECT_ARTIFACT_ATTACHMENTS = """
 SELECT relative_path, label, content_digest, size_bytes, presentation,
-       session_id::text, intent_id::text
+       session_id::text, intent_id::text, sources
 FROM dlightrag_answer_artifact_attachments
 WHERE owner_id = $1 AND run_id = $2
 ORDER BY attachment_order
@@ -2390,6 +2555,142 @@ WHERE status IN ('succeeded', 'failed', 'cancelled')
 ORDER BY purge_after
 LIMIT $1
 FOR UPDATE SKIP LOCKED
+"""
+
+_SELECT_WORKING_STATE_RUNS = """
+SELECT owner_id, run_id
+FROM dlightrag_runs
+WHERE status IN ('succeeded', 'failed', 'cancelled')
+  AND finished_at IS NOT NULL
+  AND finished_at <= NOW() - make_interval(secs => $1::double precision)
+  AND (
+      EXISTS (
+          SELECT 1
+          FROM dlightrag_answer_child_sessions AS child
+          WHERE child.owner_id = dlightrag_runs.owner_id
+            AND child.run_id = dlightrag_runs.run_id
+            AND child.host_state_json <> '{}'::jsonb
+      )
+      OR EXISTS (
+          SELECT 1
+          FROM dlightrag_answer_child_operations AS operation
+          WHERE operation.owner_id = dlightrag_runs.owner_id
+            AND operation.run_id = dlightrag_runs.run_id
+            AND operation.outcome_json <> '{}'::jsonb
+      )
+  )
+ORDER BY finished_at
+LIMIT $2
+FOR UPDATE OF dlightrag_runs SKIP LOCKED
+"""
+
+# The host state a child ran on and the outcome each control returned belong to the live
+# Run: steering, continuing and cancelling a child are refused once it is over, and no
+# reader surfaces either. Clearing them leaves the columns a reader does surface.
+_CLEAR_RUN_HOST_STATE = """
+UPDATE dlightrag_answer_child_sessions
+SET host_state_json = '{}'::jsonb
+WHERE owner_id = $1 AND run_id = $2 AND host_state_json <> '{}'::jsonb
+"""
+
+_CLEAR_RUN_OPERATION_OUTCOMES = """
+UPDATE dlightrag_answer_child_operations
+SET outcome_json = '{}'::jsonb
+WHERE owner_id = $1 AND run_id = $2 AND outcome_json <> '{}'::jsonb
+"""
+
+_SELECT_COMPACTABLE_RUNS = """
+SELECT owner_id, run_id
+FROM dlightrag_runs
+WHERE status IN ('succeeded', 'failed', 'cancelled')
+  AND finished_at IS NOT NULL
+  AND finished_at <= NOW() - make_interval(secs => $1::double precision)
+  AND EXISTS (
+      SELECT 1
+      FROM dlightrag_answer_evidence AS evidence
+      WHERE evidence.owner_id = dlightrag_runs.owner_id
+        AND evidence.run_id = dlightrag_runs.run_id
+        AND NOT evidence.content_slimmed
+        -- The newest row of a session is never slimmed, so it alone never keeps a Run in
+        -- the candidate set: every other unslimmed row is compacted in place.
+        AND evidence.created_at < (
+            SELECT max(newest.created_at)
+            FROM dlightrag_answer_evidence AS newest
+            WHERE newest.owner_id = evidence.owner_id
+              AND newest.run_id = evidence.run_id
+              AND newest.session_id = evidence.session_id
+        )
+  )
+ORDER BY finished_at
+LIMIT $2
+FOR UPDATE OF dlightrag_runs SKIP LOCKED
+"""
+
+# One Run's evidence log, compacted in place: every row but the newest of its session
+# loses the passage text of chunks the answer did not cite, and keeps everything a
+# citation is made of. Occupied prefixes are left alone, because a row the database
+# cannot read as text is not a row it can rewrite.
+_COMPACT_RUN_EVIDENCE = """
+WITH cited AS (
+    SELECT COALESCE(array_agg(DISTINCT source ->> 'id'), ARRAY[]::text[]) AS ids
+    FROM dlightrag_runs AS runs
+    CROSS JOIN LATERAL jsonb_array_elements(
+        COALESCE(runs.result_json -> 'sources', '[]'::jsonb)
+    ) AS source
+    WHERE runs.owner_id = $1 AND runs.run_id = $2
+),
+newest AS (
+    SELECT DISTINCT ON (session_id) session_id, intent_id, result_ordinal
+    FROM dlightrag_answer_evidence
+    WHERE owner_id = $1 AND run_id = $2
+    ORDER BY session_id, created_at DESC, result_ordinal DESC
+),
+compactable AS (
+    SELECT evidence.session_id, evidence.intent_id, evidence.result_ordinal,
+           convert_from(evidence.content, 'UTF8')::jsonb AS document
+    FROM dlightrag_answer_evidence AS evidence
+    WHERE evidence.owner_id = $1
+      AND evidence.run_id = $2
+      AND NOT evidence.content_slimmed
+      AND jsonb_typeof(
+          convert_from(evidence.content, 'UTF8')::jsonb -> 'contexts' -> 'chunks'
+      ) = 'array'
+      AND NOT EXISTS (
+          SELECT 1
+          FROM newest
+          WHERE newest.session_id = evidence.session_id
+            AND newest.intent_id = evidence.intent_id
+            AND newest.result_ordinal = evidence.result_ordinal
+      )
+)
+UPDATE dlightrag_answer_evidence AS target
+SET content = convert_to(
+        jsonb_set(
+            compactable.document,
+            '{contexts,chunks}',
+            (
+                SELECT jsonb_agg(
+                           CASE
+                               WHEN chunk ? '_source_reference_id'
+                                   AND NOT (chunk ->> '_source_reference_id' = ANY (cited.ids))
+                               THEN chunk - 'content'
+                               ELSE chunk
+                           END
+                       )
+                FROM jsonb_array_elements(
+                    compactable.document -> 'contexts' -> 'chunks'
+                ) AS chunk
+            )
+        )::text,
+        'UTF8'
+    ),
+    content_slimmed = TRUE
+FROM compactable, cited
+WHERE target.owner_id = $1
+  AND target.run_id = $2
+  AND target.session_id = compactable.session_id
+  AND target.intent_id = compactable.intent_id
+  AND target.result_ordinal = compactable.result_ordinal
 """
 
 _DELETE_EVENTS_FOR_RUNS = """
@@ -2508,6 +2809,10 @@ def _validate_acceptance(
         raise ValueError("Corpus Mutation runs require workspace access scope")
     if envelope.supersedes_run_id is not None and envelope.run_kind != "corpus_mutation":
         raise ValueError("only Corpus Mutation runs may supersede a waiting mutation")
+    if envelope.active_run_limit is not None and (
+        envelope.run_kind != "answer" or envelope.active_run_limit < 1
+    ):
+        raise ValueError("an active run limit is one or more Answer runs")
     superseded_uuid = (
         parse_run_id(envelope.supersedes_run_id) if envelope.supersedes_run_id is not None else None
     )
@@ -2589,6 +2894,67 @@ def _json_value(value: Any) -> Any:
     return value
 
 
+def _transcript_message(
+    *,
+    payload_json: Any,
+    entry_type: str,
+    sequence: int,
+    timestamp: Any,
+) -> dict[str, Any] | None:
+    """One stored entry as the reader-facing message the transcript surfaces state.
+
+    The projection is the store's: the role, the words, the Tool's decoded text and facts are the
+    fields every transcript reader draws, so a page read and a Run-level read cannot disagree
+    about what one entry says.
+
+    An assistant message's reasoning is projected raw, exactly as it was stored: the store is not
+    a reader edge, so masking and bounding belong to the surface that hands the reasoning to a
+    reader (the Inspector activity page).
+    """
+    payload = _json_object(payload_json)
+    at = stamp(timestamp)
+    if entry_type in {"user_message", "control_message"}:
+        return {
+            "sequence": sequence,
+            "role": "user",
+            "content": payload.get("content"),
+            "at": at,
+        }
+    if entry_type == "delivery_warning":
+        return {
+            "sequence": sequence,
+            "role": "delivery",
+            "content": "\n".join(str(item) for item in payload.get("findings") or ()),
+            "attempt": payload.get("attempt"),
+            "at": at,
+        }
+    if entry_type == "assistant_message":
+        return {
+            "sequence": sequence,
+            "role": "assistant",
+            "content": payload.get("content") or "",
+            "reasoning": str(payload.get("reasoning") or ""),
+            "tool_calls": list(payload.get("tool_calls") or ()),
+            "at": at,
+        }
+    if entry_type == "tool_result":
+        outcome = str(payload.get("outcome") or "failed")
+        stored_facts = payload.get("facts")
+        message: dict[str, Any] = {
+            "sequence": sequence,
+            "role": "tool",
+            "tool_call_id": str(payload.get("call_id") or ""),
+            "name": str(payload.get("tool_name") or ""),
+            "at": at,
+            **tool_content_message_fields(decode_tool_content(payload.get("content"))),
+            "is_error": outcome != "succeeded",
+        }
+        if isinstance(stored_facts, Mapping):
+            message["facts"] = dict(stored_facts)
+        return message
+    return None
+
+
 def _optional_int(row: Any, name: str) -> int | None:
     try:
         value = row[name]
@@ -2667,7 +3033,34 @@ def _reference_record(row: Any) -> RunArtifactReference:
     )
 
 
-class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
+# How many matches one agent contributes to a search answer. It guards a query like a single
+# character that matches a whole Run's worth of messages; the answer also states how many the Run
+# holds in total, so a shortened list is never silent.
+SEARCH_MATCHES_PER_AGENT = 2000
+
+
+def _like_literal(term: str) -> str:
+    """The characters a word holds, as the pattern a `LIKE`/`ILIKE` reads literally."""
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _labelled(agent: str | None, objective: str | None) -> dict[str, str]:
+    """The agent a message came from, named as its own row names it, for a reader searching a Run."""
+    if agent is None:
+        return {}
+    if agent == "main" or not objective:
+        return {"agent": agent}
+    return {"agent": agent, "agent_label": objective}
+
+
+class PGRunStore(
+    ChildRunStoreMixin,
+    FeedbackRunStoreMixin,
+    PolicyRunStoreMixin,
+    PrivacyRunStoreMixin,
+    SessionMemoryRunStoreMixin,
+    PostgresOperationRunner,
+):
     """Generic durable lifecycle plus Answer-owned PostgreSQL projections."""
 
     def __init__(
@@ -2675,14 +3068,12 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
         *,
         pool: ConnectionPool | None = None,
         notifications: PGNotificationHub | None = None,
-        retention_seconds: int = DEFAULT_RUN_RETENTION_SECONDS,
         query_max_nonterminal_runs: int = DEFAULT_QUERY_MAX_NONTERMINAL_RUNS,
         corpus_mutation_max_nonterminal_runs: int = DEFAULT_CORPUS_MUTATION_MAX_NONTERMINAL_RUNS,
         promotion_doc_threshold: int | None = None,
         promotion_chunk_threshold: int | None = None,
     ) -> None:
         super().__init__(pool=pool, notifications=notifications)
-        self._retention_seconds = retention_seconds
         self._query_max_nonterminal_runs = max(1, int(query_max_nonterminal_runs))
         self._corpus_mutation_max_nonterminal_runs = max(
             1, int(corpus_mutation_max_nonterminal_runs)
@@ -2703,8 +3094,6 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
             return
 
         async def _operation(conn: Any) -> None:
-            if await conn.fetchval(_PRE_RUNTIME_ANSWER_SCHEMA):
-                raise RunSchemaError(_PRE_RUNTIME_ANSWER_SCHEMA_ERROR)
             if validate_only:
                 await verify_migrations(
                     conn,
@@ -2722,7 +3111,7 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
                 schema_error=RunSchemaError,
             )
             # Stored code is code, not data: PostgreSQL never rewrites a function body when a
-            # table or column it names is renamed, and a recorded migration never re-runs - so a
+            # table or column it names is renamed, and a recorded baseline never re-runs - so a
             # rename leaves this body naming what is no longer there, and every run event write
             # fails at runtime. Each writer reconciles the body with this revision instead.
             await conn.execute(_ENFORCE_RUN_EVENT_CONSTRAINTS)
@@ -2873,6 +3262,13 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
             raise RunAdmissionLimitExceededError(
                 "Deployment-wide nonterminal admission limit reached"
             )
+        if envelope.active_run_limit is not None:
+            # Counted under the same lock that admits the Run below, and after a replay has
+            # been answered, so a retried key is never refused and two submissions of one owner
+            # cannot both be admitted into the last place.
+            active = int(await conn.fetchval(_COUNT_OWNER_ACTIVE_ANSWERS, owner) or 0)
+            if active >= envelope.active_run_limit:
+                raise ActiveRunLimitExceededError(envelope.active_run_limit)
         if envelope.run_kind == "answer":
             await PGConnectionPinWriter.validate_in(
                 conn, owner_id=owner, payload=envelope.payload, bindings=connection_bindings
@@ -2950,6 +3346,53 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
 
         return await self._run_write(_operation)
 
+    async def _commit_agentspace_head(
+        self, conn: Any, owner: str, head: AgentspaceHeadCommit
+    ) -> None:
+        """Apply one staged head pointer inside the Run's terminal transaction."""
+        try:
+            session_uuid = uuid.UUID(head.session_id)
+            run_uuid = uuid.UUID(head.head_run_id)
+            expected = (
+                uuid.UUID(head.expected_head_run_id)
+                if head.expected_head_run_id is not None
+                else None
+            )
+        except ValueError:
+            logger.warning("Workspace head commit named a malformed id; it was skipped")
+            return
+        manifest = [
+            {
+                "path": file.relative_path,
+                "digest": file.content_digest,
+                "size": file.size_bytes,
+            }
+            for file in head.manifest
+        ]
+        await conn.execute(
+            _INSERT_WORKSPACE_SNAPSHOT,
+            owner,
+            session_uuid,
+            run_uuid,
+            (uuid.UUID(head.parent_run_id) if head.parent_run_id is not None else None),
+            head.manifest_digest,
+            json.dumps(manifest, ensure_ascii=False, separators=(",", ":")),
+        )
+        revision = await conn.fetchval(
+            _COMMIT_WORKSPACE_HEAD,
+            owner,
+            session_uuid,
+            run_uuid,
+            head.lane_id,
+            head.manifest_digest,
+            expected,
+        )
+        if revision is None:
+            logger.warning(
+                "Workspace head commit for Session %s was refused: head moved on",
+                head.session_id,
+            )
+
     async def _write_publications(
         self, conn: Any, owner: str, run_uuid: uuid.UUID, publications: Sequence[Any]
     ) -> None:
@@ -3005,6 +3448,9 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
                         "artifact_path": item.relative_path,
                         "presentation": item.presentation,
                         "label": item.label,
+                        # The files this product was built from, so a later Run that adopts the
+                        # published version can bring back what rebuilds it (ADR 0052).
+                        "sources": declared_sources_capability(item.declared_sources),
                     },
                     ensure_ascii=False,
                 ),
@@ -3163,63 +3609,281 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
         *,
         owner_id: str,
         run_id: str,
-        session_id: str,
+        session_id: str | None,
         limit: int,
         before: int | None = None,
+        scope: TranscriptScope = "run",
+        since: int | None = None,
     ) -> tuple[dict[str, Any], ...]:
-        """Project one page of parent or owned child Session ancestry, oldest first.
+        """Project one page of Session ancestry, oldest first, or of a whole Run when session is None.
 
-        The page holds the newest ``limit`` messages older than the ``before`` sequence. Each
-        message carries its own ``sequence``, so the next older page asks for the first one's.
+        The page holds the newest ``limit`` messages older than the ``before`` sequence, of the
+        named Session, or of every Session the Run owns when ``session_id`` is None — the Run's
+        own agent first, then each child, and ``limit`` counts per Session so a busy agent cannot
+        hide a quiet one. Each message carries its own ``sequence``, so the next older page asks
+        for the first one's.
+
+        ``since`` asks the other way round: the oldest messages this Run wrote after that sequence,
+        which is what a reader already holding a transcript asks for to append to it.
+
+        ``scope`` says which messages those are, because one Session holds several Runs: ``run``
+        reads the ones the named Run wrote, which is what a Run's own trace draws, and ``lane``
+        reads the Session's whole lane across its Runs, which is what a conversation projects.
+        A Run-scoped read uses the Run's entry index and never walks the conversation's ancestry;
+        only the lane read pays for the history before this Run.
         """
         owner = _require_owner(owner_id)
         run_uuid = parse_run_id(run_id)
-        session_uuid = parse_run_id(session_id)
-        if run_uuid is None or session_uuid is None:
+        session_uuid = parse_run_id(session_id) if session_id is not None else None
+        if run_uuid is None or (session_id is not None and session_uuid is None):
+            return ()
+
+        async def _operation(conn: Any) -> tuple[dict[str, Any], ...]:
+            query = (
+                _SELECT_AGENT_TRANSCRIPT_LANE if scope == "lane" else _SELECT_AGENT_TRANSCRIPT_RUN
+            )
+            rows = await conn.fetch(
+                query,
+                owner,
+                run_uuid,
+                session_uuid,
+                before,
+                scope == "lane",
+                since,
+                max(1, min(int(limit), 100)),
+                # A page reads whole messages: no words, so nothing to place a snippet around.
+                None,
+                None,
+                None,
+            )
+            messages: list[dict[str, Any]] = []
+            for row in reversed(rows):
+                message = _transcript_message(
+                    payload_json=row["payload_json"],
+                    entry_type=str(row["entry_type"]),
+                    sequence=int(row["sequence"]),
+                    timestamp=row["timestamp"],
+                )
+                if message is not None:
+                    messages.append(message)
+            return tuple(messages)
+
+        return await self._run_read(_operation)
+
+    async def load_run_timeline_steps(
+        self, *, owner_id: str, run_id: str
+    ) -> tuple[dict[str, Any], ...]:
+        """One Run's stored steps, read once for the whole Run rather than a page at a time.
+
+        Every agent's entries come back as the one sequence of rows a Run timeline merges: where a
+        step sits (Session, sequence, instant), the shape its kind is read from, the Tool facts a
+        mark reads, and the ids an Assistant entry names so a Tool result is timed against its own
+        call. No excerpt or result text travels here — the page asks for its own words beside this
+        read, and only for the steps it draws. The read is scoped by ``run_id``: a Run's steps are
+        the Run's own entries, whatever came before it in the conversation.
+        """
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        if run_uuid is None:
             return ()
 
         async def _operation(conn: Any) -> tuple[dict[str, Any], ...]:
             rows = await conn.fetch(
-                _SELECT_AGENT_TRANSCRIPT,
+                _SELECT_RUN_TIMELINE_STEPS,
                 owner,
                 run_uuid,
-                session_uuid,
-                max(1, min(int(limit), 100)),
-                before,
+            )
+            steps: list[dict[str, Any]] = []
+            for row in rows:
+                raw_calls = _json_value(row["tool_call_ids"])
+                call_ids = (
+                    tuple(str(call_id) for call_id in raw_calls if call_id)
+                    if isinstance(raw_calls, list)
+                    else ()
+                )
+                steps.append(
+                    {
+                        "session_id": str(row["session_id"]),
+                        "is_main": bool(row["is_main"]),
+                        "sequence": int(row["sequence"]),
+                        "at": stamp(row["timestamp"]),
+                        "entry_type": str(row["entry_type"]),
+                        "tool_calls": int(row["tool_calls"]),
+                        "has_content": bool(row["has_content"]),
+                        "has_reasoning": bool(row["has_reasoning"]),
+                        "call_id": str(row["call_id"]) if row["call_id"] else None,
+                        "tool_name": str(row["tool_name"]) if row["tool_name"] else None,
+                        "failed": bool(row["failed"]),
+                        "degraded": bool(row["degraded"]),
+                        "tool_call_ids": call_ids,
+                    }
+                )
+            return tuple(steps)
+
+        return await self._run_read(_operation)
+
+    async def load_run_timeline_token(self, *, owner_id: str, run_id: str) -> dict[str, Any] | None:
+        """What a Run timeline index is valid for: the Run's version, status and roster.
+
+        The version is the Run's durable progress version — bumped once per durable entry
+        transaction and never for a token or reasoning batch — so a reader cache can tell "nothing
+        durable moved" from "the Run wrote". The roster is named beside it because a Child
+        appearing changes the merged index without touching the Run's own version, and each
+        Session's highest sequence catches a recovery write that appended without bumping it.
+
+        None when the Run is unknown: this is the owner-scoped existence check every timeline read
+        starts from.
+        """
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        if run_uuid is None:
+            return None
+
+        async def _operation(conn: Any) -> dict[str, Any] | None:
+            row = await conn.fetchrow(_SELECT_RUN_TIMELINE_VERSION, owner, run_uuid)
+            if row is None:
+                return None
+            return {
+                "run_version": int(row["durable_progress_version"]),
+                "status": str(row["status"]),
+                "roster": [
+                    [str(pair[0]), str(pair[1])]
+                    for pair in _json_value(row["roster"]) or ()
+                    if isinstance(pair, list) and len(pair) == 2
+                ],
+                "sequences": [
+                    [str(pair[0]), int(pair[1])]
+                    for pair in _json_value(row["sequences"]) or ()
+                    if isinstance(pair, list) and len(pair) == 2
+                ],
+            }
+
+        return await self._run_read(_operation)
+
+    async def load_timeline_entries(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        keys: Sequence[tuple[str, int]],
+    ) -> tuple[dict[str, Any], ...]:
+        """The stored entries a Run timeline page names, as the reader-facing messages they hold.
+
+        The page states which ``(Session, sequence)`` it draws; this reads those entries alone, so
+        a Run-level page never walks a Session's history to find its newest steps. The projection
+        is the transcript's own; the service layer applies the reader content gate after it.
+        """
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        sessions: list[uuid.UUID] = []
+        sequences: list[int] = []
+        for session_id, sequence in dict.fromkeys(keys):
+            session_uuid = parse_run_id(session_id)
+            if session_uuid is None:
+                continue
+            sessions.append(session_uuid)
+            sequences.append(int(sequence))
+        if run_uuid is None or not sessions:
+            return ()
+
+        async def _operation(conn: Any) -> tuple[dict[str, Any], ...]:
+            rows = await conn.fetch(
+                _SELECT_TIMELINE_ENTRIES,
+                owner,
+                run_uuid,
+                sessions,
+                sequences,
             )
             messages: list[dict[str, Any]] = []
-            for row in reversed(rows):
-                payload = _json_object(row["payload_json"])
-                entry_type = str(row["entry_type"])
-                sequence = int(row["sequence"])
-                if entry_type in {"user_message", "control_message"}:
-                    messages.append(
-                        {"sequence": sequence, "role": "user", "content": payload.get("content")}
-                    )
-                elif entry_type == "assistant_message":
-                    messages.append(
-                        {
-                            "sequence": sequence,
-                            "role": "assistant",
-                            "content": payload.get("content") or "",
-                            "tool_calls": list(payload.get("tool_calls") or ()),
-                        }
-                    )
-                elif entry_type == "tool_result":
-                    outcome = str(payload.get("outcome") or "failed")
-                    messages.append(
-                        {
-                            "sequence": sequence,
-                            "role": "tool",
-                            "tool_call_id": str(payload.get("call_id") or ""),
-                            "name": str(payload.get("tool_name") or ""),
-                            **tool_content_message_fields(
-                                decode_tool_content(payload.get("content"))
-                            ),
-                            "is_error": outcome != "succeeded",
-                        }
-                    )
+            for row in rows:
+                message = _transcript_message(
+                    payload_json=row["payload_json"],
+                    entry_type=str(row["entry_type"]),
+                    sequence=int(row["sequence"]),
+                    timestamp=row["timestamp"],
+                )
+                if message is None:
+                    continue
+                message["session_id"] = str(row["session_id"])
+                messages.append(message)
             return tuple(messages)
+
+        return await self._run_read(_operation)
+
+    async def search_run_transcript(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        terms: Sequence[str],
+        require_all: bool,
+        limit: int = SEARCH_MATCHES_PER_AGENT,
+    ) -> tuple[dict[str, Any], ...]:
+        """Project the newest messages of every agent of one Run that hold ``terms``, oldest first.
+
+        With ``require_all`` every term has to appear, which is what a search means; without it any
+        one of them does. Each message carries the words in their neighbourhood as ``snippet`` and
+        names the agent it came from, so a reader can tell whose words they found; ``limit`` counts
+        per agent, the Run's own agent first.
+        """
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        wanted = [term for term in terms if term][:8]
+        if run_uuid is None or not wanted:
+            return ()
+
+        async def _operation(conn: Any) -> tuple[dict[str, Any], ...]:
+            rows = await conn.fetch(
+                _SELECT_AGENT_TRANSCRIPT_RUN,
+                owner,
+                run_uuid,
+                # Every agent of the Run, and its whole trace: no session, no page cursor, and
+                # a search asks about one Run rather than a lane's whole history.
+                None,
+                None,
+                False,
+                None,
+                max(1, min(int(limit), SEARCH_MATCHES_PER_AGENT)),
+                # The words reach `ILIKE` as patterns, so its own wildcards are escaped: a
+                # reader who types `%` is looking for that character, not for everything.
+                [f"%{_like_literal(term)}%" for term in wanted],
+                require_all,
+                # The same words as they were typed, for the anchor that places each snippet:
+                # the patterns above are what matches, and these are what a snippet is cut
+                # around. Without them `strpos` looks for the per cent signs, finds nothing,
+                # and every snippet begins at the start of its message instead of the words.
+                list(wanted),
+            )
+            hits: list[dict[str, Any]] = []
+            for row in reversed(rows):
+                entry_type = str(row["entry_type"])
+                objective = row.get("child_objective")
+                payload = _json_object(row["payload_json"])
+                hit: dict[str, Any] = {
+                    "sequence": int(row["sequence"]),
+                    "role": "assistant"
+                    if entry_type == "assistant_message"
+                    else "tool"
+                    if entry_type == "tool_result"
+                    else "user",
+                    "snippet": str(row["snippet"] or ""),
+                    "total": int(row["total"]),
+                    **_labelled(
+                        "main" if row["is_main"] else str(row["session_id"]),
+                        str(objective) if isinstance(objective, str) and objective else None,
+                    ),
+                }
+                # A tool result names its tool; a load_skill one is a bounded Skill document,
+                # not the megabytes a tool result may hold, so its hit carries the text and the
+                # reader-facing mapping masks a protected document instead of shipping a snippet.
+                if entry_type == "tool_result":
+                    hit["name"] = str(payload.get("tool_name") or "")
+                if hit.get("name") == "load_skill":
+                    hit["content"] = tool_content_message_fields(
+                        decode_tool_content(payload.get("content"))
+                    ).get("content", "")
+                hits.append(hit)
+            return tuple(hits)
 
         return await self._run_read(_operation)
 
@@ -3486,15 +4150,24 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
         return await self._run_read(_operation)
 
     async def list_runs(
-        self, *, owner_id: str, after_run_id: str | None = None, limit: int = 50
+        self,
+        *,
+        owner_id: str,
+        after_run_id: str | None = None,
+        limit: int = 50,
+        newest_first: bool = False,
     ) -> tuple[RunRecord, ...]:
         owner = _require_owner(owner_id)
         cap = max(1, min(int(limit), 100))
         after = parse_run_id(after_run_id) if after_run_id else None
+        if newest_first and after is not None:
+            raise ValueError("newest_first lists cannot be paged with after_run_id")
 
         async def _operation(conn: Any) -> tuple[RunRecord, ...]:
             if after is None:
-                rows = await conn.fetch(_LIST_RUNS, owner, cap)
+                rows = await conn.fetch(
+                    _LIST_RUNS_NEWEST if newest_first else _LIST_RUNS, owner, cap
+                )
             else:
                 rows = await conn.fetch(_LIST_RUNS_AFTER, owner, after, cap)
             return tuple(run_record(row) for row in rows)
@@ -3575,6 +4248,35 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
 
         async def _operation(conn: Any) -> RunFetchedResource | None:
             row = await conn.fetchrow(_SELECT_RUN_RESOURCE_BY_ID, owner, run_uuid, resource_id)
+            if row is None:
+                return None
+            return RunFetchedResource(
+                resource_id=str(row["resource_id"]),
+                ordinal=int(row["ordinal"] or 0),
+                digest=str(row["blob_digest"]),
+                filename=str(row["safe_name"] or row["resource_id"]),
+                mime_type=str(row["media_type"] or "application/octet-stream"),
+                source_locator=bytes(row["source_locator"] or b""),
+                capabilities=_json_object(row["capabilities"]),
+            )
+
+        return await self._run_read(_operation)
+
+    async def latest_run_attachment(
+        self, *, owner_id: str, run_id: str, safe_name: str
+    ) -> RunFetchedResource | None:
+        """Read the newest image attachment a Run stored under ``safe_name``.
+
+        Recency is the row's own ``created_at``: an attachment is inserted once, when the
+        tool that made it settled, so the newest row is the last picture the Run took.
+        """
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        if run_uuid is None or not safe_name:
+            return None
+
+        async def _operation(conn: Any) -> RunFetchedResource | None:
+            row = await conn.fetchrow(_SELECT_LATEST_RUN_ATTACHMENT, owner, run_uuid, safe_name)
             if row is None:
                 return None
             return RunFetchedResource(
@@ -3725,9 +4427,78 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
                     presentation=str(row["presentation"]),
                     session_id=str(row["session_id"]),
                     intent_id=str(row["intent_id"]),
+                    sources=tuple(str(source) for source in (row["sources"] or ())),
                 )
                 for row in rows
             )
+
+        return await self._run_read(_operation)
+
+    async def load_tool_subjects(
+        self, *, owner_id: str, run_id: str, call_ids: Sequence[str]
+    ) -> dict[str, str]:
+        """The first bounded subject each named Tool call reported, from the Run's event log.
+
+        A subject is the caller-visible ``object_label`` the live Tool Activity already shows; it is
+        metadata, never a Tool's arguments or result. An absent call id — a trimmed event log, a
+        tool that reported no subject — is simply missing from the mapping.
+        """
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        wanted = [str(call_id) for call_id in call_ids if call_id]
+        if run_uuid is None or not wanted:
+            return {}
+
+        async def _operation(conn: Any) -> dict[str, str]:
+            rows = await conn.fetch(_SELECT_TOOL_PROGRESS_SUBJECTS, owner, run_uuid, wanted)
+            return {
+                str(row["call_id"]): str(row["subject"])
+                for row in rows
+                if row["call_id"] and row["subject"]
+            }
+
+        return await self._run_read(_operation)
+
+    async def load_tool_call_arguments(
+        self, *, owner_id: str, run_id: str
+    ) -> tuple[RunToolCall, ...]:
+        """The full arguments every Tool call in this Run's transcript recorded, in call order.
+
+        The Assistant entry is the one durable record of what a call was asked to do; the Run's
+        event log carries only the Tool's bounded subject. The attestation reader joins the two by
+        ``call_id``, so a call the model emitted and the runtime refused -- present here too -- is
+        never mistaken for one that ran. The first entry to name a call id supplies it, which is
+        the call the event log names. A Run with no recorded transcript answers empty.
+        """
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        if run_uuid is None:
+            return ()
+
+        async def _operation(conn: Any) -> tuple[RunToolCall, ...]:
+            rows = await conn.fetch(_SELECT_TOOL_CALL_ARGUMENTS, owner, run_uuid)
+            calls: dict[str, RunToolCall] = {}
+            for row in rows:
+                recorded = _json_value(row["tool_calls"])
+                if not isinstance(recorded, list):
+                    continue
+                for item in recorded:
+                    if not isinstance(item, Mapping):
+                        continue
+                    call_id = str(item.get("id") or "")
+                    tool_name = str(item.get("name") or "")
+                    arguments = item.get("arguments")
+                    if not call_id or not tool_name or not isinstance(arguments, Mapping):
+                        continue
+                    calls.setdefault(
+                        call_id,
+                        RunToolCall(
+                            call_id=call_id,
+                            tool_name=tool_name,
+                            arguments=dict(arguments),
+                        ),
+                    )
+            return tuple(calls.values())
 
         return await self._run_read(_operation)
 
@@ -4010,7 +4781,7 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
                 lease_owner=worker,
                 fencing_epoch=run.fencing_epoch,
             ),
-            workspace_store=PGWorkspaceStore(
+            workspace_store=PGAgentspaceStore(
                 pool=self._operation_pool,
                 owner_id=owner,
                 run_id=run_uuid,
@@ -4164,6 +4935,7 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
         result: Mapping[str, object],
         stop_reason: str | None = None,
         publications: Sequence[Any] = (),
+        workspace_head: AgentspaceHeadCommit | None = None,
     ) -> TerminalOutcome:
         return await self._finish_run(
             owner_id=owner_id,
@@ -4179,6 +4951,7 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
             payload={"status": "succeeded", "result": result},
             withhold_on_cancel=True,
             publications=publications,
+            workspace_head=workspace_head,
         )
 
     async def finish_failure(
@@ -4241,6 +5014,7 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
         payload: Mapping[str, Any],
         withhold_on_cancel: bool,
         publications: Sequence[Any] = (),
+        workspace_head: AgentspaceHeadCommit | None = None,
     ) -> TerminalOutcome:
         owner = _require_owner(owner_id)
         run_uuid = parse_run_id(run_id)
@@ -4270,6 +5044,8 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
                 if outcome.committed and outcome.status == status:
                     if status == "succeeded" and publications:
                         await self._write_publications(conn, owner, run_uuid, publications)
+                    if status == "succeeded" and workspace_head is not None:
+                        await self._commit_agentspace_head(conn, owner, workspace_head)
                     await conn.execute(
                         "DELETE FROM dlightrag_answer_committed_spills"
                         " WHERE owner_id = $1 AND run_id = $2",
@@ -4447,6 +5223,57 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
                         ),
                     )
                 return SweepOutcome(cancelled=int(cancelled), abandoned=int(abandoned))
+
+        return await self._run_write(_operation)
+
+    async def clear_finished_run_working_state(self) -> int:
+        """Drop what a finished Run's children ran on, one batch of Runs at a time.
+
+        A child's host state holds the live host and tool state it is leased on, and each
+        child operation's outcome holds what a control returned so a retry can answer
+        idempotently. Both belong to a Run that is still answerable: the roster and the
+        inspector read the child's status, objective, summary and usage, not these, and
+        steering, continuing or cancelling a child is refused once the Run is over. A Run
+        leaves the candidate set once its rows are cleared, so draining is finite.
+        """
+
+        async def _operation(conn: Any) -> int:
+            async with conn.transaction():
+                runs = await conn.fetch(
+                    _SELECT_WORKING_STATE_RUNS,
+                    FINISHED_RUN_GRACE_SECONDS,
+                    _BATCH_LIMIT,
+                )
+                for run in runs:
+                    await conn.execute(_CLEAR_RUN_HOST_STATE, run["owner_id"], run["run_id"])
+                    await conn.execute(
+                        _CLEAR_RUN_OPERATION_OUTCOMES, run["owner_id"], run["run_id"]
+                    )
+                return len(runs)
+
+        return await self._run_write(_operation)
+
+    async def compact_evidence_logs(self) -> int:
+        """Drop the passage text no answer cited, one batch of finished Runs at a time.
+
+        Evidence is written per retrieval and read back as a session's newest row, so the
+        rows behind it are the log of what a Run looked at. Their passage text is most of
+        the bytes and the answer never stood on it. The database compacts a Run's log in
+        place: the newest row of each session stays whole, every other row keeps the chunk
+        ids, the source metadata and the digests, and a chunk whose source the answer cites
+        keeps its text. A compacted row is no longer a candidate, so draining is finite.
+        """
+
+        async def _operation(conn: Any) -> int:
+            async with conn.transaction():
+                runs = await conn.fetch(
+                    _SELECT_COMPACTABLE_RUNS,
+                    FINISHED_RUN_GRACE_SECONDS,
+                    _BATCH_LIMIT,
+                )
+                for run in runs:
+                    await conn.execute(_COMPACT_RUN_EVIDENCE, run["owner_id"], run["run_id"])
+                return len(runs)
 
         return await self._run_write(_operation)
 

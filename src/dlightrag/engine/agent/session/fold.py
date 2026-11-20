@@ -15,6 +15,7 @@ from dlightrag.engine.agent.session.entries import (
     AssistantMessageEntry,
     CompactionEntry,
     ControlMessageEntry,
+    DeliveryWarningEntry,
     SessionEntry,
     ToolResultMessageEntry,
     UserMessageEntry,
@@ -129,6 +130,10 @@ def fold_entries(
             messages.append(fold_tool_message(entry))
         elif isinstance(entry, ControlMessageEntry):
             messages.append({"role": "user", "content": entry.content})
+        elif isinstance(entry, DeliveryWarningEntry):
+            # The warning is delivery/audit evidence, not a conversation turn. The next
+            # request carries it as an append-only repair envelope (request-only).
+            continue
         elif isinstance(entry, CompactionEntry):
             continue
     return messages

@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """What one model call ran with, as the wrapper that sent it knows it.
 
-A step of a Session records the model, the parameters and the prompt it ran on (ADR 0041).
+A step of a Session records the model, the parameters and the prompt it ran on (ADR 0043).
 The wrapper that calls the provider knows the first two for the attempt that produced the
 result, so it states them here and hands them up with the result. It knows nothing of the Run,
 the role or the entry, which belong to whoever commits the result.

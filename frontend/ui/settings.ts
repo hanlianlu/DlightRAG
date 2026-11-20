@@ -6,9 +6,13 @@
  * data and reports a typed summary for the navigation row to show. Pages are mounted while the
  * dialog is open and hidden while another shows, so a page that polls keeps its status fresh;
  * closing tears them down. Profile Memory is the one page that stays in the dialog while it is
- * closed, because a live Memory change arrives with an Undo whenever Chat says so. A notice shows
- * in a toast region of the dialog's own, in the top layer with it, because the shell's would sit
- * under the scrim; a page's notice reaches it whichever level a phone is on.
+ * closed, because a live Memory change arrives with an Undo whenever Chat says so. It also keeps a
+ * scrolling window of its own: it fills the pane beside the description, so a long list of stored
+ * memories scrolls in its card while the switch above it and the Clear action below stay put. A
+ * notice shows in a toast region of the dialog's own, in the top layer with it, because the shell's
+ * would sit under the scrim; a page's notice reaches it whichever level a phone is on, and so does
+ * one the shell raises while the dialog is open. What still awaits the reader when the dialog
+ * closes, an Undo or an error, goes on in the shell's region.
  *
  * On a phone the same markup is two levels: the section list, then one page with a Back button.
  */
@@ -29,11 +33,12 @@ import './settings-connections.ts';
 import './settings-conversations.ts';
 import {languageLabel} from './settings-language.ts';
 import './settings-memory.ts';
+import './settings-privacy.ts';
 import './settings-skills.ts';
 import type {SettingsSection, SettingsSummary} from './settings-summary.ts';
 import './toast.ts';
 import {requestToast} from './toast-request.ts';
-import type {ToastRequestDetail} from './toast.ts';
+import {type ToastRequestDetail, toastRegionOf} from './toast.ts';
 
 type Group = 'agent' | 'data' | 'general';
 
@@ -43,9 +48,12 @@ interface SectionDefinition {
   icon: IconName;
   label: () => string;
   description: () => string;
+  /** The page holds a scrolling window of its own, so it fills the pane instead of letting it scroll. */
+  fills?: boolean;
 }
 
-const SECTIONS: readonly SectionDefinition[] = [
+// Non-empty by its type, so the dialog's fallback page is always there to read.
+const SECTIONS: readonly [SectionDefinition, ...SectionDefinition[]] = [
   {
     section: 'connections',
     group: 'agent',
@@ -75,6 +83,7 @@ const SECTIONS: readonly SectionDefinition[] = [
       'Preferences and facts the agent remembers about you across conversations.',
       {id: 'settings.memoryDescription'},
     ),
+    fills: true,
   },
   {
     section: 'skills',
@@ -92,6 +101,16 @@ const SECTIONS: readonly SectionDefinition[] = [
     icon: 'conversations',
     label: () => msg('Conversation Sessions', {id: 'settings.conversationSessions'}),
     description: () => msg('Conversations retain 365 days', {id: 'settings.retentionNote'}),
+  },
+  {
+    section: 'privacy',
+    group: 'data',
+    icon: 'privacy',
+    label: () => msg('Privacy', {id: 'settings.privacy'}),
+    description: () => msg(
+      'Choose whether your conversations may be used to improve DlightRAG.',
+      {id: 'settings.privacyDescription'},
+    ),
   },
   {
     section: 'language',
@@ -148,6 +167,13 @@ function statusOf(summary: SettingsSummary | undefined): {short: string; detail:
         detail: summary.count === 1
           ? msg('1 conversation · kept 365 days', {id: 'settings.status.conversationsOne'})
           : msg(str`${summary.count} conversations · kept 365 days`, {id: 'settings.status.conversations'}),
+      };
+    case 'privacy':
+      return {
+        short: '',
+        detail: summary.contribute
+          ? msg('On', {id: 'settings.status.privacyOn'})
+          : msg('Off', {id: 'settings.status.privacyOff'}),
       };
     case 'language':
       return {short: '', detail: languageLabel(summary.preference)};
@@ -224,6 +250,12 @@ export class DlSettingsDialog extends LightElement {
     this.#focusEntry();
   }
 
+  /** The dialog while it is showing, which holds the top layer: a notice is seen there and nowhere else. */
+  get openDialog(): HTMLDialogElement | null {
+    const dialog = this.#dialog();
+    return dialog?.open ? dialog : null;
+  }
+
   /** Hand one live Profile Memory fact from Chat to the page that turns it into a receipt. */
   handleMemoryOperation(event: MemoryOperationEvent): void {
     this.querySelector('dl-settings-memory')?.handleOperation(event);
@@ -231,7 +263,7 @@ export class DlSettingsDialog extends LightElement {
 
   protected override render(): TemplateResult {
     const phone = this.#phone.matches;
-    const definition = SECTIONS.find((item) => item.section === this.page) ?? SECTIONS[0]!;
+    const definition = SECTIONS.find((item) => item.section === this.page) ?? SECTIONS[0];
     const isPage = (section: SettingsSection): boolean => this.page === section;
     return html`
       <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title"
@@ -259,25 +291,27 @@ export class DlSettingsDialog extends LightElement {
                 @click=${this.#back}></dl-icon-button>
               <h3 id="settings-page-title" class=${styles.paneTitle} tabindex="-1">${definition.label()}</h3>
             </header>
-            <div class=${styles.paneBody} data-page-body>
+            <div class="${styles.paneBody} ${definition.fills ? styles.paneFill : ''}" data-page-body>
               <p class=${styles.description}>${definition.description()}</p>
               ${this.mounted ? html`
                 <dl-settings-connections class=${styles.page} ?hidden=${!isPage('connections')}></dl-settings-connections>
                 <dl-settings-agent-accounts class=${styles.page}
                   ?hidden=${!isPage('agent-accounts')}></dl-settings-agent-accounts>` : nothing}
-              <dl-settings-memory class=${styles.page} .active=${this.mounted} .current=${isPage('memory')}
-                ?hidden=${!isPage('memory')}></dl-settings-memory>
+              <dl-settings-memory class="${styles.page} ${styles.pageFill}" .active=${this.mounted}
+                .current=${isPage('memory')} ?hidden=${!isPage('memory')}></dl-settings-memory>
               ${this.mounted ? html`
                 <dl-settings-skills class=${styles.page} ?hidden=${!isPage('skills')}></dl-settings-skills>
                 <dl-settings-conversations class=${styles.page} .handles=${this.handles}
                   .deleteAll=${this.#deleteAll} ?hidden=${!isPage('conversations')}></dl-settings-conversations>
+                <dl-settings-privacy class=${styles.page} ?hidden=${!isPage('privacy')}></dl-settings-privacy>
                 <dl-settings-language class=${styles.page}
                   ?hidden=${!isPage('language')}></dl-settings-language>` : nothing}
             </div>
           </section>
         </div>
         ${this.mounted ? html`
-          <dl-toast-region class="toast" role="status" aria-live="polite"></dl-toast-region>` : nothing}
+          <dl-toast-region class="toast"></dl-toast-region>
+          <dl-toast-region class="toast" tone="error"></dl-toast-region>` : nothing}
       </dialog>
     `;
   }
@@ -360,7 +394,8 @@ export class DlSettingsDialog extends LightElement {
 
   /** While Settings is open its own region shows a page's notice, above the scrim; otherwise the shell does. */
   #toastRequested = (event: CustomEvent<ToastRequestDetail>): void => {
-    const toast = this.#dialog()?.open ? this.querySelector('dl-toast-region') : null;
+    const dialog = this.openDialog;
+    const toast = dialog ? toastRegionOf(dialog, event.detail.tone) : undefined;
     if (!toast) return;
     event.stopPropagation();
     toast.show(event.detail);
@@ -370,12 +405,14 @@ export class DlSettingsDialog extends LightElement {
     // The event is queued when the dialog closes, so it can arrive after Settings opened again;
     // it then reports the session before this one, which has nothing left to tear down.
     if (this.#dialog()?.open) return;
-    // A notice that still offers Undo outlives the dialog: the shell's region takes it over.
-    const toast = this.querySelector('dl-toast-region');
-    const notice = toast?.visible ? toast.request : null;
-    // Focus goes back to where Settings was opened from, not to an Undo the reader never reached.
-    if (notice?.action && !toast?.pending) {
-      requestToast(this, {message: notice.message, action: {...notice.action, focus: false}});
+    // What still awaits the reader outlives the dialog, an Undo and an error alike (one raised from the shell
+    // while Settings was open is gone with it otherwise): the shell's regions take it over. Focus goes back to
+    // where Settings was opened from, not to an Undo the reader never reached.
+    for (const toast of this.querySelectorAll('dl-toast-region')) {
+      const notice = toast.visible && !toast.pending ? toast.request : null;
+      if (notice && (notice.action || toast.tone === 'error')) {
+        requestToast(this, {...notice, tone: toast.tone, action: notice.action && {...notice.action, focus: false}});
+      }
     }
     this.mounted = false;
     this.summaries = {};

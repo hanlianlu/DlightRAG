@@ -6,7 +6,7 @@ from collections.abc import Awaitable
 from fastapi import HTTPException, Response
 from pydantic import BaseModel, ConfigDict
 
-from dlightrag.application.model_catalogue import (
+from dlightrag.application.model_catalogue.service import (
     ModelCatalogueAdmin,
     ModelCatalogueEntryNotFoundError,
     ModelCatalogueRevisionConflict,

@@ -4,10 +4,10 @@
 from typing import Any
 
 # Locks the Run row only while this worker's claim is still the live one: the
-# same owner and fencing epoch, still running -- ownership, not the clock. Every fenced
-# write that is more than one statement takes this lock first, so a reclaimed
-# Run refuses a stale worker and one lock order holds across writers. The row
-# carries what a settlement decides by once it holds the lock.
+# same owner and fencing epoch, still running. Every fenced write that is more
+# than one statement takes this lock first, so a reclaimed Run refuses a stale
+# worker and one lock order holds across writers. The row carries what a
+# settlement decides by once it holds the lock.
 _LOCK_LEASED_RUN = """
 SELECT durable_progress_version,
        cancel_requested_at IS NOT NULL AS cancel_requested

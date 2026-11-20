@@ -10,14 +10,26 @@ import {
   type MemoryOperationEvent,
 } from '../api/memory.ts';
 import {noteRefusal} from '../api/wire.ts';
-import {createSSEParser, parseData} from './sse.ts';
-import type {AnswerEventCursorStore} from '../stores/answer-event-cursor-store.ts';
+import {createSSEParser, parseData} from '../api/sse.ts';
+import type {LocalizedText} from './localized-text.ts';
+import {SERVICE_ERROR_TEXT} from './run-errors.ts';
 
 const DEFAULT_MAX_RECONNECT_ATTEMPTS = 5;
 const DEFAULT_RECONNECT_DELAY_MS = 500;
 
+/** Whether a batch states something a trace can read: a tool step, a phase, the end.
+ *
+ *  A token or a reasoning delta is the Run still writing, and the words are the chat's to draw;
+ *  everything else is a fact some page holds. One rule, because both the surface that forwards a
+ *  batch and the surface that reads pages for it have to agree on which is which.
+ */
+export function statesSomething(events: readonly AnswerRunEvent[]): boolean {
+  return events.some((event) => event.kind !== 'token' && event.kind !== 'reasoning');
+}
+
 export type AnswerRunEvent =
   | {kind: 'token'; text: string}
+  | {kind: 'reasoning'; text: string}
   | {kind: 'reset'}
   | {kind: 'progress'; payload: unknown}
   | {
@@ -30,8 +42,9 @@ export type AnswerRunEvent =
   | {kind: 'done'; payload: unknown};
 
 type PendingAnswerRunEvent =
-  | Exclude<AnswerRunEvent, {kind: 'token'}>
-  | {kind: 'token'; parts: string[]};
+  | Exclude<AnswerRunEvent, {kind: 'token'} | {kind: 'reasoning'}>
+  | {kind: 'token'; parts: string[]}
+  | {kind: 'reasoning'; parts: string[]};
 
 interface FrameTicket {
   handle: unknown;
@@ -43,8 +56,8 @@ interface AnswerRunBatch {
   frame: FrameTicket | null;
 }
 
-export type RunFrameScheduler = (callback: () => void) => unknown;
-export type RunFrameCanceller = (handle: unknown) => void;
+type RunFrameScheduler = (callback: () => void) => unknown;
+type RunFrameCanceller = (handle: unknown) => void;
 
 interface DefaultFrameHandle {
   kind: 'animation' | 'timeout';
@@ -71,9 +84,15 @@ export type FollowResult =
   | {kind: 'aborted'}
   | {kind: 'terminal'; stored?: ConversationTurn}
   | {kind: 'retryable'; stored: ConversationTurn}
-  | {kind: 'error'; message: string};
+  | {kind: 'error'; message: LocalizedText};
 
-export interface RunControllerOptions {
+/** Where a Run's replay position is kept: how far the stream has been consumed, per conversation. */
+interface RunCursors {
+  lastSequence(conversationId: string, runId: string): number;
+  recordSequence(conversationId: string, runId: string, sequence: number): void;
+}
+
+interface RunControllerOptions {
   fetch?: typeof fetch;
   getRun?: typeof getRun;
   cancelRun?: typeof cancelRun;
@@ -82,8 +101,9 @@ export interface RunControllerOptions {
   onStateChange?: () => void;
   scheduleFrame?: RunFrameScheduler;
   cancelFrame?: RunFrameCanceller;
-  /** Where replay cursors persist; the Shell's AppHandles owns the shared one. */
-  cursorStore: AnswerEventCursorStore;
+  /** Where replay cursors persist, asked for at each use: the bag a Feature is handed after it was
+   *  built is the one that holds them, so the controller cannot keep the one it started with. */
+  cursorStore: () => RunCursors;
 }
 
 /** Owns the transport and lifecycle resources for this tab's one followed run. */
@@ -96,7 +116,7 @@ export class RunController {
   readonly #onStateChange: () => void;
   readonly #scheduleFrame: RunFrameScheduler;
   readonly #cancelFrame: RunFrameCanceller;
-  readonly #cursors: AnswerEventCursorStore;
+  readonly #cursors: () => RunCursors;
 
   #lifecycleController: AbortController | null = null;
   readonly #cancelControllers = new Map<string, AbortController>();
@@ -208,7 +228,7 @@ export class RunController {
     let barrenAttempts = 0;
 
     const mayRetry = (before: number): boolean => {
-      barrenAttempts = this.#cursors.lastSequence(conversationId, runId) > before
+      barrenAttempts = this.#cursors().lastSequence(conversationId, runId) > before
         ? 0
         : barrenAttempts + 1;
       return barrenAttempts <= this.#maxReconnectAttempts;
@@ -216,7 +236,7 @@ export class RunController {
 
     try {
       while (!signal.aborted) {
-        const after = this.#cursors.lastSequence(conversationId, runId);
+        const after = this.#cursors().lastSequence(conversationId, runId);
         let response: Response;
         try {
           response = await this.#fetch(`/web/api/runs/${encodeURIComponent(runId)}/events`, {
@@ -233,7 +253,7 @@ export class RunController {
         if (response.status === 404 || response.status === 410) break;
         if (!response.ok) {
           noteRefusal(response.status);
-          return {kind: 'error', message: 'Service error. Please try again.'};
+          return {kind: 'error', message: SERVICE_ERROR_TEXT};
         }
 
         let terminal = false;
@@ -267,7 +287,7 @@ export class RunController {
         return {kind: 'terminal', stored};
       } catch {
         if (signal.aborted) return {kind: 'aborted'};
-        return {kind: 'error', message: 'Service error. Please try again.'};
+        return {kind: 'error', message: SERVICE_ERROR_TEXT};
       }
     } finally {
       this.#flushBatch(batch);
@@ -327,9 +347,11 @@ export class RunController {
     if (batch.pending.length === 0) return;
     const pending = batch.pending;
     batch.pending = [];
-    const events: AnswerRunEvent[] = pending.map((event) => event.kind === 'token'
-      ? {kind: 'token', text: event.parts.join('')}
-      : event);
+    const events: AnswerRunEvent[] = pending.map((event) => {
+      if (event.kind === 'token') return {kind: 'token', text: event.parts.join('')};
+      if (event.kind === 'reasoning') return {kind: 'reasoning', text: event.parts.join('')};
+      return event;
+    });
     batch.onBatch(events);
   }
 
@@ -344,6 +366,10 @@ export class RunController {
       const previous = batch.pending.at(-1);
       if (previous?.kind === 'token') previous.parts.push(event.text);
       else batch.pending.push({kind: 'token', parts: [event.text]});
+    } else if (event.kind === 'reasoning') {
+      const previous = batch.pending.at(-1);
+      if (previous?.kind === 'reasoning') previous.parts.push(event.text);
+      else batch.pending.push({kind: 'reasoning', parts: [event.text]});
     } else {
       batch.pending.push(event);
     }
@@ -351,9 +377,10 @@ export class RunController {
   }
 
   #interpretEvent(eventType: string, data: string): AnswerRunEvent | null {
-    if (eventType === 'token') {
+    if (eventType === 'token' || eventType === 'reasoning') {
       const parsed = parseData(data);
-      return {kind: 'token', text: typeof parsed === 'string' ? parsed : String(parsed)};
+      const text = typeof parsed === 'string' ? parsed : String(parsed);
+      return eventType === 'token' ? {kind: 'token', text} : {kind: 'reasoning', text};
     }
     if (eventType === 'reset') return {kind: 'reset'};
     if (eventType === 'progress') return {kind: 'progress', payload: parseData(data)};
@@ -409,8 +436,8 @@ export class RunController {
       if (signal.aborted || this.#batch !== batch) return;
       const sequence = Number(id);
       if (Number.isFinite(sequence) && sequence > 0) {
-        if (sequence <= this.#cursors.lastSequence(conversationId, runId)) return;
-        this.#cursors.recordSequence(conversationId, runId, sequence);
+        if (sequence <= this.#cursors().lastSequence(conversationId, runId)) return;
+        this.#cursors().recordSequence(conversationId, runId, sequence);
       }
       const event = this.#interpretEvent(eventType, data);
       if (!event) return;

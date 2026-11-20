@@ -33,6 +33,7 @@ test.afterEach(() => {
 });
 
 const accepted: AcceptedAnswer = {
+  kind: 'accepted',
   conversation: {
     conversationId: 'conversation-1',
     title: 'Answer',
@@ -57,12 +58,15 @@ const accepted: AcceptedAnswer = {
     errorKind: null,
     errorMessage: null,
     childCount: 0,
+    answerSequence: null,
+    feedback: null,
     createdAt: '2026-01-01T00:00:00Z',
   },
 };
 
 // What the server actually puts on the wire; the adapter must translate it.
 const acceptedWire = {
+  kind: 'accepted',
   conversation: {
     conversation_id: 'conversation-1',
     title: 'Answer',
@@ -115,6 +119,61 @@ test('browser answer command posts the immutable intent and leased files', async
   assert.equal(body.get('submission_id'), intent.submissionId);
   assert.equal(body.get('mode'), intent.mode);
   assert.equal((body.get('attachments') as File).name, 'notes.md');
+  assert.equal(body.get('delivery'), null);
+});
+
+test('a send that arrives while a Run is live carries its delivery and reads the receipt', async () => {
+  let payload: string | null = null;
+  const adapter = new BrowserAnswerSubmissionAdapter();
+  globalThis.fetch = async (_input, init) => {
+    payload = typeof init?.body === 'string' ? init.body : null;
+    return new Response(JSON.stringify({
+      kind: 'queue',
+      message: {
+        message_id: 'message-1',
+        content: 'One more thing',
+        position: 1,
+        created_at: '2026-01-01T00:00:00Z',
+      },
+    }), {
+      status: 202,
+      headers: {'Content-Type': 'application/json'},
+    });
+  };
+
+  const result = await adapter.submit(
+    {...intent, delivery: 'queue'},
+    [],
+    new AbortController().signal,
+  );
+
+  assert.deepEqual(result, {
+    kind: 'queue',
+    message: {
+      messageId: 'message-1',
+      content: 'One more thing',
+      position: 1,
+      createdAt: '2026-01-01T00:00:00Z',
+    },
+  });
+  assert.deepEqual(JSON.parse(payload ?? ''), {
+    query: intent.query,
+    workspaces: intent.workspaces,
+    conversation_id: intent.conversationId,
+    submission_id: intent.submissionId,
+    mode: intent.mode,
+    delivery: 'queue',
+  });
+
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    kind: 'steer',
+    run_id: 'run-1',
+    control_sequence: 3,
+  }), {status: 202, headers: {'Content-Type': 'application/json'}});
+  assert.deepEqual(
+    await adapter.submit({...intent, delivery: 'steer'}, [], new AbortController().signal),
+    {kind: 'steer', runId: 'run-1', controlSequence: 3},
+  );
 });
 
 test('browser answer command preserves typed failures and marks transport failures ambiguous', async () => {
@@ -200,4 +259,38 @@ test('submission lookup is owner route shaped and distinguishes absent from acce
     `/web/api/answer-submissions/${intent.submissionId}`,
     `/web/api/answer-submissions/${intent.submissionId}`,
   ]);
+});
+
+test('a lookup answer that cannot be read is an unknown outcome, as an unreadable submit answer is', async () => {
+  const adapter = new BrowserAnswerSubmissionAdapter();
+  for (const body of ['<html>half a page', JSON.stringify({turn: 'not an accepted answer'})]) {
+    globalThis.fetch = async () => new Response(body, {status: 200});
+    await assert.rejects(
+      adapter.lookup(intent.submissionId, new AbortController().signal),
+      (error: unknown) => error instanceof AnswerSubmissionError
+        && error.kind === 'ambiguous'
+        && error.message === '',
+      `${body} was taken for an answer`,
+    );
+  }
+});
+
+test('browser answer command carries the reader\'s own limit as a retryable refusal with its kind', async () => {
+  const adapter = new BrowserAnswerSubmissionAdapter();
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    kind: 'service_unavailable',
+    message: 'You have as many answers in progress as you may run at once.',
+    error_kind: 'active_run_limit',
+  }), {
+    status: 429,
+    headers: {'Content-Type': 'application/json'},
+  });
+
+  await assert.rejects(
+    adapter.submit(intent, [], new AbortController().signal),
+    (error: unknown) => error instanceof AnswerSubmissionError
+      && error.status === 429
+      && error.kind === 'service_unavailable'
+      && error.errorKind === 'active_run_limit',
+  );
 });

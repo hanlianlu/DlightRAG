@@ -14,38 +14,37 @@ from mcp import Client, MCPError
 from mcp.types import INVALID_PARAMS, CallToolResult, InputRequiredResult, TextContent
 
 from dlightrag.adapters.mcp import server as mcp_server
-from dlightrag.application.access import (
+from dlightrag.application.access.control import (
     JwtClaimsAccessControl,
-    RequestScope,
+)
+from dlightrag.application.access.principal import (
     owner_id_from_principal,
+)
+from dlightrag.application.access.scope import (
+    RequestScope,
     request_scope_context,
 )
 from dlightrag.application.answer_runs.artifacts import published_artifact_descriptor
 from dlightrag.application.answer_runs.service import AgentEffortOffer
-from dlightrag.application.config import (
+from dlightrag.application.config.sections import (
     AccessControlConfig,
     AccessControlRuleConfig,
     DlightragConfig,
 )
-from dlightrag.application.corpus_admin import (
-    FilePanelCursorCodec,
-    IngestSpec,
-    WorkspaceCatalogPage,
-)
-from dlightrag.application.retrieval import (
-    RetrieveProjection,
-    RetrieveResponse,
-    restore_retrieval_result,
-)
+from dlightrag.application.corpus_admin.file_panel import FilePanelCursorCodec
+from dlightrag.application.corpus_admin.service import IngestSpec
+from dlightrag.application.corpus_admin.workspace_catalog import WorkspaceCatalogPage
 from dlightrag.application.retrieval._answer_projection import project_answer_retrieval
+from dlightrag.application.retrieval.execution import restore_retrieval_result
+from dlightrag.application.retrieval.service import RetrieveProjection, RetrieveResponse
 from dlightrag.application.runs import RunView
-from dlightrag.application.settings import access_settings
+from dlightrag.application.settings.projections import access_settings
 from dlightrag.engine.runtime.records import (
     RunAccessScope,
     RunRecord,
 )
-from tests.config_helpers import mutate_config, replace_config
 from tests.support.application_double import application_double
+from tests.support.config_helpers import mutate_config, replace_config
 from tests.unit.conftest import answer_capabilities
 
 _IMAGE_BLOCK = {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
@@ -431,7 +430,7 @@ async def test_mcp_names_invalid_arguments_without_echoing_them(
 
 
 async def test_mcp_steering_input_errors_are_refusals(mock_mcp_application: Any) -> None:
-    from dlightrag.application.answer_runs import AnswerRequestError
+    from dlightrag.application.answer_runs.service import AnswerRequestError
 
     mock_mcp_application.answers.steer.side_effect = AnswerRequestError(
         "steer instruction exceeds 20000 characters"
@@ -446,7 +445,7 @@ async def test_mcp_steering_input_errors_are_refusals(mock_mcp_application: Any)
 
 
 async def test_mcp_corpus_input_errors_are_refusals(mock_mcp_application: Any) -> None:
-    from dlightrag.application.corpus_admin import CorpusMutationInputError
+    from dlightrag.application.corpus_admin.errors import CorpusMutationInputError
 
     mock_mcp_application.corpus_mutations.create_delete.side_effect = CorpusMutationInputError(
         "at least one exact document identifier is required"
@@ -505,7 +504,9 @@ async def test_mcp_a_stored_record_that_fails_its_model_is_internal(
 
 
 async def test_mcp_surfaces_an_application_access_denial(mock_mcp_application: Any) -> None:
-    from dlightrag.application.access import AccessDeniedError
+    from dlightrag.application.access.control import (
+        AccessDeniedError,
+    )
 
     mock_mcp_application.answers.create.side_effect = AccessDeniedError(
         "Access denied for action=workspace.query workspace=finance"
@@ -893,7 +894,10 @@ async def test_mcp_all_workspaces_rejects_empty_authorized_set(
         AccessControlConfig(
             rules=[
                 AccessControlRuleConfig(
-                    claim="groups", value="finance", workspaces=["finance"], actions=["reader"]
+                    claim="groups",
+                    value="finance",
+                    workspaces=["finance"],
+                    actions=["common_user"],
                 )
             ]
         ),
@@ -974,7 +978,7 @@ async def test_mcp_rejects_mutually_exclusive_s3_key_and_prefix(mock_mcp_applica
 
 
 async def test_mcp_create_workspace_surfaces_a_duplicate(mock_mcp_application) -> None:
-    from dlightrag.application.corpus_admin import WorkspaceExistsError
+    from dlightrag.application.corpus_admin.errors import WorkspaceExistsError
 
     mock_mcp_application.corpora.create_workspace.side_effect = WorkspaceExistsError(
         "Workspace 'Default' already exists"
@@ -1036,7 +1040,7 @@ async def test_mcp_corpus_mutation_surfaces_caller_refusals(
     mock_mcp_application, refusal: str
 ) -> None:
     """A reader's refusal and a reused key are the caller's to fix, not internal failures."""
-    from dlightrag.application.corpus_admin import CorpusMutationUnavailableError
+    from dlightrag.application.corpus_admin.errors import CorpusMutationUnavailableError
     from dlightrag.application.runs import IdempotencyKeyConflict
 
     error = {
@@ -1121,7 +1125,7 @@ async def test_mcp_requests_stay_bound_to_running_application_config(
     test_config: DlightragConfig,
     tmp_path,
 ) -> None:
-    from dlightrag.application.config import set_config
+    from dlightrag.application.config.loading import set_config
 
     application_config = test_config.model_copy(
         update={
@@ -1246,7 +1250,7 @@ async def test_mcp_answer_links_are_not_refused_by_the_type_their_address_names(
 async def test_mcp_answer_reports_changed_connections(
     mock_mcp_application: Any,
 ) -> None:
-    from dlightrag.application.answer_runs import AnswerConnectionsChangedError
+    from dlightrag.application.answer_runs.service import AnswerConnectionsChangedError
 
     mock_mcp_application.answers.create.side_effect = AnswerConnectionsChangedError()
 
@@ -1285,6 +1289,72 @@ async def test_mcp_answer_projects_the_deployment_wide_admission_limit(
     assert isinstance(result, CallToolResult)
     assert result.is_error is True
     assert _tool_text(result) == "Error: Deployment-wide nonterminal admission limit reached"
+
+
+async def test_mcp_answer_projects_the_callers_own_limit_under_its_kind(
+    mock_mcp_application: Any,
+) -> None:
+    from dlightrag.application.answer_runs.service import ActiveRunLimitError
+    from dlightrag.engine.answer.errors import ACTIVE_RUN_LIMIT_MESSAGE
+
+    mock_mcp_application.answers.create.side_effect = ActiveRunLimitError(2)
+
+    result = await mcp_server.mcp_app.call_tool("answer", {"query": "x"})
+
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is True
+    assert _tool_text(result) == f"Error [active_run_limit]: {ACTIVE_RUN_LIMIT_MESSAGE}"
+
+
+async def test_mcp_acceptance_is_for_the_caller_the_request_scope_names(
+    mock_mcp_application: Any,
+) -> None:
+    """The scope carries the verified claims a Runtime Policy names people by, so the answer, a
+    follow-up and a fork each hand it to acceptance, and not only the owner it projects to."""
+    scope = RequestScope(user_id="intern", auth_mode="jwt", claims={"email": "intern@example.com"})
+    mock_mcp_application.answers.continuation_workspaces.return_value = ("default",)
+    mock_mcp_application.corpora.alist_workspace_records.return_value = [{"workspace": "default"}]
+    arguments = {"run_id": _RUN_ID, "query": "and then?"}
+
+    with request_scope_context(scope):
+        await mcp_server.mcp_app.call_tool("answer", {"query": "x"})
+        await mcp_server.mcp_app.call_tool("follow_up_answer_run", arguments)
+        await mcp_server.mcp_app.call_tool("fork_answer_run", arguments)
+
+    answers = mock_mcp_application.answers
+    assert answers.create.await_args.kwargs["caller"] == scope
+    assert answers.follow_up.await_args.kwargs["caller"] == scope
+    assert answers.fork.await_args.kwargs["caller"] == scope
+
+
+async def test_mcp_capabilities_offer_the_efforts_of_the_caller_they_are_asked_by(
+    mock_mcp_application: Any,
+) -> None:
+    scope = RequestScope(user_id="intern", auth_mode="jwt", claims={"email": "intern@example.com"})
+    mock_mcp_application.answers.agent_effort_offer.return_value = AgentEffortOffer(("low",), "low")
+
+    with request_scope_context(scope):
+        payload = _tool_json(await mcp_server.mcp_app.call_tool("get_capabilities", {}))
+
+    mock_mcp_application.answers.agent_effort_offer.assert_awaited_once_with(scope)
+    assert payload["answer_agent_effort_levels"] == ["low"]
+
+
+async def test_mcp_capabilities_still_answer_while_the_effort_ceiling_cannot_be_read(
+    mock_mcp_application: Any,
+) -> None:
+    from dlightrag.application.policies.service import (
+        PolicyUnreadableError,
+    )
+
+    mock_mcp_application.answers.agent_effort_offer.side_effect = PolicyUnreadableError(
+        "The stored 'agent_effort_ceiling' runtime policy no longer fits its document (default)"
+    )
+
+    payload = _tool_json(await mcp_server.mcp_app.call_tool("get_capabilities", {}))
+
+    assert payload["answer_agent_effort_levels"] == []
+    assert payload["answer_image_capability"]["status"] in {"supported", "unsupported", "unknown"}
 
 
 async def test_mcp_status_returns_the_canonical_result_and_sanitizes_contexts(
@@ -1561,7 +1631,7 @@ async def test_mcp_file_tools_canonicalize_display_workspace_before_access_and_m
 async def test_mcp_list_workspaces_returns_the_bounded_first_page(
     mock_mcp_application: Any,
 ) -> None:
-    from dlightrag.application.corpus_admin import (
+    from dlightrag.application.corpus_admin.workspace_catalog import (
         WorkspaceCatalogCursor,
         WorkspaceCatalogPage,
     )

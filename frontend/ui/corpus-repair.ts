@@ -3,6 +3,7 @@
 
 import {msg} from '@lit/localize';
 import {html, type TemplateResult} from 'lit';
+import {catalogText, type LocalizedText} from '../lib/localized-text.ts';
 import type {CorpusRunResumeOutcome, TrackedCorpusRun} from '../lib/corpus-run-tracker.ts';
 
 /** Why the Run is parked and what to do, in the server's words when it gave them. */
@@ -19,8 +20,8 @@ export function resumeRepairLabel(): string {
 }
 
 /** What a settled resume request tells the reader. */
-export function resumeRepairResult(outcome: Exclude<CorpusRunResumeOutcome, 'stale'>): string {
+export function resumeRepairResult(outcome: Exclude<CorpusRunResumeOutcome, 'stale'>): LocalizedText {
   return outcome === 'accepted'
-    ? msg('Corpus repair resume accepted.', {id: 'corpusRepair.resumeAccepted'})
-    : msg('Corpus repair resume failed.', {id: 'corpusRepair.resumeFailed'});
+    ? catalogText('Corpus repair resume accepted.', 'corpusRepair.resumeAccepted')
+    : catalogText('Corpus repair resume failed.', 'corpusRepair.resumeFailed');
 }

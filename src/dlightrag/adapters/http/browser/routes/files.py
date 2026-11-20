@@ -9,7 +9,11 @@ from uuid import uuid7
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 
-from dlightrag.adapters.http.browser.deps import enforce_web_access, get_application, get_workspace
+from dlightrag.adapters.http.browser.deps import (
+    enforce_web_access,
+    get_application,
+    get_workspace,
+)
 from dlightrag.adapters.http.browser.file_models import (
     WebCorpusRunReceipt,
     WebFailedFileItem,
@@ -19,17 +23,19 @@ from dlightrag.adapters.http.browser.file_models import (
 )
 from dlightrag.adapters.http.browser.routes.corpus_runs import corpus_run_receipt
 from dlightrag.adapters.http.source_download import source_download_response
-from dlightrag.application.access import AccessAction, owner_id_from_user
-from dlightrag.application.corpus_admin import (
+from dlightrag.application.access.control import AccessAction
+from dlightrag.application.access.principal import (
+    owner_id_from_user,
+)
+from dlightrag.application.corpus_admin.errors import UnsafeUploadNameError, UploadTooLargeError
+from dlightrag.application.corpus_admin.file_panel import (
     FILE_PANEL_PAGE_DEFAULT_LIMIT,
     FILE_PANEL_PAGE_MAX_LIMIT,
     FilePanelCursorError,
     FilePanelPageRequest,
-    UnsafeUploadNameError,
-    UploadTooLargeError,
-    safe_log_text,
 )
 from dlightrag.application.errors import ApplicationError
+from dlightrag.engine.ai.telemetry import safe_log_text
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +51,7 @@ async def download_source(
     workspace: str | None = Query(default=None),
 ) -> FileResponse | RedirectResponse:
     """Download one source document through the Web session boundary."""
-    from dlightrag.application.corpus_admin import workspace_id_for_name
+    from dlightrag.application.corpus_admin.service import workspace_id_for_name
 
     safe_workspace = (
         workspace_id_for_name(workspace)
@@ -74,7 +80,7 @@ async def download_source(
 
 
 def _resolve_workspace(requested: str | None, cookie_workspace: str) -> str:
-    from dlightrag.application.corpus_admin import workspace_id_for_name
+    from dlightrag.application.corpus_admin.service import workspace_id_for_name
 
     if not requested or not requested.strip():
         return cookie_workspace

@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from dlightrag.engine.rag.retrieval import ContextRow
+from dlightrag.engine.rag.retrieval.models import ContextRow
 from dlightrag.engine.rag.retrieval.rerank_breaker import RerankCircuitOpen
 
 logger = logging.getLogger(__name__)

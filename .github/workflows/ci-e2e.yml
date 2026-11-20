@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 #
-# Manual-trigger E2E smoke tests against a real PostgreSQL 18 instance.
-# Requires the dlightrag-postgres:pg18 image. Model calls are faked in tests.
+# Manual-trigger E2E smoke tests against a real PostgreSQL 18 instance, built from
+# postgres/. Model calls are faked in tests.
 # Not part of the standard CI matrix — use `make ci-e2e` for local runs.
 
 name: CI E2E (manual)
@@ -15,23 +15,6 @@ permissions:
 jobs:
   e2e-pg18:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: ghcr.io/${{ github.repository_owner }}/dlightrag-postgres:pg18
-        credentials:
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-        env:
-          POSTGRES_DB: dlightrag
-          POSTGRES_USER: dlightrag
-          POSTGRES_PASSWORD: dlightrag
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U dlightrag -d dlightrag"
-          --health-interval 15s
-          --health-timeout 10s
-          --health-retries 10
     env:
       RUN_E2E_PG18: '1'
       PGHOST: localhost
@@ -41,13 +24,38 @@ jobs:
       PGDATABASE: dlightrag
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build the PostgreSQL image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: postgres/
+          load: true
+          tags: dlightrag-postgres:pg18
+          cache-from: type=gha,scope=postgres
+          cache-to: type=gha,mode=max,scope=postgres
+      - name: Start PostgreSQL 18
+        run: |
+          docker run --detach --name dlightrag-e2e-postgres \
+            --publish 5432:5432 \
+            --env POSTGRES_DB=dlightrag \
+            --env POSTGRES_USER=dlightrag \
+            --env POSTGRES_PASSWORD=dlightrag \
+            dlightrag-postgres:pg18 \
+            postgres -c shared_preload_libraries=pg_textsearch,pg_jieba
+          for _ in {1..60}; do
+            docker exec dlightrag-e2e-postgres pg_isready -U dlightrag -d dlightrag \
+              && exit 0
+            sleep 2
+          done
+          docker logs dlightrag-e2e-postgres
+          exit 1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           enable-cache: true
-          python-version: '3.14.7'
+          python-version: '3.14.10'
       - uses: actions/setup-node@v7
         with:
-          node-version: '26'
+          node-version: '26.13.1'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: uv sync --group dev
@@ -55,3 +63,6 @@ jobs:
       - run: uv run playwright install --with-deps chromium
       - run: make frontend-build
       - run: uv run pytest tests/e2e -v --tb=long -m e2e_pg18
+      - name: Remove the PostgreSQL container
+        if: always()
+        run: docker rm --force dlightrag-e2e-postgres || true

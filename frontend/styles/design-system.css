@@ -117,6 +117,13 @@
     width: 14rem;
   }
 
+  /* A part of the action row specimen that holds two marks of its own, the way the reader's thumbs do. */
+  .ds-action-part {
+    align-items: center;
+    display: flex;
+    gap: var(--space-tight);
+  }
+
   /* A bordered card that clips its rows: the choice rows and the navigation list form sit in one. */
   .ds-list-card {
     border: 1px solid var(--color-border-subtle);
@@ -127,13 +134,6 @@
 
   .ds-list-card > * + * {
     border-top: 1px solid var(--color-border-subtle);
-  }
-
-  .ds-toast-demo {
-    inset: auto;
-    opacity: 1;
-    position: static;
-    transform: none;
   }
 
   .ds-token-group { margin-bottom: var(--space-component); }

@@ -20,6 +20,7 @@ from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.reasoning import (
     REASONING_LEVELS,
+    ReasoningLevel,
     ReasoningLevels,
     ReasoningProfile,
     resolve_reasoning,
@@ -27,12 +28,16 @@ from dlightrag.engine.ai.reasoning import (
 from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS, ChatModelSelector, ModelSettings
 from dlightrag.engine.answer.client_contracts import AnswerEffort, normalize_answer_effort
 from dlightrag.engine.answer.execution.connection_binding import (
+    ConnectionSurface,
     RunConnectionBinding,
     decode_connection_bindings,
+    decode_connection_surface,
 )
 from dlightrag.engine.answer.mode import canonical_answer_mode
 from dlightrag.engine.answer.resources.models import ResourceInput
-from dlightrag.engine.rag.retrieval import RetrievalOptions
+from dlightrag.engine.rag.retrieval.models import (
+    RetrievalOptions,
+)
 from dlightrag.engine.runtime.errors import IncompatibleActiveRunError, RunExecutionError
 
 #: Random bytes in one Run's resource identity, and its recorded spelling.
@@ -160,6 +165,11 @@ class PinnedModelProfile:
     profile: ModelProfile
     reasoning_settings: Mapping[str, Any] | None = None
 
+    @property
+    def agentic_reasoning(self) -> ReasoningLevel | None:
+        """The level this role's agent was configured to run at when the Run was accepted."""
+        return (self.reasoning_settings or {}).get("agentic")
+
     def as_json(self) -> dict[str, Any]:
         return {
             "role": self.role,
@@ -224,6 +234,10 @@ class AnswerRunRequest:
     mode: str = "auto"
     parent_run_id: str | None = None
     continuation_kind: str | None = None
+    #: The goal identity of a goal round, so its settlement can tell which goal it served.
+    goal_id: str | None = None
+    goal_revision: int | None = None
+    goal_round: int | None = None
     agent_session_id: str = ""
     agent_lane_id: str = "main"
     source_lane_id: str | None = None
@@ -248,6 +262,9 @@ class AnswerRunRequest:
             "mode": canonical_answer_mode(self.mode),
             "parent_run_id": self.parent_run_id,
             "continuation_kind": self.continuation_kind,
+            "goal_id": self.goal_id,
+            "goal_revision": self.goal_revision,
+            "goal_round": self.goal_round,
             "agent_session_id": self.agent_session_id,
             "agent_lane_id": self.agent_lane_id,
             "source_lane_id": self.source_lane_id,
@@ -279,6 +296,9 @@ class AnswerRunRequest:
             continuation_kind=(
                 str(request["continuation_kind"]) if request.get("continuation_kind") else None
             ),
+            goal_id=str(request["goal_id"]) if request.get("goal_id") else None,
+            goal_revision=_optional_int(request.get("goal_revision")),
+            goal_round=_optional_int(request.get("goal_round")),
             agent_session_id=str(request.get("agent_session_id") or ""),
             agent_lane_id=str(request.get("agent_lane_id") or "main"),
             source_lane_id=(
@@ -310,6 +330,9 @@ class AnswerRunInput:
     resource_identity: str = field(repr=False)
     agent_run_plan: AgentRunPlan | None = None
     run_connection_bindings: tuple[RunConnectionBinding, ...] = ()
+    #: The enabled Connections this Run pins for on-demand resources and attributed
+    #: server guidance; secret-free, and empty when nothing is enabled.
+    connection_surface: tuple[ConnectionSurface, ...] = ()
     workspaces: tuple[str, ...] = ()
     history: tuple[Mapping[str, Any], ...] = ()
     episodic_summary: str = ""
@@ -330,9 +353,17 @@ class AnswerRunInput:
     resource_manifest: tuple[Mapping[str, Any], ...] = ()
     parent_run_id: str | None = None
     continuation_kind: str | None = None
+    #: The goal identity of a goal round, carried through accepted input and the durable envelope.
+    goal_id: str | None = None
+    goal_revision: int | None = None
+    goal_round: int | None = None
     requested_skill: str | None = None
     #: The caller's own agent effort for this run, when one was chosen.
     effort: AnswerEffort | None = None
+    #: The highest agent effort this run may run at, as the Runtime Policy stood for its
+    #: caller when it was accepted. It is pinned with the run and is no part of what the caller
+    #: asked for: the idempotency fingerprint is taken from the request, which never holds it.
+    effort_ceiling: AnswerEffort = "max"
 
     def as_request(self) -> dict[str, Any]:
         return {
@@ -356,6 +387,7 @@ class AnswerRunInput:
             "run_connection_bindings": [
                 binding.as_json() for binding in self.run_connection_bindings
             ],
+            "connection_surface": [surface.as_json() for surface in self.connection_surface],
             "agent_run_plan": (
                 self.agent_run_plan.canonical_payload() if self.agent_run_plan is not None else None
             ),
@@ -366,8 +398,12 @@ class AnswerRunInput:
             "resource_manifest": [dict(item) for item in self.resource_manifest],
             "parent_run_id": self.parent_run_id,
             "continuation_kind": self.continuation_kind,
+            "goal_id": self.goal_id,
+            "goal_revision": self.goal_revision,
+            "goal_round": self.goal_round,
             "requested_skill": self.requested_skill,
             "effort": self.effort,
+            "effort_ceiling": self.effort_ceiling,
         }
 
     @classmethod
@@ -406,6 +442,7 @@ class AnswerRunInput:
             run_connection_bindings=decode_connection_bindings(
                 request.get("run_connection_bindings", [])
             ),
+            connection_surface=decode_connection_surface(request.get("connection_surface", [])),
             workspaces=tuple(str(value) for value in request.get("workspaces") or ()),
             history=tuple(dict(message) for message in request.get("history") or ()),
             episodic_summary=str(request.get("episodic_summary") or ""),
@@ -430,10 +467,15 @@ class AnswerRunInput:
             continuation_kind=(
                 str(request["continuation_kind"]) if request.get("continuation_kind") else None
             ),
+            goal_id=str(request["goal_id"]) if request.get("goal_id") else None,
+            goal_revision=_optional_int(request.get("goal_revision")),
+            goal_round=_optional_int(request.get("goal_round")),
             requested_skill=(
                 str(request["requested_skill"]).strip() if request.get("requested_skill") else None
             ),
             effort=normalize_answer_effort(request.get("effort")),
+            # A run accepted before ceilings existed was accepted with none.
+            effort_ceiling=normalize_answer_effort(request.get("effort_ceiling")) or "max",
         )
 
     @classmethod
@@ -474,8 +516,15 @@ def pinned_model_selectors(pins: tuple[PinnedModelProfile, ...]) -> tuple[ChatMo
     return selectors
 
 
-def child_model_guidance(pins: tuple[PinnedModelProfile, ...]) -> str:
-    """Describe accepted endpoint facts, never a live catalogue on recovery."""
+def child_model_guidance(
+    pins: tuple[PinnedModelProfile, ...], *, effort_ceiling: AnswerEffort
+) -> str:
+    """Describe accepted endpoint facts, never a live catalogue on recovery.
+
+    The ceiling the Run was accepted under is one of those facts. The text is pinned with the
+    Run's Agent Plan, so acceptance and execution both render it here, from the same pins and
+    the same ceiling. ``max`` is no ceiling and adds nothing.
+    """
     intents = {
         "query": "preferred strongest reasoning tier: hardest research, planning, evidence adjudication and final review",
         "default": "general-purpose tier below query: ordinary analysis, synthesis, drafting and routine review",
@@ -492,6 +541,10 @@ def child_model_guidance(pins: tuple[PinnedModelProfile, ...]) -> str:
         resolved = resolve_reasoning(profile.reasoning, reasoning)
         lines.append(
             f"{pin.role}: {intents[pin.role]}; model={pin.fingerprint.model}; images={profile.supports_images}; context_tokens={profile.context_window_tokens}; agentic_reasoning_request={reasoning or 'provider default'}; agentic_reasoning_effective={resolved.effective if resolved else 'provider default'}."
+        )
+    if effort_ceiling != "max":
+        lines.append(
+            f"This Run's effort ceiling is {effort_ceiling}: the agentic_reasoning values listed are what each role is configured with, and a sub-agent runs at no higher than {effort_ceiling}, except a role that sets its own reasoning options."
         )
     lines.append(
         "Reasoning max is a configured request level, not a universal capability guarantee. Image support follows the effective profile, not the vlm label. All selectors use the supported tool-calling wrapper; provider rejection is explicit."

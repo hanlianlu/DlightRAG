@@ -12,6 +12,7 @@ import {Store} from './base.ts';
 
 const NEW_CONVERSATION_KEY = '__new_chat__';
 
+/** The submissions this page has under way or waiting on the reader, one per conversation. */
 export class AnswerSubmissionRegistry extends Store {
   readonly #actors = new Map<string, AnswerSubmissionActor>();
 
@@ -44,6 +45,7 @@ export class AnswerSubmissionRegistry extends Store {
     return [...this.#actors.values()].map(answerSubmissionSnapshot);
   }
 
+  /** Stop every submission and give back the files each one held. */
   dispose(): void {
     for (const actor of this.#actors.values()) {
       actor.getSnapshot().context.lease.discard();
@@ -52,7 +54,4 @@ export class AnswerSubmissionRegistry extends Store {
     this.#actors.clear();
     this.changed();
   }
-
 }
-
-export const answerSubmissionRegistry = new AnswerSubmissionRegistry();

@@ -69,31 +69,68 @@
   overflow-x: auto;
 }
 
-.runActions {
+/* === Thinking (live reasoning) === */
+
+/* The reasoning a running answer showed: one fold among the Tool rows in the turn's merged process
+ * trace, in the order it happened. Only the block still being written is open. Its ink is muted and
+ * its size a detail, because the answer is what a reader came for. */
+.thinkingSummary {
   align-items: center;
-  display: flex;
-  flex-wrap: wrap;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: var(--font-size-caption);
   gap: var(--space-tight);
-  margin-top: var(--space-tight);
+  list-style: none;
 }
 
-.runActions:empty {
+.thinkingSummary::-webkit-details-marker {
   display: none;
 }
 
+.thinkingSummary:focus-visible {
+  outline: 2px solid var(--focus-ring-color);
+  outline-offset: 2px;
+}
 
-.runActions button {
-  background: transparent;
-  border: 0;
+.thinkingLabel {
+  font-weight: 500;
+}
+
+.thinkingChevron {
+  color: var(--color-text-subtle);
+  flex: none;
+  transition: transform var(--duration-control) var(--easing-standard);
+}
+
+.thinkingBlock[open] > .thinkingSummary > .thinkingChevron {
+  transform: rotate(90deg);
+}
+
+.thinkingText {
+  border-inline-start: 2px solid var(--color-divider);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-detail);
+  line-height: var(--line-height-message);
+  margin-block-start: var(--space-tight);
+  margin-inline-start: var(--space-3xs);
+  overflow-wrap: anywhere;
+  padding-inline-start: var(--space-related);
+  white-space: pre-wrap;
+}
+
+
+/* The row's own buttons read as quiet words in it: the primitive lays them out bare and parts them, so
+ * what is left here is the ink and the size. Nothing may state their padding — the clearance from the
+ * line is the row's, and this layer would outrank it. A control a feature element draws into the row
+ * (the thumbs) wears its own face. */
+.runActions > button {
   color: var(--color-accent-text);
-  cursor: pointer;
-  font: inherit;
   font-size: var(--font-size-caption);
-  padding: 0;
 }
 
 /* Mineral Light has no gold darker than Accent text, so hover also underlines. */
-.runActions button:hover {
+.runActions > button:hover {
   color: var(--color-accent-emphasis);
   text-decoration: underline;
   text-underline-offset: 0.2em;
@@ -108,13 +145,49 @@
 }
 
 .tracesLive {
-  animation: pulse 1.2s ease-in-out infinite;
+  animation: var(--duration-pulse) global(dl-pulse) ease-in-out infinite;
   color: var(--color-progress-fill);
   display: inline-flex;
 }
 
+/* The way into a Run's live browser while it browses: a quiet glyph and the page's host,
+   a hint rather than a control the eye lands on. It is a button, so it is reachable by
+   keyboard and named for a reader who cannot see the host. */
+.runActions .liveButton {
+  align-items: center;
+  display: inline-flex;
+  gap: var(--space-tight);
+}
 
-.runSummary {
+.liveGlyph {
+  align-items: center;
+  color: var(--color-progress-fill);
+  display: inline-flex;
+}
+
+.liveHost {
+  max-width: 18ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+
+/* The row under an answer: the way into the Run, the branch from it, the reader's
+ * thumbs, and what it spent. It parts them with the shared action row
+ * (`.dl-action-row`, design-system/primitives.css), which owns the hairline, the
+ * measure on either side of it, and the reading of a part that is no box of its
+ * own — so this file states no divider at all, and a row that shows only the
+ * first thing shows no line. What is left here is where the row sits. */
+.runActions {
+  margin-top: var(--space-tight);
+}
+
+.runActions:empty {
+  display: none;
+}
+
+.runUsage {
   color: var(--color-text-muted);
   font-size: var(--font-size-caption);
 }
@@ -133,23 +206,38 @@
 
 /* === Streaming Indicator === */
 
-@keyframes pulse {
-  0%, 100% { opacity: 0.2; }
-  50% { opacity: 1; }
+/* The marks that breathe while a Run works use the shared pulse (design-system/primitives.css). Their
+   breath is deeper than the status dot's and does not shrink: it rests at 0.2 and peaks at full strength. */
+.tracesLive,
+.toolSpinner,
+.streamingDot {
+  --pulse-mid-opacity: 1;
+  --pulse-mid-scale: 1;
+  --pulse-start-opacity: 0.2;
 }
 
+/* The trace's one bounded viewport: it holds five collapsed steps (a Tool line or a Thinking fold)
+ * and scrolls inside itself for the rest of the history. A Run's thought grows inside this box, so
+ * the page keeps its place and the answer is never run down the screen. */
 .toolTrace {
+  --process-trace-row-block-size: 1.75rem;
+
   display: flex;
   flex-direction: column;
   gap: var(--space-3xs);
   margin-top: var(--space-related);
+  max-height: calc(5 * var(--process-trace-row-block-size));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-inline-end: var(--space-tight);
+  scrollbar-gutter: stable;
 }
 
 .toolRow {
   display: flex;
   align-items: center;
   gap: var(--space-tight);
-  font-size: 0.8rem;
+  font-size: var(--font-size-detail);
   color: var(--color-text-muted);
 }
 
@@ -171,7 +259,7 @@
   height: var(--space-tight);
   background: var(--color-progress-fill);
   border-radius: var(--radius-circle);
-  animation: pulse 1.2s ease-in-out infinite;
+  animation: var(--duration-pulse) global(dl-pulse) ease-in-out infinite;
 }
 
 .toolLabel {
@@ -182,9 +270,93 @@
 
 .toolDuration {
   margin-left: auto;
-  font-size: 0.72rem;
+  font-size: var(--font-size-caption);
   color: var(--color-text-muted);
   flex-shrink: 0;
+}
+
+
+/* === Process Group === */
+
+/* A live turn's tool calls as one line that opens on them: what the Run is doing, how many
+   steps it has taken, and how long the group has run. It is the only thing between the answer
+   and the actions while the Run works, so it keeps the muted voice of the status line it
+   replaces, with the words themselves the one thing raised above it. */
+.processGroup {
+  margin-top: var(--space-related);
+}
+
+.processSummary {
+  align-items: center;
+  border-radius: var(--radius-control);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  display: flex;
+  font-size: var(--font-size-detail);
+  gap: var(--space-tight);
+  list-style: none;
+  max-width: 100%;
+  min-height: var(--size-button);
+  width: fit-content;
+}
+
+.processSummary::-webkit-details-marker {
+  display: none;
+}
+
+.processSummary:hover {
+  color: var(--color-text-primary);
+}
+
+.processSummary:focus-visible {
+  outline: 2px solid var(--focus-ring-color);
+  outline-offset: 2px;
+}
+
+/* The one sentence names the work; the count and the clock stand beside it quietly. */
+.processState {
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The line reads as one sentence: its parts are parted by a dot the reader hears nothing of,
+   since the announcement composes its own words. */
+.processSeparator {
+  color: var(--color-text-subtle);
+  flex: none;
+}
+
+.processCalls {
+  color: var(--color-text-muted);
+  flex: none;
+  font-size: var(--font-size-caption);
+}
+
+/* The clock redraws once a second; equal-width figures keep its line from moving. */
+.processDuration {
+  color: var(--color-text-muted);
+  flex: none;
+  font-size: var(--font-size-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+.processChevron {
+  color: var(--color-text-subtle);
+  flex: none;
+  transition: transform var(--duration-control) var(--easing-standard);
+}
+
+.processGroup[open] > .processSummary > .processChevron {
+  transform: rotate(90deg);
+}
+
+/* The merged trace opens under the words of the line that leads it: reasoning folds and Tool rows
+   share one indented, rolling list. */
+.processGroup > .toolTrace {
+  margin-inline-start: var(--space-related);
+  margin-top: var(--space-tight);
 }
 
 
@@ -196,7 +368,7 @@
   height: var(--space-tight);
   background: var(--color-progress-fill);
   border-radius: var(--radius-circle);
-  animation: pulse 1.2s ease-in-out infinite;
+  animation: var(--duration-pulse) global(dl-pulse) ease-in-out infinite;
 }
 
 .streamingDot.progressPhase {
@@ -205,7 +377,7 @@
   background: none;
   border-radius: var(--radius-docked);
   animation: none;
-  font-size: 0.85rem;
+  font-size: var(--font-size-detail);
   color: var(--color-text-muted);
 }
 
@@ -222,11 +394,21 @@
   border-radius: var(--radius-circle);
   margin-left: var(--space-tight);
   vertical-align: middle;
-  animation: pulse 1.2s ease-in-out infinite;
+  animation: var(--duration-pulse) global(dl-pulse) ease-in-out infinite;
 }
 
 .progressPhase {
   /* Modifier for streamingDot — standalone for classList use */
+}
+
+/* The pulse is the only motion in these marks, so a reader who asked for none gets them still. */
+@media (prefers-reduced-motion: reduce) {
+  .tracesLive,
+  .toolSpinner,
+  .streamingDot,
+  .streamingDot.progressPhase::after {
+    animation: none;
+  }
 }
 
 /* === Thumbnail Strip === */
@@ -265,7 +447,7 @@
   /* stylelint-disable-next-line declaration-property-value-disallowed-list */
   line-height: 1;
   padding: 0;
-  transition: color 0.15s, background 0.15s;
+  transition: color var(--duration-control), background var(--duration-control);
 }
 
 .thumbnailRemove:hover {
@@ -326,7 +508,7 @@
   /* stylelint-disable-next-line declaration-property-value-disallowed-list */
   line-height: 1;
   padding: 0;
-  transition: color 0.15s, background 0.15s;
+  transition: color var(--duration-control), background var(--duration-control);
 }
 
 .documentChipRemove:hover {
@@ -494,6 +676,10 @@
   line-height: 1.3;
 }
 
+/* Rendered Markdown headings are sized in em on purpose: a heading scales with the text it sits in, so it
+   keeps its proportion wherever the Markdown is drawn. Everything else takes a type-scale token. */
+
+/* stylelint-disable declaration-property-value-disallowed-list -- Markdown headings scale with their text */
 .markdownContent h1 {
   font-size: 1.4em;
   font-weight: 600;
@@ -513,6 +699,7 @@
   font-size: 1em;
   font-weight: 500;
 }
+/* stylelint-enable declaration-property-value-disallowed-list */
 
 .markdownContent table {
   border: 1px solid var(--color-border-subtle);
@@ -577,6 +764,7 @@
 
 .markdownContent code {
   font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  /* stylelint-disable-next-line declaration-property-value-disallowed-list -- inline code scales with its text */
   font-size: 0.9em;
 }
 

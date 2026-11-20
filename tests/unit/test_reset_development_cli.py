@@ -2,6 +2,7 @@
 """Tests for the full development reset command (host-side, repository-owned)."""
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -298,12 +299,54 @@ class TestSettingsResolution:
         assert root == (tmp_path / "custom_storage").resolve()
 
 
+_CONFIG_JSON = json.dumps(
+    {
+        "volumes": {
+            "pg18_data": {"name": "dlightrag_pg18_data"},
+            "dlightrag_data": {"name": "dlightrag_dlightrag_data"},
+            "dlightrag_agent_workspaces": {"name": "dlightrag_dlightrag_agent_workspaces"},
+            "dlightrag_owner_skills": {"name": "dlightrag_dlightrag_owner_skills"},
+        }
+    }
+)
+_RESOLVED = [
+    "dlightrag_pg18_data",
+    "dlightrag_dlightrag_data",
+    "dlightrag_dlightrag_agent_workspaces",
+]
+
+
+def _volume_docker(*, existing: set[str], rm_fails: frozenset[str] = frozenset()):
+    """Fake `docker volume inspect/rm` over a set of still-existing volumes."""
+    calls: list[tuple[str, ...]] = []
+
+    def fake_docker(*args: str):
+        calls.append(args)
+        verb, name = args[1], args[2]
+        if verb == "inspect":
+            if name in existing:
+                return Mock(returncode=0, stdout="[]", stderr="")
+            return Mock(returncode=1, stdout="", stderr=f"Error: No such volume: {name}")
+        if name in rm_fails:
+            return Mock(returncode=1, stdout="", stderr="volume is in use")
+        existing.discard(name)
+        return Mock(returncode=0, stdout=name, stderr="")
+
+    return fake_docker, calls
+
+
 class TestDockerMode:
+    @pytest.fixture(autouse=True)
+    def _no_real_docker(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(_reset, "_docker", _volume_docker(existing=set())[0])
+
     def test_docker_reset_verifies_empty_database(self, monkeypatch: pytest.MonkeyPatch) -> None:
         calls: list[str] = []
 
         def fake_compose(*args: str, **_kwargs):
             calls.append(" ".join(args))
+            if args[:1] == ("config",):
+                return Mock(returncode=0, stdout=_CONFIG_JSON, stderr="")
             result = Mock()
             result.returncode = 0
             if args[:2] == ("ps", "--format"):
@@ -351,6 +394,8 @@ class TestDockerMode:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         def fake_compose(*args: str, **_kwargs):
+            if args[:1] == ("config",):
+                return Mock(returncode=0, stdout=_CONFIG_JSON, stderr="")
             result = Mock(returncode=0, stdout="", stderr="")
             if args[:2] == ("ps", "--format"):
                 result.stdout = "postgres\n"
@@ -380,6 +425,8 @@ class TestDockerMode:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         def fake_compose(*args: str, **_kwargs):
+            if args[:1] == ("config",):
+                return Mock(returncode=0, stdout=_CONFIG_JSON, stderr="")
             if args[:2] == ("ps", "--format"):
                 return Mock(returncode=1, stdout="", stderr="daemon unavailable")
             return Mock(returncode=0, stdout="", stderr="")
@@ -414,6 +461,8 @@ class TestDockerMode:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         def fake_compose(*args: str, **_kwargs):
+            if args[:1] == ("config",):
+                return Mock(returncode=0, stdout=_CONFIG_JSON, stderr="")
             result = Mock()
             result.returncode = 0
             result.stdout = "postgres\ndlightrag-api\n"
@@ -440,6 +489,66 @@ class TestDockerMode:
         )
         assert not report.ok
         assert any("dlightrag-api" in failure for failure in report.failures)
+
+    def test_skipped_volume_is_removed_explicitly(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # `down -v` exits 0 but skips the unlabeled pg18 volume; the owner skills volume is
+        # outside _COMPOSE_VOLUMES and must never be touched.
+        fake_docker, docker_calls = _volume_docker(
+            existing={"dlightrag_pg18_data", "dlightrag_dlightrag_owner_skills"}
+        )
+
+        def fake_compose(*args: str, **_kwargs):
+            if args[:1] == ("config",):
+                return Mock(returncode=0, stdout=_CONFIG_JSON, stderr="")
+            return Mock(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(_reset, "_compose", fake_compose)
+        monkeypatch.setattr(_reset, "_docker", fake_docker)
+        monkeypatch.setattr(_reset, "_wait_for_postgres_health", lambda report, **_kwargs: False)
+
+        report = _reset.ResetReport(mode="docker")
+        _reset.run_docker_reset(
+            _reset.PostgresTarget(
+                host="localhost", port=5432, user="u", password="p", database="db"
+            ),
+            report,
+        )
+
+        removed = [args[2] for args in docker_calls if args[1] == "rm"]
+        assert removed == ["dlightrag_pg18_data"]
+        assert not any("owner_skills" in args[2] for args in docker_calls)
+        assert (
+            "compose-down",
+            f"deleted volumes {', '.join(_RESOLVED)}; every service stopped",
+        ) in (report.steps)
+
+    def test_failed_volume_removal_fails_the_step(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        fake_docker, _calls = _volume_docker(
+            existing={"dlightrag_pg18_data"}, rm_fails=frozenset({"dlightrag_pg18_data"})
+        )
+        compose_calls: list[tuple[str, ...]] = []
+
+        def fake_compose(*args: str, **_kwargs):
+            compose_calls.append(args)
+            if args[:1] == ("config",):
+                return Mock(returncode=0, stdout=_CONFIG_JSON, stderr="")
+            return Mock(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(_reset, "_compose", fake_compose)
+        monkeypatch.setattr(_reset, "_docker", fake_docker)
+
+        report = _reset.ResetReport(mode="docker")
+        _reset.run_docker_reset(
+            _reset.PostgresTarget(
+                host="localhost", port=5432, user="u", password="p", database="db"
+            ),
+            report,
+        )
+
+        assert not report.ok
+        assert any("volume is in use" in failure for failure in report.failures)
+        assert not any(step == "compose-down" for step, _ in report.steps)
+        assert not any(args[:1] == ("up",) for args in compose_calls)
 
     async def test_docker_mode_validates_paths_before_compose_mutation(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

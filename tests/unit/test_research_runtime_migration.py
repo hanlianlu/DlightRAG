@@ -16,8 +16,10 @@ import httpx2
 import pytest
 from pydantic import BaseModel
 
-from dlightrag.engine.agent.environment import SearchToolchain
 from dlightrag.engine.agent.environment.access import AccessScheduler
+from dlightrag.engine.agent.environment.toolchain import (
+    SearchToolchain,
+)
 from dlightrag.engine.agent.session.effects import EffectIntent
 from dlightrag.engine.agent.session.entries import (
     CompactionEntry,
@@ -41,8 +43,10 @@ from dlightrag.engine.agent.session.runtime import (
     AgentSessionEvent,
     AgentSessionRuntime,
 )
+from dlightrag.engine.agent.skills import LoadSkillInput, SkillCatalog, load_skill_tool
 from dlightrag.engine.agent.tool_content import ToolTextPart
-from dlightrag.engine.agent.tools import (
+from dlightrag.engine.agent.tools.contracts import (
+    TOOL_SUBJECT_MAX_CHARS,
     AgentTool,
     EvidenceSourceFact,
     ResourceAttachmentBytes,
@@ -50,8 +54,8 @@ from dlightrag.engine.agent.tools import (
     ToolResult,
     ToolResultCapacityError,
     ToolRuntime,
+    already_in_source_order,
 )
-from dlightrag.engine.agent.tools.contracts import already_in_source_order
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ModelProfile
 from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
@@ -59,8 +63,8 @@ from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.ai.tokens import estimate_tokens
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.images import AnswerImageBudget
-from dlightrag.engine.answer.orchestration import AnswerOrchestrator
 from dlightrag.engine.answer.orchestration.orchestrator import (
+    AnswerOrchestrator,
     _admit_durable_attachment_messages,
     _hydrate_attachment_messages,
 )
@@ -79,10 +83,12 @@ from dlightrag.engine.answer.resources.registry import (
     ResourceEffectOwner,
 )
 from dlightrag.engine.answer.tools.artifacts import attach_artifact_tool
-from dlightrag.engine.rag.retrieval import RetrievalResult
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalResult,
+)
 from dlightrag.engine.runtime.coordinator import RunCancellationObserved
 from dlightrag.engine.runtime.settlements import EffectHostUpdate
-from tests.in_memory_session_repository import MemoryAgentSessionRepository
+from tests.support.in_memory_session_repository import MemoryAgentSessionRepository
 from tests.unit.conftest import OtlpExport, answer_model_profile
 
 
@@ -124,12 +130,19 @@ async def _settle_bounded_research_tool(
     text: str,
     *,
     session_fencing_epoch: int | None = None,
+    execute: Any = None,
+    tool_name: str = "bounded",
 ) -> tuple[Any, Any]:
-    async def execute(_input: BaseModel, _runtime: Any) -> ToolResult:
+    async def default_execute(_input: BaseModel, _runtime: Any) -> ToolResult:
         assert _runtime.fencing_epoch == (session_fencing_epoch or 1)
         return ToolResult.text(text)
 
-    tool = AgentTool("bounded", "Return bounded text.", _EmptyToolInput, execute=execute)
+    tool = AgentTool(
+        tool_name,
+        "Return bounded text.",
+        _EmptyToolInput,
+        execute=execute or default_execute,
+    )
     prepared = SimpleNamespace(
         tools=(tool,),
         model_profile=profile,
@@ -318,35 +331,81 @@ async def test_research_effect_touches_shared_run_state_only_in_source_order() -
 
 @pytest.mark.asyncio
 async def test_research_tool_settlement_uses_small_profile_dynamic_residual() -> None:
-    # 17_460 keeps the 52-token dynamic residual this scenario pins.
+    # 17_460 keeps the 52-token dynamic residual this scenario pins: with the default 16,384
+    # output reserve the hard input limit is 1,024, and only the minimum-input floor is left.
+    # A 1M window would not have reached this profile's gate at all.
     profile = ModelProfile(context_window_tokens=17_460)
 
     settled, prepared = await _settle_bounded_research_tool(profile, "x" * 400)
 
     assert estimate_tokens(settled.result.text_content) <= 52
     assert settled.result.text_content != "x" * 400
-    assert prepared.trace["tool_observations"][0]["capacity_tokens"] == 52
+    observation = prepared.trace["tool_observations"][0]
+    assert observation["capacity_tokens"] == 52
+    assert observation["ceiling_tokens"] == 52
+    assert observation["observed_truncated"] is True
 
 
 @pytest.mark.asyncio
-async def test_research_tool_settlement_preserves_40k_on_large_profile() -> None:
+async def test_a_small_window_no_longer_reaches_the_degenerate_zero_residual_gate() -> None:
+    """A 40,000-token window reads a 20,000-character result where the flat reserve refused it.
+
+    Before the reserve was clamped, this profile's hard input limit was 23,616 against a flat
+    40,000 reserve, so every non-empty result failed. It now keeps everything it can afford
+    above the request floor, and a result that fits is served whole with no cut recorded.
+    """
+    profile = ModelProfile(context_window_tokens=40_000)
+    assert CONTEXT_POLICY.observation_capacity(profile) == 22_592
+
+    settled, prepared = await _settle_bounded_research_tool(profile, "x" * 20_000)
+
+    assert settled.result.text_content == "x" * 20_000
+    assert settled.result.details is None
+    assert prepared.trace["tool_observations"][0]["observed_truncated"] is False
+
+
+@pytest.mark.asyncio
+async def test_research_tool_settlement_still_rejects_a_profile_with_no_residual_at_all() -> None:
+    """17,408 hard input is degenerate under either reserve: 1,024 of it is the input floor.
+
+    The clamp does not rescue a profile this small, and the failure must stay loud rather
+    than serve a result with the truncation marker dropped.
+    """
+    profile = ModelProfile(context_window_tokens=17_408)
+    assert CONTEXT_POLICY.hard_input_limit(profile) == CONTEXT_POLICY.compaction_trigger(profile)
+
+    with pytest.raises(ToolResultCapacityError, match="no residual"):
+        await _settle_bounded_research_tool(profile, "x" * 1_000)
+
+
+@pytest.mark.asyncio
+async def test_research_tool_settlement_preserves_the_60k_floor_on_large_profile() -> None:
     settled, prepared = await _settle_bounded_research_tool(
         answer_model_profile(),
         "large profile result",
     )
 
     assert settled.result.text_content == "large profile result"
-    assert prepared.trace["tool_observations"][0]["capacity_tokens"] == 40_000
+    observation = prepared.trace["tool_observations"][0]
+    # The guarantee and the ceiling are the same number: what one result is promised is what
+    # it may claim, so a batch of full-size results stays inside a compaction's reach.
+    assert observation["capacity_tokens"] == 60_000
+    assert observation["ceiling_tokens"] == CONTEXT_POLICY.tool_result_ceiling(
+        answer_model_profile()
+    )
+    assert observation["ceiling_tokens"] == observation["capacity_tokens"]
+    assert observation["observed_truncated"] is False
 
 
 @pytest.mark.asyncio
 async def test_research_tool_settlement_rejects_nonempty_result_with_zero_residual() -> None:
-    # 17_408 is the window where the dynamic residual is exactly zero.
-    profile = ModelProfile(context_window_tokens=17_408)
+    # 1,536 is the window where the dynamic residual is exactly zero: the hard input limit is
+    # 1,024, which is the input floor itself, so no reserve of any policy can leave room.
+    profile = ModelProfile(context_window_tokens=1_536)
     assert CONTEXT_POLICY.hard_input_limit(profile) == CONTEXT_POLICY.compaction_trigger(profile)
 
     with pytest.raises(ToolResultCapacityError, match="no residual"):
-        await _settle_bounded_research_tool(profile, "cannot fit")
+        await _settle_bounded_research_tool(profile, "x" * 1_000)
 
 
 @pytest.mark.asyncio
@@ -680,7 +739,6 @@ async def test_research_runtime_projects_a_reported_subject_into_tool_updates() 
 
     async def execute(_input: BaseModel, runtime: ToolRuntime) -> ToolResult:
         await runtime.emit_update(ToolResult.text("", subject="quarterly revenue 2026"))
-        await runtime.emit_update(ToolResult.text("", subject="a later update"))
         return ToolResult.text("added 3 new passages.")
 
     tool = AgentTool("search_knowledge_base", "Search.", _EmptyToolInput, execute=execute)
@@ -732,11 +790,10 @@ async def test_research_runtime_projects_a_reported_subject_into_tool_updates() 
     )
 
     updates = [event for event in emitted if getattr(event, "kind", None) == "tool_update"]
-    assert len(updates) == 2
+    assert len(updates) == 1
     assert updates[0].data["tool_name"] == "search_knowledge_base"
     assert updates[0].data["call_id"] == "search-call"
     assert updates[0].data["object_label"] == "quarterly revenue 2026"
-    # The trace row keeps the first subject the Tool reported.
     observation = prepared.trace["tool_observations"][0]
     assert observation["call_id"] == "search-call"
     assert observation["subject"] == "quarterly revenue 2026"
@@ -746,10 +803,29 @@ async def test_research_runtime_projects_a_reported_subject_into_tool_updates() 
 async def test_a_tool_that_reports_no_subject_keeps_the_trace_key_absent() -> None:
     _, prepared = await _settle_bounded_research_tool(answer_model_profile(), "done")
 
-    assert "subject" not in prepared.trace["tool_observations"][0]
+    observation = prepared.trace["tool_observations"][0]
+    assert "subject" not in observation
 
 
 @pytest.mark.asyncio
+async def test_a_long_reported_subject_is_bounded_and_the_first_update_wins() -> None:
+    async def execute(_input: BaseModel, runtime: ToolRuntime) -> ToolResult:
+        await runtime.emit_update(
+            ToolResult.text("", subject="  " + "s" * (TOOL_SUBJECT_MAX_CHARS * 3))
+        )
+        await runtime.emit_update(ToolResult.text("", subject="later update"))
+        return ToolResult.text("done")
+
+    _, prepared = await _settle_bounded_research_tool(
+        answer_model_profile(), "done", execute=execute, tool_name="search_web"
+    )
+
+    subject = prepared.trace["tool_observations"][0]["subject"]
+    assert subject == "s" * (TOOL_SUBJECT_MAX_CHARS - 1) + "…"
+    assert len(subject) == TOOL_SUBJECT_MAX_CHARS
+    assert subject != "later update"
+
+
 async def test_research_runtime_measures_one_tool_attempt_and_publishes_it_on_settlement() -> None:
     """Elapsed time is measured by the adapter that awaited the effect, then
     published by the settlement event -- including for a failed Tool, whose
@@ -871,16 +947,92 @@ async def test_a_tool_call_is_recorded_under_the_run_that_requested_it(
     spans = {span.name: span for span in otlp_export.spans()}
     assert set(spans) == {"run-answer", "execute-agent-tool"}
     root, tool_span = spans["run-answer"], spans["execute-agent-tool"]
-    tool_attributes = otlp_export.attributes(tool_span)
-    assert tool_attributes["dlightrag.observation.kind"] == "tool"
-    # The Required attribute of an execute_tool span, stated by the call site.
-    assert tool_attributes["gen_ai.tool.name"] == "mcp_connection_hash"
+    assert otlp_export.attributes(tool_span)["dlightrag.observation.kind"] == "tool"
     assert tool_span.parent is not None and root.context is not None
     assert tool_span.parent.span_id == root.context.span_id
     arguments = otlp_export.payload(tool_span, "dlightrag.input")
     assert arguments["tool"] == "mcp_connection_hash"
     assert "which filings mention risk" in arguments["arguments"]
     assert otlp_export.payload(tool_span, "dlightrag.metadata")["call_id"] == "mcp-call"
+
+
+@pytest.mark.asyncio
+async def test_a_tool_span_carries_what_the_call_reports_about_itself(
+    otlp_export: OtlpExport,
+) -> None:
+    """A tool's own facts ride its span's output, beside the Runtime's, which they cannot overrule.
+
+    This is what a dashboard reads to group a tool's calls: which Web search provider answered,
+    whether the chain had to fail over, and what the search cost.
+    """
+
+    async def execute(_input: BaseModel, _runtime: ToolRuntime) -> ToolResult:
+        return ToolResult.text(
+            "done",
+            telemetry={
+                "web_search_provider": "tavily",
+                "web_search_hits": 3,
+                "is_error": True,
+            },
+        )
+
+    class _WebSearchInput(BaseModel):
+        query: str
+
+    tool = AgentTool("search_web", "Search the open web.", _WebSearchInput, execute=execute)
+    prepared = SimpleNamespace(
+        tools=(tool,),
+        model_profile=answer_model_profile(),
+        trace={"tool_observations": []},
+        evidence=EvidenceLedger(),
+    )
+    effects = ResearchRuntimeEffects(
+        telemetry=otlp_export.telemetry,
+        orchestrator=cast(Any, SimpleNamespace(bind_child_context=lambda *_args: None)),
+        prepared=prepared,
+        session=_Session(),  # type: ignore[arg-type]
+        session_id=SessionId.new(),
+        fetched_buffer=FetchedResourceBuffer(),
+        persist_child_intent=None,
+    )
+    item = ToolBatchItem(
+        source_index=0,
+        call_id="call-1",
+        tool_name=tool.name,
+        disposition="executable",
+        result_entry_id=EntryId.new(),
+        intent_id=IntentId.new(),
+        replay_policy=tool.replay_policy,
+        contract_version=tool.contract_version,
+        input_schema_digest=tool.input_schema_digest,
+        effective_input_digest="0" * 64,
+    )
+    context = SimpleNamespace(
+        session_id=SessionId.new(),
+        lane_id=LaneId.main(),
+        operation_id=OperationId.new(),
+    )
+
+    with otlp_export.telemetry.trace(session_id="sess-1", user_id="owner-1"):
+        async with otlp_export.telemetry.observe("run-answer"):
+            await effects.execute_tool(
+                cast(Any, context),
+                item,
+                {"query": "inflation"},
+                AttemptId.new(),
+                lambda _event: asyncio.sleep(0),
+                already_in_source_order,
+            )
+
+    spans = {span.name: span for span in otlp_export.spans()}
+    output = otlp_export.payload(spans["execute-agent-tool"], "dlightrag.output")
+    assert output == {
+        "web_search_provider": "tavily",
+        "web_search_hits": 3,
+        # The Runtime's own facts, which a tool cannot state for it.
+        "is_error": False,
+        "cached": False,
+    }
 
 
 @pytest.mark.asyncio
@@ -926,6 +1078,159 @@ async def test_answer_event_sink_publishes_tool_identity_outcome_and_elapsed() -
             },
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_a_cut_settlement_reaches_the_durable_tool_end_and_an_uncut_one_does_not() -> None:
+    """The bit that voids a recorded window travels on the settlement, and only when it is true."""
+    recorded: list[tuple[str, dict[str, Any]]] = []
+
+    class _Recorder(_Session):
+        async def emit_tool_event(self, kind: str, payload: object) -> None:
+            recorded.append((kind, dict(cast(Any, payload))))
+
+    sink = _answer_runtime_event_sink(cast(Any, _Recorder()))
+    for call_id, extra in (("cut", {"observed_truncated": True}), ("whole", {})):
+        await sink(
+            AgentSessionEvent(
+                kind="tool_result_committed",
+                session_id=SessionId.new(),
+                lane_id=LaneId.main(),
+                operation_id=OperationId.new(),
+                commit_sequence=3,
+                data={
+                    "tool_name": "load_skill",
+                    "call_id": call_id,
+                    "source_index": 0,
+                    "outcome": "succeeded",
+                    **extra,
+                },
+            )
+        )
+
+    assert [
+        (kind, payload["call_id"], payload.get("observed_truncated")) for kind, payload in recorded
+    ] == [
+        ("tool_end", "cut", True),
+        ("tool_end", "whole", None),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_tools_read_fact_reaches_the_durable_progress_event_and_nothing_else_in_details(
+    tmp_path: Path,
+) -> None:
+    """The path from a ``load_skill`` call to the event a Run's attestation reads back.
+
+    A Tool reports a fact on an update's ``details``; the Runtime forwards only the vocabulary's
+    keys onto the ``tool_update`` it emits, and the answer sink publishes them on ``tool_progress``
+    beside the subject. A key a Tool puts in ``details`` that is not in the vocabulary is never
+    forwarded: it is the Tool's own business and not part of the durable record.
+    """
+    owner_root = tmp_path / "owner"
+    (owner_root / "paged").mkdir(parents=True)
+    (owner_root / "paged" / "SKILL.md").write_text(
+        "---\nname: paged\ndescription: Use when a test pages.\n---\nbody\n", encoding="utf-8"
+    )
+    catalog = SkillCatalog.discover(owner_root=owner_root)
+    load = load_skill_tool(lambda: catalog, model_profile=answer_model_profile())
+
+    async def noisy(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
+        # The real tool's update, then one that also carries what is not a fact.
+        result = await load.execute(raw, runtime)
+        await runtime.emit_update(
+            ToolResult.text(
+                "",
+                subject="paged",
+                details={
+                    "skill_path": "SKILL.md",
+                    "skill_window_start": [0],
+                    "internal_note": "never forwarded",
+                    "observed_truncated": True,
+                },
+            )
+        )
+        return result
+
+    tool = AgentTool("load_skill", "Read a Skill.", LoadSkillInput, execute=noisy)
+    prepared = SimpleNamespace(
+        tools=(tool,),
+        model_profile=answer_model_profile(),
+        trace={"tool_observations": []},
+        evidence=EvidenceLedger(),
+    )
+    effects = ResearchRuntimeEffects(
+        telemetry=NOOP_TELEMETRY,
+        orchestrator=cast(Any, SimpleNamespace(bind_child_context=lambda *_args: None)),
+        prepared=prepared,
+        session=_Session(),  # type: ignore[arg-type]
+        session_id=SessionId.new(),
+        fetched_buffer=FetchedResourceBuffer(),
+        persist_child_intent=None,
+    )
+    item = ToolBatchItem(
+        source_index=0,
+        call_id="load-1",
+        tool_name=tool.name,
+        disposition="executable",
+        result_entry_id=EntryId.new(),
+        intent_id=IntentId.new(),
+        replay_policy=tool.replay_policy,
+        contract_version=tool.contract_version,
+        input_schema_digest=tool.input_schema_digest,
+        effective_input_digest="0" * 64,
+    )
+    context = SimpleNamespace(
+        session_id=SessionId.new(), lane_id=LaneId.main(), operation_id=OperationId.new()
+    )
+    emitted: list[AgentSessionEvent] = []
+
+    async def collect(event: AgentSessionEvent) -> None:
+        emitted.append(event)
+
+    await effects.execute_tool(
+        cast(Any, context),
+        item,
+        {"name": "paged"},
+        AttemptId.new(),
+        collect,
+        already_in_source_order,
+    )
+
+    updates = [event.data for event in emitted if event.kind == "tool_update"]
+    document_chars = len("---\nname: paged\ndescription: Use when a test pages.\n---\nbody\n")
+    assert [("skill_path" in data, data.get("object_label")) for data in updates] == [
+        (False, "paged"),
+        (True, "paged"),
+        (True, "paged"),
+    ]
+    assert updates[1]["skill_window_end"] == updates[1]["skill_document_chars"] == document_chars
+    # What was not in the vocabulary, or not a scalar, is gone before the sink ever sees it.
+    assert set(updates[2]) & {"internal_note", "observed_truncated", "skill_window_start"} == set()
+
+    recorded: list[tuple[str, dict[str, Any]]] = []
+
+    class _Recorder(_Session):
+        async def emit_tool_event(self, kind: str, payload: object) -> None:
+            recorded.append((kind, dict(cast(Any, payload))))
+
+    sink = _answer_runtime_event_sink(cast(Any, _Recorder()))
+    for event in emitted:
+        await sink(event)
+
+    progress = [payload for kind, payload in recorded if kind == "tool_progress"]
+    assert progress[1] == {
+        "tool_name": "load_skill",
+        "call_id": "load-1",
+        "source_index": 0,
+        "text_chars": 0,
+        "object_label": "paged",
+        "skill_path": "SKILL.md",
+        "skill_window_start": 0,
+        "skill_window_end": document_chars,
+        "skill_document_chars": document_chars,
+    }
+    assert all("internal_note" not in payload for payload in progress)
 
 
 @pytest.mark.asyncio
@@ -1484,7 +1789,9 @@ async def test_attached_resources_pin_their_earlier_handles_for_recovery() -> No
     """
     import hashlib
 
-    from dlightrag.engine.agent.tools import ResourceAttachmentBytes
+    from dlightrag.engine.agent.tools.contracts import (
+        ResourceAttachmentBytes,
+    )
     from dlightrag.engine.answer.resource_settlement import attached_resource_update
 
     content = b"%PDF-1.7 adopted"
@@ -1646,7 +1953,6 @@ async def _drive_research_run(
     question: str,
     *,
     model: Any,
-    stream_model: Any = None,
     resource_manifest: tuple[ResourceManifestEntry, ...] = (),
     query_images: list[dict[str, Any]] | None = None,
     injected_tools: tuple[AgentTool, ...] = (),
@@ -1663,7 +1969,7 @@ async def _drive_research_run(
         synthesizer=cast(Any, SimpleNamespace()),
         retrieve_knowledge_base=_one_fact,
         model_func=model,
-        stream_model_func=stream_model,
+        stream_model_func=cast(Any, None),
         injected_tools=list(injected_tools),
         model_profile=profile,
         telemetry=NOOP_TELEMETRY,

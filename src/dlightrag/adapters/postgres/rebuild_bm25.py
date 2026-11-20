@@ -10,7 +10,8 @@ from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
 from dlightrag.adapters.postgres.corpus.corpus_bm25 import (
     rebuild_postgres_bm25,
 )
-from dlightrag.application.config import DlightragConfig, get_config, load_config, set_config
+from dlightrag.application.config.loading import get_config, load_config, set_config
+from dlightrag.application.config.sections import DlightragConfig
 
 DEFAULT_BATCH_SIZE = 500
 

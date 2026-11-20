@@ -3,19 +3,20 @@
 import {msg, str} from '@lit/localize';
 import {html, type TemplateResult} from 'lit';
 import {createWorkspaceRequest} from '../api/workspaces.ts';
-import {icon} from '../design-system/index.ts';
+import {icon, isImeKey} from '../design-system/index.ts';
 import {raise} from '../lib/dom.ts';
-import {apiErrorMessage} from '../lib/errors.ts';
+import {refusalText} from '../lib/errors.ts';
 import {LightElement} from '../lib/lit-host.ts';
+import {catalogText, localizedText} from '../lib/localized-text.ts';
 import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
 import {requestToast} from './toast-request.ts';
 
-export interface WorkspaceCreatedDetail {
+interface WorkspaceCreatedDetail {
   workspace: string;
 }
 
 /** New-workspace row: input intent, asynchronous creation, and pending state. */
-export class DlWorkspaceCreate extends LightElement {
+class DlWorkspaceCreate extends LightElement {
   static properties = {handles: {attribute: false}, pending: {state: true}};
 
   declare handles: AppHandles;
@@ -52,10 +53,11 @@ export class DlWorkspaceCreate extends LightElement {
     } catch (error) {
       if (!signal.aborted) {
         requestToast(this, {
-          message: apiErrorMessage(
+          tone: 'error',
+          message: localizedText(refusalText(
             error,
-            msg('Failed to create workspace', {id: 'workspaceCreate.failed'}),
-          ),
+            catalogText('Failed to create workspace', 'workspaceCreate.failed'),
+          )),
         });
       }
     } finally {
@@ -71,7 +73,8 @@ export class DlWorkspaceCreate extends LightElement {
              aria-label=${msg('New workspace name', {id: 'workspaceCreate.nameAria'})} ?disabled=${this.pending}
              @click=${(event: Event) => { event.stopPropagation(); }}
              @keydown=${(event: KeyboardEvent) => {
-               if (event.key !== 'Enter') return;
+               // The Enter that ends an IME composition is the composition's, not a create.
+               if (event.key !== 'Enter' || isImeKey(event)) return;
                event.preventDefault();
                void this.#submit();
              }}>

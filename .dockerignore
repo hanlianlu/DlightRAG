@@ -44,10 +44,6 @@ docker-compose.yml
 Dockerfile
 postgres/
 
-# Editor backups
-*.bkp
-.$*.drawio.bkp
-
 # Dev/test files
 tests/
 docs/
@@ -55,9 +51,9 @@ docs/
 agent-browser/
 .test-results/
 .import_linter_cache/
-# Local parser output from personal documents
-output/
 frontend/node_modules/
+# Source maps for reported stacks stay on the host; the image's own build writes its own.
+frontend/.sourcemaps/
 # The image builds its own frontend; a host build must never travel in the context, or the image
 # ends up carrying two bundles and index.html can point at the stale one.
 src/dlightrag/adapters/http/browser/static/app/
@@ -67,7 +63,6 @@ scripts/
 
 # Worktrees
 .worktrees/
-.superpowers/
 # Storage
 dlightrag_storage/
 *.db

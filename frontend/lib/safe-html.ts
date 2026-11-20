@@ -24,12 +24,21 @@ const BASE_ADD_ATTR = [
   'y2',
 ];
 
-// Strict profile — untrusted LLM answer/preview/highlight content.
+// Strict profile — untrusted LLM answer/preview/highlight content. It is the second pass behind
+// the server's nh3 allowlist (src/dlightrag/adapters/http/browser/safe_html.py), which emits no
+// form controls, no <style> and no style or id attributes; this pass refuses the same, so the page
+// stays safe if the server pass ever lets one through:
+//  - <style> (HTML or inside an inline <svg>) is document-global CSS: it can hide or overlay the
+//    application, or fetch URLs, from answer text;
+//  - a form with its controls posts what the reader types to an address the model chose;
+//  - an id can shadow one the application looks up by id.
 const LLM_SANITIZE_CONFIG: Config = {
   USE_PROFILES: {html: true, svg: true},
   ALLOW_DATA_ATTR: false,
   ADD_TAGS: ['line', 'polyline'],
   ADD_ATTR: [...BASE_ADD_ATTR],
+  FORBID_TAGS: ['style', 'form', 'input', 'textarea', 'select', 'option', 'optgroup'],
+  FORBID_ATTR: ['style', 'id'],
 };
 
 export function setSanitizedLlmHtml(element: Element, html: string): void {

@@ -17,7 +17,7 @@ from dlightrag.engine.ai.media import (
     image_url_block,
     verify_web_image_bytes,
 )
-from dlightrag.engine.rag.retrieval import ContextRow
+from dlightrag.engine.rag.retrieval.models import ContextRow
 
 logger = logging.getLogger(__name__)
 

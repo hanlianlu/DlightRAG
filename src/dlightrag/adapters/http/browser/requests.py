@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Typed browser route request payloads."""
 
+from typing import Literal
 from uuid import UUID
 
 from dlightrag.engine.answer.client_contracts import AnswerEffort, ClientContractModel
@@ -15,6 +16,7 @@ class WebAnswerRequest(ClientContractModel):
     mode: AnswerMode | None = None
     requested_skill: str | None = None
     effort: AnswerEffort | None = None
+    delivery: Literal["queue", "steer"] | None = None
 
 
 __all__ = ["WebAnswerRequest"]

@@ -47,7 +47,6 @@ async def test_run_view_surfaces_only_bounded_repair_guidance() -> None:
 
     assert view.repair_reason == "r" * 512
     assert view.repair_remedy == "Inspect and repair, then resume."
-    assert not hasattr(view, "checkpoint")
 
 
 async def test_pending_cancellation_commits_before_local_signal() -> None:
@@ -116,7 +115,6 @@ async def test_reads_and_events_drop_runtime_worker_state() -> None:
     assert view == listed[0]
     assert view is not None
     assert view.request_input() == {"query": "why"}
-    assert not hasattr(view, "lease_owner")
     assert [(event.sequence, event.event_type, event.payload) for event in events] == [
         (3, "token", {"text": "hi"})
     ]

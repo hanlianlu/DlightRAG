@@ -33,6 +33,7 @@ from dlightrag.application.connections.models import (
     DispatchCredentials,
     GrantRefreshClaim,
     OAuthFlow,
+    PinnedCatalogue,
     PinnedToolFact,
     RefreshClaim,
     RemoteTool,
@@ -40,10 +41,10 @@ from dlightrag.application.connections.models import (
     StoredGrant,
 )
 from dlightrag.application.connections.naming import name_catalogue
-from dlightrag.application.connections.policy import ConnectionPolicy
+from dlightrag.application.connections.policy import ConnectionPolicy, GrantKind, StatedHeaders
 from dlightrag.engine.agent.session.effects import canonical_json, schema_digest
 from dlightrag.engine.agent.session.operation import ToolEffectPending, decode_operation_state
-from dlightrag.engine.agent.tools import ToolRuntime
+from dlightrag.engine.agent.tools.contracts import ToolRuntime
 from dlightrag.engine.answer.execution.connection_binding import (
     ResearchToolClaim,
     RunConnectionBinding,
@@ -63,11 +64,14 @@ CREATE TABLE dlightrag_connection_heads (
  refresh_epoch BIGINT NOT NULL DEFAULT 0, refresh_expires_at TIMESTAMPTZ,
  observed_status TEXT NOT NULL DEFAULT 'disabled', last_attempt_at TIMESTAMPTZ,
  refresh_failures INTEGER NOT NULL DEFAULT 0,
+ -- Headers every request to this endpoint states, as [name, value] pairs. Never secrets: a
+ -- credential travels in its own sealed Grant, and policy refuses to overlap the two.
+ endpoint_headers JSONB NOT NULL DEFAULT '[]',
  last_error_kind TEXT, PRIMARY KEY(owner_id, connection_id)
 );
 CREATE TABLE dlightrag_connection_grants (
  owner_id TEXT NOT NULL, connection_id TEXT NOT NULL, grant_id TEXT NOT NULL,
- kind TEXT NOT NULL CHECK(kind IN ('bearer','oauth')), audience_digest TEXT NOT NULL,
+ kind TEXT NOT NULL CHECK(kind IN ('bearer','header','oauth')), audience_digest TEXT NOT NULL,
  consented_scopes JSONB NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'active',
  secret_version BIGINT NOT NULL DEFAULT 1, encrypted_envelope TEXT, key_id TEXT NOT NULL,
  refresh_owner TEXT, refresh_epoch BIGINT NOT NULL DEFAULT 0,
@@ -78,7 +82,8 @@ CREATE TABLE dlightrag_connection_grants (
 CREATE TABLE dlightrag_connection_generations (
  owner_id TEXT NOT NULL, connection_id TEXT NOT NULL, generation BIGINT NOT NULL,
  endpoint_json JSONB NOT NULL, endpoint_digest TEXT NOT NULL, grant_id TEXT,
- catalogue_json JSONB, catalogue_digest TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ catalogue_json JSONB, catalogue_digest TEXT, instructions TEXT,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
  PRIMARY KEY(owner_id, connection_id, generation),
  FOREIGN KEY(owner_id, connection_id) REFERENCES dlightrag_connection_heads(owner_id, connection_id),
  FOREIGN KEY(owner_id, connection_id, grant_id) REFERENCES dlightrag_connection_grants(owner_id, connection_id, grant_id)
@@ -117,15 +122,10 @@ CREATE TABLE dlightrag_connection_oauth_flows (
 CREATE INDEX connection_oauth_expiry ON dlightrag_connection_oauth_flows(expires_at);
 """
 _MIGRATIONS = (
-    Migration("personal_connections", "Owner Connections and immutable catalogues", (_SCHEMA,)),
-    Migration("answer_connection_pins", "Atomic owner Run generation pins", (_PIN_SCHEMA,)),
-    Migration("connection_oauth_inbox", "Live initiator encrypted OAuth inbox", (_OAUTH_SCHEMA,)),
-    # The inbox holds only flows that live for minutes and whose PKCE state never outlives
-    # the initiating process, so an older inbox is replaced rather than migrated.
     Migration(
-        "connection_oauth_head_revision",
-        "Complete an OAuth flow only on the head revision it began at",
-        ("DROP TABLE IF EXISTS dlightrag_connection_oauth_flows", _OAUTH_SCHEMA),
+        "baseline",
+        "Owner Connections, immutable catalogues, Run generation pins, and the OAuth inbox",
+        (_SCHEMA, _PIN_SCHEMA, _OAUTH_SCHEMA),
     ),
 )
 _TABLES = (
@@ -194,12 +194,14 @@ _TABLES = (
             "last_attempt_at",
             "last_error_kind",
             "refresh_failures",
+            "endpoint_headers",
         ),
         primary_key=("owner_id", "connection_id"),
         indexes=("connection_refresh_due",),
         foreign_keys=(
             ForeignKeyRequirement(
-                ("owner_id", "connection_id", "head_generation"), "dlightrag_connection_generations"
+                ("owner_id", "connection_id", "head_generation"),
+                "dlightrag_connection_generations",
             ),
         ),
     ),
@@ -214,6 +216,7 @@ _TABLES = (
             "grant_id",
             "catalogue_json",
             "catalogue_digest",
+            "instructions",
             "created_at",
         ),
         primary_key=("owner_id", "connection_id", "generation"),
@@ -267,6 +270,30 @@ def _json(value: Any) -> Any:
     return json.loads(value) if isinstance(value, str) else value
 
 
+def _observed_status(*, error: str | None, tools: int) -> str:
+    """What a head's status says after a discovery.
+
+    One rule for every path that publishes a catalogue: an error is an authentication fault or a
+    fault, and a discovery that succeeded with nothing to offer is its own observation -- the
+    endpoint answered, and what it offers under these request headers is no tools. `ready` would
+    tell an owner the Connection works while the Agent gets nothing from it.
+    """
+    if error == "authentication":
+        return "needs-auth"
+    if error is not None:
+        return "degraded"
+    return "no-tools" if tools == 0 else "ready"
+
+
+def _headers(value: Any) -> StatedHeaders:
+    """A head's stated headers as the pairs the transport sends, in the order they are stated."""
+    return tuple((str(pair[0]), str(pair[1])) for pair in (_json(value) or []))
+
+
+def _headers_json(headers: StatedHeaders) -> str:
+    return json.dumps([list(pair) for pair in headers], ensure_ascii=False)
+
+
 def _stored(row: Any) -> StoredConnection:
     catalogue = _json(row["catalogue_json"])
     return StoredConnection(
@@ -284,6 +311,7 @@ def _stored(row: Any) -> StoredConnection:
         catalogue_created_at=row["created_at"].isoformat() if catalogue is not None else None,
         last_error_kind=row["last_error_kind"],
         authorization_status=row["authorization_status"],
+        endpoint_headers=_headers(row["endpoint_headers"]),
         authentication=row["kind"] or "none",
         secret_version=row["secret_version"] or 0,
         grant_refresh_epoch=row["grant_refresh_epoch"] or 0,
@@ -400,15 +428,12 @@ class PGConnectionsStore(PostgresOperationRunner):
 
         return await self._run(operation)
 
-    async def research_catalogues(
-        self, owner_id: str
-    ) -> tuple[tuple[RunConnectionBinding, tuple[CatalogueTool, ...]], ...]:
-        async def operation(
-            conn: Any,
-        ) -> tuple[tuple[RunConnectionBinding, tuple[CatalogueTool, ...]], ...]:
+    async def research_catalogues(self, owner_id: str) -> tuple[PinnedCatalogue, ...]:
+        async def operation(conn: Any) -> tuple[PinnedCatalogue, ...]:
             rows = await conn.fetch(
-                """SELECT h.connection_id,h.head_generation,h.activation_epoch,
-                g.catalogue_digest,g.catalogue_json FROM dlightrag_connection_heads h
+                """SELECT h.connection_id,h.head_generation,h.activation_epoch,h.label,
+                g.catalogue_digest,g.catalogue_json,g.instructions
+                FROM dlightrag_connection_heads h
                 JOIN dlightrag_connection_generations g ON
                 (g.owner_id,g.connection_id,g.generation)=(h.owner_id,h.connection_id,h.head_generation)
                 LEFT JOIN dlightrag_connection_grants r ON (r.owner_id,r.grant_id)=(g.owner_id,g.grant_id)
@@ -418,15 +443,17 @@ class PGConnectionsStore(PostgresOperationRunner):
                 owner_id,
             )
             return tuple(
-                (
-                    RunConnectionBinding(
+                PinnedCatalogue(
+                    binding=RunConnectionBinding(
                         owner_id,
                         row["connection_id"],
                         row["head_generation"],
                         row["activation_epoch"],
                         row["catalogue_digest"],
                     ),
-                    tuple(CatalogueTool(**tool) for tool in _json(row["catalogue_json"])),
+                    tools=tuple(CatalogueTool(**tool) for tool in _json(row["catalogue_json"])),
+                    label=str(row["label"]),
+                    instructions=str(row["instructions"] or ""),
                 )
                 for row in rows
             )
@@ -503,6 +530,79 @@ class PGConnectionsStore(PostgresOperationRunner):
 
         return await self._run(operation)
 
+    async def _authorized_generation(
+        self,
+        conn: Any,
+        *,
+        claim: ResearchToolClaim,
+        runtime: ToolRuntime,
+        binding: RunConnectionBinding,
+    ) -> DispatchCredentials:
+        """Lock and verify the pinned head, generation, Grant, endpoint, and live fence.
+
+        The tool-call and resource gates differ in what they add on top (a pending effect's
+        exact contract, or nothing at all); everything that makes the Connection itself
+        authoritative lives here once, so a change to that authority cannot land in one path
+        and miss the other.
+        """
+        head = await conn.fetchrow(
+            """SELECT * FROM dlightrag_connection_heads
+            WHERE owner_id=$1 AND connection_id=$2 FOR UPDATE""",
+            claim.owner_id,
+            binding.connection_id,
+        )
+        generation = await conn.fetchrow(
+            """SELECT * FROM dlightrag_connection_generations
+            WHERE owner_id=$1 AND connection_id=$2 AND generation=$3 FOR UPDATE""",
+            claim.owner_id,
+            binding.connection_id,
+            binding.generation,
+        )
+        if (
+            head is None
+            or not head["enabled"]
+            or head["tombstoned_at"] is not None
+            or head["consent_version"] != 1
+            or head["activation_epoch"] != binding.activation_epoch
+            or generation is None
+            or generation["catalogue_digest"] != binding.catalogue_digest
+        ):
+            raise ConnectionsError("Connection dispatch denied")
+        grant = None
+        if generation["grant_id"] is not None:
+            grant = await conn.fetchrow(
+                """SELECT * FROM dlightrag_connection_grants
+                WHERE owner_id=$1 AND connection_id=$2 AND grant_id=$3 FOR UPDATE""",
+                claim.owner_id,
+                binding.connection_id,
+                generation["grant_id"],
+            )
+            if (
+                grant is None
+                or grant["status"] != "active"
+                or grant["kind"] not in {"bearer", "header", "oauth"}
+                or grant["audience_digest"] != generation["endpoint_digest"]
+                or grant["secret_version"] < 1
+                or grant["encrypted_envelope"] is None
+            ):
+                raise ConnectionsError("Connection grant unavailable")
+        endpoint = _json(generation["endpoint_json"])["url"]
+        if hashlib.sha256(endpoint.encode()).hexdigest() != generation["endpoint_digest"]:
+            raise ValueError("Connection endpoint digest mismatch")
+        if not await self._live_execution(conn, claim=claim, runtime=runtime, lock=True):
+            raise ConnectionsError("Connection execution fence denied")
+        return DispatchCredentials(
+            binding.connection_id,
+            binding.generation,
+            binding.activation_epoch,
+            endpoint,
+            generation["grant_id"],
+            grant["secret_version"] if grant else 0,
+            grant["encrypted_envelope"] if grant else None,
+            grant["kind"] if grant else "none",
+            _headers(head["endpoint_headers"]),
+        )
+
     async def dispatch_gate(
         self,
         *,
@@ -540,52 +640,9 @@ class PGConnectionsStore(PostgresOperationRunner):
                 if selected is None or runtime.tool_name != tool.local_name:
                     raise ConnectionsError("Connection dispatch denied")
                 b = selected
-                head = await conn.fetchrow(
-                    """SELECT * FROM dlightrag_connection_heads
-                    WHERE owner_id=$1 AND connection_id=$2 FOR UPDATE""",
-                    claim.owner_id,
-                    b.connection_id,
+                dispatch = await self._authorized_generation(
+                    conn, claim=claim, runtime=runtime, binding=b
                 )
-                generation = await conn.fetchrow(
-                    """SELECT * FROM dlightrag_connection_generations
-                    WHERE owner_id=$1 AND connection_id=$2 AND generation=$3 FOR UPDATE""",
-                    claim.owner_id,
-                    b.connection_id,
-                    b.generation,
-                )
-                if (
-                    head is None
-                    or not head["enabled"]
-                    or head["tombstoned_at"] is not None
-                    or head["consent_version"] != 1
-                    or head["activation_epoch"] != b.activation_epoch
-                    or generation is None
-                    or generation["catalogue_digest"] != b.catalogue_digest
-                ):
-                    raise ConnectionsError("Connection dispatch denied")
-                grant = None
-                if generation["grant_id"] is not None:
-                    grant = await conn.fetchrow(
-                        """SELECT * FROM dlightrag_connection_grants
-                        WHERE owner_id=$1 AND connection_id=$2 AND grant_id=$3 FOR UPDATE""",
-                        claim.owner_id,
-                        b.connection_id,
-                        generation["grant_id"],
-                    )
-                    if (
-                        grant is None
-                        or grant["status"] != "active"
-                        or grant["kind"] not in {"bearer", "oauth"}
-                        or grant["audience_digest"] != generation["endpoint_digest"]
-                        or grant["secret_version"] < 1
-                        or grant["encrypted_envelope"] is None
-                    ):
-                        raise ConnectionsError("Connection grant unavailable")
-                endpoint = _json(generation["endpoint_json"])["url"]
-                if hashlib.sha256(endpoint.encode()).hexdigest() != generation["endpoint_digest"]:
-                    raise ValueError("Connection endpoint digest mismatch")
-                if not await self._live_execution(conn, claim=claim, runtime=runtime, lock=True):
-                    raise ConnectionsError("Connection execution fence denied")
                 # Parent lock serializes settlement and child cancellation. Check
                 # existing runtime authority; never create a second effect ledger.
                 states = await conn.fetch(
@@ -626,16 +683,7 @@ class PGConnectionsStore(PostgresOperationRunner):
                     raise ConnectionsError("Connection pending effect mismatch")
                 if not await self._live_execution(conn, claim=claim, runtime=runtime, lock=False):
                     raise ConnectionsError("Connection execution is no longer held by this worker")
-                return DispatchCredentials(
-                    b.connection_id,
-                    b.generation,
-                    b.activation_epoch,
-                    endpoint,
-                    generation["grant_id"],
-                    grant["secret_version"] if grant else 0,
-                    grant["encrypted_envelope"] if grant else None,
-                    grant["kind"] if grant else "none",
-                )
+                return dispatch
 
         # A lost COMMIT acknowledgement must not silently rerun an effect gate.
         return await self._run_once(operation)
@@ -688,6 +736,45 @@ class PGConnectionsStore(PostgresOperationRunner):
                 runtime.fencing_epoch,
             )
         )
+
+    async def resource_gate(
+        self, *, claim: ResearchToolClaim, runtime: ToolRuntime, connection_id: str
+    ) -> DispatchCredentials:
+        """Authorize one on-demand resource read against the Run's pinned generation.
+
+        A resource read returns live content, so it pins no catalogue and needs no pending
+        effect of its own: the gate verifies the Connection is the one the Run accepted (the
+        pin and its activation epoch), still enabled and consented, with an active Grant for
+        the pinned endpoint, then fences the Run or Child Session. The caller re-runs it over
+        an OAuth preflight, exactly as the tool-call gate does.
+        """
+
+        async def operation(conn: Any) -> DispatchCredentials:
+            async with conn.transaction():
+                pin = await conn.fetchrow(
+                    """SELECT generation,activation_epoch,catalogue_digest
+                    FROM dlightrag_answer_connection_pins
+                    WHERE owner_id=$1 AND run_id=$2 AND connection_id=$3""",
+                    claim.owner_id,
+                    uuid.UUID(claim.run_id),
+                    connection_id,
+                )
+                if pin is None:
+                    raise ConnectionsError("Connection dispatch denied")
+                return await self._authorized_generation(
+                    conn,
+                    claim=claim,
+                    runtime=runtime,
+                    binding=RunConnectionBinding(
+                        claim.owner_id,
+                        connection_id,
+                        int(pin["generation"]),
+                        int(pin["activation_epoch"]),
+                        str(pin["catalogue_digest"]),
+                    ),
+                )
+
+        return await self._run_once(operation)
 
     async def dispatch_alive(
         self, *, claim: ResearchToolClaim, runtime: ToolRuntime, dispatch: DispatchCredentials
@@ -758,6 +845,7 @@ class PGConnectionsStore(PostgresOperationRunner):
         command: ConnectionCommand,
         policy: ConnectionPolicy,
         candidate: tuple[RemoteTool, ...] | None = None,
+        candidate_instructions: str | None = None,
     ) -> None:
         async def operation(conn: Any) -> None:
             async with conn.transaction():
@@ -783,13 +871,22 @@ class PGConnectionsStore(PostgresOperationRunner):
                         raise ConnectionsError("Connection quota exceeded")
                     identity = uuid.uuid4().hex
                     await conn.execute(
-                        "INSERT INTO dlightrag_connection_heads(owner_id,connection_id,label) VALUES($1,$2,$3)",
+                        "INSERT INTO dlightrag_connection_heads"
+                        "(owner_id,connection_id,label,endpoint_headers) VALUES($1,$2,$3,$4::jsonb)",
                         owner_id,
                         identity,
                         command.label,
+                        _headers_json(command.endpoint_headers or ()),
                     )
                     await self._generation(
-                        conn, owner_id, identity, 0, command.endpoint or "", None, None
+                        conn,
+                        owner_id,
+                        identity,
+                        0,
+                        command.endpoint or "",
+                        None,
+                        None,
+                        instructions=None,
                     )
                 else:
                     if row is None:
@@ -852,12 +949,14 @@ class PGConnectionsStore(PostgresOperationRunner):
                                     command.label or row["label"],
                                     candidate,
                                 ),
+                                instructions=candidate_instructions,
                             )
                             await conn.execute(
-                                "UPDATE dlightrag_connection_heads SET head_generation=$3,observed_status='ready' WHERE owner_id=$1 AND connection_id=$2",
+                                "UPDATE dlightrag_connection_heads SET head_generation=$3,observed_status=$4 WHERE owner_id=$1 AND connection_id=$2",
                                 owner_id,
                                 identity,
                                 generation,
+                                _observed_status(error=None, tools=len(candidate)),
                             )
                         if command.label:
                             await conn.execute(
@@ -865,6 +964,17 @@ class PGConnectionsStore(PostgresOperationRunner):
                                 owner_id,
                                 identity,
                                 command.label,
+                            )
+                        if command.endpoint_headers is not None:
+                            # Stated headers belong to the head, not to a generation: they change
+                            # what the next request says, and the refresh re-reads the catalogue
+                            # they produce. A Run keeps the catalogue it was promoted with.
+                            await conn.execute(
+                                "UPDATE dlightrag_connection_heads SET endpoint_headers=$3::jsonb "
+                                "WHERE owner_id=$1 AND connection_id=$2",
+                                owner_id,
+                                identity,
+                                _headers_json(command.endpoint_headers),
                             )
                     await conn.execute(
                         "UPDATE dlightrag_connection_heads SET revision=revision+1,refresh_epoch=refresh_epoch+1,refresh_owner=NULL,refresh_expires_at=NULL,refresh_due_at=now() WHERE owner_id=$1 AND connection_id=$2",
@@ -877,16 +987,23 @@ class PGConnectionsStore(PostgresOperationRunner):
 
         await self._run_once(operation)
 
-    async def replace_bearer(
+    async def install_credential(
         self,
         *,
         owner_id: str,
         connection_id: str,
         expected_revision: str,
         grant_id: str,
+        kind: GrantKind,
         key_id: str,
         envelope: str,
     ) -> None:
+        """Replace a locked head's credential without publishing a catalogue.
+
+        The head keeps its generation, so its published catalogue stays what it was until the
+        refresh this command asks for reads the endpoint again with the new credential.
+        """
+
         async def operation(conn: Any) -> None:
             async with conn.transaction():
                 await _owner_lock(conn, owner_id)
@@ -909,10 +1026,11 @@ class PGConnectionsStore(PostgresOperationRunner):
                 await conn.execute(
                     """INSERT INTO dlightrag_connection_grants
                     (owner_id,connection_id,grant_id,kind,audience_digest,encrypted_envelope,key_id)
-                    VALUES($1,$2,$3,'bearer',$4,$5,$6)""",
+                    VALUES($1,$2,$3,$4,$5,$6,$7)""",
                     owner_id,
                     connection_id,
                     grant_id,
+                    kind,
                     hashlib.sha256(endpoint.encode()).hexdigest(),
                     envelope,
                     key_id,
@@ -1382,6 +1500,27 @@ class PGConnectionsStore(PostgresOperationRunner):
 
         return await self._run_once(operation)
 
+    async def abandon_oauth_flow(self, *, owner_id: str, state_hash: str) -> None:
+        """Finish one owner's live flow whose callback carried nothing this deployment accepts.
+
+        The Connection then reports the refusal as ``failed`` at once instead of ``pending`` until
+        the flow's lifetime runs out. A flow that already took a deposit is left alone: another
+        callback won the race, and its exchange is the one that counts. The flow owner's own task
+        finds the row gone on its next look, ends, and hands back the head's refresh claim through
+        ``finish_oauth_flow``, so this update touches nothing but the flow row.
+        """
+
+        async def operation(conn: Any) -> None:
+            await conn.execute(
+                """UPDATE dlightrag_connection_oauth_flows SET finished_at=now()
+                WHERE owner_id=$1 AND state_hash=$2 AND deposited_at IS NULL AND finished_at IS NULL
+                AND flow_lease_expires_at>clock_timestamp() AND expires_at>clock_timestamp()""",
+                owner_id,
+                state_hash,
+            )
+
+        await self._run_once(operation)
+
     async def finish_oauth_flow(self, *, flow: OAuthFlow) -> None:
         async def operation(conn: Any) -> None:
             async with conn.transaction():
@@ -1410,12 +1549,13 @@ class PGConnectionsStore(PostgresOperationRunner):
         expected_revision: str,
         endpoint: str,
         grant_id: str,
-        kind: str,
+        kind: GrantKind,
         key_id: str,
         envelope: str,
         scopes: tuple[str, ...],
         catalogue: tuple[RemoteTool, ...],
         policy: ConnectionPolicy,
+        instructions: str | None = None,
     ) -> None:
         """Publish a new Grant as a Settings command at the owner's ``expected_revision``."""
 
@@ -1443,6 +1583,7 @@ class PGConnectionsStore(PostgresOperationRunner):
                     scopes=scopes,
                     catalogue=catalogue,
                     policy=policy,
+                    instructions=instructions,
                 )
                 await conn.execute(
                     "SELECT pg_notify($1, $2)", CONNECTIONS_CHANGED_CHANNEL, owner_id
@@ -1459,6 +1600,7 @@ class PGConnectionsStore(PostgresOperationRunner):
         scopes: tuple[str, ...],
         catalogue: tuple[RemoteTool, ...],
         policy: ConnectionPolicy,
+        instructions: str | None = None,
     ) -> None:
         """Publish a finished flow's Grant onto the head revision the flow began at.
 
@@ -1501,6 +1643,7 @@ class PGConnectionsStore(PostgresOperationRunner):
                         scopes=scopes,
                         catalogue=catalogue,
                         policy=policy,
+                        instructions=instructions,
                     )
                     outcome = "succeeded"
                 await conn.execute(
@@ -1528,6 +1671,7 @@ class PGConnectionsStore(PostgresOperationRunner):
         scopes: tuple[str, ...],
         catalogue: tuple[RemoteTool, ...],
         policy: ConnectionPolicy,
+        instructions: str | None = None,
     ) -> None:
         """Replace the locked head's Grants with a new one and publish its first generation."""
         owner_id, connection_id = row["owner_id"], row["connection_id"]
@@ -1553,16 +1697,30 @@ class PGConnectionsStore(PostgresOperationRunner):
             json.dumps(scopes),
         )
         generation = row["head_generation"] + 1
-        await self._generation(conn, owner_id, connection_id, generation, endpoint, grant_id, named)
+        await self._generation(
+            conn,
+            owner_id,
+            connection_id,
+            generation,
+            endpoint,
+            grant_id,
+            named,
+            instructions=instructions,
+        )
         await conn.execute(
             """UPDATE dlightrag_connection_heads SET head_generation=$3,revision=revision+1,
             refresh_epoch=refresh_epoch+1,refresh_owner=NULL,refresh_expires_at=NULL,
-            refresh_due_at=now()+$4*interval '1 second',observed_status=CASE WHEN enabled THEN 'ready' ELSE 'disabled' END,last_error_kind=NULL
+            refresh_due_at=now()+$4*interval '1 second',observed_status=$5,last_error_kind=NULL
             WHERE owner_id=$1 AND connection_id=$2""",
             owner_id,
             connection_id,
             generation,
             policy.refresh_seconds,
+            # A credential save that carried an endpoint publishes what its discovery found, so
+            # the same rule decides the observation: an empty catalogue is no tools, not ready.
+            "disabled"
+            if not row["enabled"]
+            else _observed_status(error=None, tools=len(catalogue)),
         )
 
     async def _generation(
@@ -1574,6 +1732,8 @@ class PGConnectionsStore(PostgresOperationRunner):
         endpoint: str,
         grant: str | None,
         catalogue: tuple[CatalogueTool, ...] | None,
+        *,
+        instructions: str | None = None,
     ) -> None:
         encoded = (
             json.dumps([asdict(tool) for tool in catalogue], sort_keys=True, separators=(",", ":"))
@@ -1582,8 +1742,8 @@ class PGConnectionsStore(PostgresOperationRunner):
         )
         await conn.execute(
             """INSERT INTO dlightrag_connection_generations
-            (owner_id,connection_id,generation,endpoint_json,endpoint_digest,grant_id,catalogue_json,catalogue_digest)
-            VALUES($1,$2,$3,$4::jsonb,$5,$6,$7::jsonb,$8)""",
+            (owner_id,connection_id,generation,endpoint_json,endpoint_digest,grant_id,catalogue_json,catalogue_digest,instructions)
+            VALUES($1,$2,$3,$4::jsonb,$5,$6,$7::jsonb,$8,$9)""",
             owner,
             identity,
             generation,
@@ -1592,6 +1752,7 @@ class PGConnectionsStore(PostgresOperationRunner):
             grant,
             encoded,
             hashlib.sha256(encoded.encode()).hexdigest() if encoded is not None else None,
+            instructions,
         )
 
     @staticmethod
@@ -1705,6 +1866,7 @@ class PGConnectionsStore(PostgresOperationRunner):
         error: str | None,
         retry_seconds: float,
         policy: ConnectionPolicy,
+        instructions: str | None = None,
     ) -> bool:
         item = claim.connection
 
@@ -1775,14 +1937,9 @@ class PGConnectionsStore(PostgresOperationRunner):
                         item.endpoint,
                         item.grant_id,
                         named,
+                        instructions=instructions,
                     )
-                status = (
-                    "ready"
-                    if active_error is None
-                    else "needs-auth"
-                    if active_error == "authentication"
-                    else "degraded"
-                )
+                status = _observed_status(error=active_error, tools=len(named or ()))
                 failures = min(10, head["refresh_failures"] + 1) if active_error else 0
                 delay = (
                     retry_seconds

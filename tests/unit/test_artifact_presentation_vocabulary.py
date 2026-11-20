@@ -77,19 +77,6 @@ def test_fresh_schema_admits_every_capability() -> None:
     assert _admitted_check_values(run_store._CREATE_ARTIFACT_ATTACHMENTS) == _CAPABILITIES
 
 
-def test_latest_migration_admits_every_capability() -> None:
-    """An existing database gets the vocabulary its writer already uses."""
-    attempts = [
-        statement
-        for migration in run_store.RUN_MIGRATIONS
-        for statement in migration.statements
-        if _CHECK_NAME in statement
-    ]
-
-    assert attempts, "no migration constrains the Artifact presentation vocabulary"
-    assert _admitted_check_values(attempts[-1]) == _CAPABILITIES
-
-
 @pytest.mark.parametrize(
     "model",
     [AnswerArtifactResponse, PresentationArtifact],

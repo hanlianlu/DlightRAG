@@ -38,15 +38,28 @@ def _names(members: int) -> list[str]:
     return [f"agent-browser-{index}" for index in range(1, members + 1)]
 
 
+#: The one member that runs a headed browser beside its display server, and the port its
+#: second run-server listens on. It is not a numbered member: a Run leases it to ask for a
+#: headed browser, or to recover from a page that refused a headless one.
+HEADED = "agent-browser-headed"
+HEADED_PORT = 3001
+
+
+def _headed_url() -> str:
+    return f"ws://{HEADED}:{HEADED_PORT}/"
+
+
 def _anchors(members: int) -> str:
     """The networks every member's peer joins, and the endpoints bound into the services."""
     names = _names(members)
-    endpoints = ",".join(f'"ws://{name}:3000/"' for name in names)
+    endpoints = ",".join([f'"ws://{name}:3000/"' for name in names] + [f'"{_headed_url()}"'])
     return (
         "x-agent-browser-networks: &agent-browser-networks\n"
-        + "".join(f"  {name}:\n" for name in names)
+        + "".join(f"  {name}:\n" for name in [*names, HEADED])
         + "\nx-agent-browser-bindings: &agent-browser-bindings\n"
         + f"  DLIGHTRAG_ANSWER__AGENT__BROWSER__ENDPOINTS: '[{endpoints}]'\n"
+        + "  DLIGHTRAG_ANSWER__AGENT__BROWSER__HEADED_ENDPOINTS: "
+        + f"'[\"{_headed_url()}\"]'\n"
         + "  DLIGHTRAG_ANSWER__AGENT__BROWSER__EGRESS_PROXY: http://agent-browser-egress:3128\n"
     )
 
@@ -60,7 +73,7 @@ def _services(members: int) -> str:
 
 def _networks(members: int) -> str:
     """One internal network per member, so no member reaches another or the Web."""
-    return "".join(f"  {name}:\n    internal: true\n" for name in _names(members))
+    return "".join(f"  {name}:\n    internal: true\n" for name in [*_names(members), HEADED])
 
 
 _BODIES = {"anchors": _anchors, "services": _services, "networks": _networks}

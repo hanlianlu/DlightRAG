@@ -6,23 +6,31 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from dlightrag.application.config import (
+from dlightrag.application.config.sections import (
     AgentBrowserConfig,
     AgentExecutionConfig,
     AgentMailboxConfig,
     AnswerSectionSettings,
     DlightragConfig,
+    MemoryConsolidationConfig,
     WebSourcesConfig,
 )
-from dlightrag.application.settings import agent_browser_settings
+from dlightrag.application.settings.projections import agent_browser_settings
 from dlightrag.engine.answer.execution_settings import (
-    default_local_workspace_root,
+    default_local_agentspace_root,
     validate_agent_execution,
 )
 
 
-def test_execution_environment_defaults_to_trust() -> None:
-    assert AgentExecutionConfig().execution_environment == "trust"
+def test_the_memory_pass_asks_for_low_reasoning_unless_the_operator_names_another() -> None:
+    assert AgentExecutionConfig().memory_consolidation.reasoning == "low"
+    assert MemoryConsolidationConfig(reasoning="medium").reasoning == "medium"
+
+
+@pytest.mark.parametrize("level", ["extreme", "", "LOW", None])
+def test_a_memory_pass_reasoning_that_is_not_a_level_is_refused(level: object) -> None:
+    with pytest.raises(ValidationError, match="reasoning"):
+        MemoryConsolidationConfig.model_validate({"reasoning": level})
 
 
 def test_child_concurrency_is_at_least_one() -> None:
@@ -58,7 +66,7 @@ def test_trust_without_root_uses_home_default(tmp_path: Path) -> None:
         workspace_root=None,
         working_dir=str(tmp_path / "corpus"),
     )
-    assert resolved == default_local_workspace_root()
+    assert resolved == default_local_agentspace_root()
     assert resolved is not None
     assert resolved.is_dir()
 
@@ -70,18 +78,6 @@ def test_trust_rejects_a_relative_root(tmp_path: Path) -> None:
             workspace_root="relative/workspaces",
             working_dir=str(tmp_path / "corpus"),
         )
-
-
-def test_the_retired_sandbox_mode_is_refused_with_no_alias() -> None:
-    """Stronger-than-the-kernel isolation left the application, so the name is gone.
-
-    A configuration that still names it fails validation rather than selecting a mode
-    that does nothing, and no alias accepts it in its place (ADR 0024).
-    """
-    with pytest.raises(ValidationError, match="execution_environment"):
-        AgentExecutionConfig.model_validate({"execution_environment": "sandbox"})
-    with pytest.raises(ValidationError, match="execution_environment"):
-        AgentExecutionConfig.model_validate({"execution_environment": "isolated"})
 
 
 def test_workspace_root_must_not_overlap_working_dir(tmp_path: Path) -> None:
@@ -103,54 +99,6 @@ def test_workspace_root_must_not_overlap_working_dir(tmp_path: Path) -> None:
             workspace_root=config.answer.agent.workspace_root,
             working_dir=config.deployment.working_dir,
         )
-
-
-@pytest.mark.parametrize(
-    "servers",
-    [[], [{"name": "docs", "transport": "stdio", "command": "unused", "tools": ["read"]}]],
-)
-def test_deployment_outbound_mcp_key_is_rejected(servers) -> None:
-    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-        AgentExecutionConfig.model_validate({"outbound_mcp": servers})
-
-
-def test_unknown_agent_key_is_rejected() -> None:
-    with pytest.raises(ValidationError):
-        DlightragConfig.model_validate(
-            {"agent": {"execution_environment": "disabled", "sandbox": True}}
-        )
-
-
-def test_skills_root_defaults_to_none_and_accepts_absolute() -> None:
-    assert AgentExecutionConfig().skills_root is None
-    config = AgentExecutionConfig.model_validate({"skills_root": "/opt/dlightrag/skills"})
-    assert config.skills_root == "/opt/dlightrag/skills"
-
-
-def test_skills_root_rejects_a_relative_path() -> None:
-    with pytest.raises(ValidationError, match="skill roots must be absolute paths"):
-        AgentExecutionConfig.model_validate({"skills_root": "skills"})
-
-
-def test_owner_skills_root_defaults_to_none_and_accepts_absolute() -> None:
-    assert AgentExecutionConfig().owner_skills_root is None
-    config = AgentExecutionConfig.model_validate(
-        {"owner_skills_root": "/opt/dlightrag/owner_skills"}
-    )
-    assert config.owner_skills_root == "/opt/dlightrag/owner_skills"
-
-
-def test_owner_skills_root_rejects_a_relative_path() -> None:
-    with pytest.raises(ValidationError, match="skill roots must be absolute paths"):
-        AgentExecutionConfig.model_validate({"owner_skills_root": "owner_skills"})
-
-
-def test_disabled_builtin_skills_defaults_empty_and_accepts_names() -> None:
-    assert AgentExecutionConfig().disabled_builtin_skills == ()
-    config = AgentExecutionConfig.model_validate(
-        {"disabled_builtin_skills": ["skill-creator", "operator-disabled"]}
-    )
-    assert config.disabled_builtin_skills == ("skill-creator", "operator-disabled")
 
 
 def test_search_tool_configuration_defaults_and_absolute_paths() -> None:
@@ -177,9 +125,11 @@ def test_search_tool_configuration_defaults_and_absolute_paths() -> None:
         ("fd_path", "relative/bin/fd"),
         ("ripgrep_path", "relative/bin/rg"),
         ("search_tool_cache_root", "relative-cache"),
+        ("skills_root", "skills"),
+        ("owner_skills_root", "owner_skills"),
     ],
 )
-def test_search_tool_directories_must_be_absolute(field: str, value: str) -> None:
+def test_configured_tool_and_skill_roots_must_be_absolute(field: str, value: str) -> None:
     with pytest.raises(ValidationError):
         AgentExecutionConfig.model_validate({field: value})
 
@@ -249,7 +199,7 @@ def test_the_agent_may_register_unless_the_operator_turns_registration_off(
 
 _MAILBOX = {
     "bucket": "agent-mail",
-    "alias_domain": "orliantra.cc",
+    "alias_domain": "mail.example",
     "access_key_id": "fixture-key-id",
     "secret_access_key": "fixture-secret-key",
 }
@@ -278,7 +228,7 @@ def test_a_bucket_comes_with_the_domain_and_the_keys_that_read_it() -> None:
     [
         ("endpoint", "https://account.r2.cloudflarestorage.com"),
         ("region", "us-east-1"),
-        ("alias_domain", "orliantra.cc"),
+        ("alias_domain", "mail.example"),
         ("access_key_id", "fixture-key-id"),
         ("secret_access_key", "fixture-secret-key"),
     ],
@@ -350,7 +300,7 @@ def test_the_agent_mailbox_is_bound_through_the_environment_and_its_keys_never_r
         mailbox.prefix,
     ) == (
         "agent-mail",
-        "orliantra.cc",
+        "mail.example",
         "https://account.r2.cloudflarestorage.com",
         "auto",
         "inbound",

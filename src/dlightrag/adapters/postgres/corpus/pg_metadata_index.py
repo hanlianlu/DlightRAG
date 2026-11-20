@@ -21,13 +21,16 @@ from dlightrag.adapters.postgres.corpus.partition_foundation import (
     ensure_partitioned_tables,
     verify_partitioned_tables,
 )
-from dlightrag.engine.rag.retrieval import MetadataFilter, MetadataScope
 from dlightrag.engine.rag.retrieval.metadata_fields import (
     FILTER_FIELD_COLUMNS,
     INGEST_FINALIZATION_COMPLETE_FIELD,
     METADATA_FIELD_IDS,
     PARSER_INPUT_SHA256_FIELD,
     SOURCE_RETRIEVAL_OPTIONS_FIELD,
+)
+from dlightrag.engine.rag.retrieval.models import (
+    MetadataFilter,
+    MetadataScope,
 )
 from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
 
@@ -60,6 +63,8 @@ _PG_INDEXED_FIELDS = frozenset(
 # Application-owned crash journal. It is deliberately outside the public RAG
 # metadata registry: callers cannot filter on or supply it as custom metadata.
 _FINALIZATION_COMPLETE_COLUMN = INGEST_FINALIZATION_COMPLETE_FIELD
+_METADATA_TABLE = "dlightrag_doc_metadata"
+_SEARCH_COLUMN = "custom_metadata_search"
 if set(_PG_FIELD_TYPES) != set(METADATA_FIELD_IDS):
     raise RuntimeError("PostgreSQL metadata columns do not match the RAG metadata field registry")
 _PG_METADATA_COLUMNS = tuple(
@@ -85,6 +90,8 @@ def _build_create_table() -> str:
     cols.append(f"    {_FINALIZATION_COMPLETE_COLUMN}    BOOLEAN NOT NULL DEFAULT FALSE")
     cols.append(f"    {SOURCE_RETRIEVAL_OPTIONS_FIELD}    JSONB")
     cols.append(f"    {PARSER_INPUT_SHA256_FIELD}    TEXT")
+    # The storage-internal canonical form of ``custom_metadata`` the containment index serves.
+    cols.append(f"    {_SEARCH_COLUMN}    JSONB NOT NULL DEFAULT '{{}}'")
     cols.append("    PRIMARY KEY (workspace, doc_id)")
     return (
         "CREATE TABLE IF NOT EXISTS dlightrag_doc_metadata (\n"
@@ -145,48 +152,9 @@ AS $$
 $$
 """
 
-_BACKFILL_CUSTOM_SEARCH = """
-UPDATE dlightrag_doc_metadata
-SET custom_metadata_search = dlightrag_canonical_custom_metadata(custom_metadata)
-WHERE custom_metadata_search
-      IS DISTINCT FROM dlightrag_canonical_custom_metadata(custom_metadata)
-"""
-
-# Rows written before the publication journal existed were completed under the
-# legacy contract. Publish only rows LightRAG durably marked processed before
-# the journal migration; post-migration interrupted commits remain hidden.
-_PUBLISH_LEGACY_PROCESSED_DOCUMENTS = f"""
-DO $$
-BEGIN
-    IF to_regclass('public.lightrag_doc_status') IS NOT NULL THEN
-        UPDATE dlightrag_doc_metadata AS metadata
-        SET {_FINALIZATION_COMPLETE_COLUMN} = TRUE
-        WHERE metadata.{_FINALIZATION_COMPLETE_COLUMN} IS FALSE
-          AND COALESCE(metadata.ingested_at, '-infinity'::timestamptz) <= (
-              SELECT migration.applied_at
-              FROM dlightrag_schema_migrations AS migration
-              WHERE migration.scope = 'doc_metadata'
-                AND migration.version = 'product_document_visibility'
-          )
-          AND EXISTS (
-              SELECT 1
-              FROM lightrag_doc_status AS status
-              WHERE status.workspace = metadata.workspace
-                AND status.id = metadata.doc_id
-                AND status.status = 'processed'
-          );
-    END IF;
-END
-$$
-"""  # noqa: S608 - fixed internal column
-
-_METADATA_TABLE = "dlightrag_doc_metadata"
-_SEARCH_COLUMN = "custom_metadata_search"
-
 # Public identities the other corpus adapters reuse so every retrieval leg
 # matches against the same table and column.
 METADATA_TABLE = _METADATA_TABLE
-METADATA_SEARCH_COLUMN = _SEARCH_COLUMN
 
 
 def metadata_visibility_condition(alias: str | None = None) -> str:
@@ -293,9 +261,6 @@ END
 $$
 """
 
-_DROP_FIELD_STATS_TRIGGER = (
-    "DROP TRIGGER IF EXISTS dlightrag_metadata_field_stats ON dlightrag_doc_metadata"
-)
 _CREATE_FIELD_STATS_TRIGGER = """
 CREATE TRIGGER dlightrag_metadata_field_stats
 AFTER INSERT OR UPDATE OR DELETE ON dlightrag_doc_metadata
@@ -335,7 +300,6 @@ GROUP BY present.workspace, present.field_id
 
 
 _VISIBLE_STATS_PREDICATE = metadata_visibility_condition("metadata")
-_BACKFILL_FIELD_STATS = _backfill_field_stats(_VISIBLE_STATS_PREDICATE)
 _BACKFILL_WORKSPACE_FIELD_STATS = _backfill_field_stats(
     f"metadata.workspace = $1 AND {_VISIBLE_STATS_PREDICATE}"
 )
@@ -344,9 +308,8 @@ _BACKFILL_WORKSPACE_FIELD_STATS = _backfill_field_stats(
 def _metadata_partition_spec() -> PartitionedTableSpec:
     return PartitionedTableSpec(
         name=_METADATA_TABLE,
-        # Foundation validation runs before append-only migrations. New
-        # storage-internal columns therefore belong to _SCHEMA_TABLES below,
-        # not this pre-migration compatibility gate.
+        # Foundation validation runs before the baseline, so a database holding an
+        # unpartitioned or populated corpus fails loudly with the reset message.
         required_columns=("workspace", "doc_id", *METADATA_FIELD_IDS, _SEARCH_COLUMN),
         primary_key=("workspace", "doc_id"),
         required_indexes=(
@@ -360,193 +323,48 @@ def _metadata_partition_spec() -> PartitionedTableSpec:
     )
 
 
-def _build_schema_migrations() -> tuple[Migration, ...]:
-    """Add declared metadata columns; never remove what is no longer declared.
-
-    Every statement is derived from the registry rather than recorded as history.
-    Indexes are rebuilt in place. Columns are never dropped automatically, but a
-    registry change that leaves an undeclared ledger version requires a full
-    development-data reset before this revision can start.
-    """
-    migrations = [
-        Migration(
-            "document_metadata",
-            "Create document metadata table partitioned by workspace",
-            (_CREATE_TABLE,),
-        ),
-        Migration(
-            "partition_default_child",
-            "Attach the shared DEFAULT child to the metadata parent",
-            (
-                f"CREATE TABLE IF NOT EXISTS {default_child_name(_METADATA_TABLE)} "
-                f"PARTITION OF {_METADATA_TABLE} DEFAULT",
-            ),
-        ),
-        Migration(
-            "function_canonical_custom_metadata",
-            "Install the shared custom-metadata canonicalization function",
-            (_CREATE_CANONICAL_CUSTOM_FN,),
-        ),
-        Migration(
-            "column_custom_metadata_search",
-            "Add the storage-internal canonical search JSONB column",
-            (
-                "ALTER TABLE dlightrag_doc_metadata "
-                "ADD COLUMN IF NOT EXISTS custom_metadata_search "
-                "JSONB NOT NULL DEFAULT '{}'",
-            ),
-        ),
-        Migration(
-            "backfill_custom_metadata_search",
-            "Deterministically backfill canonical custom-metadata search values",
-            (_BACKFILL_CUSTOM_SEARCH,),
-        ),
+def _baseline_statements() -> tuple[str, ...]:
+    """The whole metadata scope, derived from the RAG metadata field registry."""
+    statements = [
+        _CREATE_TABLE,
+        f"CREATE TABLE IF NOT EXISTS {default_child_name(_METADATA_TABLE)} "
+        f"PARTITION OF {_METADATA_TABLE} DEFAULT",
+        _CREATE_CANONICAL_CUSTOM_FN,
+        "CREATE INDEX IF NOT EXISTS idx_dm_workspace_download_locator "
+        "ON dlightrag_doc_metadata (workspace, download_locator)",
     ]
     for f in _PG_METADATA_COLUMNS:
-        migrations.append(
-            Migration(
-                f"column_{f.field_id}",
-                f"Ensure document metadata column {f.field_id}",
-                (
-                    "ALTER TABLE dlightrag_doc_metadata "
-                    f"ADD COLUMN IF NOT EXISTS {pg_identifier(f.field_id)} {f.pg_type}",
-                ),
-            )
-        )
-    migrations.append(
-        Migration(
-            "index_workspace_download_locator",
-            "Index exact source download ownership lookups",
-            (
-                "CREATE INDEX IF NOT EXISTS idx_dm_workspace_download_locator "
-                "ON dlightrag_doc_metadata (workspace, download_locator)",
-            ),
-        )
-    )
-    for f in _PG_METADATA_COLUMNS:
         idx_clause = _index_clause(f.field_id, f.pg_type, f.indexed)
-        if idx_clause is None:
-            continue
-        # Versioned by the expression: an index only serves a match whose
-        # canonical form it was built with, so changing one must rebuild it.
-        migrations.append(
-            Migration(
-                f"index_{f.field_id}_canonical",
-                f"Ensure document metadata index {f.field_id}",
-                (
-                    f"DROP INDEX IF EXISTS idx_dm_{f.field_id}",
-                    f"CREATE INDEX IF NOT EXISTS idx_dm_{f.field_id} "
-                    f"ON dlightrag_doc_metadata{idx_clause}",
-                ),
+        if idx_clause is not None:
+            statements.append(
+                f"CREATE INDEX IF NOT EXISTS idx_dm_{f.field_id} "
+                f"ON dlightrag_doc_metadata{idx_clause}"
             )
-        )
-    migrations.append(
-        Migration(
-            "index_custom_metadata_search_gin",
-            "GIN containment index for canonical custom metadata",
-            (
-                "CREATE INDEX IF NOT EXISTS idx_dm_custom_metadata_search "
-                "ON dlightrag_doc_metadata "
-                "USING GIN (custom_metadata_search jsonb_path_ops)",
-            ),
-        )
-    )
-    migrations.append(
-        Migration(
-            "index_filename_trgm",
-            "Trigram GIN index for literal filename substring matching",
-            (
-                "CREATE INDEX IF NOT EXISTS idx_dm_filename_trgm "
-                "ON dlightrag_doc_metadata "
-                "USING GIN (LOWER(TRIM(filename)) gin_trgm_ops)",
-            ),
-        )
-    )
-    migrations.append(
-        Migration(
-            "column_finalization_complete",
-            "Persist the application-owned ingestion finalization journal",
-            (
-                "ALTER TABLE dlightrag_doc_metadata "
-                f"ADD COLUMN IF NOT EXISTS {_FINALIZATION_COMPLETE_COLUMN} "
-                "BOOLEAN DEFAULT FALSE",
-            ),
-        )
-    )
-    migrations.append(
-        Migration(
-            "metadata_field_stats",
-            "Maintain bounded planner field availability counts",
-            (
-                _CREATE_FIELD_STATS_TABLE,
-                _CREATE_FIELD_STATS_TRIGGER_FN,
-                _DROP_FIELD_STATS_TRIGGER,
-                _CREATE_FIELD_STATS_TRIGGER,
-                f"TRUNCATE TABLE {_FIELD_STATS_TABLE}",
-                _BACKFILL_FIELD_STATS,
-            ),
-        )
-    )
-    migrations.append(
-        Migration(
-            "product_document_visibility",
-            "Enforce finalized-only Product Document visibility and statistics",
-            (
-                "ALTER TABLE dlightrag_doc_metadata "
-                f"ADD COLUMN IF NOT EXISTS {_FINALIZATION_COMPLETE_COLUMN} "
-                "BOOLEAN DEFAULT FALSE",
-                "UPDATE dlightrag_doc_metadata "  # noqa: S608 - fixed internal column
-                f"SET {_FINALIZATION_COMPLETE_COLUMN} = FALSE "
-                f"WHERE {_FINALIZATION_COMPLETE_COLUMN} IS NULL",
-                "ALTER TABLE dlightrag_doc_metadata "
-                f"ALTER COLUMN {_FINALIZATION_COMPLETE_COLUMN} SET DEFAULT FALSE",
-                "ALTER TABLE dlightrag_doc_metadata "
-                f"ALTER COLUMN {_FINALIZATION_COMPLETE_COLUMN} SET NOT NULL",
-                "ALTER TABLE dlightrag_doc_metadata "
-                "ADD CONSTRAINT dlightrag_doc_metadata_finalization_not_null "
-                f"CHECK ({_FINALIZATION_COMPLETE_COLUMN} IS NOT NULL)",
-                "CREATE INDEX IF NOT EXISTS idx_dm_visible_doc "
-                "ON dlightrag_doc_metadata (workspace, doc_id) "
-                f"WHERE {metadata_visibility_condition()}",
-                _CREATE_FIELD_STATS_TRIGGER_FN,
-                _DROP_FIELD_STATS_TRIGGER,
-                _CREATE_FIELD_STATS_TRIGGER,
-                f"TRUNCATE TABLE {_FIELD_STATS_TABLE}",
-                _BACKFILL_FIELD_STATS,
-            ),
-        )
-    )
-    migrations.append(
-        Migration(
-            "publish_legacy_processed_documents",
-            "Publish verified processed documents written before the visibility journal",
-            (_PUBLISH_LEGACY_PROCESSED_DOCUMENTS,),
-        )
-    )
-    migrations.append(
-        Migration(
-            "source_retrieval_options",
-            "Persist non-secret source retrieval routing separately from user metadata",
-            (
-                "ALTER TABLE dlightrag_doc_metadata "
-                f"ADD COLUMN IF NOT EXISTS {SOURCE_RETRIEVAL_OPTIONS_FIELD} JSONB",
-            ),
-        )
-    )
-    migrations.append(
-        Migration(
-            "parser_input_sha256",
-            "Record the digest of the bytes each document was parsed from",
-            (
-                "ALTER TABLE dlightrag_doc_metadata "
-                f"ADD COLUMN IF NOT EXISTS {PARSER_INPUT_SHA256_FIELD} TEXT",
-            ),
-        )
-    )
-    return tuple(migrations)
+    statements += [
+        "CREATE INDEX IF NOT EXISTS idx_dm_custom_metadata_search "
+        "ON dlightrag_doc_metadata "
+        "USING GIN (custom_metadata_search jsonb_path_ops)",
+        "CREATE INDEX IF NOT EXISTS idx_dm_filename_trgm "
+        "ON dlightrag_doc_metadata "
+        "USING GIN (LOWER(TRIM(filename)) gin_trgm_ops)",
+        "CREATE INDEX IF NOT EXISTS idx_dm_visible_doc "
+        "ON dlightrag_doc_metadata (workspace, doc_id) "
+        f"WHERE {metadata_visibility_condition()}",
+        _CREATE_FIELD_STATS_TABLE,
+        _CREATE_FIELD_STATS_TRIGGER_FN,
+        _CREATE_FIELD_STATS_TRIGGER,
+    ]
+    return tuple(statements)
 
 
-_SCHEMA_MIGRATIONS = _build_schema_migrations()
+_SCHEMA_MIGRATIONS = (
+    Migration(
+        "baseline",
+        "Create the document metadata table partitioned by workspace, its indexes, and the "
+        "field statistics it maintains",
+        _baseline_statements(),
+    ),
+)
 
 _SCHEMA_TABLES = (
     TableRequirement(
@@ -568,7 +386,6 @@ _SCHEMA_TABLES = (
             "idx_dm_filename_trgm",
             "idx_dm_visible_doc",
         ),
-        checks=("dlightrag_doc_metadata_finalization_not_null",),
         partitioned_by=("workspace",),
         required_child_partitions=(default_child_name("dlightrag_doc_metadata"),),
     ),
@@ -905,7 +722,7 @@ class PGMetadataIndex(PostgresOperationRunner):
     async def initialize(self, *, validate_only: bool = False) -> None:
         """Create/convert the partitioned table and indexes, or validate (reader).
 
-        The partition foundation runs before migrations so an old unpartitioned
+        The partition foundation runs before the baseline so an old unpartitioned
         (or populated) corpus fails loudly with the one-time development reset
         message instead of hitting a raw PostgreSQL DDL error.
         """
@@ -928,11 +745,10 @@ class PGMetadataIndex(PostgresOperationRunner):
                 migrations=_SCHEMA_MIGRATIONS,
                 tables=_SCHEMA_TABLES,
                 schema_error=CorpusSchemaError,
-                require_applied_prefix=False,
             )
             # Stored code is code, not data: a rename never rewrites a function body, and a
-            # recorded migration never re-runs, so the body is reconciled with this revision on
-            # every writer start rather than migrated once.
+            # recorded baseline never re-runs, so the body is reconciled with this revision on
+            # every writer start.
             await conn.execute(_CREATE_FIELD_STATS_TRIGGER_FN)
 
         await self._run(_operation)

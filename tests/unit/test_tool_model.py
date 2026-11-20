@@ -86,6 +86,71 @@ async def test_tool_model_routes_streaming_turns_through_the_provider(monkeypatc
     provider.complete_tool_turn.assert_not_awaited()
 
 
+async def test_stream_turn_forwards_reasoning_deltas_to_the_provider(monkeypatch) -> None:
+    provider = AsyncMock()
+
+    async def complete_streaming(*_args: object, **kwargs: Any) -> AssistantTurn:
+        await kwargs["emit_text"]("live")
+        await kwargs["emit_reasoning"]("thinking")
+        return AssistantTurn(text="live", reasoning="thinking", tool_calls=(), stop_reason="stop")
+
+    provider.complete_tool_turn_streaming.side_effect = complete_streaming
+    monkeypatch.setattr(
+        "dlightrag.engine.ai.providers.get_provider",
+        lambda *_args, **_kwargs: provider,
+    )
+    model = ToolModel(
+        _query_settings(), scheduler=ModelScheduler(max_concurrency=1), telemetry=NOOP_TELEMETRY
+    )
+    emitted: list[str] = []
+    reasoned: list[str] = []
+
+    async def emit_text(text: str) -> None:
+        emitted.append(text)
+
+    async def emit_reasoning(text: str) -> None:
+        reasoned.append(text)
+
+    turn = await model.stream_turn(
+        messages=[{"role": "user", "content": "q"}],
+        tools=[],
+        emit_text=emit_text,
+        emit_reasoning=emit_reasoning,
+    )
+
+    assert turn.reasoning == "thinking"
+    assert emitted == ["live"]
+    assert reasoned == ["thinking"]
+    kwargs = provider.complete_tool_turn_streaming.await_args.kwargs
+    assert kwargs["emit_text"] is emit_text
+    assert kwargs["emit_reasoning"] is emit_reasoning
+
+
+async def test_stream_turn_omits_an_absent_reasoning_callback(monkeypatch) -> None:
+    provider = AsyncMock()
+    provider.complete_tool_turn_streaming.return_value = AssistantTurn(
+        text="live", tool_calls=(), stop_reason="stop"
+    )
+    monkeypatch.setattr(
+        "dlightrag.engine.ai.providers.get_provider",
+        lambda *_args, **_kwargs: provider,
+    )
+    model = ToolModel(
+        _query_settings(), scheduler=ModelScheduler(max_concurrency=1), telemetry=NOOP_TELEMETRY
+    )
+
+    async def emit_text(text: str) -> None:
+        del text
+
+    await model.stream_turn(
+        messages=[{"role": "user", "content": "q"}],
+        tools=[],
+        emit_text=emit_text,
+    )
+
+    assert "emit_reasoning" not in provider.complete_tool_turn_streaming.await_args.kwargs
+
+
 async def test_tool_model_error_states_what_failed(monkeypatch) -> None:
     class Observation:
         updates: list[dict[str, object]] = []

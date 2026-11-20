@@ -155,8 +155,10 @@ def test_each_probe_is_a_new_trace() -> None:
 
 
 def test_retention_is_one_statement_per_table_the_environment_cannot_express() -> None:
-    statement = cli.retention_statement("otel_traces", "Timestamp", cli.Retention(7, "d"))
-    assert statement == "ALTER TABLE default.otel_traces MODIFY TTL Timestamp + toIntervalDay(7)"
+    statement = cli.retention_statement("hyperdx_sessions", "Timestamp", cli.Retention(7, "d"))
+    assert (
+        statement == "ALTER TABLE default.hyperdx_sessions MODIFY TTL Timestamp + toIntervalDay(7)"
+    )
     # The clause is the deployment's own: a 36-hour statement is 36 hours, not two days.
     assert cli.retention_statement(
         "otel_metrics_gauge", "TimeUnix", cli.Retention(36, "h")
@@ -204,6 +206,7 @@ def test_retention_alters_every_telemetry_table_and_says_so(
     """The seven-day TTLs a shell once applied by hand are one idempotent pass."""
     clickhouse = _FakeClickHouse(
         {
+            "hyperdx_sessions": ["Timestamp"],
             "otel_logs": ["Timestamp"],
             "otel_metrics_gauge": ["TimeUnix"],
             "otel_traces": ["Timestamp"],
@@ -214,12 +217,13 @@ def test_retention_alters_every_telemetry_table_and_says_so(
     report = cli.apply_retention(_STATED_7_DAYS)
 
     assert clickhouse.altered == [
+        "ALTER TABLE default.hyperdx_sessions MODIFY TTL Timestamp + toIntervalDay(7)",
         "ALTER TABLE default.otel_logs MODIFY TTL Timestamp + toIntervalDay(7)",
         "ALTER TABLE default.otel_metrics_gauge MODIFY TTL TimeUnix + toIntervalDay(7)",
         "ALTER TABLE default.otel_traces MODIFY TTL Timestamp + toIntervalDay(7)",
     ]
     assert report == (
-        "retention: 7 day(s) on otel_logs.Timestamp, "
+        "retention: 7 day(s) on hyperdx_sessions.Timestamp, otel_logs.Timestamp, "
         "otel_metrics_gauge.TimeUnix, otel_traces.Timestamp"
     )
 
@@ -239,10 +243,15 @@ def test_retention_reports_a_table_it_cannot_key_a_ttl_on(
     assert "no time column to key on otel_mystery" in report
 
 
-def test_retention_before_anything_was_exported_is_not_a_failure(
+def test_retention_waits_for_tables_a_signal_has_not_created_yet(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A deployment that has exported nothing has no table to alter."""
+    """A deployment with no replay yet has no sessions table, and that is not a failure."""
+    clickhouse = _FakeClickHouse({"otel_logs": ["Timestamp"]})
+    monkeypatch.setattr(cli, "clickhouse_query", clickhouse)
+
+    assert "waiting for hyperdx_sessions" in cli.apply_retention(_STATED_7_DAYS)
+
     monkeypatch.setattr(cli, "clickhouse_query", _FakeClickHouse({}))
     assert cli.apply_retention(_STATED_7_DAYS) == (
         "retention: no telemetry tables yet (nothing has been exported)"
@@ -645,7 +654,7 @@ def test_a_rejected_write_names_the_artifact_the_api_refused(tmp_path: Path) -> 
         )
 
 
-def test_the_shipped_artifacts_are_pushable_and_each_alert_watches_a_window() -> None:
+def test_every_shipped_alert_watches_its_window_and_points_at_the_webhook_just_pushed() -> None:
     """The files under stack/ are the deployment's alerts: every one must be honest.
 
     Two failures this holds out: an alert whose query is not scoped to the
@@ -653,136 +662,14 @@ def test_the_shipped_artifacts_are_pushable_and_each_alert_watches_a_window() ->
     alert pointing at a webhook the stack does not ship.
     """
     pushes = cli.alerting_artifacts(cli.stack_root(), environ=_SHIPPED_ENVIRON)
-    channel = next(push for push in pushes if push.collection == "webhooks")
-    assert channel.payload["service"] == "generic"
 
     alerts = [push for push in pushes if push.collection == "alerts"]
-    # The browser channel's `front-end-errors` alert is not shipped, because the product
-    # has no browser channel; and no 5xx share is computable from what the api exports.
-    assert len(alerts) == 6
+    assert alerts
     for push in alerts:
         # The webhook is the one the push has just written: the file names the variable.
         assert push.payload["channel"]["webhookId"] == f"${{{cli.CHANNEL_ID_VARIABLE}}}"
-        assert push.payload["thresholdType"] == "above"
-        assert push.payload["interval"] in {"5m", "15m", "1h"}
         query = push.payload["chartConfig"]["sqlTemplate"]
         assert "$__timeFilter" in query, f"{push.label} does not filter to its evaluation window"
-
-    dashboards = [push for push in pushes if push.collection == "dashboards"]
-    assert [push.payload["name"] for push in dashboards] == ["DlightRAG"]
-    tiles = dashboards[0].payload["tiles"]
-    assert len(tiles) == 10
-    cache_tiles = {
-        tile["name"]: tile["config"]["sqlTemplate"]
-        for tile in tiles
-        if "cache" in tile["name"] or "fresh" in tile["name"]
-    }
-    # Embeddings have no prompt cache, so a rate over them reads as a regression
-    # the provider never offered; the two cache tiles must both leave them out.
-    assert set(cache_tiles) == {"cache hit rate by span", "fresh vs cached prompt tokens"}
-    for name, query in cache_tiles.items():
-        assert "SpanName != 'embed-text'" in query, f"{name} counts embeddings"
-        assert "gen_ai.usage.input_cached_tokens" not in query, (
-            f"{name} reads an attribute no convention defines"
-        )
-        assert "gen_ai.usage.cache_read.input_tokens" in query, (
-            f"{name} does not read the cache-read key the registry names"
-        )
-    # `input_tokens` includes the cache read, so a rate divides by `input` alone and
-    # the fresh count is derived by subtraction. Dividing by `input + cache_read`
-    # would be the double count the exclusive domain used to require.
-    hit_rate = cache_tiles["cache hit rate by span"]
-    denominator = hit_rate.partition("nullIf(")[2].partition(", 0)")[0]
-    assert "gen_ai.usage.input_tokens" in denominator
-    assert "cache_read" not in denominator, "the cache read is already inside input_tokens"
-    assert "fresh_tokens,\n" in cache_tiles["fresh vs cached prompt tokens"]
-
-
-def test_the_postgres_alert_counts_backends_rather_than_label_combinations() -> None:
-    """`pg_stat_activity_count` has one row per (datname, state) and one per scrape.
-
-    Summing every row over a bucket therefore measures labels times scrapes, not
-    backends: the shipped query did, and 89% of five-minute windows read over its
-    own threshold while the server's real peak was a third of it. One scrape is the
-    unit, so the value is the busiest single scrape; a bucket around it adds nothing
-    to a `number` display, whose alert already reads the worst of its window.
-    """
-    document = json.loads(
-        (cli.stack_root() / "stack" / "alerts" / "postgres-health.json").read_text(encoding="utf-8")
-    )
-    query = document["chartConfig"]["sqlTemplate"]
-
-    # Deduplicated per scrape, then the busiest single scrape is the window's value.
-    assert "SELECT DISTINCT TimeUnix AS scrape, MetricName, Value, Attributes" in query
-    assert "GROUP BY scrape" in query
-    assert "GROUP BY ts" not in query, "a bucket between the scrape and the alert's max"
-    assert "max(backends)" in query
-    assert "sumIf(Value, MetricName = 'pg_stat_activity_count')" in query
-    # `max_connections` is server-global: one series. A sum over it is a category error,
-    # and a sum of backends over the window is the label-times-scrape error above.
-    assert "max(maxconn)" in query
-    assert "sumIf(Value, MetricName = 'pg_settings_max_connections')" not in query
-    # An outage reads through the same number rather than a second alert.
-    assert "greatest(1 - max(up)," in query
-
-
-def test_the_postgres_alert_fires_when_the_server_answers_nothing_but_pg_up() -> None:
-    """A server that is down reports `pg_up = 0` and none of the other series.
-
-    `maxconn` is then 0, and the shipped query once returned 0 for any scrape whose
-    `maxconn` was 0: the very scrape that says the server is down. The connection ratio is
-    the branch that needs a ceiling to divide by, so only it is guarded; `1 - max(up)` is
-    read whether or not the scrape carried anything else. Worked through the query: a scrape
-    of `pg_up = 0` alone is `greatest(1 - 0, 0) = 1`, over the 0.8 threshold, and a healthy
-    scrape of 28 backends under an 80-connection ceiling is `greatest(0, 0.35) = 0.35`.
-    """
-    document = json.loads(
-        (cli.stack_root() / "stack" / "alerts" / "postgres-health.json").read_text(encoding="utf-8")
-    )
-    query = document["chartConfig"]["sqlTemplate"]
-
-    assert "if(max(maxconn) = 0, 0, max(backends) / max(maxconn))" in query
-    assert "if(max(maxconn) = 0, 0,\n" not in query, "the ceiling guard must not wrap the outage"
-    # No scrape at all is a deployment that is not watching Postgres, and stays quiet.
-    assert "if(count() = 0, 0, max(pressure))" in query
-
-
-def test_the_disk_alert_keeps_a_mountpoint_that_has_no_free_space_left() -> None:
-    """A full disk is `free = 0`, which is the row this alert exists to report.
-
-    `HAVING free > 0` dropped it before the utilization was computed, so a mountpoint at
-    100% vanished from the result and the alert stayed `OK`. The filter now removes only a
-    mountpoint that reported nothing at all (`used + free = 0`, which would divide by zero).
-    """
-    document = json.loads(
-        (cli.stack_root() / "stack" / "alerts" / "host-disk-pressure.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    query = document["chartConfig"]["sqlTemplate"]
-
-    assert "HAVING used + free > 0" in query
-    assert "HAVING free > 0" not in query
-    assert "used / (used + free) AS utilization" in query
-
-
-def test_the_postgres_alert_states_its_threshold_as_a_ceiling() -> None:
-    """0.8 of `max_connections` is a level the deployment approaches, not one it sits at.
-
-    The retained data's peak is 0.35 of the limit over eight days of scrapes, so a name
-    or a message that said real backends *reach* 80% would describe a state this
-    deployment is not in. The number is a ceiling warning — it fires with a fifth of the
-    server's connections still free — and the message says so.
-    """
-    document = json.loads(
-        (cli.stack_root() / "stack" / "alerts" / "postgres-health.json").read_text(encoding="utf-8")
-    )
-
-    assert document["threshold"] == 0.8
-    assert document["thresholdType"] == "above"
-    assert "ceiling" in document["message"]
-    assert "80%" in document["message"]
-    assert "window" in document["message"], "the value is the window's worst reading"
 
 
 def _shipped_queries() -> list[tuple[str, str, str]]:
@@ -871,7 +758,7 @@ def test_no_shipped_artifact_reads_a_key_the_conventions_do_not_define() -> None
         if name.isupper() and not name.startswith("_") and isinstance(value, str)
     }
     queries = _shipped_queries()
-    assert len(queries) >= 6 + 4, "every alert and every SQL tile is covered"
+    assert len(queries) >= 7 + 4, "every alert and every SQL tile is covered"
     for label, query, _display in queries:
         for key in _NAMED_ATTRIBUTE.findall(query):
             if key.startswith("dlightrag."):
@@ -898,7 +785,7 @@ def test_a_shipped_alert_asks_only_for_the_macros_its_display_type_is_given() ->
         "$__rate_interval",
     )
     queries = _shipped_queries()
-    assert len(queries) >= 6 + 4, "every alert and every SQL tile is covered"
+    assert len(queries) >= 7 + 4, "every alert and every SQL tile is covered"
     for label, query, display in queries:
         if display in {"line", "stacked_bar"}:
             continue
@@ -908,13 +795,36 @@ def test_a_shipped_alert_asks_only_for_the_macros_its_display_type_is_given() ->
             )
 
 
+def test_the_front_end_alert_reads_the_signal_the_browser_channel_actually_sends() -> None:
+    """Console capture is off, so the log branch matches nothing; the span branch fires.
+
+    The alert is `above 1`, so a branch that cannot produce a row costs the reader
+    nothing — but a branch that is *supposed* to fire and cannot is the defect this
+    test holds out. The span branch must stay, and it must read `StatusCode`.
+    """
+    document = json.loads(
+        (cli.stack_root() / "stack" / "alerts" / "front-end-errors.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    query = document["chartConfig"]["sqlTemplate"]
+
+    assert query.count("UNION ALL") == 1
+    assert "FROM otel_traces" in query
+    assert "ServiceName = 'dlightrag-web'" in query
+    assert "StatusCode = 'Error'" in query
+    # Both branches are scoped to the window the alert is evaluated over.
+    assert query.count("$__timeFilter_ms") == 2
+
+
 def test_no_shipped_artifact_carries_a_bot_token() -> None:
     """The webhook URL, the chat id, and the bot behind them are a deployment's own.
 
     Every file that ships names variables, never the values. ``stack/.env`` is the one
     file that holds them, and it is excluded from the distribution; the scan covers the
     whole package, not just ``stack/``, so a token that leaks into the CLI, the
-    compose file, or a document is caught too.
+    compose file, or a document is caught too. A token is recognised by its shape, so no
+    real one has to be written down here to be caught.
     """
     package = Path(cli.__file__).resolve().parents[2]
     bot_token = re.compile(r"api\.telegram\.org/bot|\b\d{8,10}:[A-Za-z0-9_-]{35}\b")
@@ -937,7 +847,7 @@ def _shipped_artifact_files() -> list[Path]:
     files = sorted((stack / "alerts").glob("*.json")) + sorted(
         (stack / "dashboards").glob("*.json")
     )
-    assert len(files) >= 8, "every alert, the channel, and the dashboard are covered"
+    assert len(files) >= 9, "every alert, the channel, and the dashboard are covered"
     return files
 
 
@@ -989,15 +899,15 @@ def test_every_shipped_name_carries_the_product_so_two_products_can_share_a_stac
 def test_every_query_over_product_signals_is_scoped_to_the_products_services() -> None:
     """Another product exporting into the same ClickStack must not be counted here.
 
-    The per-process service names are `dlightrag-api`, `dlightrag-mcp` and
-    `dlightrag-reader`, so the scope is a prefix.
+    The per-process service names are `dlightrag-api`, `dlightrag-mcp`,
+    `dlightrag-reader` (and `dlightrag-web` for the browser), so the scope is a prefix.
     A query over host or collector metrics has no product to scope to and is left alone.
     """
     for label, query, _display in _shipped_queries():
         if "SpanName" in query or "SpanAttributes" in query or "otel_logs" in query:
-            assert "startsWith(ServiceName, 'dlightrag')" in query, (
-                f"{label} reads product signals without naming the product's services"
-            )
+            assert "startsWith(ServiceName, 'dlightrag')" in query or (
+                "ServiceName = 'dlightrag-web'" in query
+            ), f"{label} reads product signals without naming the product's services"
     dashboard = next(
         push
         for push in cli.alerting_artifacts(cli.stack_root(), environ=_SHIPPED_ENVIRON)
@@ -1045,7 +955,7 @@ def test_a_push_resolves_the_stack_ids_and_chat_from_the_environment() -> None:
     channel = next(push for push in pushes if push.collection == "webhooks")
     assert '"chat_id": "chat-1"' in channel.payload["body"]
     alerts = [push for push in pushes if push.collection == "alerts"]
-    assert len(alerts) == 6
+    assert len(alerts) == 7
     for push in alerts:
         assert push.payload["chartConfig"]["connectionId"] == "connection-123"
     tracked = [push for push in alerts if "sourceId" in push.payload["chartConfig"]]

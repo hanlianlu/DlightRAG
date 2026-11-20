@@ -11,8 +11,8 @@ from typing import Any
 
 import pytest
 
-from dlightrag.application.config import DlightragConfig
-from dlightrag.application.corpus_admin import FilePanelCursorCodec
+from dlightrag.application.config.sections import DlightragConfig
+from dlightrag.application.corpus_admin.file_panel import FilePanelCursorCodec
 from tests.support.application_double import application_double, delegate
 
 

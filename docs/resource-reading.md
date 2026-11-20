@@ -5,7 +5,7 @@ This document owns how an Answer Run reads, views, and copies its Resources: the
 conversion routes, conversion snapshots, and adoption of an earlier Run's Resources.
 Public URL admission follows [ADR 0005](adr/0005-public-web-resource-acquisition.md),
 a page read as a browser renders it follows
-[ADR 0032](adr/0032-the-agent-browser.md), a copy into the Agent Workspace follows
+[ADR 0032](adr/0032-the-agent-browser.md), a copy into the Agentspace follows
 [ADR 0033](adr/0033-resource-materialization.md), stored bytes share one read surface
 under [ADR 0016](adr/0016-one-run-resource-read-surface.md), and adoption follows
 [ADR 0013](adr/0013-lineage-adoption-of-earlier-run-resources.md).
@@ -21,7 +21,7 @@ Rendered Read, Browser Capture, Resource Materialization, and Blob.
   or an earlier Run's Resource adopted by this Run.
 - Corpus ingestion is separate: Answer Resources never invoke MinerU or Docling
   and never become corpus documents, chunks, vectors, BM25 rows, or graph data.
-  Workspace files are not converted; `read(path)` decodes UTF-8 or BOM-tagged
+  Agentspace files are not converted; `read(path)` decodes UTF-8 or BOM-tagged
   UTF-16 text, and `view(path)` accepts standalone images only.
 - `read` and `view` are Research tools. Fast sends current-turn images to the
   model directly and cannot represent any other attachment, so an Answer that
@@ -32,7 +32,7 @@ Rendered Read, Browser Capture, Resource Materialization, and Blob.
 
 ### `read`
 
-- Takes exactly one of a workspace `path`, a `resource_id` registered in this
+- Takes exactly one of an Agentspace `path`, a `resource_id` registered in this
   Run, or an anonymous public `url`. `offset` and `limit` apply only to paths,
   and `focus` only to `resource_id` and `url` reads. A cursor continues a
   directory or a Resource; a URL read continues with the `resource_id` it
@@ -45,12 +45,16 @@ Rendered Read, Browser Capture, Resource Materialization, and Blob.
 - Returns bounded text only. A Resource page starts with
   `[resource: <id> | lines <a>-<b> | extraction_status=<status>]`, holds one
   text window sized so that the page and the label the runtime puts before it fit
-  the observation capacity (the room the compaction trigger leaves below the input
-  limit, which is also where the runtime cuts a Tool result), and ends with notes,
-  visual handles, and a `[more; cursor=…]` continuation. A Resource longer than one
-  window is therefore always read on by cursor, never cut. The window is sized for the
-  Run's own model: a Child on a role whose configured context window is much smaller
-  has the page cut at its own capacity, with no cursor for the cut part.
+  the observation capacity (the dynamic-context reserve: the room the compaction
+  trigger leaves below the input limit, 60,000 tokens where the profile can afford
+  it and a third of the hard input limit where it cannot, never below the flat
+  charge that profile already paid; the runtime fits a Tool result at that same
+  number, so a page the reader returns is a page the runtime keeps whole on any
+  profile that can serve a request), and ends with notes, visual handles, and a
+  `[more; cursor=…]` continuation. A Resource longer than one window is therefore
+  always read on by cursor, never cut. The window is sized for the Run's own model:
+  a Child on a role whose configured context window is much smaller has the page
+  cut at its own capacity, with no cursor for the cut part.
   `focus` starts the page order at the most relevant window; the continuation
   runs to the end, wraps to the start, and stops before the focus window, so
   every character is returned once.
@@ -59,7 +63,7 @@ Rendered Read, Browser Capture, Resource Materialization, and Blob.
 
 ### `view`
 
-- Takes exactly one of a `resource_id`, an admitted public `url`, or a workspace
+- Takes exactly one of a `resource_id`, an admitted public `url`, or an Agentspace
   `path`. `locator` and `cursor` are mutually exclusive, a path takes neither,
   and a URL view continues with its returned `resource_id`. `view(url)` shares
   the acquisition of `read(url)` and does not need text conversion to succeed.
@@ -75,6 +79,12 @@ Rendered Read, Browser Capture, Resource Materialization, and Blob.
 | Converted document with `locator=vis-…` | One embedded image from the adopted conversion |
 | Anything else, including hosted-extraction text | An error naming what can be viewed |
 
+- Each attachment's text also carries the one way to put those pixels in front of
+  the reader: `![label](evidence:<resource id>)`, naming the attachment. A Model
+  handed a picture has no way to guess a placement grammar, and without one the
+  only thing it can do with an image it fetched is describe it -- which is what an
+  Answer did before held images could be placed at all. Naming the attachment's own
+  id is what makes the Model's pixels and the reader's pixels the same pixels.
 - PDFium renders one page at a time on demand, under a process-wide lock and a
   40-megapixel limit, independently of text extraction; only a conversion that
   ended `safety_refused` also refuses `view` for the rest of the Run. Office
@@ -89,7 +99,7 @@ Rendered Read, Browser Capture, Resource Materialization, and Blob.
 
 ### `materialize`
 
-- Takes a `resource_id` and a workspace `path`, and writes the bytes the Resource
+- Takes a `resource_id` and an Agentspace `path`, and writes the bytes the Resource
   admitted to that path, byte for byte, so a process the Agent runs can open the file
   itself: `read` returns a text view, which for a CSV collapses a line break inside a
   cell, and `bash` cannot reach a Resource at all. It is declared only with execution
@@ -115,10 +125,10 @@ Rendered Read, Browser Capture, Resource Materialization, and Blob.
   copy needs only the bytes, so no stored conversion view is required, and the adoption
   spends this Run's attachment allowance. An unknown handle gets the one refusal `read`
   and `view` give.
-- It is accounted as `write` is. The path is rooted in the workspace and never reaches
-  through a symbolic link, the workspace integrity latch refuses it, it holds its path
-  through the same access scheduler, the workspace quota refuses what does not fit, and
-  it replaces a file already there. The settlement carries the Workspace Inventory fact
+- It is accounted as `write` is. The path is rooted in the Agentspace and never reaches
+  through a symbolic link, the Agentspace integrity latch refuses it, it holds its path
+  through the same access scheduler, the Agentspace quota refuses what does not fit, and
+  it replaces a file already there. The settlement carries the Agentspace Inventory fact
   for the path, with its size, mode, and the SHA-256 of what is on disk, and a copy under
   `notes/` is a Session Note within that plane's budget. A refusal of the latch, of the
   path, or of a directory at the path loads and adopts nothing.
@@ -164,7 +174,7 @@ Rendered Read, Browser Capture, Resource Materialization, and Blob.
   fetched again during recovery.
 - Direct anonymous HTTP runs first. When it fails or yields no text for a
   textual resource, the configured Extract chain supplies text once. Its steps run
-  in order and the first usable result wins: the hosted providers (Exa, Tavily),
+  in order and the first usable result wins: the hosted providers (Exa, Tavily, DeepSeek),
   then the Agent Browser, which a Research Run with a browser appends unless the
   configuration places it elsewhere
   ([Public Web Sources](configuration.md#public-web-sources)). A URL the local
@@ -186,7 +196,7 @@ The `browser` tool ([Agent Browser](retrieval-answer.md#agent-browser)) turns tw
 things its page yields into Resources: the page as it stands, and a file the page
 downloads. Both are Web Resources with admission origin `agent` and acquisition
 `browser_capture` or `browser_download`, admitted by
-[ADR 0032](adr/0032-the-agent-browser.md). Neither lands in the Agent Workspace by
+[ADR 0032](adr/0032-the-agent-browser.md). Neither lands in the Agentspace by
 itself.
 
 - **A Resource of its own.** Each capture and each download is a new Resource. It never
@@ -215,7 +225,8 @@ itself.
   it stops a download's transfer. An oversized capture is refused as
   `the captured page exceeds <n> bytes`. A download that is refused, for its size, for a
   transfer that failed or did not finish within `navigation_timeout_seconds`, or for being
-  a fifth in one call, is named in the result and never fails the call, and no copy of it
+  a fifth in one call, is named in the result — at most twenty refusals in one result, with
+  the count of the rest — and never fails the call, and no copy of it
   survives.
 - **Downloads.** A download is typed by its filename, then by a PDF signature, and is
   otherwise opaque. It becomes Evidence when `read` or `view` reads it, as any Resource
@@ -244,7 +255,7 @@ a browser renders it. The Fast path never does.
 - **Asking.** `read(url=…, rendered=true)` and `read(resource_id=…, rendered=true)`
   render the page in the Run's browser, serialize the DOM after its scripts ran, and
   convert that HTML by the route direct HTML takes, so both text views come from one
-  converter. `rendered` applies only to a URL or a Web Resource. A workspace `path`,
+  converter. `rendered` applies only to a URL or a Web Resource. An Agentspace `path`,
   `http` options, a spill handle, and a Resource that is not a Web Resource (an
   upload, for one) are refused, never silently ignored.
 - **A second representation.** The rendering is appended to the same Web Resource
@@ -297,7 +308,9 @@ a browser renders it. The Fast path never does.
 
 An explicit rendered read that fails is a tool error with no effects, and the
 sentence it carries is fixed per reason: page URLs and driver error text never enter
-it.
+it. A page that answered 403, 404, 429, or 503 is not such a failure: the read is the
+body the page answered with, and its note says which status that was. Only a page
+whose markers name a bot filter's refusal is a failure instead of a page.
 
 | Reason | What the model reads |
 |---|---|
@@ -307,7 +320,7 @@ it.
 | `disconnected` | The browser disconnected while rendering; the next rendered read starts a fresh one |
 | `timeout` | The page did not finish loading within the configured seconds |
 | `navigation_failed` | The browser could not load the page, with its network error token when it has one |
-| `http_status` | The page answered HTTP 4xx or 5xx to the browser |
+| `egress_refused` | This deployment's egress proxy refused the connection: the site was never reached, and it admits ports 80 and 443 only |
 | `download` | The URL starts a download, not a page |
 | `too_large` | The rendered page exceeds the byte limit |
 | `no_text` | The rendered page produced no text |
@@ -369,7 +382,7 @@ textual URL then falls back to the Extract chain.
 | CSV | MarkItDown | None | None |
 | HTML | MarkItDown | Embedded data-URI images | None |
 
-- AnyDoc is exactly `firecrawl-anydoc` 0.2.4 (import `anydoc`); any other
+- AnyDoc is exactly `firecrawl-anydoc` 0.2.5 (import `anydoc`); any other
   installed version is a configuration error, not a fallback. It runs offline on
   admitted bytes with OCR rejected. MarkItDown runs with plugins disabled on
   admitted bytes and an explicit stream type, never fetches, and uses a fresh

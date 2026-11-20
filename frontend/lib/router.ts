@@ -5,13 +5,13 @@ export type WebRoute =
   | {kind: 'conversation'; conversationId: string}
   | {kind: 'not-found'};
 
-export type NavigationSource = 'push' | 'replace' | 'pop';
-export type NavigationGuard = (
+type NavigationSource = 'push' | 'replace' | 'pop';
+type NavigationGuard = (
   next: WebRoute,
   current: WebRoute,
   source: NavigationSource,
 ) => boolean | Promise<boolean>;
-export type RouteListener = (
+type RouteListener = (
   route: WebRoute,
   source: NavigationSource,
 ) => void | Promise<void>;
@@ -33,7 +33,7 @@ export interface NavigationDriver {
   subscribe(listener: (snapshot: NavigationSnapshot) => void): () => void;
 }
 
-export interface NavigateOptions {
+interface NavigateOptions {
   replace?: boolean;
   notify?: boolean;
   bypassGuard?: boolean;
@@ -73,7 +73,7 @@ export function parseWebRoute(value: string | URL): WebRoute {
   }
 }
 
-export function routesEqual(left: WebRoute, right: WebRoute): boolean {
+function routesEqual(left: WebRoute, right: WebRoute): boolean {
   if (left.kind !== right.kind) return false;
   if (left.kind === 'conversation' && right.kind === 'conversation') {
     return left.conversationId === right.conversationId;
@@ -135,7 +135,11 @@ export class WebRouter {
     const current = driver.current();
     this.#route = parseWebRoute(current.href);
     this.#index = current.state?.dlightragRouteIndex ?? 0;
-    driver.replace(routePath(this.#route), {
+    // Canonicalizing a load owns the path alone. The query and fragment are the address the page
+    // arrived with, and the modules that boot after this one read them: Settings reads the
+    // `settings=connections` a provider's authorization return carries.
+    const arrived = new URL(current.href, 'http://dlightrag.local');
+    driver.replace(`${routePath(this.#route)}${arrived.search}${arrived.hash}`, {
       ...(current.state ?? {}),
       dlightragRouteIndex: this.#index,
     });

@@ -2,31 +2,34 @@
 /** Icon-only control. Chrome is Shadow; the host owns the accessible name. */
 
 import {render} from 'lit';
-import {type IconName, type IconSize, icon } from '../icons/icon.ts';
+import {icon, type IconSize} from '../icons/icon.ts';
+import type {IconName} from '../icons/registry.generated.ts';
 
 const SIZES = new Set<IconSize>(['xs', 'sm', 'md', 'lg']);
 
+// Every var() fallback below restates the token's :root value, so the button looks the same where the
+// design-system stylesheet is absent. `tokens/custom-properties.test.ts` holds the two to each other.
 const template = document.createElement('template');
 template.innerHTML = `
   <style>
-    :host { display: inline-flex; color: var(--color-text-subtle, currentColor); }
+    :host { display: inline-flex; color: var(--color-text-subtle, #78716c); }
     button {
       align-items: center;
       background: none;
       border: none;
-      border-radius: var(--radius-control, 6px);
+      border-radius: var(--radius-control, 0.625rem);
       color: inherit;
       cursor: pointer;
       display: inline-flex;
       justify-content: center;
       margin: 0;
-      min-block-size: var(--control-hit-target, 44px);
-      min-inline-size: var(--control-hit-target, 44px);
+      min-block-size: var(--control-hit-target, 2.75rem);
+      min-inline-size: var(--control-hit-target, 2.75rem);
       padding: var(--space-inline, 0.25rem) var(--space-tight, 0.5rem);
     }
-    button:hover { background: var(--color-bg-elevated, transparent); }
+    button:hover { background: var(--color-bg-elevated, #292524); }
     button:focus-visible {
-      outline: 2px solid var(--color-control-ring, currentColor);
+      outline: 2px solid var(--color-control-ring, rgb(210 182 97 / 64%));
       outline-offset: 2px;
     }
     button:disabled { cursor: default; opacity: 0.5; }
@@ -36,8 +39,11 @@ template.innerHTML = `
       height: var(--dl-icon-size-sm, 16px);
       overflow: visible;
       stroke: currentColor;
-      stroke-width: var(--dl-icon-stroke, 1.75);
+      stroke-width: var(--dl-icon-weight, 1.5);
       width: var(--dl-icon-size-sm, 16px);
+    }
+    :host([size='xs']) {
+      --dl-icon-weight: 2;
     }
     :host([size='xs']) #icon svg {
       height: var(--dl-icon-size-xs, 12px);
@@ -55,8 +61,17 @@ template.innerHTML = `
   <button type="button" part="button"><span id="icon"></span><slot></slot></button>
 `;
 
+/** A part of the cloned template. The template is this file's own, so a miss is a mistake here. */
+function part<T extends Element>(root: ParentNode, selector: string): T {
+  const found = root.querySelector<T>(selector);
+  if (!found) throw new Error(`dl-icon-button template has no ${selector}`);
+  return found;
+}
+
 export class DlIconButton extends HTMLElement {
-  static readonly observedAttributes = ['name', 'size', 'disabled'];
+  // The inner button's accessible name is the host's, copied in #sync, so it follows the host's aria-label
+  // when the language changes in place.
+  static readonly observedAttributes = ['name', 'size', 'disabled', 'aria-label'];
 
   readonly #button: HTMLButtonElement;
   readonly #icon: HTMLSpanElement;
@@ -65,8 +80,8 @@ export class DlIconButton extends HTMLElement {
     super();
     const shadow = this.attachShadow({mode: 'open'});
     shadow.append(template.content.cloneNode(true));
-    this.#button = shadow.querySelector('button')!;
-    this.#icon = shadow.querySelector('#icon')!;
+    this.#button = part<HTMLButtonElement>(shadow, 'button');
+    this.#icon = part<HTMLSpanElement>(shadow, '#icon');
   }
 
   connectedCallback(): void {

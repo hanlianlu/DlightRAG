@@ -5,9 +5,12 @@
  * Memory change (the agent remembered something in a Run) arrives with its Undo whenever Chat
  * says so. While Settings is closed it only turns that fact into a toast. `active` says Settings
  * is open: only then does the page read, list, or report, and closing drops everything it read.
+ *
+ * The page is a window of its own: the switch holds the top, Clear holds the foot, and the stored
+ * memories scroll in the card between them (the dialog's pane never scrolls this page).
  */
 
-import {msg, str} from '@lit/localize';
+import {msg} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import {
@@ -24,52 +27,23 @@ import {
 } from '../api/memory.ts';
 import {icon} from '../design-system/index.ts';
 import {PHONE_DIALOG_MEDIA} from '../lib/breakpoints.ts';
+import {raise} from '../lib/dom.ts';
 import {LightElement, MediaController} from '../lib/lit-host.ts';
 import {KeysetPager} from '../lib/paged.ts';
 import shared from '../styles/settings-page.module.css';
 import styles from '../styles/settings-memory.module.css';
 import {loadOlderControl} from './load-older.ts';
+import {memoryKindLabel, memorySummary} from './memory-words.ts';
 import {modalResult} from './modal.ts';
-import {dangerCard, switchCard} from './settings-parts.ts';
+import {commitSwitch, dangerCard, loadState, switchCard} from './settings-parts.ts';
 import {reportSettingsSummary} from './settings-summary.ts';
 import {requestToast} from './toast-request.ts';
 
 const MAX_SEEN_MEMORY_OPERATIONS = 500;
 type MemoryReadResult = 'loaded' | 'stale' | 'failed';
 
-function memorySummary(event: MemoryOperationEvent): string {
-  const body = event.body.replace(/\s+/g, ' ').trim();
-  const concise = body.length > 120 ? `${body.slice(0, 117)}…` : body;
-  if (event.outcome === 'unchanged') {
-    return event.operation === 'forget'
-      ? msg('Already forgotten.', {id: 'settings.memory.alreadyForgotten'})
-      : msg('Already remembered.', {id: 'settings.memory.alreadyRemembered'});
-  }
-  if (event.outcome === 'conflict') {
-    return msg('Profile Memory changed; recall it before retrying.', {
-      id: 'settings.memory.conflict',
-    });
-  }
-  if (event.outcome === 'rejected') {
-    return msg('Profile Memory operation was rejected.', {id: 'settings.memory.rejected'});
-  }
-  if (event.operation === 'forget') {
-    return concise
-      ? msg(str`Forgot: ${concise}`, {id: 'settings.memory.forgot'})
-      : msg('Profile Memory forgotten.', {id: 'settings.memory.forgotten'});
-  }
-  if (event.operation === 'undo') {
-    return concise
-      ? msg(str`Restored: ${concise}`, {id: 'settings.memory.restored'})
-      : msg('Profile Memory restored.', {id: 'settings.memory.restoredEmpty'});
-  }
-  return concise
-    ? msg(str`Remembered: ${concise}`, {id: 'settings.memory.remembered'})
-    : msg('Saved to Profile Memory.', {id: 'settings.memory.saved'});
-}
-
 /** Owns Profile Memory state: its asynchronous reads and mutations, receipts, and focus. */
-export class DlSettingsMemory extends LightElement {
+class DlSettingsMemory extends LightElement {
   static properties = {
     active: {attribute: false},
     current: {attribute: false},
@@ -128,6 +102,9 @@ export class DlSettingsMemory extends LightElement {
   }
 
   protected override updated(changed: PropertyValues<this>): void {
+    // This page's top is its window's, because the dialog's pane never scrolls it: a page that
+    // opens again opens on the newest memories.
+    if (changed.has('current') && this.current) this.#listWindow()?.scrollTo({top: 0});
     if (this.active && (changed.has('memory') || changed.has('active'))) {
       reportSettingsSummary(this, {
         section: 'memory',
@@ -154,7 +131,8 @@ export class DlSettingsMemory extends LightElement {
     this.#seenOperations.add(identity);
     const message = memorySummary(event);
     if (event.outcome !== 'changed' || !event.changeId) {
-      requestToast(this, {message});
+      const refused = event.outcome === 'conflict' || event.outcome === 'rejected';
+      requestToast(this, {message, tone: refused ? 'error' : 'receipt'});
       return;
     }
     const changeId = event.changeId;
@@ -171,11 +149,7 @@ export class DlSettingsMemory extends LightElement {
           try {
             const receipt = await undoMemoryChange(changeId, signal);
             if (receipt.outcome !== 'changed') throw new Error('Memory undo conflicted');
-          } catch (error) {
-            if (!signal.aborted) requestToast(this, {
-              message: msg('Could not undo the change.', {id: 'toast.undoFailed'}),
-            });
-            throw error;
+            this.#profileChanged();
           } finally {
             this.pending = false;
             void this.#refresh();
@@ -194,10 +168,14 @@ export class DlSettingsMemory extends LightElement {
     // A closed dialog shows nothing, and nothing read is kept in it.
     if (!this.active) return html``;
     return html`
-      ${this.memory ? this.#page(this.memory) : html`<p class=${shared.hint} role="status">${
-        this.loading || this.pending
-          ? msg('Loading memory settings…', {id: 'settings.memoryLoading'})
-          : msg('Could not load memory settings.', {id: 'settings.memoryLoadFailed'})}</p>`}
+      ${this.memory ? this.#page(this.memory) : loadState({
+    host: this,
+    failed: !this.loading && !this.pending,
+    loading: msg('Loading memory settings…', {id: 'settings.memoryLoading'}),
+    failure: msg('Could not load memory settings.', {id: 'settings.memoryLoadFailed'}),
+    retry: msg('Retry', {id: 'settings.memory.retry'}),
+    onRetry: () => this.#refresh(),
+  })}
       <dialog id="clear-memory-dialog" class="confirm-dialog" aria-labelledby="clear-memory-title">
         <form method="dialog" novalidate>
           <h2 id="clear-memory-title">${msg('Clear Profile memory?', {id: 'settings.clearMemoryTitle'})}</h2>
@@ -219,7 +197,7 @@ export class DlSettingsMemory extends LightElement {
 
   #page(memory: MemorySettings): TemplateResult {
     return html`
-      <div class=${shared.stack}>
+      <div class="${shared.stack} ${memory.enabled ? styles.window : ''}">
         ${switchCard({
           id: 'memory-enabled-toggle',
           label: msg('Activate profile memories', {id: 'settings.activateMemories'}),
@@ -248,27 +226,31 @@ export class DlSettingsMemory extends LightElement {
     const pager = this.#pager;
     const firstPage = this.records === null;
     const count = memory.activeCount ?? this.records?.length ?? null;
+    const rows = this.records ?? [];
     return html`
-      <section class="${shared.card} ${shared.divided}" aria-labelledby="memory-list-title">
+      <section class="${shared.card} ${shared.divided} ${styles.listCard}"
+               aria-labelledby="memory-list-title">
         <div class=${styles.listHeader}>
           <h4 id="memory-list-title" class=${styles.listTitle} tabindex="-1">${
             msg('Stored memories', {id: 'settings.memory.stored'})}</h4>
           ${count === null ? nothing : html`<span class=${styles.badge}>${count}</span>`}
         </div>
-        ${this.records?.length ? html`<ul class="${shared.list} ${shared.divided}">
-          ${repeat(this.records, (record) => record.memoryId, (record) => html`
-            <li class=${styles.memory}>
-              <span class=${styles.kind}>${record.kind === 'fact'
-                ? msg('Fact', {id: 'settings.memory.kindFact'})
-                : msg('Preference', {id: 'settings.memory.kindPreference'})}</span>
-              <p class=${styles.body}>${record.body}</p>
-              <dl-icon-button class="${styles.forget} ${shared.iconAction}" name="close" size="sm"
-                aria-label=${msg('Forget this memory', {id: 'settings.memory.forget'})}
-                ?disabled=${this.pending || this.loading}
-                @click=${() => { void this.#forget(record); }}></dl-icon-button>
-            </li>
-          `)}
-        </ul>` : nothing}
+        ${rows.length ? html`
+          <div class=${styles.listWindow} data-memory-window role="region" tabindex="0"
+               aria-labelledby="memory-list-title">
+            <ul class="${shared.list} ${shared.divided}">
+              ${repeat(rows, (record) => record.memoryId, (record) => html`
+                <li class=${styles.memory}>
+                  <p class=${styles.text}>${record.body}</p>
+                  <span class=${styles.kind}>${memoryKindLabel(record.kind)}</span>
+                  <dl-icon-button class="${styles.forget} ${shared.iconAction}" name="close" size="sm"
+                    aria-label=${msg('Forget this memory', {id: 'settings.memory.forget'})}
+                    ?disabled=${this.pending || this.loading}
+                    @click=${() => { void this.#forget(record); }}></dl-icon-button>
+                </li>
+              `)}
+            </ul>
+          </div>` : nothing}
         <p class=${styles.status} role="status">${pager.starting
           ? msg('Loading memories…', {id: 'settings.memory.listLoading'})
           : firstPage && pager.state === 'error'
@@ -308,31 +290,19 @@ export class DlSettingsMemory extends LightElement {
   }
 
   #toggle = async (event: Event): Promise<void> => {
-    const signal = this.lifetime;
-    const toggle = event.currentTarget as HTMLElement;
-    if (signal.aborted || this.pending || !this.memory) return;
-    const requested = !this.memory.enabled;
-    const focused = document.activeElement === toggle;
-    this.pending = true;
-    this.#invalidateReads();
-    try {
-      const memory = await putMemorySettings(requested, signal);
-      if (!signal.aborted) this.memory = memory;
-    } catch {
-      if (!signal.aborted) {
-        requestToast(this, {
-          message: msg('Could not save memory settings.', {id: 'settings.memorySaveFailed'}),
-        });
-      }
-    } finally {
-      if (!signal.aborted) {
-        this.pending = false;
-        this.#reloadList();
-        await this.updateComplete;
-        // A switch that was disabled for the request drops focus in some engines; give it back.
-        if (focused) toggle.focus();
-      }
-    }
+    const memory = this.memory;
+    if (!memory) return;
+    await commitSwitch(this, event, {
+      signal: this.lifetime,
+      send: (signal) => putMemorySettings(!memory.enabled, signal),
+      accept: (reply) => {
+        this.memory = reply;
+        this.#profileChanged();
+      },
+      failure: msg('Could not save memory settings.', {id: 'settings.memorySaveFailed'}),
+      begin: () => { this.#invalidateReads(); },
+      settled: () => { this.#reloadList(); },
+    });
   };
 
   #clear = async (event: Event): Promise<void> => {
@@ -346,6 +316,7 @@ export class DlSettingsMemory extends LightElement {
     try {
       await clearMemory(signal);
       if (!signal.aborted) {
+        this.#profileChanged();
         requestToast(this, {
           message: msg('Memory cleared.', {id: 'settings.memoryCleared'}),
         });
@@ -353,6 +324,7 @@ export class DlSettingsMemory extends LightElement {
     } catch {
       if (!signal.aborted) {
         requestToast(this, {
+          tone: 'error',
           message: msg('Could not clear memory.', {id: 'settings.memoryClearFailedToast'}),
         });
       }
@@ -363,6 +335,11 @@ export class DlSettingsMemory extends LightElement {
       }
     }
   };
+
+  /** The owner changed their profile here: the notices under their answers read it again. */
+  #profileChanged(): void {
+    raise(this, 'dl-profile-memory-change');
+  }
 
   /** The list is dropped, not refreshed in place, so its next page goes with it. */
   #reloadList(): void {
@@ -389,6 +366,11 @@ export class DlSettingsMemory extends LightElement {
     return this.querySelector<HTMLElement>('#memory-list-title');
   }
 
+  /** The box the stored memories scroll in, once there are any. */
+  #listWindow(): HTMLElement | null {
+    return this.querySelector<HTMLElement>('[data-memory-window]');
+  }
+
   async #forget(record: MemoryRecord): Promise<void> {
     const signal = this.lifetime;
     if (signal.aborted || this.pending || this.loading) return;
@@ -400,13 +382,15 @@ export class DlSettingsMemory extends LightElement {
     try {
       const receipt = await forgetMemory(record.memoryId, signal);
       if (signal.aborted) return;
+      this.#profileChanged();
       undoable = receipt.outcome === 'changed' && receipt.changeId !== '';
       this.#receive({
-        live: true, operation: receipt.action, outcome: receipt.outcome,
+        live: true, operation: 'forget', outcome: receipt.outcome,
         changeId: receipt.changeId, intentId: null, body: receipt.body || record.body,
       }, undoable);
     } catch {
       if (!signal.aborted) requestToast(this, {
+        tone: 'error',
         message: msg('Could not forget this memory.', {id: 'settings.memory.forgetFailed'}),
       });
     } finally {
@@ -457,5 +441,11 @@ customElements.define('dl-settings-memory', DlSettingsMemory);
 declare global {
   interface HTMLElementTagNameMap {
     'dl-settings-memory': DlSettingsMemory;
+  }
+
+  interface HTMLElementEventMap {
+    /** The owner changed their Profile Memory from Settings: they turned it on or off, cleared it, or forgot or
+     *  restored a record. What the page read of it is stale. */
+    'dl-profile-memory-change': CustomEvent<void>;
   }
 }

@@ -6,16 +6,20 @@ import logging
 from collections import Counter
 from typing import Any
 
-from dlightrag.engine.rag.retrieval import (
-    ContextRow,
-    MetadataFilter,
-    MetadataScope,
-    RetrievalResult,
+from dlightrag.engine.rag.retrieval.filtering import metadata_filter_scope
+from dlightrag.engine.rag.retrieval.fusion import (
     format_bm25_top,
     rrf_fuse,
 )
-from dlightrag.engine.rag.retrieval.filtering import metadata_filter_scope
+from dlightrag.engine.rag.retrieval.models import (
+    ContextRow,
+    MetadataFilter,
+    MetadataScope,
+)
 from dlightrag.engine.rag.retrieval.ports import BM25Search, MetadataScopeStore, RetrievalBackend
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalResult,
+)
 from dlightrag.engine.rag.retrieval.visual import (
     DirectVisualRetriever,
     PreparedVisualQuery,

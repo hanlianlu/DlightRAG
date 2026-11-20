@@ -18,13 +18,16 @@ from dlightrag.adapters.http.browser.markdown import (
 from dlightrag.adapters.http.browser.run_resources import rewrite_image_sources
 from dlightrag.adapters.http.browser.safe_html import sanitize_html_fragment
 from dlightrag.adapters.http.browser.video_playback import VideoPlaybackLink, video_playback_link
-from dlightrag.application.corpus_admin import validate_public_web_url
+from dlightrag.application.answer.provenance import ArtifactAttestationResponse
 from dlightrag.engine.answer.citations.contracts import (
     SourceReferencePayload,
 )
 from dlightrag.engine.answer.citations.syntax import Citation
 from dlightrag.engine.answer.client_contracts import ClientContractModel
 from dlightrag.engine.answer.reference import resolve_artifact_target
+from dlightrag.engine.public_http import (
+    validate_public_web_url,
+)
 
 _CHUNK_ALLOWED_TAGS = {
     "table",
@@ -90,6 +93,10 @@ class PresentationImage(ClientContractModel):
     thumbnail_url: str
     label: str = ""
     answer_image_sent: bool = True
+    #: Names a resource the Run itself holds, so the reader's bytes are that resource's bytes.
+    #: ``None`` for a corpus image, which is addressed by workspace and chunk instead, and left out
+    #: of the wire rather than sent as a null the browser would only have to ignore.
+    resource_id: str | None = Field(default=None, exclude=True)
 
 
 class PresentationArtifactIssue(ClientContractModel):
@@ -114,6 +121,9 @@ class PresentationArtifact(ClientContractModel):
     download_url: str | None = None
     presentation_url: str | None = None
     issue: PresentationArtifactIssue | None = None
+    # The same record the REST Artifact carries, from the same class: the two transports answer
+    # one question about one Artifact, so they answer it in one shape.
+    attestation: ArtifactAttestationResponse | None = None
 
 
 class PresentationArtifactOutcome(ClientContractModel):

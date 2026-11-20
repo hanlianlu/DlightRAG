@@ -1,27 +1,28 @@
-/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
-
 /* The stylesheet of an html-report: the DlightRAG Mineral design system as the default look.
  *
  * Every colour is a token below, named like the product's role (frontend/design-system/foundations/
- * color.css) and holding the same value: `:root` is Mineral Light, and the dark block is Mineral
- * dark, switched by the system preference because an iframe cannot see the product's own toggle.
- * The rest of the file uses tokens only. A fragment may override any token to wear another
- * palette; nothing here forbids it. The --tone-* tokens colour .tag, and are the chart palette's
- * categorical marks (palette.json) so a tag and a series of one hue match.
+ * color.css) and holding the same value: `:root` is Mineral Light, and `:root[data-color-mode='dark']`
+ * is Mineral dark. The document wears the attribute: the product's Artifact frame sets it from the
+ * reader's own colour mode and keeps it current, so an embedded report follows the product rather
+ * than the operating system; opened on its own, the report's runtime sets it from
+ * `prefers-color-scheme` and follows the system as it changes. The rest of the file uses tokens only.
+ * A fragment may override any token to wear another palette; nothing here forbids it. The --tone-*
+ * tokens colour .tag, and are the chart palette's categorical marks (palette.json) so a tag and a
+ * series of one hue match.
  */
 
 :root {
   color-scheme: light dark;
 
   --color-bg-base: #fafaf9; /* stone-50 */
-  --color-bg-surface: #e7e5e4; /* stone-200 */
-  --color-bg-elevated: #d6d3d1; /* stone-300 */
+  --color-bg-surface: #f5f5f4; /* stone-100 */
+  --color-bg-elevated: #e7e5e4; /* stone-200 */
   --color-bg-subtle: #fff;
   --color-bg-hover: rgb(68 64 60 / 8%);
-  --color-text-primary: #1c1917; /* stone-900 */
-  --color-text-secondary: #292524; /* stone-800 */
-  --color-text-tertiary: #44403c; /* stone-700: body text */
-  --color-text-muted: #57534e; /* stone-600: the faintest text */
+  --color-text-primary: #1c1917; /* ink-100 */
+  --color-text-secondary: #363330; /* ink-92 */
+  --color-text-tertiary: #44403c; /* ink-87: body text */
+  --color-text-muted: #57534e; /* ink-80: the faintest text */
   --color-border-subtle: rgb(68 64 60 / 16%);
   --color-border-strong: rgb(68 64 60 / 28%);
   --color-divider: rgb(68 64 60 / 14%);
@@ -34,7 +35,6 @@
   --color-danger: #b91c1c;
   --color-danger-surface: rgb(185 28 28 / 14%);
   --color-success: #15803d;
-  --color-success-surface: rgb(21 128 61 / 14%);
   --color-control-ring: rgb(87 74 36 / 80%);
   --radius-control: 0.625rem;
   --radius-card: 1rem;
@@ -58,41 +58,44 @@
   --gutter: 16px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --color-bg-base: #0c0a09; /* stone-950 */
-    --color-bg-surface: #1c1917; /* stone-900 */
-    --color-bg-elevated: #292524; /* stone-800 */
-    --color-bg-subtle: #0c0a09;
-    --color-bg-hover: rgb(120 113 108 / 10%);
-    --color-text-primary: #f5f5f4; /* stone-100 */
-    --color-text-secondary: #e7e5e4; /* stone-200 */
-    --color-text-tertiary: #d6d3d1; /* stone-300: body text */
-    --color-text-muted: #a8a29e; /* stone-400: the faintest text */
-    --color-border-subtle: rgb(120 113 108 / 16%);
-    --color-border-strong: rgb(120 113 108 / 28%);
-    --color-divider: rgb(120 113 108 / 12%);
-    --color-accent-action: #d2b661; /* gold-200 */
-    --color-accent-text: #d2b661;
-    --color-accent-surface: rgb(210 182 97 / 12%);
-    --color-accent-ghost: rgb(210 182 97 / 6%);
-    --color-accent-border: rgb(210 182 97 / 38%);
-    --color-accent-border-faint: rgb(210 182 97 / 24%);
-    --color-danger: #f87171;
-    --color-danger-surface: rgb(248 113 113 / 15%);
-    --color-success: #4ade80;
-    --color-success-surface: rgb(74 222 128 / 15%);
-    --color-control-ring: rgb(210 182 97 / 64%);
+:root[data-color-mode='light'] {
+  color-scheme: light;
+}
 
-    --tone-1: #5081d6;
-    --tone-2: #09b4a9;
-    --tone-3: #c899f0;
-    --tone-4: #7dcae6;
-    --tone-5: #b95a4a;
-    --tone-6: #737b83;
-    --tone-ink: 36%;
-    --tone-tint: 18%;
-  }
+:root[data-color-mode='dark'] {
+  color-scheme: dark;
+
+  --color-bg-base: #0c0a09; /* stone-950 */
+  --color-bg-surface: #1c1917; /* stone-900 */
+  --color-bg-elevated: #292524; /* stone-800 */
+  --color-bg-subtle: #0c0a09;
+  --color-bg-hover: rgb(120 113 108 / 10%);
+  --color-text-primary: #e5e3e1; /* ink-90, the dark ceiling */
+  --color-text-secondary: #d8d6d4; /* ink-82 */
+  --color-text-tertiary: #ccc9c6; /* ink-75: body text */
+  --color-text-muted: #b3aea9; /* ink-60: the faintest text */
+  --color-border-subtle: rgb(120 113 108 / 16%);
+  --color-border-strong: rgb(120 113 108 / 28%);
+  --color-divider: rgb(120 113 108 / 12%);
+  --color-accent-action: #d2b661; /* gold-200 */
+  --color-accent-text: #d2b661;
+  --color-accent-surface: rgb(210 182 97 / 12%);
+  --color-accent-ghost: rgb(210 182 97 / 6%);
+  --color-accent-border: rgb(210 182 97 / 38%);
+  --color-accent-border-faint: rgb(210 182 97 / 24%);
+  --color-danger: #f87171;
+  --color-danger-surface: rgb(248 113 113 / 15%);
+  --color-success: #4ade80;
+  --color-control-ring: rgb(210 182 97 / 64%);
+
+  --tone-1: #5081d6;
+  --tone-2: #09b4a9;
+  --tone-3: #c899f0;
+  --tone-4: #7dcae6;
+  --tone-5: #b95a4a;
+  --tone-6: #737b83;
+  --tone-ink: 36%;
+  --tone-tint: 18%;
 }
 
 /* ---- page ------------------------------------------------------------------------------------ */
@@ -192,6 +195,12 @@ main {
 
 /* ---- text ------------------------------------------------------------------------------------ */
 
+/* One column: the report's width is the measure. A paragraph, a list and a timeline end where a
+   table, a card and a figure end, so a long note reads against the same edges as the data under
+   it. A narrower measure on the prose (72ch) cut the text at about two thirds of the page and left
+   the rest of the row empty beside a table that ran the whole width; the page's own max-width is
+   what keeps the line readable. */
+
 .report h1,
 .report h2,
 .report h3,
@@ -228,13 +237,11 @@ main {
 
 .report p {
   margin: 0 0 0.9em;
-  max-width: 72ch;
 }
 
 .report ul,
 .report ol {
   margin: 0 0 0.9em;
-  max-width: 72ch;
   padding-left: 1.3em;
 }
 
@@ -819,7 +826,6 @@ figure.chart[data-profile='narrow'] .chart-title {
   container-type: inline-size;
   list-style: none;
   margin: 1rem 0;
-  max-width: 72ch;
   padding: 0;
   position: relative;
 }

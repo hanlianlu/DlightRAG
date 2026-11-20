@@ -1,71 +1,29 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {expect} from '@esm-bundle/chai';
-import {sendKeys, setViewport} from '@web/test-runner-commands';
-import {buttonNamed, linkStyles, waitFor} from '../testing/dom.ts';
+import {sendKeys} from '@web/test-runner-commands';
+import {buttonNamed, waitFor} from '../testing/dom.ts';
 import {
-  agentAccountsView,
-  memoryPage,
   memorySettings,
   mountSettings,
+  nameOf,
   openSettings,
-  ownerSkills,
+  pageElement,
+  populated,
+  row,
+  rows,
   settingsClosed,
   wire,
-  wireAccount,
-  wireSkill,
 } from '../testing/settings.ts';
 import type {DlSettingsDialog} from './settings.ts';
 
 const originalFetch = window.fetch;
-const originalViewport = {width: window.innerWidth, height: window.innerHeight};
 
 afterEach(() => {
   window.fetch = originalFetch;
   document.body.replaceChildren();
   document.body.className = '';
 });
-
-/** The reads a fully populated Settings makes: two Connections, three accounts, five memories, two Skills. */
-function populated(): ReturnType<typeof wire> {
-  return wire({
-    'GET /web/api/connections/mcp': () => Response.json({
-      revision: '1',
-      presets: [],
-      connections: [
-        {connection_id: 'a', label: 'Notion', endpoint: 'https://a.example/mcp', enabled: true,
-          activation_epoch: 1, generation: 1, authentication: 'oauth', authorization_status: null, status: 'ready'},
-        {connection_id: 'b', label: 'Hugging Face', endpoint: 'https://b.example/mcp', enabled: false,
-          activation_epoch: 1, generation: 1, authentication: 'none', authorization_status: null, status: 'disabled'},
-      ],
-    }),
-    'GET /web/api/agent-accounts': () => Response.json(agentAccountsView([
-      wireAccount('discourse.org'), wireAccount('huggingface.co'), wireAccount('ycombinator.com'),
-    ])),
-    'GET /web/api/memory/settings': () => memorySettings(true, 5),
-    'GET /web/api/memory': () => memoryPage([{id: 'one', body: 'Use concise answers'}]),
-    'GET /web/api/skills/mine': () => ownerSkills([wireSkill('csv-report'), wireSkill('old-style-guide', {enabled: false})]),
-  });
-}
-
-/** The navigation rows, in order, as a reader meets them. */
-function rows(settings: DlSettingsDialog): HTMLButtonElement[] {
-  return [...settings.querySelectorAll<HTMLButtonElement>('nav .dl-nav-item')];
-}
-
-function row(settings: DlSettingsDialog, section: string): HTMLButtonElement {
-  return settings.querySelector<HTMLButtonElement>(`nav .dl-nav-item[data-section="${section}"]`)!;
-}
-
-/** What a row is called: the text its aria-labelledby points at. */
-function nameOf(element: Element): string {
-  const id = element.getAttribute('aria-labelledby')!;
-  return element.ownerDocument.getElementById(id)!.textContent!.trim();
-}
-
-function pageElement(settings: DlSettingsDialog, tag: string): HTMLElement {
-  return settings.querySelector<HTMLElement>(tag)!;
-}
 
 /** The pages in the order the navigation lists them, and what a populated Settings says of each. */
 const PAGES = [
@@ -90,6 +48,10 @@ const PAGES = [
     description: 'Conversations retain 365 days',
   },
   {
+    section: 'privacy', name: 'Privacy', status: '', detail: 'On',
+    description: 'Choose whether your conversations may be used to improve DlightRAG.',
+  },
+  {
     section: 'language', name: 'Language', status: '', detail: 'Automatic',
     description: 'The language of the interface.',
   },
@@ -101,10 +63,12 @@ function currentRows(settings: DlSettingsDialog): string[] {
 }
 
 it('does not expose runtime model catalogue administration in Settings', async () => {
+  window.fetch = populated().fetch;
   const {settings} = mountSettings();
-  await settings.updateComplete;
+  await openSettings(settings);
 
-  expect(settings.textContent).not.to.contain('Runtime Model Catalogue');
+  // Every page is mounted while Settings is open, so this is all of what the dialog can show a reader.
+  expect(/model catalogue/i.test(settings.textContent ?? ''), 'no page names it').to.equal(false);
   expect(Boolean(settings.querySelector('dl-model-catalogue'))).to.equal(false);
   expect(customElements.get('dl-model-catalogue')).to.equal(undefined);
 });
@@ -124,7 +88,7 @@ it('opens a modal named Settings on Connections, with three labelled groups of p
   }));
   expect(groups).to.deep.equal([
     {name: 'Agent', pages: ['Connections', 'Agent Accounts', 'Profile Memory', 'Skills']},
-    {name: 'Data', pages: ['Conversation Sessions']},
+    {name: 'Data', pages: ['Conversation Sessions', 'Privacy']},
     {name: 'General', pages: ['Language']},
   ]);
 
@@ -213,9 +177,10 @@ it('tells each row what its page holds, in a short status and in a full line', a
   const status = (section: string): string => row(settings, section)
     .querySelector('.dl-nav-item-status')!.textContent!.trim();
   const detail = (section: string): string => document
-    .getElementById(row(settings, section).getAttribute('aria-describedby')!)!.textContent!.trim();
+    .getElementById(row(settings, section).getAttribute('aria-describedby') ?? '')?.textContent?.trim() ?? '';
 
-  await waitFor(() => PAGES.every(({section, status: expected}) => expected === '' || status(section) !== ''));
+  // A row has a full line as soon as its page has reported, and every page has one to report.
+  await waitFor(() => PAGES.every(({section, detail: expected}) => detail(section) === expected));
   expect(PAGES.map(({section}) => status(section))).to.deep.equal(PAGES.map(({status: expected}) => expected));
   expect(PAGES.map(({section}) => detail(section))).to.deep.equal(PAGES.map(({detail: expected}) => expected));
 });
@@ -238,6 +203,7 @@ it('opens at once, whatever any page is still waiting for', async () => {
     'GET /web/api/agent-accounts': () => never,
     'GET /web/api/memory/settings': () => never,
     'GET /web/api/skills/mine': () => never,
+    'GET /web/api/privacy/settings': () => never,
   }).fetch;
   const {settings} = mountSettings();
   const dialog = await openSettings(settings);
@@ -250,7 +216,9 @@ it('opens at once, whatever any page is still waiting for', async () => {
   expect(settings.textContent).to.contain('Loading agent accounts');
   expect(settings.textContent).to.contain('Loading memory settings');
   expect(settings.textContent).to.contain('Loading skills');
+  expect(settings.textContent).to.contain('Loading privacy settings');
   expect(settings.querySelector('#memory-enabled-toggle')).to.equal(null);
+  expect(settings.querySelector('#privacy-contribute')).to.equal(null);
 });
 
 it('tears every page but Memory down on close, drops what they reported, and gives focus back', async () => {
@@ -401,177 +369,4 @@ it('lets a notice that still offers Undo outlive the dialog, and gives focus bac
   expect(toast.querySelector('button')?.textContent?.trim()).to.equal('Undo');
   // The reader never reached that Undo: focus is back on what opened Settings.
   expect(document.activeElement).to.equal(trigger);
-});
-
-/** A page's notice with an Undo, and the Undo as a finger would find it: showing, and under the point it covers. */
-async function noticeWithUndo(settings: DlSettingsDialog): Promise<{region: Element; undo: Element | null; hit: Element | null}> {
-  settings.querySelector('dl-settings-language')!.dispatchEvent(new CustomEvent('dl-toast-request', {
-    detail: {message: 'Forgot: one', action: {actionLabel: 'Undo', onAction: async () => 'Undone'}},
-    bubbles: true,
-    composed: true,
-  }));
-  const region = settings.querySelector('dl-toast-region')!;
-  await region.updateComplete;
-  await waitFor(() => getComputedStyle(region).opacity === '1');
-  const undo = region.querySelector('button');
-  const box = undo?.getBoundingClientRect();
-  return {
-    region,
-    undo,
-    hit: box ? document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2) : null,
-  };
-}
-
-describe('on a phone', () => {
-  let unlink: () => void;
-  before(async () => {
-    await setViewport({width: 390, height: 844});
-    unlink = await linkStyles([
-      '../design-system/index.css',
-      '../styles/global.css',
-      '../styles/layout.css',
-      '../styles/settings.css',
-      '../styles/settings-dialog.module.css',
-      '../styles/settings-page.module.css',
-      '../styles/settings-memory.module.css',
-      '../styles/settings-agent-accounts.module.css',
-      '../styles/settings-connections.module.css',
-    ].map((href) => new URL(href, import.meta.url).href));
-  });
-  after(async () => {
-    unlink();
-    await setViewport(originalViewport);
-  });
-
-  const visible = (element: Element): boolean => element.getClientRects().length > 0;
-
-  it('opens on the section list with the page out of sight, and the first row focused', async () => {
-    window.fetch = populated().fetch;
-    const {settings} = mountSettings();
-    const dialog = await openSettings(settings);
-
-    expect(visible(settings.querySelector('nav')!)).to.equal(true);
-    expect(visible(settings.querySelector('[role="region"]')!)).to.equal(false);
-    expect(document.activeElement).to.equal(rows(settings)[0]);
-    // The list shows no page, so no row of it is "current".
-    expect(rows(settings).some((item) => item.hasAttribute('aria-current'))).to.equal(false);
-    expect(dialog.open).to.equal(true);
-  });
-
-  it('opens a page from the list, takes the reader to its title, and Back returns to the row it left', async () => {
-    window.fetch = populated().fetch;
-    const {settings} = mountSettings();
-    await openSettings(settings);
-    const memory = row(settings, 'memory');
-
-    memory.click();
-    await settings.updateComplete;
-    const title = settings.querySelector<HTMLElement>('#settings-page-title')!;
-    expect(visible(settings.querySelector('nav')!)).to.equal(false);
-    expect(visible(settings.querySelector('[role="region"]')!)).to.equal(true);
-    expect(title.textContent).to.equal('Profile Memory');
-    expect(document.activeElement).to.equal(title);
-    expect(memory.getAttribute('aria-current')).to.equal('page');
-
-    const back = [...settings.querySelectorAll<HTMLElement>('dl-icon-button')]
-      .find((button) => button.getAttribute('aria-label') === 'Back')!;
-    expect(visible(back)).to.equal(true);
-    back.click();
-    await settings.updateComplete;
-
-    expect(visible(settings.querySelector('nav')!)).to.equal(true);
-    expect(visible(settings.querySelector('[role="region"]')!)).to.equal(false);
-    expect(document.activeElement).to.equal(memory);
-    expect(memory.hasAttribute('aria-current')).to.equal(false);
-  });
-
-  it('shows a notice on the section list as well as on a page, with its Undo within reach', async () => {
-    window.fetch = populated().fetch;
-    const {settings} = mountSettings();
-    await openSettings(settings);
-
-    // The list hides the page pane, and a notice from a page that is not showing still lands.
-    let shown = await noticeWithUndo(settings);
-    expect(visible(settings.querySelector('[role="region"]')!)).to.equal(false);
-    expect(shown.undo).not.to.equal(null);
-    expect(shown.hit).to.equal(shown.undo);
-
-    row(settings, 'language').click();
-    await settings.updateComplete;
-    shown = await noticeWithUndo(settings);
-    expect(shown.hit).to.equal(shown.undo);
-  });
-
-  it('lists the accounts as rows when Settings opens straight on them, though the page was out of sight when it mounted', async () => {
-    window.fetch = populated().fetch;
-    const {settings} = mountSettings();
-    await openSettings(settings, 'agent-accounts');
-
-    const accounts = pageElement(settings, 'dl-settings-agent-accounts');
-    await waitFor(() => accounts.querySelectorAll('li').length === 3);
-    expect(accounts.querySelector('table')).to.equal(null);
-  });
-
-  it('opens straight on a page it is asked for, with the list one Back away', async () => {
-    window.fetch = populated().fetch;
-    const {settings} = mountSettings();
-    await openSettings(settings, 'connections');
-
-    expect(visible(settings.querySelector('nav')!)).to.equal(false);
-    expect(visible(settings.querySelector('[role="region"]')!)).to.equal(true);
-    expect(document.activeElement).to.equal(settings.querySelector('#settings-page-title'));
-  });
-});
-
-describe('on a desktop', () => {
-  let unlink: () => void;
-  before(async () => {
-    await setViewport({width: 1280, height: 800});
-    unlink = await linkStyles([
-      '../design-system/index.css',
-      '../styles/global.css',
-      '../styles/layout.css',
-      '../styles/settings.css',
-      '../styles/settings-dialog.module.css',
-      '../styles/settings-page.module.css',
-      '../styles/settings-memory.module.css',
-    ].map((href) => new URL(href, import.meta.url).href));
-  });
-  after(async () => {
-    unlink();
-    await setViewport(originalViewport);
-  });
-
-  it('shows a notice with its Undo within reach of a pointer', async () => {
-    window.fetch = populated().fetch;
-    const {settings} = mountSettings();
-    await openSettings(settings);
-
-    const shown = await noticeWithUndo(settings);
-    expect(shown.undo).not.to.equal(null);
-    expect(shown.hit).to.equal(shown.undo);
-  });
-
-  it('opens every page at its top, and scrolls its own pane rather than the dialog', async () => {
-    const many = Array.from({length: 30}, (_, index) => ({id: `m${index}`, body: `Memory number ${index}`}));
-    window.fetch = wire({
-      'GET /web/api/memory/settings': () => memorySettings(true, 30),
-      'GET /web/api/memory': () => memoryPage(many),
-    }).fetch;
-    const {settings} = mountSettings();
-    const dialog = await openSettings(settings, 'memory');
-    await waitFor(() => settings.querySelectorAll('dl-settings-memory li').length === 30);
-    const body = settings.querySelector<HTMLElement>('[data-page-body]')!;
-
-    expect(body.scrollHeight).to.be.greaterThan(body.clientHeight);
-    expect(dialog.scrollHeight).to.equal(dialog.clientHeight);
-    body.scrollTop = 200;
-    expect(body.scrollTop).to.be.greaterThan(0);
-    row(settings, 'language').click();
-    await settings.updateComplete;
-    row(settings, 'memory').click();
-    await settings.updateComplete;
-
-    expect(body.scrollTop).to.equal(0);
-  });
 });

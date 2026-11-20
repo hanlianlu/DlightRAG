@@ -14,7 +14,10 @@ from dlightrag.adapters.postgres.runtime.run_blob_store import PGRunBlobStore, w
 from dlightrag.adapters.postgres.runtime.run_store import PGRunStore
 from dlightrag.engine.agent.environment.access import AccessScheduler
 from dlightrag.engine.agent.session.ids import IntentId
-from dlightrag.engine.agent.tools import ResourceAttachmentBytes, ToolResult
+from dlightrag.engine.agent.tools.contracts import (
+    ResourceAttachmentBytes,
+    ToolResult,
+)
 from dlightrag.engine.agent.tools.files import read_tool, view_tool
 from dlightrag.engine.answer.execution.executor import AnswerExecutor
 from dlightrag.engine.answer.execution.lineage import RetainedResourceLoader
@@ -33,7 +36,7 @@ from dlightrag.engine.runtime.coordinator import LeaseLostError
 from tests.integration.run_runtime_pg_harness import isolated_run_runtime, run_envelope
 from tests.support.pg import delete_runs
 from tests.support.resources import printed_handle
-from tests.tool_helpers import tool_runtime
+from tests.support.tool_helpers import tool_runtime
 
 OWNER = "lineage-owner"
 DOCUMENT = b"%PDF-1.7 an earlier run's document"

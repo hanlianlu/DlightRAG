@@ -2,19 +2,24 @@
 """The peer tools one research run offers, composed per run and never globally."""
 
 import hashlib
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, Protocol, cast
 
 from pydantic import BaseModel
 
-from dlightrag.engine.agent.environment import AccessScheduler
+from dlightrag.engine.agent.environment.access import (
+    AccessScheduler,
+)
 from dlightrag.engine.agent.environment.errors import FullOutputUnavailable
 from dlightrag.engine.agent.environment.execution import ExecutionEnvironment
 from dlightrag.engine.agent.environment.toolchain import SearchToolchain
+from dlightrag.engine.agent.sealed_artifact import SealedArtifact
+from dlightrag.engine.agent.skill_delivery import DeliveryLedger
+from dlightrag.engine.agent.skill_protection import ProtectedTextIndex
 from dlightrag.engine.agent.tool_content import ToolTextPart, tool_content_attachments
-from dlightrag.engine.agent.tools import (
+from dlightrag.engine.agent.tools.contracts import (
     AdmittedBytesReader,
     AgentTool,
     ToolDeclaration,
@@ -47,7 +52,9 @@ from dlightrag.engine.agent.tools.files import (
     write_tool,
 )
 from dlightrag.engine.agent.tools.registry import DuplicateToolError, ToolRegistry
-from dlightrag.engine.answer.agent_browser import has_mailbox
+from dlightrag.engine.answer.agent_browser.accounts import (
+    has_mailbox,
+)
 from dlightrag.engine.answer.citations.utils import ATTACHMENT_WORKSPACE, WEB_SEARCH_WORKSPACE
 from dlightrag.engine.answer.continuation_handles import SESSION_NOTE_DIRECTORY
 from dlightrag.engine.answer.errors import (
@@ -65,14 +72,32 @@ from dlightrag.engine.answer.tools.browser import (
     browser_declaration,
     browser_tool,
 )
+from dlightrag.engine.answer.tools.goals import (
+    GOAL_TOOL_NAMES,
+    GoalHost,
+    goal_tool_declarations,
+    goal_tools,
+)
+from dlightrag.engine.answer.tools.mcp_resources import (
+    McpResourceHost,
+    mcp_resource_declarations,
+    mcp_resource_tools,
+)
 from dlightrag.engine.answer.tools.memory import (
+    MEMORY_FORGET,
+    MEMORY_LOOKUP,
+    MEMORY_MUTATION_TOOLS,
+    MEMORY_REMEMBER,
+    MEMORY_UNDO,
     MemoryHost,
     forget_declaration,
     forget_tool,
-    recall_memory_declaration,
-    recall_memory_tool,
+    lookup_declaration,
+    lookup_tool,
     remember_declaration,
     remember_tool,
+    undo_declaration,
+    undo_tool,
 )
 from dlightrag.engine.answer.tools.search import (
     KnowledgeRetrieval,
@@ -92,12 +117,13 @@ from dlightrag.engine.answer.tools.subagents import (
 )
 
 #: What a Run's workspace holds, stated once on the shell and once on the listing tool.
-#: The Session's notes are the one plane a Run is handed (ADR 0022); a Resource becomes a
-#: file only when the Agent asks for a copy (ADR 0033), and a knowledge-base document is
-#: reached by search instead.
+#: The Session owns one workspace that each Run of this conversation continues (S1.1); a
+#: Resource becomes a file only when the Agent asks for a copy (ADR 0033), and a
+#: knowledge-base document is reached by search instead.
 _WORKSPACE_FACT = (
-    f"Each Run's workspace starts with only `{SESSION_NOTE_DIRECTORY}/` from earlier Runs "
-    "of this conversation, and `tmp/` is scratch for this Run alone. Knowledge-base documents "
+    "Each Run's workspace is the Session's workspace: the files earlier Runs of this "
+    f"conversation left are already there, `{SESSION_NOTE_DIRECTORY}/` is its memory, and "
+    "`tmp/` is scratch that is not carried to the next Run. Knowledge-base documents "
     "are never files in it; a Resource becomes one only when materialize copies its resource_id."
 )
 
@@ -126,6 +152,29 @@ def _reading[T: ToolDeclaration](read: T, *, earlier_artifacts: bool) -> T:
     return _stating(read, _EARLIER_ARTIFACT_FACT) if earlier_artifacts else read
 
 
+def _recording_execution(tool: AgentTool, ledger: DeliveryLedger | None) -> AgentTool:
+    """Record one execution Tool's command for the delivery preview, and run it unchanged.
+
+    The wrapper adds no behaviour: the Tool's declaration, result, effects and replay policy are
+    the Tool's own. Only the command line reaches the ledger, because a command that names a
+    declared verifier is the one in-loop fact a preview can state about it (ADR 0058).
+    """
+    if ledger is None:
+        return tool
+
+    async def execute(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
+        result = await tool.execute(raw, runtime)
+        command = getattr(raw, "command", None)
+        ledger.record_execution(
+            tool_name=tool.name,
+            command=command if isinstance(command, str) else None,
+            failed=result.is_error,
+        )
+        return result
+
+    return replace(tool, execute=execute)
+
+
 class ResearchToolDeclarations(Protocol):
     """Request-specific declaration projection over configured Research capabilities."""
 
@@ -137,6 +186,7 @@ class ResearchToolDeclarations(Protocol):
         agent_may_register: bool,
         model_guidance: str,
         injected: Sequence[ToolDeclaration],
+        mcp_resources: bool = False,
     ) -> tuple[ToolDeclaration, ...]: ...
 
 
@@ -152,8 +202,10 @@ def research_tool_declarations(
     artifact_publication: bool = False,
     subagents: Sequence[ToolDeclaration] = (),
     memory: bool = False,
+    goals: bool = False,
     skills: Sequence[ToolDeclaration] = (),
     injected: Sequence[ToolDeclaration] = (),
+    mcp_resources: bool = False,
     child: bool = False,
     tool_names: tuple[str, ...] | None = None,
 ) -> tuple[ToolDeclaration, ...]:
@@ -177,6 +229,10 @@ def research_tool_declarations(
             )
         )
     declarations.extend(injected)
+    if mcp_resources:
+        # The three shared tools are how a Run reads an external server's documents on
+        # demand; they are pinned declarations like every other tool.
+        declarations.extend(mcp_resource_declarations())
     if environment:
         if not resource_read:
             declarations.append(read_declaration(public_url=False))
@@ -202,8 +258,15 @@ def research_tool_declarations(
     declarations.extend(subagents)
     if memory:
         declarations.extend(
-            (remember_declaration(), forget_declaration(), recall_memory_declaration())
+            (
+                remember_declaration(),
+                forget_declaration(),
+                undo_declaration(),
+                lookup_declaration(),
+            )
         )
+    if goals and not child:
+        declarations.extend(goal_tool_declarations())
     declarations.extend(skills)
     try:
         registry = ToolRegistry(declarations)
@@ -232,6 +295,8 @@ def compose_research_tools(
     browser: BrowserToolHost | None = None,
     resource_viewer: ResourceViewer | None = None,
     admitted_bytes_reader: AdmittedBytesReader | None = None,
+    protected_digests: Collection[str] = frozenset(),
+    protected_index: Callable[[], ProtectedTextIndex] | None = None,
     environment: ExecutionEnvironment | None = None,
     scheduler: AccessScheduler | None = None,
     spill: Any | None = None,
@@ -242,11 +307,20 @@ def compose_research_tools(
     image_preparer: ImagePreparer | None = None,
     subagent_host: SubagentHost | None = None,
     memory_host: MemoryHost | None = None,
+    goal_host: GoalHost | None = None,
+    mcp_resource_host: McpResourceHost | None = None,
     skill_tools: list[AgentTool] | None = None,
+    delivery_ledger: DeliveryLedger | None = None,
+    sealed_artifacts: Sequence[SealedArtifact] = (),
     child: bool = False,
     tool_names: tuple[str, ...] | None = None,
 ) -> list[AgentTool]:
-    """Bind the selected declarations to real run capabilities only."""
+    """Bind the selected declarations to real run capabilities only.
+
+    ``delivery_ledger`` is the current attempt's record: the execution Tool reports its command
+    line into it, and the attach Tool reads it to preview the reader's record. ``None`` composes
+    exactly the tools it composed before the preview existed.
+    """
     access = scheduler or AccessScheduler()
     child_declarations: tuple[ToolDeclaration, ...] = ()
     if subagent_host is not None:
@@ -267,8 +341,10 @@ def compose_research_tools(
         artifact_publication=artifacts_root is not None,
         subagents=child_declarations,
         memory=memory_host is not None,
+        goals=goal_host is not None,
         skills=skill_tools or (),
         injected=injected_tools,
+        mcp_resources=mcp_resource_host is not None,
         child=child,
         tool_names=tool_names,
     )
@@ -281,6 +357,9 @@ def compose_research_tools(
             evidence=evidence,
             trace=trace,
             register_web_source=register_web_source,
+            # A Run that can drive a browser can still search when every hosted provider is out,
+            # so the failure it reads says so.
+            browser_available=browser is not None,
         ),
         "read": lambda: _ledger_backed(
             _reading(
@@ -315,13 +394,16 @@ def compose_research_tools(
             ),
             evidence,
         ),
-        "bash": lambda: _stating(
-            bash_tool(
-                cast(ExecutionEnvironment, environment),
-                access,
-                output_stage_factory=output_stage_factory,
+        "bash": lambda: _recording_execution(
+            _stating(
+                bash_tool(
+                    cast(ExecutionEnvironment, environment),
+                    access,
+                    output_stage_factory=output_stage_factory,
+                ),
+                _WORKSPACE_FACT,
             ),
-            _WORKSPACE_FACT,
+            delivery_ledger,
         ),
         "edit": lambda: edit_tool(cast(ExecutionEnvironment, environment), access, spill=spill),
         "write": lambda: write_tool(cast(ExecutionEnvironment, environment), access),
@@ -352,10 +434,22 @@ def compose_research_tools(
             cast(Path, artifacts_root),
             scheduler=access,
             limits=publication_limits or PublicationLimits(),
+            environment=environment,
+            # An earlier Artifact is reached the way materialize reaches it.
+            admitted_bytes_reader=admitted_bytes_reader if resource_reader is not None else None,
+            # A Skill's own documents are its author's, never this Run's deliverable.
+            protected_digests=protected_digests,
+            # And a deliverable that reproduces their words is refused too (ADR 0061).
+            protected_index=protected_index,
+            # The record the reader will see, previewed while the Agent can still correct it.
+            delivery_ledger=delivery_ledger,
+            # The one Artifact name a built-in Skill lets claim sealed, and the gate run on it.
+            sealed_artifacts=sealed_artifacts,
         ),
-        "remember": lambda: remember_tool(host=cast(MemoryHost, memory_host)),
-        "forget": lambda: forget_tool(host=cast(MemoryHost, memory_host)),
-        "recall_memory": lambda: recall_memory_tool(host=cast(MemoryHost, memory_host)),
+        MEMORY_REMEMBER: lambda: remember_tool(host=cast(MemoryHost, memory_host)),
+        MEMORY_FORGET: lambda: forget_tool(host=cast(MemoryHost, memory_host)),
+        MEMORY_UNDO: lambda: undo_tool(host=cast(MemoryHost, memory_host)),
+        MEMORY_LOOKUP: lambda: lookup_tool(host=cast(MemoryHost, memory_host)),
     }
     bound_children = ()
     if subagent_host is not None and child_declarations:
@@ -364,8 +458,15 @@ def compose_research_tools(
             if child
             else subagent_tools(host=subagent_host)
         )
-    for tool in (*bound_children, *(skill_tools or ())):
+    for tool in (
+        *bound_children,
+        *(skill_tools or ()),
+        *(goal_tools(host=goal_host) if goal_host else ()),
+    ):
         bindings[tool.name] = lambda tool=tool: tool
+    if mcp_resource_host is not None:
+        for tool in mcp_resource_tools(mcp_resource_host):
+            bindings[tool.name] = lambda tool=tool: tool
     for tool in injected_tools:
         bindings[tool.name] = lambda tool=tool: _bounded_injected_result(tool, spill)
     return [bindings[declaration.name]() for declaration in declarations]
@@ -485,12 +586,13 @@ CHILD_FORBIDDEN_TOOLS = frozenset(
         "spawn_agent",
         "subagent_status",
         "wait_subagent",
+        "read_subagent",
         "cancel_subagent",
         "steer_subagent",
         "continue_subagent",
         "reply_subagent",
-        "remember",
-        "forget",
+        *MEMORY_MUTATION_TOOLS,
+        *GOAL_TOOL_NAMES,
         "attach_artifact",
         "publish_skill",
         "delete_skill",

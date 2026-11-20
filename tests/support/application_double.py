@@ -35,20 +35,32 @@ from types import FunctionType
 from typing import Any
 from unittest.mock import NonCallableMagicMock, create_autospec
 
-from dlightrag.application import Application
-from dlightrag.application.access import AccessControl, access_control_from_settings
+from dlightrag.application.access.control import (
+    AccessControl,
+    access_control_from_settings,
+)
 from dlightrag.application.agent_accounts import AgentAccounts
-from dlightrag.application.answer_runs import AnswerService
-from dlightrag.application.config import DlightragConfig
-from dlightrag.application.connections import Connections
-from dlightrag.application.corpus_admin import CorpusAdmin, CorpusMutationService
+from dlightrag.application.answer_runs.service import AnswerService
+from dlightrag.application.application import Application
+from dlightrag.application.config.sections import DlightragConfig
+from dlightrag.application.connections.service import Connections
+from dlightrag.application.corpus_admin.mutations import CorpusMutationService
+from dlightrag.application.corpus_admin.service import CorpusAdmin
 from dlightrag.application.health import ApplicationHealth
-from dlightrag.application.memory import MemoryService
-from dlightrag.application.model_catalogue import ModelCatalogueAdmin
-from dlightrag.application.retrieval import RetrievalService
+from dlightrag.application.live_browser.service import LiveBrowserService
+from dlightrag.application.memory.service import MemoryService
+from dlightrag.application.model_catalogue.service import ModelCatalogueAdmin
+from dlightrag.application.policies.service import (
+    RuntimePolicies,
+)
+from dlightrag.application.privacy import Privacy
+from dlightrag.application.retrieval.service import RetrievalService
 from dlightrag.application.runs import RunService
-from dlightrag.application.settings import access_settings
-from dlightrag.application.web_conversations import WebConversationService
+from dlightrag.application.settings.projections import access_settings
+from dlightrag.application.skills import SkillProtection
+from dlightrag.application.web_conversations.service import WebConversationService
+from dlightrag.engine.agent.skill_protection import ProtectedTextIndex
+from dlightrag.engine.answer.goal_service import AnswerGoalService
 
 # Application imports its service types under TYPE_CHECKING only, so its property
 # annotations resolve against these names. A new service type fails loudly here.
@@ -62,11 +74,15 @@ _ANNOTATED_TYPES: dict[str, Any] = {
         Connections,
         CorpusAdmin,
         CorpusMutationService,
+        LiveBrowserService,
         MemoryService,
         ModelCatalogueAdmin,
+        Privacy,
         RetrievalService,
         RunService,
+        RuntimePolicies,
         WebConversationService,
+        AnswerGoalService,
     )
 }
 
@@ -147,6 +163,28 @@ class _NoCreators:
         return {}
 
 
+class _UnprotectedSkills(SkillProtection):
+    """The content gate of a deployment whose index holds no protected documents.
+
+    The real object is built from the process's Skill bundle factory, which this double
+    does not compose, and an autospecced method would hand a non-string back to every
+    reader projection that asks for masked text. An empty index is the one protection
+    state whose every answer is known -- the identity -- so a test that does not pass its
+    own ``skill_protection`` gets a working gate. A test that needs real masking passes a
+    populated ``SkillProtection`` (or a stand-in with the same two members) by keyword.
+    """
+
+    def __init__(self) -> None:
+        pass
+
+    @property
+    def index(self) -> ProtectedTextIndex:
+        return ProtectedTextIndex.empty()
+
+    def mask(self, text: str) -> str:
+        return text
+
+
 class _ApplicationDouble(NonCallableMagicMock):
     """Admits Application's public attributes and builds each on first access."""
 
@@ -168,6 +206,8 @@ class _ApplicationDouble(NonCallableMagicMock):
 
     def _get_child_mock(self, /, **kwargs: Any) -> Any:
         name = str(kwargs.get("_new_name"))
+        if name == "skill_protection":
+            return _UnprotectedSkills()
         if name in _SERVICE_TYPES:
             return _ServiceDouble(spec_set=_SERVICE_TYPES[name], **kwargs)
         if _is_method(Application, name):

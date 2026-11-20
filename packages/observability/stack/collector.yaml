@@ -1,18 +1,19 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-# Collector additions for DlightRAG, loaded by the `metrics-agent` service as its second config file
-# (`--profile metrics`).
+# Collector additions for DlightRAG, loaded by the `metrics-agent` service as the second
+# `--config` of a standalone collector (beside `collector-standalone.yaml`, which declares the
+# processors and the exporter these pipelines name).
 #
 # The stack's own pipelines — `traces`, `metrics`, `logs/out-default`, `logs/out-rrweb` — are set
-# by HyperDX over OpAMP, and the remote config overwrites their `receivers:`/`exporters:` keys. So
-# nothing here touches them: a new pipeline NAME is the supported extension point, and it inherits
-# nothing, which is why `processors:` is declared explicitly.
+# by HyperDX over OpAMP to the supervised collector, which this file is never loaded into: a
+# supervised collector validates a custom config before that remote one arrives, so a pipeline
+# that names the remote's exporter fails there.
 #
 # These two pipelines replace what would otherwise be three more containers. The shipped
 # `clickhouse/clickstack-otel-collector` compiles the `hostmetrics` and `docker_stats` receivers in
 # (contrib v0.155.0), so per-host CPU/memory/disk and per-container CPU/memory/network cost no
 # second agent. What it does not cover: cAdvisor's per-container filesystem and writable-layer
 # usage, and Postgres — `postgresqlreceiver` is not compiled in, so that one is scraped from a
-# `postgres-exporter` through the `prometheus` receiver the remote config already defines.
+# `postgres-exporter` through the `prometheus` receiver `collector-standalone.yaml` defines.
 #
 # Verified 2026-10-09 against the real ClickHouse, outside the OpAMP path: a one-off collector run
 # with this file plus an exporter stub wrote `container.cpu.utilization` and

@@ -15,17 +15,22 @@ pool of their own. PDF checks take the process PDFium lock for that reason.
 from __future__ import annotations
 
 import asyncio
+import bz2
 import contextvars
 import functools
+import gzip
 import hashlib
+import html
 import json
+import lzma
 import re
 import stat
+import tarfile
 import threading
 import xml.etree.ElementTree as ET
 import zipfile
 from collections import deque
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from html.parser import HTMLParser
@@ -37,10 +42,12 @@ from urllib.parse import unquote
 from defusedxml import ElementTree as DefusedElementTree
 from PIL import Image
 
+from dlightrag.engine.agent.skill_protection import ProtectedTextIndex
+from dlightrag.engine.agent.tools.contracts import DeclaredSource
 from dlightrag.engine.answer.citations.contracts import SourceReference
 from dlightrag.engine.answer.citations.finalization import finalize_answer
 from dlightrag.engine.answer.citations.projection import link_public_citations
-from dlightrag.engine.answer.markdown import answer_markdown
+from dlightrag.engine.answer.markdown import answer_markdown, rendered_text
 from dlightrag.engine.answer.reference import (
     classify_target,
     html_references,
@@ -49,7 +56,9 @@ from dlightrag.engine.answer.reference import (
 )
 from dlightrag.engine.answer.resources.models import PUBLISHED_ARTIFACT_HANDLE_PREFIX
 from dlightrag.engine.answer.resources.visual import ResourceViewError, pdf_page_count
-from dlightrag.engine.rag.retrieval import RetrievalContexts
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalContexts,
+)
 
 PresentationCapability = Literal["image", "video", "markdown", "html", "pdf", "text", "download"]
 ArtifactIssueKind = Literal[
@@ -65,6 +74,7 @@ ArtifactIssueKind = Literal[
     "reference_cycle",
     "stale_attachment",
     "unattached_reference",
+    "protected_content",
 ]
 
 _HTML_LOADING_TAGS = frozenset({"script", "img", "audio", "video", "source", "iframe"})
@@ -79,6 +89,8 @@ _MEDIA_BY_EXTENSION: dict[str, tuple[str, PresentationCapability]] = {
     ".md": ("text/markdown", "markdown"),
     ".html": ("text/html", "html"),
     ".htm": ("text/html", "html"),
+    ".xhtml": ("text/html", "html"),
+    ".xht": ("text/html", "html"),
     ".pdf": ("application/pdf", "pdf"),
     # Video is presented by a native ``<video>`` element, never by a container
     # parser: the browser owns decoding, so the extension only has to name the
@@ -117,6 +129,39 @@ _MEDIA_BY_EXTENSION: dict[str, tuple[str, PresentationCapability]] = {
 }
 _IMAGE_MEDIA = frozenset({"image/png", "image/jpeg", "image/webp", "image/gif"})
 _VIDEO_MEDIA = frozenset({"video/mp4", "video/quicktime", "video/webm"})
+_OOXML_MEDIA = frozenset(
+    {
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    }
+)
+_OLE_MEDIA = frozenset(
+    {
+        "application/msword",
+        "application/vnd.ms-excel",
+        "application/vnd.ms-powerpoint",
+    }
+)
+_NON_PROSE_MEDIA = frozenset({"application/zip", *_IMAGE_MEDIA, *_VIDEO_MEDIA})
+"""Media types whose bytes are not prose, and what the content gate reads out of each.
+
+The form checks read structure, never words: a PDF is a page count, a docx is a zip shape.
+A reader reads the words, so the gate reads them too — PDF text through the renderer the
+image already ships, Office Open XML through its own XML, everything else as UTF-8 or
+UTF-16. The legacy OLE formats have no reader in this process; they are stated as a limit in
+ADR 0061 rather than pretended to be covered.
+"""
+
+MIN_PUBLISHED_REPRODUCTION_CHARS = 320
+"""Shortest verified run of a protected document's own text that refuses publication.
+
+Publication masks nothing: it either ships the file whole or withholds it while naming the
+issue, so the run here is longer than one a reader surface replaces. A deliverable may quote a
+Skill's line, repeat its terms, or carry a table row, and those are legitimate; a paragraph or
+a copied body is a reproduction, and a Run publishes what it produced, not the material it
+reasoned with (ADR 0046, ADR 0061).
+"""
 
 # Content identification for video containers. The instance carries a model, so
 # it is built once per process and only when a video Artifact is actually
@@ -205,6 +250,10 @@ class ArtifactAttachment:
     content_digest: str
     size_bytes: int
     presentation: PresentationCapability
+    #: The files the root was built from, as Artifact-root-relative paths. They are published
+    #: with the root and never placed in the Answer: a generated deliverable that cannot link
+    #: to what produced it would otherwise reach a later turn with nothing that rebuilds it.
+    sources: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,6 +300,10 @@ class PublicationPlan:
     descriptors: tuple[Mapping[str, object], ...] = ()
     issues: tuple[ArtifactIssue, ...] = ()
     artifact_sources: Mapping[str, Sequence[SourceReference]] = field(default_factory=dict)
+    #: What each attached root was built from, by the root's resource id: the declared source's
+    #: path and its resource id. Recorded on the published product, so reopening it returns the
+    #: files that produce it again rather than only the bytes it received (ADR 0052).
+    sources_by_root: Mapping[str, tuple[DeclaredSource, ...]] = field(default_factory=dict)
 
     @property
     def outcome(self) -> dict[str, object]:
@@ -305,9 +358,26 @@ def prepare_artifact_attachment(
     *,
     path: str,
     label: str = "",
+    sources: Sequence[str] = (),
     limits: PublicationLimits | None = None,
+    protected_digests: Collection[str] = frozenset(),
+    protected_index: Callable[[], ProtectedTextIndex] | None = None,
+    protected_text_exempt_names: Collection[str] = (),
 ) -> ArtifactAttachment:
-    """Validate one model-selected root and bind its current content digest."""
+    """Validate one model-selected root, the files it declares, and bind the root's digest.
+
+    What the root declares is published with it, so it is checked against the same budget the
+    closure is: a kit that cannot fit is refused here, where its author is, rather than left
+    behind at settlement where the product would ship without it.
+
+    ``protected_index`` is asked for the process's content fingerprints only when a file is
+    actually read: a caller that never publishes never builds the index.
+    ``protected_text_exempt_names`` names built-in Skills' declared sealed artifacts. Those files
+    are machine-required delivery data, not reader-facing prose: the exact-byte digest gate still
+    protects them, but a reference passage the engine or verifier wrote into the case does not
+    refuse the sealed artifact's own publication. Every other file, source and container member is
+    still text-scanned.
+    """
     limits = limits or PublicationLimits()
     try:
         relative = _normalize_reference(path, parent=None)
@@ -324,7 +394,56 @@ def prepare_artifact_attachment(
         raise ArtifactValidationError(
             "missing_file", f"Artifact {Path(relative).name or 'file'} is missing."
         )
-    staged = _validate_file(relative, target, limits=limits)
+    staged = _validate_file(
+        relative,
+        target,
+        limits=limits,
+        protected_digests=protected_digests,
+        protected_index=protected_index,
+        protected_text_exempt_names=protected_text_exempt_names,
+    )
+    normalized_sources: list[str] = []
+    for source in sources:
+        try:
+            normalized = _normalize_reference(source, parent=None)
+        except ValueError as exc:
+            raise ArtifactValidationError(
+                "invalid_reference", "An Artifact source must be relative to the Artifact root."
+            ) from exc
+        if normalized == relative:
+            raise ArtifactValidationError(
+                "invalid_reference", f"Artifact {staged.filename} cannot be its own source."
+            )
+        if normalized in normalized_sources:
+            continue
+        if len(normalized_sources) + 1 >= limits.max_artifacts:
+            raise ArtifactValidationError(
+                "too_many_artifacts",
+                f"At most {limits.max_artifacts - 1} sources publish with one Artifact, which "
+                f"shares the {limits.max_artifacts}-file publication budget.",
+            )
+        source_path = files.get(normalized)
+        if source_path is None:
+            raise ArtifactValidationError(
+                "missing_file",
+                f"Artifact source {Path(normalized).name or 'file'} is missing from the "
+                "Artifact root.",
+            )
+        staged_source = _validate_file(
+            normalized,
+            source_path,
+            limits=limits,
+            protected_digests=protected_digests,
+            protected_index=protected_index,
+            protected_text_exempt_names=protected_text_exempt_names,
+        )
+        if staged.size_bytes + staged_source.size_bytes > limits.max_total_bytes:
+            raise ArtifactValidationError(
+                "answer_too_large",
+                f"{staged.filename} and the {len(normalized_sources) + 1} file(s) declared with "
+                f"it exceed the {limits.max_total_bytes}-byte publication budget.",
+            )
+        normalized_sources.append(normalized)
     normalized_label = " ".join(label.split())[:200]
     return ArtifactAttachment(
         relative_path=relative,
@@ -332,7 +451,58 @@ def prepare_artifact_attachment(
         content_digest=staged.source_digest,
         size_bytes=staged.source_size_bytes,
         presentation=staged.presentation,
+        sources=tuple(normalized_sources),
     )
+
+
+def artifact_closure(
+    artifacts_root: Path,
+    roots: Sequence[str],
+    *,
+    limits: PublicationLimits | None = None,
+) -> tuple[str, ...]:
+    """Every Artifact-root-relative file reachable from ``roots`` through safe links and sources.
+
+    The attach-time sealed-artifact gate has to judge what will ship, not only the root: a Markdown
+    page may link the sealed case as a dependency, and a root that cannot embed its inputs may
+    declare them as sources. This walks the same two edges publication walks — ``classify_target``
+    references in Markdown/HTML and the already-declared sources — bounded by the same Artifact
+    count, and returns the paths in discovery order. It reads text only; callers that need the bytes
+    read them in their own workspace hold.
+    """
+    budget = limits or PublicationLimits()
+    discovered: list[str] = []
+    pending = deque(roots)
+    while pending and len(discovered) < budget.max_artifacts:
+        relative = pending.popleft()
+        if relative in discovered:
+            continue
+        try:
+            data = (artifacts_root / relative).read_bytes()
+        except OSError:
+            continue
+        discovered.append(relative)
+        suffix = PurePosixPath(relative).suffix.lower()
+        if suffix not in {".md", ".html", ".htm"}:
+            continue
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        references = (
+            html_references(text) if suffix in {".html", ".htm"} else markdown_references(text)
+        )
+        for reference in references:
+            if classify_target(reference.target, image=reference.image) != "artifact":
+                continue
+            raw = reference.target.partition(":")[2]
+            try:
+                child = _normalize_reference(raw, parent=relative)
+            except ValueError:
+                continue
+            if child not in discovered:
+                pending.append(child)
+    return tuple(discovered)
 
 
 def artifact_read_call(relative_path: str) -> str:
@@ -354,16 +524,28 @@ def validate_publication(
     attachments: Sequence[ArtifactAttachment] = (),
     limits: PublicationLimits | None = None,
     contexts: RetrievalContexts | None = None,
+    protected_digests: Collection[str] = frozenset(),
+    protected_index: Callable[[], ProtectedTextIndex] | None = None,
+    protected_text_exempt_names: Collection[str] = (),
 ) -> PublicationPlan:
     """Authorize roots, validate their closure, and bind actual document references.
 
     Each document keeps its own target-to-resource map and original source. Links
     place structured attachments or their dependencies; they cannot authorize an
     unattached root. Invalid targets bind to an unavailable descriptor in place.
+
+    ``protected_digests`` names the Skill documents no Run may publish, so a root and
+    every dependency it pulls in are refused the same way (ADR 0046). ``protected_index``
+    adds the content gate beside it: a text deliverable that reproduces a protected
+    document's own words is refused even though its bytes are the Run's own.
+    ``protected_text_exempt_names`` is the same machine-artifact exemption
+    ``prepare_artifact_attachment`` applies: the declared sealed artifact and a member of a
+    container carrying that name are data, not reader prose; everything else stays scanned.
     """
     limits = limits or PublicationLimits()
     roots: list[str] = []
     attached: dict[str, ArtifactAttachment] = {}
+    declared_sources: dict[str, tuple[str, ...]] = {}
     invalid_references: dict[tuple[str | None, str], tuple[str, ArtifactIssue]] = {}
     for attachment in attachments:
         try:
@@ -377,6 +559,38 @@ def validate_publication(
                 ),
             )
             continue
+        sources: list[str] = []
+        for source in attachment.sources:
+            try:
+                normalized = _normalize_reference(source, parent=None)
+            except ValueError:
+                invalid_references.setdefault(
+                    (None, source),
+                    (
+                        attachment.label,
+                        ArtifactIssue(
+                            "invalid_reference",
+                            "A declared Artifact source is not a safe relative path.",
+                        ),
+                    ),
+                )
+                continue
+            if normalized == relative:
+                invalid_references.setdefault(
+                    (None, source),
+                    (
+                        attachment.label,
+                        ArtifactIssue(
+                            "invalid_reference",
+                            f"Artifact {relative} cannot be its own source.",
+                        ),
+                    ),
+                )
+                continue
+            if normalized not in sources:
+                sources.append(normalized)
+        if sources:
+            declared_sources[relative] = tuple(sources)
         if relative in attached:
             roots.remove(relative)
         roots.append(relative)
@@ -422,6 +636,8 @@ def validate_publication(
     labels = {path: attachment.label for path, attachment in attached.items()}
     reference_paths: dict[str | None, dict[str, str]] = {}
 
+    referenced: set[str] = set(roots)
+
     def collect_references(text: str, *, parent: str | None, html: bool = False) -> list[str]:
         references = html_references(text) if html else markdown_references(text)
         children: list[str] = []
@@ -462,6 +678,7 @@ def validate_publication(
             labels.setdefault(relative, reference.label)
             if relative not in children:
                 children.append(relative)
+        referenced.update(children)
         return children
 
     collect_references(answer, parent=None)
@@ -480,7 +697,14 @@ def validate_publication(
             )
             continue
         try:
-            staged = _validate_file(relative, files[relative], limits=limits)
+            staged = _validate_file(
+                relative,
+                files[relative],
+                limits=limits,
+                protected_digests=protected_digests,
+                protected_index=protected_index,
+                protected_text_exempt_names=protected_text_exempt_names,
+            )
         except ArtifactValidationError as exc:
             issues_by_path[relative] = ArtifactIssue(exc.kind, exc.description)
             continue
@@ -516,12 +740,20 @@ def validate_publication(
                 digest=hashlib.sha256(content).hexdigest(),
             )
         candidates[relative] = staged
+        children: list[str] = []
         if staged.media_type in {"text/markdown", "text/html"}:
             children = collect_references(
                 staged.content.decode("utf-8"),
                 parent=relative,
                 html=staged.media_type == "text/html",
             )
+        # The files this root was built from enter its closure as if it had linked them: a
+        # workbook or a Word file cannot link, so the author declares them instead. They are
+        # validated, admitted and published exactly like a linked dependency (ADR 0052).
+        for source in declared_sources.get(relative, ()):
+            if source not in children:
+                children.append(source)
+        if children:
             graph[relative] = children
             discovery.extend(children)
 
@@ -589,8 +821,16 @@ def validate_publication(
         replace(item, artifact_bindings=bindings_by_scope.get(relative, {}))
         for relative, item in admitted.items()
     )
+    # A source is carried, not delivered: nothing in the report points at it, so listing it
+    # would hand the reader a file the deliverable never mentions. One that the delivery does
+    # reference as well is a dependency like any other and stays listed.
+    carried_only = {
+        source for sources in declared_sources.values() for source in sources
+    } - referenced
     descriptors = [
-        item.descriptor(label=labels.get(item.relative_path, "")) for item in settled_artifacts
+        item.descriptor(label=labels.get(item.relative_path, ""))
+        for item in settled_artifacts
+        if item.relative_path not in carried_only
     ]
     issues: list[ArtifactIssue] = []
     for relative, issue in issues_by_path.items():
@@ -621,6 +861,17 @@ def validate_publication(
             item.resource_id: artifact_sources[item.resource_id]
             for item in settled_artifacts
             if item.resource_id in artifact_sources
+        },
+        sources_by_root={
+            resource_ids[root]: tuple(
+                DeclaredSource(path=source, resource_id=resource_ids[source])
+                for source in sources
+                # Only what was actually admitted: a source the closure refused keeps its own
+                # issue, and recording it here would point the product at bytes nobody holds.
+                if source in admitted and root in admitted
+            )
+            for root, sources in declared_sources.items()
+            if root in admitted
         },
     )
 
@@ -707,7 +958,361 @@ def _loads_externally(text: str) -> bool:
     return scan.loads_external or any(_CSS_EXTERNAL.search(css) for css in scan.css)
 
 
-def _validate_file(relative: str, path: Path, *, limits: PublicationLimits) -> StagedArtifact:
+def _container_kind(content: bytes) -> str | None:
+    """What a container is by its own bytes, so a name that lies does not hide one.
+
+    A Run names its own deliverables and the media map reads the name, so this is the second
+    look. Recognised: a zip (which an Office file also is) and the wrappers a tar arrives in.
+    """
+    if content.startswith(b"PK\x03\x04"):
+        return "zip"
+    if len(content) > 262 and content[257:262] == b"ustar":
+        return "tar"
+    if content.startswith((b"\x1f\x8b", b"BZh", b"\xfd7zXZ", b"\x28\xb5\x2f\xfd")):
+        return "compressed"
+    return None
+
+
+def _protected_member(protected_digests: Collection[str], name: str, content: bytes) -> None:
+    """Refuse a container member that is one of a protected Skill's documents.
+
+    A document inside a zip or an Office file is the same document: digesting only the outer
+    bytes would leave the delivery archive — the case this rule exists for — open.
+    """
+    if hashlib.sha256(content).hexdigest() in protected_digests:
+        raise ArtifactValidationError(
+            "protected_content",
+            f"Member {name} is a Skill document, which is its author's to publish and not this "
+            "Run's. Deliver what the Run produced instead.",
+        )
+
+
+_MARKUP_TAG = re.compile(r"<[^>]{0,4096}>")
+"""One markup tag, removed before a text file is read for its words.
+
+A tag between two words of a copied paragraph would otherwise split the run at every
+formatting boundary, and a reader of the rendered file would never see the tag at all.
+Inline tags are removed with nothing in their place, because they take none: ``<b>T</b>he``
+reads ``The``. A block boundary reads as whitespace.
+"""
+
+_HTML_BLOCK_TAG = re.compile(
+    r"</?(?:p|div|br|hr|li|ul|ol|tr|td|th|table|thead|tbody|h[1-6]|section|article|header|"
+    r"footer|blockquote|pre|figure|figcaption|dl|dt|dd)\b[^>]{0,4096}>",
+    re.IGNORECASE,
+)
+_OOXML_BLOCK_TAG = re.compile(r"</(?:w:p|w:tr|w:tc|a:p|a:tr|w:tbl)>|<w:br\s*/>")
+
+_OOXML_TEXT = re.compile(r"<[^>]{0,4096}>")
+_UTF16_BOM = (b"\xff\xfe", b"\xfe\xff")
+_MAX_READABLE_CHARS = 16 * 1024 * 1024
+"""Longest text the content gate reads out of one file.
+
+A document past it is refused as unverifiable rather than read part-way: the words after the
+bound would be published unscanned, and a file too large to check is not one this gate can
+pass.
+"""
+
+
+class _UnverifiableDocument(Exception):
+    """A file whose words this process cannot read to the end."""
+
+
+def _decode_text(content: bytes) -> str | None:
+    """A text file's characters, or None when the bytes are not text this build can read."""
+    if content.startswith(_UTF16_BOM):
+        try:
+            return content.decode("utf-16")
+        except UnicodeDecodeError:
+            return None
+    try:
+        return content.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    # A UTF-16 file written without a BOM. ASCII text in that encoding is half NUL bytes, but a
+    # CJK document is not, so the order is decided by which one reads as text.
+    if len(content) >= 2 and len(content) % 2 == 0:
+        for codec in ("utf-16-le", "utf-16-be"):
+            try:
+                decoded = content.decode(codec)
+            except UnicodeDecodeError:
+                continue
+            if _looks_like_text(decoded):
+                return decoded
+    return None
+
+
+def _looks_like_text(text: str) -> bool:
+    """Whether a decoded string is prose rather than the same bytes read as the wrong encoding."""
+    sample = text[:4096]
+    if not sample:
+        return True
+    printable = sum(1 for character in sample if character.isprintable() or character in "\t\n\r")
+    return printable / len(sample) >= 0.95
+
+
+def _office_open_xml_text(content: bytes) -> str | None:
+    """The words of a Word, Excel or PowerPoint file, in the order its parts carry them.
+
+    Every one of these is a zip of XML whose text is split into runs at formatting choices, so
+    the words are read by stripping tags from each part and joining the parts: a run split into
+    one element per word reads as the sentence it is. The layout parts and relationships hold
+    no words.
+    """
+    try:
+        with zipfile.ZipFile(BytesIO(content)) as archive:
+            parts = [
+                name
+                for name in archive.namelist()
+                if name.endswith(".xml")
+                and (
+                    name.startswith("word/")
+                    or name.startswith("xl/")
+                    or name.startswith("ppt/slides/")
+                    or name == "xl/sharedStrings.xml"
+                )
+            ]
+            chunks: list[str] = []
+            for name in sorted(parts):
+                try:
+                    part = archive.read(name).decode("utf-8", errors="ignore")
+                except OSError, KeyError, RuntimeError:
+                    continue
+                # Paragraph and row boundaries are words apart; a run boundary inside a word
+                # is not, and the writer splits one word into several runs routinely.
+                text_part = _OOXML_BLOCK_TAG.sub(" ", part)
+                chunks.append(html.unescape(_OOXML_TEXT.sub("", text_part)))
+                if sum(len(chunk) for chunk in chunks) > _MAX_READABLE_CHARS:
+                    raise _UnverifiableDocument(name)
+    except OSError, zipfile.BadZipFile, RuntimeError:
+        return None
+    return " ".join(chunks)
+
+
+def _pdf_text(content: bytes) -> str | None:
+    """The words a PDF shows, through the renderer the product already ships.
+
+    Imported here rather than at module load: the library carries a rendering engine, and a
+    deployment that publishes no PDF should not pay for it at boot.
+    """
+    try:
+        import pypdfium2
+    except ImportError:  # pragma: no cover - the dependency is part of the image
+        return None
+    try:
+        document = pypdfium2.PdfDocument(content)
+    except Exception:
+        return None
+    chunks: list[str] = []
+    try:
+        for page in document:
+            try:
+                text_page = page.get_textpage()
+                chunks.append(text_page.get_text_range())
+            finally:
+                page.close()
+            if sum(len(chunk) for chunk in chunks) > _MAX_READABLE_CHARS:
+                raise _UnverifiableDocument("page")
+    except Exception:
+        return None
+    finally:
+        document.close()
+    return "\n".join(chunks)
+
+
+def _member_media_type(name: str) -> str | None:
+    """The media type a container member must be read as.
+
+    A member's name is chosen by whoever built the archive, so it cannot prove the member is
+    binary: a text reproduction named ``notes.png`` is still words a reader would get. Only the
+    formats that need their own reader (a PDF, an Office Open XML part) and a tagged page keep
+    their type; everything else is read as text, and bytes that are not text are skipped by the
+    decoder.
+    """
+    suffix = PurePosixPath(name).suffix.lower()
+    if suffix == ".pdf":
+        return "application/pdf"
+    if suffix in {".xhtml", ".xht", ".html", ".htm"}:
+        return "text/html"
+    known = _MEDIA_BY_EXTENSION.get(suffix)
+    return known[0] if known is not None and known[0] in _OOXML_MEDIA else None
+
+
+def _readable_text(content: bytes, media_type: str | None) -> str | None:
+    """What a reader would read out of one file, or None when this build cannot tell.
+
+    The digest gate reads the file's bytes, so a copy of a Skill document under any name is
+    already refused; this reads what the file *says*, which is the road the digest cannot see —
+    the Run writing the document's method into a page, a note, or a report it produced (ADR
+    0061). A media type the form checks read as structure is read here as words, because "PDF"
+    and "docx" are formats a reader opens, not binary payloads.
+    """
+    try:
+        if media_type in _OOXML_MEDIA:
+            return _office_open_xml_text(content)
+        if media_type == "application/pdf":
+            return _pdf_text(content)
+    except _UnverifiableDocument as exc:
+        raise ArtifactValidationError(
+            "protected_content",
+            f"A document could not be read to its end ({exc}); deliver a smaller file.",
+        ) from exc
+    if media_type is not None and (
+        media_type.startswith(("image/", "video/")) or media_type in _NON_PROSE_MEDIA
+    ):
+        return None
+    if media_type in _OLE_MEDIA:
+        # No reader for the legacy OLE formats in this process; ADR 0061 states the limit.
+        return None
+    text = _decode_text(content)
+    if text is None:
+        return None
+    if media_type is not None and media_type.startswith(("text/html", "application/xhtml")):
+        text = html.unescape(_MARKUP_TAG.sub("", _HTML_BLOCK_TAG.sub(" ", text)))
+    elif media_type is None or media_type.startswith("text/"):
+        # A page's own text is what a reader reads; Markdown links split a reproduction in the
+        # source and hold it whole on the page, and the page is what the reader is handed. A
+        # plain text file is rendered too: the renderer leaves it as it is, and a `.md` whose
+        # detected type is plain text still gets its links folded into the words they show.
+        text = rendered_text(text)
+    return text
+
+
+def _protected_text_in(
+    protected_text: ProtectedTextIndex | None,
+    subject: str,
+    content: bytes,
+    media_type: str | None = None,
+) -> None:
+    """Refuse a file whose words reproduce a protected Skill document's own text."""
+    if protected_text is None or not protected_text:
+        return
+    text = _readable_text(content, media_type)
+    if text is None and media_type is not None:
+        # The declared reader declined: a member named for a format it is not. Words are
+        # words under any name, so the bytes are tried as text before they are let through.
+        text = _decode_text(content)
+    if text is None:
+        return
+    if protected_text.contains(text, minimum=MIN_PUBLISHED_REPRODUCTION_CHARS):
+        raise ArtifactValidationError(
+            "protected_content",
+            f"{subject} reproduces a Skill document's own text, which is its author's to "
+            "publish and not this Run's. Deliver what the Run produced instead.",
+        )
+
+
+def _inspect_container(
+    content: bytes,
+    protected_digests: Collection[str],
+    protected_text: ProtectedTextIndex | None = None,
+    *,
+    depth: int = 2,
+    protected_text_exempt_names: Collection[str] = (),
+) -> None:
+    """Look inside a container as far as it can be opened, and refuse a protected member.
+
+    An unrecognised or unopenable container is left alone: this is a rule about a Skill's own
+    documents, not a ban on delivering archives, and
+    [ADR 0046](../../../../docs/adr/0046-a-skills-documents-are-its-authors-to-publish.md) states
+    that limit rather than pretending the check is exhaustive.
+    """
+    if (not protected_digests and not protected_text) or depth <= 0:
+        return
+    exempt_names = {name.casefold() for name in protected_text_exempt_names}
+    kind = _container_kind(content)
+    if kind is None:
+        return
+    if kind == "zip":
+        try:
+            with zipfile.ZipFile(BytesIO(content)) as archive:
+                for entry in archive.infolist():
+                    if entry.is_dir():
+                        continue
+                    member = archive.read(entry)
+                    _protected_member(protected_digests, entry.filename, member)
+                    if PurePosixPath(entry.filename).name.casefold() not in exempt_names:
+                        _protected_text_in(
+                            protected_text,
+                            f"Member {entry.filename}",
+                            member,
+                            _member_media_type(entry.filename),
+                        )
+                    _inspect_container(
+                        member,
+                        protected_digests,
+                        protected_text,
+                        depth=depth - 1,
+                        protected_text_exempt_names=exempt_names,
+                    )
+        except ArtifactValidationError:
+            raise
+        except OSError, RuntimeError, ValueError, zipfile.BadZipFile:
+            return
+        return
+    opened: bytes | None = None
+    try:
+        with tarfile.open(fileobj=BytesIO(content), mode="r:*") as archive:
+            for entry in archive:
+                if not entry.isfile():
+                    continue
+                member = archive.extractfile(entry)
+                if member is None:
+                    continue
+                payload = member.read()
+                _protected_member(protected_digests, entry.name, payload)
+                if PurePosixPath(entry.name).name.casefold() not in exempt_names:
+                    _protected_text_in(
+                        protected_text,
+                        f"Member {entry.name}",
+                        payload,
+                        _member_media_type(entry.name),
+                    )
+                _inspect_container(
+                    payload,
+                    protected_digests,
+                    protected_text,
+                    depth=depth - 1,
+                    protected_text_exempt_names=exempt_names,
+                )
+            return
+    except ArtifactValidationError:
+        raise
+    except OSError, RuntimeError, ValueError, tarfile.TarError:
+        pass
+    # A stream that is not a tar: one file in a wrapper, which is still that file.
+    for module, magic in ((gzip, b"\x1f\x8b"), (bz2, b"BZh"), (lzma, b"\xfd7zXZ")):
+        if not content.startswith(magic):
+            continue
+        try:
+            opened = module.decompress(content)
+        except ArtifactValidationError:
+            raise
+        except OSError, EOFError, ValueError:
+            return
+        break
+    if opened is None:
+        return
+    _protected_member(protected_digests, "the wrapped file", opened)
+    _protected_text_in(protected_text, "Member the wrapped file", opened)
+    _inspect_container(
+        opened,
+        protected_digests,
+        protected_text,
+        depth=depth - 1,
+        protected_text_exempt_names=exempt_names,
+    )
+
+
+def _validate_file(
+    relative: str,
+    path: Path,
+    *,
+    limits: PublicationLimits,
+    protected_digests: Collection[str] = frozenset(),
+    protected_index: Callable[[], ProtectedTextIndex] | None = None,
+    protected_text_exempt_names: Collection[str] = (),
+) -> StagedArtifact:
     try:
         size = path.stat().st_size
     except OSError as exc:
@@ -733,6 +1338,21 @@ def _validate_file(relative: str, path: Path, *, limits: PublicationLimits) -> S
         ) from exc
     source_digest = hashlib.sha256(content).hexdigest()
     source_size_bytes = len(content)
+    if source_digest in protected_digests:
+        # A Skill's own document reached the Artifacts directory, by a copy of its bytes
+        # under any name. A Run publishes what it produced, not its author's material
+        # (ADR 0046); the file stays in the workspace, it is just not handed over.
+        raise ArtifactValidationError(
+            "protected_content",
+            f"Artifact {Path(relative).name} is a Skill document, which is its author's to "
+            "publish and not this Run's. Deliver what the Run produced instead.",
+        )
+    # The digest gate above reads bytes; this one reads what a text file says. Asked for only
+    # once per file actually read, so a process that publishes nothing never builds the index.
+    exempt_names = {name.casefold() for name in protected_text_exempt_names}
+    protected_text = protected_index() if protected_index is not None else None
+    if Path(relative).name.casefold() not in exempt_names:
+        _protected_text_in(protected_text, f"Artifact {Path(relative).name}", content, media_type)
     width: int | None = None
     height: int | None = None
     try:
@@ -790,6 +1410,7 @@ def _validate_file(relative: str, path: Path, *, limits: PublicationLimits) -> S
             with zipfile.ZipFile(BytesIO(content)) as archive:
                 if archive.testzip() is not None:
                     raise ValueError("corrupt ZIP")
+
         elif media_type == "application/json":
             json.loads(content.decode("utf-8"))
         elif media_type in {"text/markdown", "text/plain", "text/csv", "text/javascript"}:
@@ -807,6 +1428,14 @@ def _validate_file(relative: str, path: Path, *, limits: PublicationLimits) -> S
                 raise ArtifactValidationError(
                     "media_mismatch", "Active HTML must be a self-contained single file."
                 )
+        # Last, so a container that passed its own checks is still opened: a name says what a
+        # file claims to be, and this rule reads what it holds.
+        _inspect_container(
+            content,
+            protected_digests,
+            protected_text,
+            protected_text_exempt_names=exempt_names,
+        )
     except ArtifactValidationError:
         raise
     except (

@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import base64
 import binascii
+import datetime
 import hashlib
 import hmac
 import json
 from collections.abc import Mapping, Set
 from typing import Any
+from uuid import UUID
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -120,6 +122,40 @@ class OpaqueCursorEnvelope:
             raise OpaqueCursorError("invalid opaque cursor") from exc
 
 
+def parse_canonical_uuid(value: object) -> UUID:
+    """The UUID a cursor field names, accepted only as its canonical lowercase text.
+
+    A sealed token is trusted for its shape, never its values: a field that merely parses
+    (upper case, braces, a URN) is a forged one. Raises :class:`ValueError`.
+    """
+    if not isinstance(value, str):
+        raise ValueError("cursor UUID must be a string")
+    parsed = UUID(value)
+    if str(parsed) != value:
+        raise ValueError("cursor UUID must be canonical")
+    return parsed
+
+
+def format_utc_timestamp(value: datetime.datetime) -> str:
+    """One aware instant as the cursor's canonical text: UTC, microseconds, ``Z``."""
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("cursor timestamp must include a timezone")
+    return value.astimezone(datetime.UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def parse_utc_timestamp(value: object) -> datetime.datetime:
+    """The instant a cursor field names, accepted only as :func:`format_utc_timestamp` writes it.
+
+    Raises :class:`ValueError` for any other spelling of the same instant.
+    """
+    if not isinstance(value, str):
+        raise ValueError("cursor timestamp must be a string")
+    parsed = datetime.datetime.fromisoformat(value)
+    if format_utc_timestamp(parsed) != value:
+        raise ValueError("cursor timestamp must be canonical")
+    return parsed
+
+
 def _subkey(secret: bytes, domain: bytes, purpose: bytes) -> bytes:
     """One 256-bit key per cursor domain and purpose."""
     return hmac.new(secret, domain + b"\0" + purpose, hashlib.sha256).digest()
@@ -148,4 +184,11 @@ def _base64url_decode(value: str) -> bytes:
     return decoded
 
 
-__all__ = ["CursorSecretBox", "OpaqueCursorEnvelope", "OpaqueCursorError"]
+__all__ = [
+    "CursorSecretBox",
+    "OpaqueCursorEnvelope",
+    "OpaqueCursorError",
+    "format_utc_timestamp",
+    "parse_canonical_uuid",
+    "parse_utc_timestamp",
+]

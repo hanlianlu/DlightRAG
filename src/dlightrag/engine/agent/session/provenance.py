@@ -1,6 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """The `call` a step records: the model, parameters, prompt digests and timings it ran on
-(ADR 0041).
+(ADR 0043).
 
 A wrapper states the model, the parameters and the timings of the attempt that produced a result.
 Whoever commits the result knows the rest: the role the call was made for, the exact request it

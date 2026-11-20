@@ -277,16 +277,23 @@ async def test_a_near_miss_type_is_not_a_video(serve, declared: str) -> None:
     assert await collect_link_cards("https://example.com/page") == ()
 
 
-async def test_a_commented_out_declaration_is_not_a_declaration(serve) -> None:
-    page = _Page(
-        content=(
-            b'<html><head><!-- <meta property="og:type" content="video.other"> -->'
-            b'<meta property="og:title" content="Clip"></head></html>'
-        )
-    )
-    serve(_Fetcher({"https://example.com/page": page}))
+@pytest.mark.parametrize(
+    "head",
+    [
+        b'<!-- <meta property="og:type" content="video.other"> -->'
+        b'<meta property="og:title" content="Clip">',
+        b'<!-- <meta property="og:type" content="video.other">'
+        b'<meta property="og:title" content="Clip">',
+        b'<meta property="og:<!-- -->type" content="video.other">'
+        b'<meta property="og:title" content="Clip">',
+    ],
+    ids=["commented-out", "unterminated-hides-the-rest", "inside-an-attribute"],
+)
+async def test_a_comment_never_produces_a_declaration(serve, head: bytes) -> None:
+    page = _Page(content=b"<html><head>" + head + b"</head></html>")
+    serve(_Fetcher({"https://example.com/clip": page}))
 
-    assert await collect_link_cards("https://example.com/page") == ()
+    assert await collect_link_cards("https://example.com/clip") == ()
 
 
 async def test_a_non_html_answer_with_html_words_is_not_a_page(serve) -> None:
@@ -325,30 +332,6 @@ async def test_a_long_declared_title_still_produces_a_card(serve) -> None:
 
     assert len(cards) == 1
     assert cards[0].title == "T" * 200
-
-
-async def test_an_unterminated_comment_hides_everything_after_it(serve) -> None:
-    page = _Page(
-        content=(
-            b'<html><head><!-- <meta property="og:type" content="video.other">'
-            b'<meta property="og:title" content="Clip"></head></html>'
-        )
-    )
-    serve(_Fetcher({"https://example.com/clip": page}))
-
-    assert await collect_link_cards("https://example.com/clip") == ()
-
-
-async def test_a_comment_inside_an_attribute_invents_no_declaration(serve) -> None:
-    page = _Page(
-        content=(
-            b'<html><head><meta property="og:<!-- -->type" content="video.other">'
-            b'<meta property="og:title" content="Clip"></head></html>'
-        )
-    )
-    serve(_Fetcher({"https://example.com/clip": page}))
-
-    assert await collect_link_cards("https://example.com/clip") == ()
 
 
 async def test_a_page_of_comment_openers_parses_within_its_budget(serve) -> None:

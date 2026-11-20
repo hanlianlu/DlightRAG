@@ -4,7 +4,14 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 
 import {prettyToolName, toolDisplay} from './tool-display.ts';
-import {applyToolEvent, MAX_TOOL_ROWS, rowDurationMs, toolStatusText} from './tool-events.ts';
+import {
+  applyToolEvent,
+  MAX_TOOL_ROWS,
+  processGroupSummary,
+  rowDurationMs,
+  toolStatusText,
+  type ToolRow,
+} from './tool-events.ts';
 
 test('known tools map to verbs with i18n ids', () => {
   const display = toolDisplay('load_skill');
@@ -182,3 +189,81 @@ test('a replayed start continues counting from the server-reported time', () => 
   }, 5000);
   assert.equal(live[0].startedAt, 5000);
 });
+
+test('the capped list still counts every step and times the group from its first call', () => {
+  let rows = applyToolEvent([], 'tool_start', {tool_name: 'read', call_id: 'c1'}, 1000);
+  for (let i = 1; i < MAX_TOOL_ROWS + 3; i++) {
+    rows = applyToolEvent(rows, 'tool_start', {
+      tool_name: 'search_web',
+      call_id: `c${i}`,
+    }, 2000 + i);
+  }
+  assert.equal(rows.length, MAX_TOOL_ROWS, 'the rows stay capped');
+  const newest = rows[rows.length - 1];
+  assert.equal(newest.ordinal, MAX_TOOL_ROWS + 3, 'the count outlives the dropped rows');
+  assert.equal(newest.traceStartedAt, 1000, 'the group clock starts at the first call');
+  assert.deepEqual(processGroupSummary(rows, null, 5000), {
+    verb: 'Searching the web',
+    verbId: 'chatFeature.tool.search_web',
+    phase: null,
+    count: MAX_TOOL_ROWS + 3,
+    durationMs: 4000,
+  });
+});
+
+test('the newest call names the group, and a server label outranks its catalogued verb', () => {
+  let rows = applyToolEvent([], 'tool_start', {tool_name: 'bash', call_id: 'c1'}, 1000);
+  assert.deepEqual(processGroupSummary(rows, null, 1500), {
+    verb: 'Running a command',
+    verbId: 'chatFeature.tool.bash',
+    phase: null,
+    count: 1,
+    durationMs: 500,
+  });
+
+  rows = applyToolEvent(rows, 'tool_start', {
+    tool_name: 'mcp_connection_deadbeef',
+    call_id: 'c2',
+    tool_label: 'Personal tools · search_issues',
+  }, 2000);
+  assert.deepEqual(processGroupSummary(rows, null, 3000), {
+    verb: 'Personal tools · search_issues',
+    verbId: null,
+    phase: null,
+    count: 2,
+    durationMs: 2000,
+  }, 'a server label is the line, and the clock still starts at the first call');
+});
+
+test('no call yet leaves the phase to name the work, with no count and no clock', () => {
+  assert.equal(processGroupSummary([], null, 1000), null);
+  assert.deepEqual(processGroupSummary([], 'searching', 1000), {
+    verb: '',
+    verbId: null,
+    phase: 'searching',
+    count: 0,
+    durationMs: null,
+  });
+});
+
+test('a hand-built row without the trace facts states its own place and nothing it did not measure', () => {
+  const hand: ToolRow = {
+    callId: 'c1',
+    label: null,
+    name: 'read',
+    verb: 'Reading a document',
+    verbId: 'chatFeature.tool.read',
+    object: '',
+    state: 'done',
+    startedAt: null,
+    durationMs: 1200,
+  };
+  assert.deepEqual(processGroupSummary([hand], null, 1000), {
+    verb: 'Reading a document',
+    verbId: 'chatFeature.tool.read',
+    phase: null,
+    count: 1,
+    durationMs: null,
+  });
+});
+

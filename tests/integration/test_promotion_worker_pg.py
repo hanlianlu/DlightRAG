@@ -117,7 +117,8 @@ async def corpus(_fresh_test_database: None) -> AsyncIterator[None]:
     from dlightrag.adapters.postgres.core._pool import pg_pool
     from dlightrag.adapters.postgres.corpus._corpus_schema import CHUNK_DOCUMENT_SCOPE_INDEX
     from dlightrag.adapters.postgres.corpus.pg_metadata_index import PGMetadataIndex
-    from dlightrag.application.config import DlightragConfig, set_config
+    from dlightrag.application.config.loading import set_config
+    from dlightrag.application.config.sections import DlightragConfig
 
     cfg = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
         deployment={
@@ -497,9 +498,8 @@ async def test_promotion_is_atomic_across_all_parents_and_isolated(
             child_count = int(await conn.fetchval(f"SELECT COUNT(*) FROM {child}"))
             assert child_count == before_a[table]
         assert await conn.fetchval(
-            "SELECT EXISTS (SELECT 1 FROM pg_constraint "
-            "WHERE conrelid = $1::regclass "
-            "AND conname = 'dlightrag_doc_metadata_finalization_not_null')",
+            "SELECT attnotnull FROM pg_attribute "
+            "WHERE attrelid = $1::regclass AND attname = '_dlightrag_finalization_complete'",
             partitions[_METADATA_TABLE],
         )
 
@@ -1006,8 +1006,8 @@ async def test_a_replayed_claim_returns_the_job_it_already_leased(
     corpus: None, workspaces: tuple[str, str]
 ) -> None:
     """A lost claim response is replayed by the pool; the replay must not strand the job."""
-    from dlightrag.application.config import get_config
-    from tests.config_helpers import mutate_config
+    from dlightrag.application.config.loading import get_config
+    from tests.support.config_helpers import mutate_config
 
     first_ws, second_ws = workspaces
     await _clean_state()

@@ -6,8 +6,11 @@ from fastapi.responses import Response
 
 from dlightrag.adapters.http.rest.auth import get_current_user
 from dlightrag.adapters.http.visual_asset_delivery import visual_asset_response
-from dlightrag.application.access import AccessAction, UserContext
-from dlightrag.application.corpus_admin import VisualAssetSize
+from dlightrag.application.access.control import AccessAction
+from dlightrag.application.access.principal import UserContext
+from dlightrag.engine.rag.corpus.contracts import (
+    VisualAssetSize,
+)
 
 from .deps import enforce_access, get_application, resolve_workspace
 

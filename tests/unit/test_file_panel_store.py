@@ -5,49 +5,21 @@ Page traversal and its indexes run against PostgreSQL in tests/integration/test_
 """
 
 import datetime
-from typing import Any
 
 import pytest
 
 from dlightrag.adapters.postgres.corpus.file_panel import PGFilePanelStore
-from dlightrag.application.corpus_admin import (
+from dlightrag.application.corpus_admin.file_panel import (
     FilePanelCursor,
     FilePanelCursorCodec,
     FilePanelCursorError,
     FilePanelPageRequest,
+)
+from dlightrag.application.corpus_admin.metadata_search import (
     MetadataSearchCursor,
     MetadataSearchCursorCodec,
 )
-
-
-class _Acquire:
-    def __init__(self, conn: Any) -> None:
-        self._conn = conn
-
-    async def __aenter__(self) -> Any:
-        return self._conn
-
-    async def __aexit__(self, *_exc: object) -> bool:
-        return False
-
-
-class _Pool:
-    def __init__(self, conn: Any) -> None:
-        self._conn = conn
-
-    def acquire(self) -> _Acquire:
-        return _Acquire(self._conn)
-
-
-class _Conn:
-    """Records every read, so a refusal can show it reached no storage."""
-
-    def __init__(self) -> None:
-        self.fetches: list[tuple[str, tuple[Any, ...]]] = []
-
-    async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
-        self.fetches.append((query, args))
-        return []
+from tests.support.pg_fakes import FakePool, RecordingConnection
 
 
 def test_file_panel_cursor_round_trips_null_and_naive_microseconds() -> None:
@@ -103,8 +75,8 @@ def test_file_panel_page_validation_and_cursor_invariants() -> None:
 
 
 async def test_file_panel_store_rejects_cross_view_cursor_before_fetch() -> None:
-    conn = _Conn()
-    store = PGFilePanelStore(pool=_Pool(conn))
+    conn = RecordingConnection()
+    store = PGFilePanelStore(pool=FakePool(conn))
     failed_cursor = FilePanelCursor(
         workspace="finance",
         updated_at=None,
@@ -133,8 +105,8 @@ async def test_file_panel_store_rejects_cross_view_cursor_before_fetch() -> None
 
 
 async def test_file_panel_store_rejects_cross_workspace_before_fetch() -> None:
-    conn = _Conn()
-    store = PGFilePanelStore(pool=_Pool(conn))
+    conn = RecordingConnection()
+    store = PGFilePanelStore(pool=FakePool(conn))
 
     with pytest.raises(ValueError, match="another workspace"):
         await store.list_processed_files(

@@ -802,6 +802,11 @@ _TRACKED_PIPELINE_ACTIVE_STATUSES = {
     "processing",
     "preprocessed",
 }
+# Statuses upstream will not advance further. ``deleting`` (LightRAG 1.5.8) is a
+# deletion that stopped partway and is never ingestion work: waiting on it never
+# ends, so the cohort retry settles it instead, and replaying it re-issues the
+# deletion. Compared as a string because LightRAG 1.5.7's DocStatus lacks it.
+_TRACKED_PIPELINE_SETTLED_STATUSES = {"processed", "failed", "deleting"}
 
 
 class CorpusMutationExecutor(RunExecutor):
@@ -1072,7 +1077,7 @@ class CorpusMutationExecutor(RunExecutor):
             # reprocesses the same files after the authoritative run finalizes and
             # archives its staging source.
             raise _TrackedPipelineNotSettled
-        if any(status not in {"processed", "failed"} for status in states.values()):
+        if any(status not in _TRACKED_PIPELINE_SETTLED_STATUSES for status in states.values()):
             await session.enter_phase("recovering_upstream_pipeline")
             async with self._maintenance.workspace_write_gate(session.owner_id):
                 await _join_public_operation(runtime.lightrag.apipeline_process_enqueue_documents())
@@ -1080,7 +1085,9 @@ class CorpusMutationExecutor(RunExecutor):
             checkpoint["upstream_documents"] = _public_upstream_state(refreshed)
             await session.checkpoint_state(checkpoint, phase="reconciled")
             states = _tracked_states(checkpoint)
-        if not states or any(status not in {"processed", "failed"} for status in states.values()):
+        if not states or any(
+            status not in _TRACKED_PIPELINE_SETTLED_STATUSES for status in states.values()
+        ):
             raise _TrackedPipelineNotSettled
         await session.enter_phase("finalizing_tracked_documents")
         async with self._maintenance.workspace_write_gate(session.owner_id):

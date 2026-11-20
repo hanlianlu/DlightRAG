@@ -28,7 +28,7 @@ from dlightrag.engine.agent.session.transactions import (
     SessionTransaction,
     TransactionCommit,
 )
-from tests.in_memory_session_repository import MemoryAgentSessionRepository
+from tests.support.in_memory_session_repository import MemoryAgentSessionRepository
 
 
 def _user(session_id: SessionId, content: str) -> UserMessageEntry:

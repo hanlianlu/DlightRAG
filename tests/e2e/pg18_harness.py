@@ -13,7 +13,7 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
-from dlightrag.application.config import DlightragConfig
+from dlightrag.application.config.sections import DlightragConfig
 from dlightrag.engine.ai.fingerprints import ModelEndpointFingerprint
 from dlightrag.engine.ai.settings import EmbeddingSettings, ModelRoleSettings, ModelSettings
 from tests.support.pg import drop_scratch_database

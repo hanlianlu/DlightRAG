@@ -3,10 +3,12 @@
  * Draw report charts with the server-side SVG renderer, through the same `core.prepare` the browser
  * runtime calls: JSON jobs on stdin, results on stdout.
  *
- * A job is `{id, spec, state, width | widths, mode, svg, sweep, slicers, lang}`. `svg: false` only
- * checks that ECharts can draw the chart; `sweep: true` draws it once for every state of its first
- * filter, after the defaults; `slicers` and `lang` are what the `{id}` tokens read. A result is
- * `{id, width, state, height, empty, svg}` or `{id, width, state, error}`.
+ * A job is `{id, spec, state, width | widths, mode, svg, sweep, render, slicers, lang}`. `svg: false`
+ * only checks that ECharts can draw the chart; `sweep: true` draws it once more for every slicer it
+ * lists, at a choice that is not that slicer's default, after the default; `render: false` runs no
+ * ECharts at all and returns `digest` instead, which is how a caller asks whether the drawing follows
+ * the state rather than what it looks like; `slicers` and `lang` are what the `{id}` tokens read. A
+ * result is `{id, width, state, height, empty, svg | digest}` or `{id, width, state, error}`.
  */
 
 const {readFileSync} = require('node:fs');
@@ -37,14 +39,32 @@ function emptyFrame(width, height, mode) {
   );
 }
 
-/** The states a slicer sweep draws: the first filter at each of its values. */
+/** Whether a choice is the one the slicer already holds, so sweeping to it would change nothing. */
+function isDefaultChoice(def, value) {
+  const held = Core.slicerDefault(def);
+  return !Array.isArray(held) && held !== null && String(held) === String(value);
+}
+
+/** The states a sweep draws: for every slicer the chart lists, one choice that is not its default. */
 function sweepStates(spec) {
-  const id = (spec.filters || [])[0];
-  const def = id && spec.slicers ? spec.slicers[id] : null;
-  if (!def) return [];
-  if (def.type === 'metric') return def.options.map((o) => ({[id]: o.label}));
-  const values = Core.filterValues(def, [spec]);
-  return [def.mode === 'multi' ? {[id]: []} : {[id]: null}, ...values.map((v) => ({[id]: def.mode === 'multi' ? [v] : v}))];
+  const out = [];
+  for (const id of spec.filters || []) {
+    const def = spec.slicers ? spec.slicers[id] : null;
+    if (!def) continue;
+    if (def.type === 'metric') {
+      const other = def.options.find((option) => option.label !== Core.slicerDefault(def));
+      if (other) out.push({[id]: other.label});
+    } else if (def.type === 'filter') {
+      const value = Core.filterValues(def, [spec]).find((v) => !isDefaultChoice(def, v));
+      if (value !== undefined) out.push({[id]: def.mode === 'multi' ? [value] : value});
+    }
+  }
+  return out;
+}
+
+/** Everything a prepared chart says, as one string: the rows it kept, the tokens, the caption, the box. */
+function planDigest(plan) {
+  return JSON.stringify([plan.option, plan.caption, plan.height, plan.empty]);
 }
 
 function main() {
@@ -53,7 +73,7 @@ function main() {
   const themes = {};
   const results = [];
   for (const job of jobs) {
-    const {id, spec, mode = 'light', svg = true} = job;
+    const {id, spec, mode = 'light', svg = true, render = true} = job;
     const states = [job.state || {}, ...(job.sweep ? sweepStates(spec) : [])];
     for (const width of job.widths || [job.width]) {
       for (const state of states) {
@@ -62,6 +82,10 @@ function main() {
           const colors = palette[mode];
           themes[mode] ??= Core.themes(structure, colors);
           const plan = Core.prepare(spec, state, width, {themes: themes[mode], slicers: job.slicers, lang: job.lang});
+          if (!render) {
+            results.push({...label, height: plan.height, empty: plan.empty, digest: planDigest(plan)});
+            continue;
+          }
           if (plan.empty) {
             results.push({...label, height: plan.height, empty: true, svg: svg ? emptyFrame(width, plan.height, mode) : undefined});
             continue;

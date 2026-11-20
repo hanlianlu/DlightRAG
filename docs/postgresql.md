@@ -27,7 +27,7 @@ embedding models or dimensions after indexing; changing `models.embedding.dim`
 requires clearing/rebuilding vectors.
 
 The checked-in Docker Compose stack builds `dlightrag-postgres:pg18` from the
-local `postgres/` image definition, pins `pg_textsearch` to v1.4.0 and
+local `postgres/` image definition, pins `pg_textsearch` to v1.5.1 and
 `pg_jieba` to v2.0.1, and preloads `pg_textsearch,pg_jieba`. Its
 `postgres/init.sql` creates the four extensions when a data volume is first
 initialized.
@@ -35,6 +35,34 @@ initialized.
 Default vector storage is `HALFVEC(dim)` with HNSW. Plain `HNSW` over
 `VECTOR(dim)` is available as an explicit fallback for deployments that prefer
 full-precision storage and have rebuilt indexes accordingly.
+
+## Startup Recovery
+
+A Compose PostgreSQL that restarts forever with `FATAL: bogus data in lock file` never
+reached a database: an unclean shutdown of the Docker Desktop VM, or of the host, left
+the lock files it had just created on disk with their length but not their bytes, so
+every byte of them reads as NUL. The data directory is otherwise intact — PostgreSQL
+reports the previous shutdown time cleanly and needs no WAL recovery — but it refuses to
+start on a lock file it cannot parse:
+
+- the volume's `postmaster.pid` (`/var/lib/postgresql/18/docker/`), reported as
+  `FATAL: bogus data in lock file "postmaster.pid": ""`, and
+- `/var/run/postgresql/.s.PGSQL.5432.lock` in the container's own layer, reported the
+  same way once the first one is gone.
+
+`docker logs` can be empty at the same time, because the same shutdown corrupts the
+container's log file: `docker start -a dlightrag-postgres-1` prints the FATAL.
+`make postgres-recover` repairs both. It takes the container out of its restart loop,
+backs up the volume's lock file under `/tmp` and removes it when it carries no readable
+PID, recreates the container so the layer-held socket lock file goes with the old layer,
+and waits for the health check. It reads the data volume only through the image's own
+tools and rebuilds nothing, so it is safe on a healthy stack, where it reports and exits.
+A different FATAL, or one PostgreSQL repeats after the repair, is not this failure: it
+points at the data directory, which only the destructive [full development
+reset](operations.md#full-development-reset) rebuilds.
+
+Stopping the stack with `docker compose stop` before quitting Docker Desktop or
+restarting the host makes the unclean shutdown behind this failure rare.
 
 ## External and Managed Endpoints
 
@@ -69,6 +97,13 @@ Without `pg_jieba` its Chinese BM25 index runs under `simple`; without
 embedding model that has a calibrated relevance floor, by similarity. An
 extension installed later takes effect as each process restarts, the writer
 first; running processes keep recalling with the index they found.
+
+`CREATE EXTENSION IF NOT EXISTS` never updates an extension that is already installed,
+so after an image moves `pg_textsearch` forward the writer also runs
+`ALTER EXTENSION pg_textsearch UPDATE` at startup when the installed release is lower than
+the one the server carries, and Profile Memory does the same in its own database. A refusal
+(a role that does not own the extension) is a logged warning, not a failed start; see
+[Updating An Installed Extension](operations.md#updating-an-installed-extension).
 
 ## Tuning Boundaries
 
@@ -228,7 +263,7 @@ so any pg_jieba build serves Chinese BM25 correctly:
 ## DlightRAG Schema Migrations
 
 DlightRAG-owned PostgreSQL tables use `dlightrag_schema_migrations` as a small
-ledger for domain schema changes. This applies to DlightRAG tables such as
+ledger of the schema baseline each scope has applied. This applies to DlightRAG tables such as
 `dlightrag_doc_metadata` and `dlightrag_workspace_meta`; LightRAG-owned tables
 remain managed by LightRAG. A writer changes some of them only after LightRAG
 has created them; readers issue no DDL:
@@ -249,17 +284,19 @@ partial index over visible documents. A trigger keeps
 `dlightrag_metadata_field_stats`, the planner's field statistics, counted over
 visible rows only through every insert, update, marker change, and delete.
 
-DlightRAG ensures the current idempotent DDL baseline on writer startup and
-records its versions in the ledger; readers validate the same versions without
-issuing DDL. A ledger version the running revision does not declare is
-incompatible: both roles refuse to start, and the remedy is a full development
-reset rather than a migration of old data. A ledger version alone does not prove
-a schema, since it survives an object dropped afterwards, so each scope also
-declares the objects its revision needs (columns, keys, foreign keys, checks,
-indexes, and guard triggers). Readers read each one back from the catalog, and
-writers do the same after migrating, refusing a database that lacks one. A
-database that holds the `dlightrag_answer_runs` table is refused the same way.
-Run `uv run scripts/reset_development.py --mode docker` (or `--mode native`) to
+Each scope (`runs`, `web_conversations`, `connections`, `doc_metadata`,
+`promotion_jobs`, `workspace_registry`, `model_catalogue`) declares one `baseline`
+version: the whole current schema as idempotent DDL. A writer ensures it on startup
+and records it in the ledger; readers validate the same version without issuing
+DDL. There is no upgrade path. A ledger version the running revision does not
+declare, which is every database an earlier revision created, is incompatible
+before any DDL runs: both roles refuse to start, and the remedy is a full
+development reset. A ledger version alone does not prove a schema, since it
+survives an object dropped afterwards, so each scope also declares the objects its
+revision needs (columns, keys, foreign keys, checks, indexes, and guard triggers).
+Readers read each one back from the catalog, and writers do the same after
+applying the baseline, refusing a database that lacks one. Run
+`uv run scripts/reset_development.py --mode docker` (or `--mode native`) to
 perform that reset; it also recreates the required PostgreSQL extensions and
 verifies the empty database. See
 [operations.md](operations.md#full-development-reset).
@@ -279,21 +316,36 @@ control, child, and blob-reference state:
 | `dlightrag_blobs` | `(owner_id, digest)` | immutable content-addressed blob metadata within one owner |
 | `dlightrag_blob_chunks` | `(owner_id, digest, chunk_index)` | the blob's bytes, in ordered chunks |
 | `dlightrag_answer_run_artifacts` | `(owner_id, run_id, resource_id)` | ordered request attachments and Published Artifact bytes |
-| `dlightrag_answer_artifact_attachments` | `(owner_id, run_id, relative_path)` | settled Root Artifact Attachment authority: label, raw digest/size, presentation, Effect provenance, and settlement order |
+| `dlightrag_answer_artifact_attachments` | `(owner_id, run_id, relative_path)` | settled Root Artifact Attachment authority: label, raw digest/size, presentation, the files the root was built from, Effect provenance, and settlement order |
 | `dlightrag_answer_run_routing` | `(owner_id, run_id)` | requested/valid/resolved mode and canonical Agent Session/Lane mapping |
 | `dlightrag_answer_run_stages` | `(owner_id, run_id, stage_intent_id)` | settled Fast `planner`, `retrieval`, and `final_generation` stage state that recovery reuses |
 | `dlightrag_agent_sessions` | `(owner_id, session_id)` | Session commit sequence, Entry sequence, current run owner and fencing epoch |
-| `dlightrag_agent_session_entries` | `(owner_id, session_id, sequence)` | immutable parent-linked User/Assistant/ToolResult/Control/Compaction Entries. An Assistant or Compaction Entry's payload also holds a `call`, written in the same transaction: the model, parameters, prompt digests and timings (how long it waited for a model slot and how long it took) of the model call that made it, and no prompt text, option, header, credential or URL ([ADR 0041](adr/0041-a-step-records-the-model-parameters-and-prompt-digests-it-ran-on.md)). A row written before it has no `call`, and no table, column or migration holds it |
+| `dlightrag_agent_session_entries` | `(owner_id, session_id, sequence)` | immutable parent-linked User/Assistant/ToolResult/Control/Compaction Entries, each naming the Run that wrote it, which the writer states. An Assistant or Compaction Entry's payload also holds a `call`, written in the same transaction: the model, parameters, prompt digests and timings (how long it waited for a model slot and how long it took) of the model call that made it, and no prompt text, option, header, credential or URL ([ADR 0043](adr/0043-a-step-records-the-model-parameters-and-prompt-digests-it-ran-on.md)). A User Entry's payload names its `origin` when the owner did not write it: `child_notification` marks a Child's settled result or guidance question that the Run handed its agent as the next input |
 | `dlightrag_agent_session_registers` | `(owner_id, session_id, register_kind, register_key)` | exact-CAS Lane heads/state, total OperationState, Plan metadata, request/tool snapshots, bounded inputs and Fast reservation |
+| `dlightrag_answer_goals` | `(owner_id, session_id)` | the Agent Session's one current Goal: objective, phase, a positive-integer round cap with no product ceiling, and rounds started, and the Run that last changed it (empty when a human goal command wrote the row). Every write moves the revision it read, so a round driver and a human turn cannot overwrite each other; the row cascades with its Session ([ADR 0060](adr/0060-goal-mode-is-a-harness-feature-skills-declare-checkpoints.md)) |
 | `dlightrag_answer_session_notes` | `(owner_id, session_id, relative_path)` | the Agent Session's notes, attributed to the Run that wrote each |
-| `dlightrag_answer_evidence` / resource tables | run/session/intent/result identity | atomic durable Evidence, fetched resources, workspace inventory, spills, and blobs; a Tool settlement stores the Session's Evidence ledger only when it changed, and recovery reads the latest snapshot; a workspace rescan writes its inventory in two statements that delete removed paths and rewrite only changed rows |
-| `dlightrag_answer_child_sessions` | parent run + child Session id | parent/call/intent lineage, ContextSnapshot, depth, independent lease/epoch, pinned plan/budget/tools/Host state, status and usage |
-| `dlightrag_answer_child_operations` | parent run + child Session + operation sequence | same-Session continuation Operations, idempotency, origin, status, cancellation origin, usage/outcome |
+| `dlightrag_answer_feedback` | `(owner_id, run_id, agent, sequence)` | one owner's judgement of one answered message: `up` or `down`, and for a `down` the reasons it gives (from a closed set) or the words of its note — at least one of the two, which the table's own check holds it to — the note being up to 2000 characters, with when it was first given and last changed. `agent` is `main` or a Child Session id and `sequence` the message's own place in that Session, which never moves, so judging again replaces the row. A row is written only for an assistant message the Run itself wrote, checked in the statement that writes it, and cascades with its Run |
+| `dlightrag_runtime_policies` | `(key)` | one JSON document per [Runtime Policy](interfaces.md#runtime-policies), replaced whole by the administrator's last write, with who wrote it and when. The key is one the application registers and the table only requires an object under a key of 1-64 characters; the application owns what each document holds. A policy with no row holds its code default. A request reads its row by key every time, so no process caches one and none is told of a change |
+| `dlightrag_answer_evidence` / resource tables | run/session/intent/result identity | atomic durable Evidence, fetched resources, Agentspace Inventory, spills, and blobs; a Tool settlement stores the Session's Evidence ledger only when it changed, and recovery reads the latest snapshot; an Agentspace rescan writes its inventory in two statements that delete removed paths and rewrite only changed rows. The maintenance loop compacts a finished Run's Evidence in place: the newest row of each Session stays whole, and every other row keeps its chunk ids, source metadata and digests while dropping the passage text of chunks the answer did not cite, and `content_slimmed` names the rows that lost it, so the payload a reader loads stays the document |
+| `dlightrag_answer_child_sessions` | parent run + child Session id | parent/call/intent lineage, ContextSnapshot, depth, independent lease/epoch, pinned plan/budget/tools/Host state, status and usage; the maintenance loop clears a finished Run's Host state, which no reader surfaces and no control can reach once the Run is over |
+| `dlightrag_answer_child_operations` | parent run + child Session + operation sequence | same-Session continuation Operations, idempotency, origin, status, cancellation origin, usage/outcome; the maintenance loop clears a finished Run's operation outcomes the same way, since a retry cannot reach them |
 | `dlightrag_answer_child_guidance` | parent run + request id | correlated `ask_parent` questions, expiry, reply origin, and status `pending` / `replied` / `expired` / `cancelled` |
 | `dlightrag_agent_browser_leases` | `endpoint` | one row per configured Agent Browser endpoint, registered at first use, with the Run (owner, run, lease owner, fencing epoch) that holds it or none, and no expiry of its own; whether a held row is live follows the Run's lease ([Agent Browser](architecture.md#agent-browser)) |
 | `dlightrag_agent_accounts` | `(owner_id, site)` | one row per owner and site: the account id its envelope is bound to, its email and username (one of them at least), and the password's envelope with the id of the key ring key that sealed it, so a retired key's count shows what is left to re-seal, with when it was registered (kept by a reset), when its credentials last changed, and when a login last filled its password; no password in clear and no Run's Child account ([Agent Accounts](security.md#agent-accounts)) |
 | `dlightrag_agent_account_settings` | `(owner_id)` | the owner's switch for the Agent's new sign-ups, which an owner with no row has on ([Agent Accounts](retrieval-answer.md#agent-accounts-and-the-agent-mailbox)) |
+| `dlightrag_privacy_settings` | `(owner_id)` | the owner's Conversation Contribution ([ADR 0041](adr/0041-a-conversation-improves-the-product-only-when-its-owner-asked.md)): whether their conversations may be used to evaluate and train models, and the moment that permission began. An owner with no row has never chosen and contributes nothing. A check refuses a row whose flag and moment disagree, so turning it off clears the moment and turning it on again begins a new one. One statement decides the moment from the stored row, reading the database's clock as it writes (`clock_timestamp()`, not the start of its transaction, so a turn-on that waited behind a turn-off is dated after it). The trace export compares it with the start of a Run's Agent Session: the earlier of `dlightrag_agent_sessions.created_at` and the earliest `created_at` among the Runs whose `dlightrag_answer_run_routing.agent_session_id` is that Session |
 | `dlightrag_agent_controls` | run + control sequence | ordered steer inbox for the parent Run or a targeted child Session/Operation; origin `user` or `parent`; append-before-ack; a worker locks and reads at most 100 pending controls at a time, in sequence order |
+
+Every pass of the maintenance loop is a bounded SQL batch that a finished
+Run waits out for the configured grace, so live Runs are never touched, and each
+pass drops data no reader needs rather than moving bytes around: what a finished
+Run's Evidence log no longer grounds, and the working state its children ran on.
+Reusing and returning the space a table churns is PostgreSQL's own job, through
+autovacuum, which neither pass duplicates. The image also runs with
+`default_toast_compression=lz4`, which stores the same text slightly smaller than
+pglz and compresses several times faster. When a table vacuums, and how much dead
+space it holds between runs, is PostgreSQL's to decide: no table here carries its
+own autovacuum settings.
 
 Independent critique reuses those Child Session, Operation, control, and
 guidance rows.
@@ -307,8 +359,16 @@ run removes its events and references, never shared bytes; a blob is deleted
 only once no reference for that owner survives. The Query and Corpus Mutation
 claim paths share the bounded `idx_dlightrag_runs_claim` index; Workspace
 mutation eligibility also uses `idx_dlightrag_runs_mutation_fifo`, and event
-reconnect uses the event primary key. The claim-plan `EXPLAIN` output is part of
-the [load evidence](run-runtime.md#load-evidence).
+reconnect uses the event primary key. An owner's [active-run
+limit](run-runtime.md#admission-limits) counts that owner's queued and running Answers
+through `idx_dlightrag_runs_owner_active`, a partial index on `(owner_id)` over
+`run_kind = 'answer' AND status IN ('queued', 'running')`: the count runs under the
+lane's acceptance lock, and without the index it walks the lane's active rows, or the
+owner's whole history, which in a deployment with one owner is the whole table.
+`idx_dlightrag_answer_run_routing_session` on `(owner_id, agent_session_id)` finds a Session's
+Answer Runs by the Session, which the [Session Memory sweep](adr/0045-profile-memory-is-maintained-per-session-and-owned-across-them.md)
+asks of each Session whose pass is behind (its newest succeeded Run, and whether any is live).
+The claim-plan `EXPLAIN` output is part of the [load evidence](run-runtime.md#load-evidence).
 
 Web conversation turns link to a run with `(principal_id, answer_run_id)` and
 `ON DELETE CASCADE`. The turn carries conversation order and the run link only:

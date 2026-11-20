@@ -12,11 +12,13 @@ from unittest.mock import AsyncMock, Mock, create_autospec
 import pytest
 from PIL import Image
 
-from dlightrag.application.retrieval import RetrievalService, RetrievalSettings
+from dlightrag.application.retrieval.service import RetrievalService, RetrievalSettings
 from dlightrag.engine.ai.embedding import MultimodalEmbedder
 from dlightrag.engine.ai.fingerprints import model_endpoint_fingerprint
 from dlightrag.engine.ai.telemetry import NoopTelemetry
-from dlightrag.engine.rag.retrieval import RetrievalResult
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalResult,
+)
 from dlightrag.engine.rag.retrieval.visual import (
     DirectVisualRetriever,
     PreparedVisualQuery,

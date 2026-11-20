@@ -42,33 +42,63 @@ class AccessAction:
     # never see tier, promotion state, or retry details.
     WORKSPACE_STORAGE_STATUS = "workspace.storage_status"
     MODEL_CATALOGUE_WRITE = "model_catalogue.write"
+    # Reading and changing the Runtime Policies. Deployment-wide like the catalogue, so a rule
+    # needs every workspace, and in no preset: a policy names the people it targets.
+    RUNTIME_POLICY_MANAGE = "runtime_policy.manage"
 
 
-_READER_ACTIONS: tuple[str, ...] = (
+# What a caller may do with a corpus it can reach, and nothing that changes it.
+_READ_ACTIONS: tuple[str, ...] = (
     AccessAction.WORKSPACE_QUERY,
     AccessAction.WORKSPACE_LIST_FILES,
     AccessAction.WORKSPACE_DOWNLOAD_SOURCE,
     AccessAction.WORKSPACE_READ_METADATA,
     AccessAction.WORKSPACE_READ_VISUAL_ASSET,
 )
-_EDITOR_ACTIONS: tuple[str, ...] = (
-    *_READER_ACTIONS,
+# An ordinary caller reads a corpus and contributes to it: ingestion, metadata
+# updates, and file deletion. No preset is read-only; a deployment that wants a
+# read-only grant names the read Actions themselves, which every rule may do.
+_COMMON_USER_ACTIONS: tuple[str, ...] = (
+    *_READ_ACTIONS,
     AccessAction.WORKSPACE_INGEST,
     AccessAction.WORKSPACE_UPDATE_METADATA,
     AccessAction.WORKSPACE_DELETE_FILES,
 )
-# A workspace's creator holds everything an editor does on it, and may reset or
-# delete it. Operator-facing storage status stays with deployment rules.
+# A workspace's creator holds everything a common user does on it, and may reset
+# or delete it. Operator-facing storage status stays with deployment rules.
 CREATOR_ACTIONS: tuple[str, ...] = (
-    *_EDITOR_ACTIONS,
+    *_COMMON_USER_ACTIONS,
     AccessAction.WORKSPACE_RESET,
     AccessAction.WORKSPACE_DELETE,
 )
+# The presets a rule may name. Two, so a rule states a place in the deployment
+# rather than a role: an administrator, or an ordinary caller.
 ACTION_PRESETS: dict[str, tuple[str, ...]] = {
-    "reader": _READER_ACTIONS,
-    "editor": _EDITOR_ACTIONS,
+    "common_user": _COMMON_USER_ACTIONS,
     "admin": ("*",),
 }
+_ACTION_NAMES: frozenset[str] = frozenset(
+    value
+    for name, value in vars(AccessAction).items()
+    if not name.startswith("_") and isinstance(value, str)
+)
+
+
+def unknown_action_patterns(patterns: Sequence[str]) -> tuple[str, ...]:
+    """The patterns among these that could never match a product Action.
+
+    A rule matches nothing through such a pattern, so a deployment that wrote one
+    would deny the callers it meant to allow and say nothing about it. Access
+    configuration refuses them instead of loading them.
+    """
+    return tuple(pattern for pattern in patterns if not _action_pattern_is_known(pattern))
+
+
+def _action_pattern_is_known(pattern: str) -> bool:
+    """Whether this pattern names a preset, an Action, or an Action namespace."""
+    if pattern == "*" or pattern in ACTION_PRESETS or pattern in _ACTION_NAMES:
+        return True
+    return pattern.endswith(".*") and any(name.startswith(pattern[:-1]) for name in _ACTION_NAMES)
 
 
 # Keyed by Corpus Mutation action; a test keeps it in step with that action list,
@@ -223,7 +253,7 @@ class JwtClaimsAccessControl:
         if subject is None or subject.auth_mode != "jwt":
             return False
         return any(
-            _claim_matches(subject.claims, rule.claim, rule.value)
+            claim_matches(subject.claims, rule.claim, rule.value)
             and _action_matches(rule.actions, action)
             and _workspace_matches(rule.workspaces, workspace)
             for rule in self._rules
@@ -258,7 +288,13 @@ def access_control_from_settings(
     return AllowAllAccessControl()
 
 
-def _claim_matches(claims: Mapping[str, object], claim_name: str, expected: str) -> bool:
+def claim_matches(claims: Mapping[str, object], claim_name: str, expected: str) -> bool:
+    """Whether a verified claim holds the expected value.
+
+    A claim of one value holds it when they are equal, and a claim of several (a list of roles
+    or groups) holds it when it is one of them. Access Rules and Runtime Policies both name the
+    callers they apply to this way.
+    """
     raw = claims.get(claim_name)
     if isinstance(raw, str):
         return raw == expected
@@ -298,4 +334,6 @@ __all__ = [
     "JwtClaimsAccessControl",
     "WorkspaceCreators",
     "access_control_from_settings",
+    "claim_matches",
+    "unknown_action_patterns",
 ]

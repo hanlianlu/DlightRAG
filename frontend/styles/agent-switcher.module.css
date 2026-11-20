@@ -1,0 +1,203 @@
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
+
+/* The Inspector's one-line agent switcher (ui/agent-switcher.ts): the line, and the roster list it
+   opens. It reads; picking an agent only changes what the page below shows. */
+
+@layer features {
+  .root {
+    align-items: center;
+    display: flex;
+    gap: var(--space-3xs);
+    height: 44px;
+    min-width: 0;
+    position: relative;
+  }
+
+  /* The line itself is the trigger: it keeps the current agent's name, state, elapsed time, and
+     objective in one row, with no second row of controls. */
+  .current {
+    align-items: center;
+    background: none;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-control);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    display: flex;
+    flex: 1 1 auto;
+    font: inherit;
+    gap: var(--space-tight);
+    height: var(--size-button);
+    min-width: 0;
+    padding: 0 var(--space-inline);
+    text-align: start;
+  }
+
+  .current:hover {
+    background: var(--color-bg-hover);
+  }
+
+  .current:focus-visible {
+    outline: 2px solid var(--focus-ring-color);
+    outline-offset: 2px;
+  }
+
+  .currentName {
+    color: var(--color-text-primary);
+    flex: none;
+    font-size: var(--font-size-detail);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .currentState {
+    color: var(--color-text-muted);
+    flex: none;
+    font-size: var(--font-size-caption);
+    white-space: nowrap;
+  }
+
+  .currentElapsed {
+    color: var(--color-text-muted);
+    flex: none;
+    font-size: var(--font-size-caption);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .currentObjective {
+    color: var(--color-text-muted);
+    flex: 1 1 auto;
+    font-size: var(--font-size-caption);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .chevron {
+    color: var(--color-text-subtle);
+    flex: none;
+    margin-inline-start: auto;
+  }
+
+  .filter {
+    display: block;
+    padding: var(--space-inline) var(--space-inline) var(--space-tight);
+  }
+
+  /* The design system's input face; only the row it fills is this component's. */
+  .filterInput {
+    width: 100%;
+  }
+
+  /* The list opens from the line's own wrapper, over the page: the page below stays where it was. */
+  .list {
+    min-width: max(100%, 18rem);
+    width: max-content;
+    z-index: 40;
+  }
+
+  /* The shared popover display would otherwise outrank the hidden attribute. */
+  .list[hidden] {
+    display: none;
+  }
+
+  .rows {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3xs);
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .switcherRow {
+    align-items: center;
+    background: none;
+    border: 0;
+    border-radius: var(--radius-control);
+    color: inherit;
+    cursor: pointer;
+    display: flex;
+    font: inherit;
+    gap: var(--space-tight);
+    padding: var(--space-tight) var(--space-inline);
+    text-align: start;
+    width: 100%;
+  }
+
+  /* The children hang off the Run's own agent: one main row, then its agents indented beneath it. */
+  .switcherRow:not([data-main]) {
+    padding-inline-start: var(--space-section);
+  }
+
+  .switcherRow:hover {
+    background: var(--color-bg-hover);
+  }
+
+  .switcherRow[aria-selected='true'] {
+    background: var(--color-accent-ghost);
+  }
+
+  .switcherRow:focus-visible {
+    outline: 2px solid var(--focus-ring-color);
+    outline-offset: -2px;
+  }
+
+  .switcherText {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3xs);
+    min-width: 0;
+  }
+
+  .switcherName {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-detail);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .switcherMeta {
+    align-items: center;
+    color: var(--color-text-muted);
+    display: flex;
+    flex-wrap: wrap;
+    font-size: var(--font-size-caption);
+    gap: var(--space-tight);
+  }
+
+  .switcherSummary {
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 1;
+    color: var(--color-text-muted);
+    display: -webkit-box;
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    overflow: hidden;
+    overflow-wrap: anywhere;
+  }
+
+  .switcherPill {
+    border: 1px solid var(--color-accent-border-soft);
+    border-radius: var(--radius-pill);
+    color: var(--color-accent-text);
+    font-size: var(--font-size-caption);
+    padding: 0 var(--space-tight);
+  }
+
+  .older {
+    display: flex;
+    justify-content: center;
+    padding-block: var(--space-tight);
+  }
+
+
+  .empty {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    margin: 0;
+    padding: var(--space-tight) var(--space-inline);
+  }
+}

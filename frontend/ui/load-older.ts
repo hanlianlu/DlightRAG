@@ -4,7 +4,7 @@
 import {html, nothing, type TemplateResult} from 'lit';
 import type {KeysetPagerStatus} from '../lib/paged.ts';
 
-export interface LoadOlderControl {
+interface LoadOlderControl {
   /** Names the list: the button carries it as `data-load-older`, its status as `data-load-older-status`. */
   list: string;
   pages: KeysetPagerStatus;

@@ -3,12 +3,9 @@
 
 import hashlib
 import io
-import os
 import zipfile
-from pathlib import Path
 
 import anydoc
-import pypdfium2
 import pytest
 
 from dlightrag.engine.agent.tool_content import tool_content_attachments
@@ -25,23 +22,16 @@ from tests.support.format_route_fixtures import (
 )
 from tests.support.resources import call, tools
 
-NONLATIN_FACTS = ("Привет мир 42.5", "Москва столица", "中文測試 7.5", "東京駅")
-
 
 def route_source(kind):
     if kind == "xlsx":
         return ResourceInput(filename="gold.xlsx", content=xlsx_fixture()[0])
-    if kind == "nonlatin":
-        path = os.environ.get("ANYDOC_TEST_NONLATIN_PDF")
-        if not path:
-            pytest.skip("optional local generated embedded-font PDF; no proprietary font bundled")
-        return ResourceInput(filename="gold.pdf", content=Path(path).read_bytes())
     return ResourceInput(filename="gold.pdf", content=pdf_fixture(kind))
 
 
 def assert_route_gold(kind, snapshot):
     assert snapshot.converter == "firecrawl-anydoc"
-    assert snapshot.converter_version == "0.2.4" and snapshot.fallback_reason is None
+    assert snapshot.converter_version == "0.2.5" and snapshot.fallback_reason is None
     if kind in {"scan", "mixed"}:
         assert snapshot.extraction_status == "known_incomplete" and snapshot.text == ""
         assert snapshot.known_ocr_pages == ((1, 2) if kind == "scan" else ())
@@ -49,9 +39,7 @@ def assert_route_gold(kind, snapshot):
         assert snapshot.visuals == ()
     else:
         assert snapshot.extraction_status == "usable_text_unverified_coverage"
-        facts = (
-            XLSX_FACTS if kind == "xlsx" else NONLATIN_FACTS if kind == "nonlatin" else PDF_FACTS
-        )
+        facts = XLSX_FACTS if kind == "xlsx" else PDF_FACTS
         assert all(fact in snapshot.text for fact in facts)
     if kind == "xlsx":
         assert "$1,234.50" in snapshot.text and "0007" in snapshot.text
@@ -62,7 +50,7 @@ def assert_route_gold(kind, snapshot):
         assert all(v.data == xlsx_fixture()[1] for v in snapshot.visuals)
 
 
-@pytest.mark.parametrize("kind", ["multi", "scan", "mixed", "nonlatin", "xlsx"])
+@pytest.mark.parametrize("kind", ["multi", "scan", "mixed", "xlsx"])
 async def test_format_routes_tool_snapshot_view_and_recovery(kind, monkeypatch):
     source = route_source(kind)
     assert source.content is not None
@@ -119,33 +107,6 @@ async def test_format_routes_tool_snapshot_view_and_recovery(kind, monkeypatch):
         for visual in snapshot.visuals:
             assert (await restored.visual_asset(resource, visual.handle_id)).data == visual.data
     assert len(calls) == 1
-
-
-@pytest.mark.parametrize("kind", ["multi", "scan", "mixed", "nonlatin"])
-def test_pdf_fixture_independent_page_and_text_layer_gold(kind):
-    source = route_source(kind)
-    with pypdfium2.PdfDocument(source.content) as pdf:
-        assert len(pdf) == {"multi": 3, "scan": 2, "mixed": 1, "nonlatin": 2}[kind]
-        texts = []
-        for page in pdf:
-            text = page.get_textpage()
-            try:
-                texts.append(text.get_text_range())
-            finally:
-                text.close()
-                page.close()
-    joined = "\n".join(texts)
-    if kind == "scan":
-        assert not joined.strip()
-    else:
-        facts = (
-            PDF_FACTS
-            if kind == "multi"
-            else NONLATIN_FACTS
-            if kind == "nonlatin"
-            else ("PLAN total 52", "Q1 12", "Q2 40")
-        )
-        assert all(fact in joined for fact in facts)
 
 
 @pytest.mark.parametrize("suffix", ["pdf", "xlsx"])

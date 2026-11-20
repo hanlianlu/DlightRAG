@@ -30,6 +30,23 @@ through account creation. [Security](../security.md)'s statement that DlightRAG 
 not "manage users/passwords" stays true of DlightRAG's own users: an Agent Account
 is a credential the Agent holds on a third-party site.
 
+Amended 2026-10-14: the register call states the length the generated password is made with,
+20 characters when it asks for none, and a password field that takes fewer characters than
+the call asked for is refused through `browser_failure` as `password_too_long`, naming the
+field's limit and the ask, with nothing filled and nothing stored — no password is shortened
+to fit a field. A field that takes fewer characters than the six the composition leaves room
+for leaves no ask that fits it: that refusal is `password_limit_too_small`, naming the field's
+limit and the mechanism's own minimum, and saying that no registration can succeed on that
+site, rather than advising an ask the schema would refuse. A call past 128 characters is
+refused in the tool's own sentence too, as this mechanism's bound on what it will draw, fill
+and seal, not as a rule about the password an agent should choose. The deployment's
+`min_credential_length` floor is gone with the `password_too_short` reason it raised, because
+one number a deployment sets cannot keep up with the sites a Run meets. The length of a
+password is a request, not a character of the password: no character of one is the model's to
+choose or see, so the rejected alternative below stays rejected, and the decision that a
+password never enters model context is unchanged. The Decision paragraph on the generated
+password and that alternative keep their original text and are read through this note.
+
 ## Context
 
 ADR 0032 gives Research an anonymous browser whose sessions end with the Run. Much of
@@ -81,6 +98,12 @@ credentials for the page's registrable domain, the Public Suffix List's eTLD+1, 
 only into fields whose frame belongs to that domain. A password is never in model
 context, and outside its sealed envelope it appears in no tool argument or result,
 Session Entry, event, trace, or log.
+*(Amended 2026-10-14: `register` also states `length`, how many characters the generated
+password is made with — the Agent's to choose for the field it meets, 20 characters when the
+call asks for none — and a password field that takes fewer characters than the call asked for
+is refused rather than filled with a shortened one; a field that takes fewer than the six the
+composition leaves room for is refused as a site no registration can succeed on. The paragraph
+above is the decision as it was made.)*
 
 **A parent's accounts persist per owner, sealed under the key ring.** An account a
 parent Agent Session registers is stored per owner. `CredentialCipher` seals its
@@ -177,6 +200,9 @@ Connections: owner Settings state has no REST counterpart.
 - **Let the model choose or see the password.** Rejected. It would sit in the durable
   transcript, compaction summaries, provider requests, and traces, within reach of a
   page's prompt injection.
+  *(Amended 2026-10-14: how many characters a generated password has is the Agent's to
+  state, because a site's own field decides what fits there; no character of one is the
+  model's to choose or see, so this alternative stays rejected.)*
 - **Persist the browser session instead of credentials.** Rejected. Sessions are
   anonymous and end with the Run (ADR 0032); a stored cookie jar is a bearer
   credential for every site in it, and logging in afresh keeps each Run's state

@@ -67,7 +67,9 @@ def name_catalogue(
         )
     if len({tool.local_name for tool in named}) != len(named):
         # Only names built to collide get here, and such a catalogue is rejected whole.
-        raise ConnectionsError("catalogue")
+        raise ConnectionsError(
+            "catalogue: names still collide after hashing; the catalogue is rejected whole"
+        )
     return tuple(named)
 
 

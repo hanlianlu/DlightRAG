@@ -9,11 +9,12 @@ from pathlib import Path
 from typing import Any
 
 from dlightrag.adapters.postgres.core._pool import pg_pool
-from dlightrag.application.config import DlightragConfig, get_config, load_config, set_config
-from dlightrag.engine.answer.workspace import (
-    RunWorkspaceAudit,
-    audit_run_workspaces,
-    resolve_workspace_root,
+from dlightrag.application.config.loading import get_config, load_config, set_config
+from dlightrag.application.config.sections import DlightragConfig
+from dlightrag.engine.answer.agentspace import (
+    RunAgentspaceAudit,
+    audit_run_agentspaces,
+    resolve_agentspace_root,
 )
 
 DEFAULT_SAMPLE = 20
@@ -67,11 +68,11 @@ class _RunExistenceProbe:
         return await pg_pool.run_once(probe)
 
 
-async def run_audit(*, config: DlightragConfig, root: Path, sample: int) -> RunWorkspaceAudit:
+async def run_audit(*, config: DlightragConfig, root: Path, sample: int) -> RunAgentspaceAudit:
     """Audit one workspace root against the operational store."""
     pg_pool.bind(config)
     try:
-        return await audit_run_workspaces(
+        return await audit_run_agentspaces(
             workspace_root=root, store=_RunExistenceProbe(), sample=sample
         )
     finally:
@@ -92,7 +93,7 @@ def main() -> None:
     root = (
         Path(args.root).expanduser().resolve()
         if args.root
-        else resolve_workspace_root(
+        else resolve_agentspace_root(
             execution_environment=config.answer.agent.execution_environment,
             workspace_root=config.answer.agent.workspace_root,
         )

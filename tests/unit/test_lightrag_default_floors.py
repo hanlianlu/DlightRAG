@@ -14,7 +14,7 @@ from typing import Any
 import lightrag.constants as lightrag_constants
 import pytest
 
-from dlightrag.application.config import DlightragConfig
+from dlightrag.application.config.sections import DlightragConfig
 from dlightrag.engine.ai.settings import ModelRoleSettings
 
 # DlightRAG default -> the LightRAG constant it must not undercut.

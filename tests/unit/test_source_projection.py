@@ -6,7 +6,9 @@ import logging
 import pytest
 
 from dlightrag.engine.answer.citations.contracts import ChunkSnippet, SourceReference
-from dlightrag.engine.rag.retrieval import RetrievalResult
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalResult,
+)
 
 
 def _internal_source(*, chunks: list[ChunkSnippet] | None = None) -> SourceReference:
@@ -139,8 +141,8 @@ def test_public_context_projection_strips_internal_source_metadata() -> None:
 
 
 def test_retrieval_projector_hides_composer_cache_and_vector_fields() -> None:
-    from dlightrag.application.retrieval import RetrieveProjection
     from dlightrag.application.retrieval._answer_projection import project_answer_retrieval
+    from dlightrag.application.retrieval.service import RetrieveProjection
 
     private_fields = {
         "_cache_key",

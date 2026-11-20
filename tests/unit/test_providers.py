@@ -25,6 +25,7 @@ from dlightrag.engine.ai.providers.base import (
     provider_cache_hit_tokens,
     provider_input_tokens,
     provider_status_code,
+    provider_usage_buckets,
     usage_counters,
 )
 from dlightrag.engine.ai.providers.base import (
@@ -35,6 +36,7 @@ from dlightrag.engine.ai.providers.openai_compatible import (
 )
 from dlightrag.engine.ai.providers.openai_response import ResponseStatusError
 from dlightrag.engine.ai.settings import ModelSettings
+from tests.support.source_tree import python_files, syntax_tree
 
 
 def _openai_error_response(status_code: int) -> httpx2.Response:
@@ -108,7 +110,7 @@ class TestProviderRegistry:
         )
 
     def test_nothing_but_provider_for_builds_a_provider_from_settings(self) -> None:
-        package = Path(dlightrag.__file__).parent
+        package = Path(dlightrag.__file__).resolve().parent
         registry = package / "engine" / "ai" / "providers" / "__init__.py"
         # The registry's own factory, and every provider class it knows.
         factories = {"get_provider"} | {
@@ -116,9 +118,9 @@ class TestProviderRegistry:
         }
         builders = sorted(
             f"{path.relative_to(package)}: {name}"
-            for path in package.rglob("*.py")
+            for path in python_files(package)
             if path != registry
-            for node in ast.walk(ast.parse(path.read_text("utf-8")))
+            for node in ast.walk(syntax_tree(path))
             if isinstance(node, ast.Call)
             and (
                 name := (
@@ -509,6 +511,75 @@ class TestAnthropicProvider:
         # A streaming turn marks its prefix like any other.
         streamed = sdk.return_value.messages.create.call_args[1]
         assert streamed["messages"][-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+
+    @pytest.mark.asyncio
+    async def test_complete_tool_turn_streaming_publishes_thinking_deltas(self):
+        p = get_provider("anthropic", api_key="test-key")
+
+        async def fake_stream():
+            yield SimpleNamespace(
+                type="message_start",
+                message=SimpleNamespace(
+                    usage=SimpleNamespace(input_tokens=5),
+                    model="claude-sonnet-4-20250514",
+                ),
+            )
+            yield SimpleNamespace(
+                type="content_block_start",
+                index=0,
+                content_block=SimpleNamespace(type="thinking", thinking="", signature=""),
+            )
+            for piece in ("Weigh ", "the evidence."):
+                yield SimpleNamespace(
+                    type="content_block_delta",
+                    index=0,
+                    delta=SimpleNamespace(type="thinking_delta", thinking=piece),
+                )
+            yield SimpleNamespace(
+                type="content_block_delta",
+                index=0,
+                delta=SimpleNamespace(type="signature_delta", signature="signed"),
+            )
+            yield SimpleNamespace(
+                type="content_block_start",
+                index=1,
+                content_block=SimpleNamespace(type="text", text=""),
+            )
+            yield SimpleNamespace(
+                type="content_block_delta",
+                index=1,
+                delta=SimpleNamespace(type="text_delta", text="Answer"),
+            )
+            yield SimpleNamespace(
+                type="message_delta",
+                delta=SimpleNamespace(stop_reason="end_turn"),
+                usage=SimpleNamespace(output_tokens=7),
+            )
+
+        emitted_text: list[str] = []
+        emitted_reasoning: list[str] = []
+
+        async def emit_text(text: str) -> None:
+            emitted_text.append(text)
+
+        async def emit_reasoning(text: str) -> None:
+            emitted_reasoning.append(text)
+
+        with patch("dlightrag.engine.ai.providers.anthropic_native.AsyncAnthropic") as sdk:
+            sdk.return_value.messages.create = AsyncMock(return_value=fake_stream())
+            cast(Any, p)._client = None
+            turn = await p.complete_tool_turn_streaming(
+                [{"role": "user", "content": "latest inflation"}],
+                "claude-sonnet-4-20250514",
+                tools=[],
+                emit_text=emit_text,
+                emit_reasoning=emit_reasoning,
+            )
+
+        assert emitted_text == ["Answer"]
+        assert emitted_reasoning == ["Weigh ", "the evidence."]
+        assert turn.text == "Answer"
+        assert turn.reasoning == "Weigh the evidence."
 
     @pytest.mark.asyncio
     async def test_complete_routes_thinking_to_top_level(self):
@@ -1088,6 +1159,53 @@ class TestOpenAICompatibleProvider:
         mock_client.return_value.chat.completions.create.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_response_streaming_tool_turn_publishes_reasoning_deltas(self):
+        p = get_provider("openai", api_key="test-key", api_family="response")
+        message = SimpleNamespace(
+            id="msg-1",
+            type="message",
+            status="completed",
+            role="assistant",
+            content=[SimpleNamespace(type="output_text", text="Answer")],
+        )
+        response = SimpleNamespace(
+            status="completed",
+            output=[message],
+            usage=SimpleNamespace(input_tokens=1, output_tokens=2),
+        )
+        stream = _ResponseEventStream(
+            [
+                _response_event("response.reasoning_summary_text.delta", delta="Check "),
+                _response_event("response.reasoning_text.delta", delta="the page."),
+                _response_event("response.output_text.delta", delta="Answer"),
+                _response_event("response.output_item.done", output_index=0, item=message),
+                _response_event("response.completed", response=response),
+            ]
+        )
+        emitted_text: list[str] = []
+        emitted_reasoning: list[str] = []
+
+        async def emit_text(text: str) -> None:
+            emitted_text.append(text)
+
+        async def emit_reasoning(text: str) -> None:
+            emitted_reasoning.append(text)
+
+        with patch.object(p, "_get_client") as mock_client:
+            mock_client.return_value.responses.create = AsyncMock(return_value=stream)
+            turn = await p.complete_tool_turn_streaming(
+                [{"role": "user", "content": "hi"}],
+                "gpt-5.4",
+                tools=[],
+                emit_text=emit_text,
+                emit_reasoning=emit_reasoning,
+            )
+
+        assert emitted_text == ["Answer"]
+        assert emitted_reasoning == ["Check ", "the page."]
+        assert turn.text == "Answer"
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("entrypoint", ["stream", "stream_tool_text"])
     async def test_response_text_stream_entrypoints_share_terminal_usage(
         self, entrypoint: str
@@ -1491,6 +1609,56 @@ class TestOpenAICompatibleProvider:
         assert turn.usage_details == {"prompt_tokens": 4, "completion_tokens": 3}
 
     @pytest.mark.asyncio
+    async def test_complete_tool_turn_streaming_publishes_reasoning_deltas(self):
+        p = get_provider("openai", api_key="test-key")
+
+        def chunk(*, content: str | None, reasoning: str | None):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content=content,
+                            model_extra=(
+                                None if reasoning is None else {"reasoning_content": reasoning}
+                            ),
+                            tool_calls=None,
+                        ),
+                        finish_reason=None,
+                    )
+                ],
+                usage=None,
+            )
+
+        async def fake_stream():
+            yield chunk(content=None, reasoning="Think ")
+            yield chunk(content=None, reasoning="again.")
+            yield chunk(content="Answer", reasoning=None)
+            yield SimpleNamespace(choices=[], usage=None)
+
+        emitted_text: list[str] = []
+        emitted_reasoning: list[str] = []
+
+        async def emit_text(text: str) -> None:
+            emitted_text.append(text)
+
+        async def emit_reasoning(text: str) -> None:
+            emitted_reasoning.append(text)
+
+        with patch.object(p, "_open_stream", AsyncMock(return_value=fake_stream())):
+            turn = await p.complete_tool_turn_streaming(
+                [{"role": "user", "content": "q"}],
+                "mimo-v2.6-flash",
+                tools=[],
+                emit_text=emit_text,
+                emit_reasoning=emit_reasoning,
+            )
+
+        assert emitted_text == ["Answer"]
+        assert emitted_reasoning == ["Think ", "again."]
+        assert turn.text == "Answer"
+        assert turn.reasoning == "Think again."
+
+    @pytest.mark.asyncio
     async def test_stream_captures_usage_and_cost_from_final_chunk(self):
         p = get_provider("openai", api_key="test-key")
         holder: dict[str, Any] = {}
@@ -1887,6 +2055,63 @@ class TestGeminiProvider:
         mock_client.aio.aclose.assert_awaited_once()
         assert cast(Any, p)._client is None
 
+    @pytest.mark.asyncio
+    async def test_streaming_tool_turn_publishes_thought_summary_deltas(self):
+        from tests.unit.test_gemini_interactions import (
+            _CREATED,
+            _bind,
+            _completed,
+            _delta,
+            _Gemini,
+            _sse,
+            _start,
+            _stop,
+        )
+
+        events = [
+            _CREATED,
+            _start(
+                0,
+                {
+                    "signature": "",
+                    "summary": [{"text": "Page 2 holds ", "type": "text"}],
+                    "type": "thought",
+                },
+            ),
+            _delta(0, type="thought_summary", content={"type": "text", "text": "the table."}),
+            _delta(0, type="thought_signature", signature="signed"),
+            _stop(0),
+            _start(1, {"content": [{"text": "Answer", "type": "text"}], "type": "model_output"}),
+            _stop(1),
+            _completed(),
+        ]
+        provider = get_provider("gemini", api_key="test-key")
+        _bind(provider, _Gemini(_sse(*events)))
+        emitted_text: list[str] = []
+        emitted_reasoning: list[str] = []
+
+        async def emit_text(text: str) -> None:
+            emitted_text.append(text)
+
+        async def emit_reasoning(text: str) -> None:
+            emitted_reasoning.append(text)
+
+        try:
+            turn = await provider.complete_tool_turn_streaming(
+                [{"role": "user", "content": "q"}],
+                "gemini-4-hydrogen",
+                tools=[],
+                emit_text=emit_text,
+                emit_reasoning=emit_reasoning,
+            )
+        finally:
+            await provider.aclose()
+
+        assert emitted_text == ["Answer"]
+        assert emitted_reasoning == ["Page 2 holds ", "the table."]
+        assert turn.text == "Answer"
+        assert turn.reasoning == "Page 2 holds the table."
+
 
 async def test_empty_tool_calls_arrays_are_stripped_for_strict_endpoints():
     messages = [
@@ -2012,6 +2237,62 @@ class TestProviderUsageDialects:
         assert usage_counters(record) == {"prompt_tokens": 18_211, "prompt_cache_hit_tokens": 384}
         assert provider_input_tokens(usage_counters(record)) == 18_211
         assert provider_cache_hit_tokens(usage_counters(record)) == 384
+
+    @pytest.mark.parametrize(
+        ("usage", "expected"),
+        [
+            # A total counter already includes whatever the cache served.
+            (
+                {
+                    "prompt_tokens": 673,
+                    "completion_tokens": 39,
+                    "total_tokens": 712,
+                    "prompt_tokens_details.cached_tokens": 512,
+                },
+                {"input": 673, "cache_read_input_tokens": 512, "output": 39, "total": 712},
+            ),
+            # Anthropic states its cache siblings beside input_tokens, so the
+            # prompt is the sum and the cache read is a named subset of it.
+            (
+                {
+                    "input_tokens": 100,
+                    "cache_creation_input_tokens": 61,
+                    "cache_read_input_tokens": 512,
+                    "output_tokens": 39,
+                },
+                {"input": 673, "cache_read_input_tokens": 512, "output": 39, "total": 712},
+            ),
+        ],
+    )
+    def test_the_cache_read_is_inside_the_prompt_the_registry_describes(
+        self, usage: dict[str, int], expected: dict[str, int]
+    ) -> None:
+        """`gen_ai.usage.input_tokens` "SHOULD include all types of input tokens".
+
+        The exclusive count a price table prices at the uncached rate stays
+        derivable — ``input - cache_read_input_tokens`` — but it is not a key the
+        wire redefines, because a consumer that sums ``input`` across spans must
+        get the prompt total.
+        """
+        buckets = provider_usage_buckets(usage)
+
+        assert buckets == expected
+        assert buckets["cache_read_input_tokens"] < buckets["input"]
+        assert buckets["input"] - buckets["cache_read_input_tokens"] == 161
+        assert buckets["total"] == buckets["input"] + buckets["output"]
+
+    def test_a_measured_miss_carries_no_cache_read_key(self) -> None:
+        buckets = provider_usage_buckets(
+            {
+                "prompt_tokens": 3911,
+                "completion_tokens": 254,
+                "total_tokens": 4165,
+                "prompt_cache_hit_tokens": 0,
+                "prompt_cache_miss_tokens": 3911,
+            }
+        )
+
+        assert buckets == {"input": 3911, "output": 254, "total": 4165}
 
     def test_counters_pass_through_and_unstated_usage_stays_unstated(self) -> None:
         assert usage_counters({"prompt_tokens": 4_096}) == {"prompt_tokens": 4_096}

@@ -18,9 +18,11 @@ import logging
 import random
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
-from typing import Any, Protocol, assert_never
+from dataclasses import dataclass
+from typing import Any, Literal, Protocol, assert_never
 
 from dlightrag.engine.dependencies import DependencyRetriesExhausted
+from dlightrag.engine.runtime.agentspace import AgentspaceHeadCommit
 from dlightrag.engine.runtime.contracts import RunKind, RunLane, RunPhase
 from dlightrag.engine.runtime.errors import RunExecutionError
 from dlightrag.engine.runtime.records import (
@@ -56,15 +58,24 @@ _MAINTENANCE_JITTER_FRACTION = 0.1
 _MAINTENANCE_BATCH_PAUSE_SECONDS = 0.05
 #: How long a graceful shutdown waits for writes that were already in flight.
 SHUTDOWN_WRITE_GRACE_SECONDS = 5.0
-#: Coalescing bounds for durable token batches: a batch is committed as soon
-#: as it reaches the character bound or, via the run's scheduled flush, no
-#: later than the wall-clock bound after its first token even if the provider
-#: stalls.
+#: Coalescing bounds for durable text batches (tokens and reasoning share them): a
+#: batch is committed as soon as it reaches the character bound or, via the run's
+#: scheduled flush, no later than the wall-clock bound after its first token even if
+#: the provider stalls.
 TOKEN_BATCH_CHARS = 512
 TOKEN_BATCH_SECONDS = 0.25
 
 _RUN_EXECUTION_FAILED = "run_execution_failed"
 _RUN_EXECUTION_FAILED_MESSAGE = "Run execution failed."
+
+
+def _stop_reason(result: Mapping[str, Any]) -> str | None:
+    """The success result's trace stop reason, when its executor recorded one."""
+    trace = result.get("trace")
+    if not isinstance(trace, Mapping):
+        return None
+    reason = trace.get("agent_stop_reason")
+    return reason if isinstance(reason, str) and reason else None
 
 
 def _startup_jitter(cadence: float) -> float:
@@ -115,7 +126,7 @@ class RunExecutor(Protocol):
     async def execute(self, session: RunSession) -> RunExecutionOutcome: ...
 
 
-class RunWorkspaceReclaimer(Protocol):
+class RunAgentspaceReclaimer(Protocol):
     """Removes per-run working trees once no Run will use them again.
 
     Runtime stays filesystem-neutral: it reports deleted identities and asks,
@@ -141,12 +152,14 @@ class RunSession:
 
     Token durability: the first buffered token arms one wall-clock flush timer,
     so a stalled provider's text still lands within ``TOKEN_BATCH_SECONDS``.
-    ``self._lane`` is the one serialization lane for token-buffer mutation,
-    token writes, and control writes; the timer and executor race only through
-    it, which keeps every batch whole and ordered before any control or terminal
-    event. A timer failure is latched and re-raised at the
-    next session boundary; ``aclose`` joins or cancels the timer and is called
-    on every coordinator exit path.
+    Reasoning text is buffered and committed the same way in a second buffer, in
+    arrival order with tokens: before either channel buffers text it commits what
+    the other one holds, so a reader never sees a batch of one cross a batch of the
+    other. ``self._lane`` is the one serialization lane for text-buffer mutation,
+    writes, and control writes; the timer and executor race only through it, which
+    keeps every batch whole and ordered before any control or terminal event. A
+    timer failure is latched and re-raised at the next session boundary; ``aclose``
+    joins or cancels the timer and is called on every coordinator exit path.
     """
 
     def __init__(
@@ -163,6 +176,7 @@ class RunSession:
         run = claimed.run
         self.owner_id = execution.owner_id
         self.run_id = execution.run_id
+        self.run_kind: RunKind = run.run_kind
         self.worker_id = execution.worker_id
         self.fencing_epoch = execution.fencing_epoch
         self.durable_progress_version = run.durable_progress_version
@@ -182,6 +196,8 @@ class RunSession:
         self._lane = asyncio.Lock()
         self._pending_tokens: list[str] = []
         self._pending_chars = 0
+        self._pending_reasoning: list[str] = []
+        self._pending_reasoning_chars = 0
         self._flush_deadline: float | None = None
         self._flush_task: asyncio.Task[None] | None = None
         self._background_failure: Exception | None = None
@@ -189,6 +205,9 @@ class RunSession:
         # regenerated output must clear it before the first new token.
         self._reset_pending = run.next_event_sequence > 1
         self.pending_publications: list[PendingPublication] = []
+        #: The one workspace-head commit this Run may make if it settles succeeded; the
+        #: executor stages the tree, the terminal transaction applies the pointer.
+        self.pending_workspace_head: AgentspaceHeadCommit | None = None
 
     # -- state ---------------------------------------------------------
     @property
@@ -291,6 +310,9 @@ class RunSession:
             # The timer can latch a failure while the executor is idle.  Check
             # before mutating the buffer so text is never accepted after that.
             self._guard()
+            # A model turn streams its reasoning before its answer; committing the
+            # other channel first keeps the durable order the reader saw.
+            await self._flush_reasoning_locked()
             self._pending_tokens.append(text)
             self._pending_chars += len(text)
             now = asyncio.get_running_loop().time()
@@ -301,7 +323,27 @@ class RunSession:
                     name=f"run-token-flush:{self.run_id}",
                 )
             if self._pending_chars >= TOKEN_BATCH_CHARS or now >= self._flush_deadline:
-                await self._flush_locked()
+                await self._flush_tokens_locked()
+        await self.check_cancelled()
+
+    async def emit_reasoning(self, text: str) -> None:
+        """Buffer the model's reasoning text under the token age and size bounds."""
+        if not text:
+            return
+        async with self._lane:
+            self._guard()
+            await self._flush_tokens_locked()
+            self._pending_reasoning.append(text)
+            self._pending_reasoning_chars += len(text)
+            now = asyncio.get_running_loop().time()
+            if self._flush_deadline is None:
+                self._flush_deadline = now + TOKEN_BATCH_SECONDS
+                self._flush_task = asyncio.create_task(
+                    self._flush_timer(self._flush_deadline),
+                    name=f"run-reasoning-flush:{self.run_id}",
+                )
+            if self._pending_reasoning_chars >= TOKEN_BATCH_CHARS or now >= self._flush_deadline:
+                await self._flush_reasoning_locked()
         await self.check_cancelled()
 
     async def reset_output(self) -> None:
@@ -352,6 +394,51 @@ class RunSession:
             await self._flush_locked()
 
     async def _flush_locked(self) -> None:
+        """Commit every buffered batch in arrival order; caller holds ``_lane``."""
+        await self._flush_reasoning_locked()
+        await self._flush_tokens_locked()
+
+    async def _flush_reasoning_locked(self) -> None:
+        """Commit the buffered reasoning batch; caller holds ``_lane``."""
+        if not self._pending_reasoning:
+            return
+        text = "".join(self._pending_reasoning)
+        await self._disarm_timer_locked()
+        try:
+            if self._reset_pending:
+                await self._fenced(
+                    self._store.append_event(
+                        owner_id=self.owner_id,
+                        run_id=self.run_id,
+                        worker_id=self.worker_id,
+                        fencing_epoch=self.fencing_epoch,
+                        phase=None,
+                        event_type="reset",
+                        payload={},
+                    )
+                )
+                self._reset_pending = False
+            await self._fenced(
+                self._store.append_event(
+                    owner_id=self.owner_id,
+                    run_id=self.run_id,
+                    worker_id=self.worker_id,
+                    fencing_epoch=self.fencing_epoch,
+                    phase=None,
+                    event_type="reasoning",
+                    payload={"text": text},
+                )
+            )
+        except Exception as exc:
+            # As with a token batch, the commit state is unknown after a storage
+            # failure: keep the text for diagnosis and latch instead of retrying.
+            self._background_failure = exc
+            raise
+        self._pending_reasoning.clear()
+        self._pending_reasoning_chars = 0
+        self._flush_deadline = None
+
+    async def _flush_tokens_locked(self) -> None:
         """Commit the buffered batch as one reset+token pair; caller holds ``_lane``."""
         if not self._pending_tokens:
             return
@@ -399,7 +486,9 @@ class RunSession:
             await self._token_flush_sleep(delay)
             async with self._lane:
                 self._guard()
-                if self._flush_deadline == deadline and self._pending_tokens:
+                if self._flush_deadline == deadline and (
+                    self._pending_tokens or self._pending_reasoning
+                ):
                     await self._flush_locked()
         except asyncio.CancelledError:
             raise
@@ -441,6 +530,8 @@ class RunSession:
             else:
                 self._pending_tokens.clear()
                 self._pending_chars = 0
+                self._pending_reasoning.clear()
+                self._pending_reasoning_chars = 0
                 self._flush_deadline = None
             self._sealed = True
         if failure is not None:
@@ -461,6 +552,28 @@ class RunSession:
             self._notify()
 
 
+@dataclass(frozen=True, slots=True)
+class SettledRun:
+    """One Run that reached a terminal state, as the settlement observer is told of it.
+
+    The observer hears success, failure and cancellation alike, because a goal round's settlement
+    decides whether the goal continues, pauses or blocks. It is called after the terminal commit
+    and is synchronous and schedule-only: it may start a task but never waits on the Run it is
+    told about.
+
+    ``stop_reason`` is the success result's trace stop reason (``agent_stop_reason``) when the
+    executor recorded one; failure and cancellation carry ``None``. The goal driver reads it to
+    tell a round that ended on the model token limit from one that finished normally.
+    """
+
+    owner_id: str
+    run_id: str
+    run_kind: RunKind
+    status: Literal["succeeded", "failed", "cancelled"]
+    error_kind: str | None = None
+    stop_reason: str | None = None
+
+
 class RunCoordinator:
     """Schedule, execute, and finalize this process's durable runs."""
 
@@ -475,7 +588,7 @@ class RunCoordinator:
         heartbeat_seconds: float = RUN_HEARTBEAT_SECONDS,
         sweep_seconds: float = SWEEP_SECONDS,
         maintenance_seconds: float = MAINTENANCE_SECONDS,
-        workspace_reclaimers: Sequence[RunWorkspaceReclaimer] = (),
+        workspace_reclaimers: Sequence[RunAgentspaceReclaimer] = (),
         _token_flush_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         if query_worker_concurrency < 1:
@@ -491,9 +604,6 @@ class RunCoordinator:
             "query": tuple(kind for kind in self._run_kinds if kind != "corpus_mutation"),
             "corpus_mutation": tuple(kind for kind in self._run_kinds if kind == "corpus_mutation"),
         }
-        self._lanes: tuple[RunLane, ...] = tuple(
-            lane for lane, kinds in self._lane_kinds.items() if kinds
-        )
         self._query_worker_concurrency = int(query_worker_concurrency)
         self._corpus_mutation_worker_concurrency = int(corpus_mutation_worker_concurrency)
         self._worker_id = worker_id or f"run-worker-{uuid.uuid4().hex}"
@@ -501,6 +611,9 @@ class RunCoordinator:
         self._sweep_seconds = sweep_seconds
         self._maintenance_seconds = maintenance_seconds
         self._workspace_reclaimers = tuple(workspace_reclaimers)
+        # Told the owner, Run and terminal status of every terminal Run, on every path a
+        # Run reaches one; each schedules and returns, and names no kind of follow-up work.
+        self._settled_observers: list[Callable[[SettledRun], None]] = []
         # Private deterministic test seam; production always uses asyncio.sleep
         # with the fixed TOKEN_BATCH_SECONDS bound.
         self._token_flush_sleep = _token_flush_sleep
@@ -531,10 +644,6 @@ class RunCoordinator:
     @property
     def worker_id(self) -> str:
         return self._worker_id
-
-    @property
-    def active_runs(self) -> tuple[str, ...]:
-        return tuple(self._runs)
 
     @property
     def is_started(self) -> bool:
@@ -708,12 +817,19 @@ class RunCoordinator:
             await asyncio.sleep(self._maintenance_seconds)
 
     async def _maintain_once(self) -> None:
-        """Drain both retention passes.
+        """Drain every retention pass.
 
         Each pass is a bounded batch that strictly shrinks its own candidate set,
         so draining is finite; pausing between batches keeps a large backlog from
         monopolizing the pool, and a transient fault defers only the remainder.
+        What a finished Run no longer needs goes first — its Evidence log, then the
+        working state its children ran on — before the event logs are trimmed and Runs
+        are pruned, so what the database holds shrinks in the order it was written.
         """
+        while await self._store.compact_evidence_logs() > 0:
+            await asyncio.sleep(_MAINTENANCE_BATCH_PAUSE_SECONDS)
+        while await self._store.clear_finished_run_working_state() > 0:
+            await asyncio.sleep(_MAINTENANCE_BATCH_PAUSE_SECONDS)
         while await self._store.trim_expired_event_logs() > 0:
             await asyncio.sleep(_MAINTENANCE_BATCH_PAUSE_SECONDS)
         while True:
@@ -793,6 +909,13 @@ class RunCoordinator:
                 await session.aclose()
                 self._broker.notify(session.owner_id, session.run_id)
                 self._wake.set()
+                terminal_status = outcome.terminal.status
+                if outcome.terminal.committed and terminal_status in {
+                    "succeeded",
+                    "failed",
+                    "cancelled",
+                }:
+                    self._settled(session, terminal_status)  # type: ignore[arg-type]
             else:
                 assert_never(outcome)
         except asyncio.CancelledError:
@@ -870,6 +993,33 @@ class RunCoordinator:
             if renewal.cancel_requested:
                 session.observe_cancellation()
 
+    def observe_settled(self, observer: Callable[[SettledRun], None]) -> None:
+        """Add a settlement observer before the coordinator starts; each is contained separately."""
+        self._settled_observers.append(observer)
+
+    def _settled(
+        self,
+        session: RunSession,
+        status: Literal["succeeded", "failed", "cancelled"],
+        error_kind: str | None = None,
+        *,
+        stop_reason: str | None = None,
+    ) -> None:
+        """Tell every settlement observer a Run is terminal; their failure is never the Run's."""
+        settled = SettledRun(
+            owner_id=session.owner_id,
+            run_id=session.run_id,
+            run_kind=session.run_kind,
+            status=status,
+            error_kind=error_kind,
+            stop_reason=stop_reason,
+        )
+        for observer in self._settled_observers:
+            try:
+                observer(settled)
+            except Exception:
+                logger.warning("Run %s settlement observer failed", session.run_id, exc_info=True)
+
     async def _finish_success(self, session: RunSession, result: Mapping[str, Any]) -> None:
         if session.lease_lost:
             return
@@ -881,11 +1031,14 @@ class RunCoordinator:
                 fencing_epoch=session.fencing_epoch,
                 result=result,
                 publications=tuple(session.pending_publications),
+                workspace_head=session.pending_workspace_head,
             )
         )
         self._broker.notify(session.owner_id, session.run_id)
         if not outcome.committed:
             session.observe_lease_loss()
+            return
+        self._settled(session, "succeeded", stop_reason=_stop_reason(result))
 
     async def _finish_failure(
         self,
@@ -915,6 +1068,7 @@ class RunCoordinator:
                 )
             )
         self._broker.notify(session.owner_id, session.run_id)
+        self._settled(session, "failed", kind)
 
     async def _finish_cancelled(self, session: RunSession) -> None:
         with contextlib.suppress(Exception):
@@ -930,6 +1084,7 @@ class RunCoordinator:
             )
         )
         self._broker.notify(session.owner_id, session.run_id)
+        self._settled(session, "cancelled")
 
     async def _release(self, session: RunSession) -> None:
         """Requeue owned work on shutdown; this is not crash recovery."""
@@ -949,6 +1104,7 @@ class RunCoordinator:
 
 __all__ = [
     "MAINTENANCE_SECONDS",
+    "SettledRun",
     "RUN_HEARTBEAT_SECONDS",
     "SHUTDOWN_WRITE_GRACE_SECONDS",
     "SWEEP_SECONDS",
@@ -957,7 +1113,7 @@ __all__ = [
     "DurableWrites",
     "RunCoordinator",
     "RunExecutor",
-    "RunWorkspaceReclaimer",
+    "RunAgentspaceReclaimer",
     "LeaseLostError",
     "RunCancellationObserved",
     "RunSession",

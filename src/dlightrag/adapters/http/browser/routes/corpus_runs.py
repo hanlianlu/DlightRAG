@@ -15,11 +15,11 @@ from dlightrag.adapters.http.browser.deps import (
 )
 from dlightrag.adapters.http.browser.file_models import WebCorpusRunReceipt, WebCorpusRunStatus
 from dlightrag.adapters.http.streaming.answer_stream import (
-    follow_run_frames,
+    follow_frames,
     resume_cursor,
     sse_frame,
 )
-from dlightrag.application.access import (
+from dlightrag.application.access.control import (
     AccessDeniedError,
     corpus_mutation_access_action,
 )
@@ -166,7 +166,7 @@ async def stream_corpus_run_events(run_id: str, request: Request) -> StreamingRe
         after_sequence=resume_cursor(request),
     )
     return StreamingResponse(
-        follow_run_frames(events, _corpus_frame),
+        follow_frames(events, _corpus_frame),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

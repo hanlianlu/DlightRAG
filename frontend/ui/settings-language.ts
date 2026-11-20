@@ -24,7 +24,7 @@ export function languageLabel(preference: LanguagePreference): string {
   }
 }
 
-export class DlSettingsLanguage extends LightElement {
+class DlSettingsLanguage extends LightElement {
   static properties = {
     preference: {state: true},
   };

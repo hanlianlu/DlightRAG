@@ -8,7 +8,7 @@ from pydantic import ValidationError
 
 from dlightrag.adapters.http.rest.models import MetadataFilterRequest
 from dlightrag.adapters.http.rest.payloads import metadata_filter_from_payload
-from dlightrag.engine.rag.retrieval import MetadataFilter
+from dlightrag.engine.rag.retrieval.models import MetadataFilter
 
 
 class TestMetadataFilter:

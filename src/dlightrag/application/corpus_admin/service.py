@@ -12,7 +12,7 @@ from typing import Annotated, Any, Literal, Protocol, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from dlightrag.application.access import WorkspaceRecord
+from dlightrag.application.access.workspaces import WorkspaceRecord
 from dlightrag.application.errors import (
     StorageSchemaError,
     WorkspaceWriteFencedError,
@@ -36,10 +36,10 @@ from dlightrag.engine.rag.corpus.downloads import (
     SourceDownloadUnavailableError as _EngineSourceDownloadUnavailableError,
 )
 from dlightrag.engine.rag.corpus.ingestion.uploads import safe_upload_basename
-from dlightrag.engine.rag.retrieval import MetadataFilter
 from dlightrag.engine.rag.retrieval.metadata_fields import (
     MetadataValidationError as _EngineMetadataValidationError,
 )
+from dlightrag.engine.rag.retrieval.models import MetadataFilter
 from dlightrag.engine.rag.workspace.pool import WorkspacePool
 from dlightrag.engine.rag.workspace.ports import (
     CorpusMaintenanceStore,

@@ -1,32 +1,40 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 348" width="980" height="348" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 640" width="1000" height="640" lang="en" role="img" aria-labelledby="title" aria-describedby="desc">
   <title id="title">DlightRAG system overview</title>
-  <desc id="desc">A browser reaches dlightrag-api through an optional authenticating edge; REST and MCP clients reach dlightrag-api and dlightrag-mcp directly. An identity provider supplies the signing keys DlightRAG verifies tokens with. DlightRAG, including an optional read replica, keeps its state in PostgreSQL 18 and a working directory, and calls outside services.</desc>
+  <desc id="desc">DlightRAG's deployment and its neighbours. A browser enters through an optional ingress / authenticating edge that resolves Web identity, to dlightrag-api; REST and MCP clients reach dlightrag-api and dlightrag-mcp directly. An optional identity provider supplies signing keys to the deployment. Every service process uses the same PostgreSQL 18 primary and the shared working directory; trusted Research processes also mount the Agentspace root and the separate global and per-owner Skills roots. dlightrag-reader is an optional role that reads the corpus and writes operational state over the same primary. A Research Run leases a member of the Agent Browser pool; each member sits on an internal network of its own and reaches the public Web only through the Agent Browser egress Squid proxy. DlightRAG reaches a parser outside its app container (MinerU on a host or in the cloud, or Docling by profile), outside services (model providers and web search, owners' Personal MCP Connections, corpus sources on S3, Azure, or URLs, an optional Agent Mailbox bucket with mail routing, and an optional writer-only Milvus/Zilliz vector leg), and an optional ClickStack (ClickHouse and HyperDX) stack exported over OTLP.</desc>
   <style>
     text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; text-anchor: middle; }
     .title { font-size: 13px; font-weight: 600; fill: #1c1917; }
     .name { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px; font-weight: 600; fill: #1c1917; }
     .sub { font-size: 11.5px; fill: #57534e; }
-    .tag { font-size: 11px; fill: #78716c; }
-    .group { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; fill: #7e6c37; text-anchor: start; }
+    .note { font-size: 11px; fill: #78716c; text-anchor: start; }
+    .layer { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; fill: #7e6c37; text-anchor: start; }
+    .start { text-anchor: start; }
+    .mid { text-anchor: middle; }
+    .bg { fill: #ffffff; }
+    .band { fill: #fafaf9; stroke: #e7e5e4; }
     .node { fill: #ffffff; stroke: #c8c2bc; }
+    .node.legend { fill: #fafaf9; stroke: #e7e5e4; }
     .core { fill: #fbf7ec; stroke: #b39b52; }
     .store { fill: #f5f5f4; stroke: #a8a29e; }
-    .boundary { fill: #fdfbf6; stroke: #c9b37a; stroke-dasharray: 6 4; }
+    .boundary { fill: #fdfbf6; stroke: #c9b37a; }
     .optional { stroke-dasharray: 4 3; }
     .wire { fill: none; stroke: #8a837d; stroke-width: 1.5; }
     .dashed { stroke-dasharray: 4 3; }
-    .head, .dot { fill: #8a837d; }
+    .head { fill: #8a837d; }
     @media (prefers-color-scheme: dark) {
+      .bg { fill: #0c0a09; }
       .title, .name { fill: #e7e5e4; }
-      .sub { fill: #a8a29e; }
-      .tag { fill: #8a837d; }
-      .group { fill: #d2b661; }
-      .node { fill: #1c1917; stroke: #57534e; }
-      .core { fill: #2a2415; stroke: #b39b52; }
-      .store { fill: #231f1d; stroke: #78716c; }
-      .boundary { fill: #16130f; stroke: #8f7b40; }
-      .wire { stroke: #8a837d; }
-      .head, .dot { fill: #8a837d; }
+      .sub { fill: #b8b1a9; }
+      .note { fill: #a8a29e; }
+      .layer { fill: #d2b661; }
+      .band { fill: #141210; stroke: #4a443e; }
+      .node { fill: #1c1917; stroke: #6f6862; }
+      .node.legend { fill: #141210; stroke: #4a443e; }
+      .core { fill: #2a2415; stroke: #c2a85c; }
+      .store { fill: #231f1d; stroke: #9a9189; }
+      .boundary { fill: #17140e; stroke: #c2a85c; }
+      .wire { stroke: #a8a29e; }
+      .head { fill: #a8a29e; }
     }
   </style>
   <defs>
@@ -35,57 +43,121 @@
     </marker>
   </defs>
 
+  <rect class="bg" x="0" y="0" width="100%" height="100%"/>
+
   <!-- Callers -->
-  <rect class="node" x="24" y="72" width="168" height="48" rx="24"/>
-  <text class="title" x="108" y="101">Browser</text>
-  <rect class="node" x="24" y="160" width="168" height="48" rx="24"/>
-  <text class="title" x="108" y="189">REST and MCP clients</text>
+  <rect class="node" x="24" y="58" width="152" height="48" rx="8"/>
+  <text class="title" x="100" y="86.5">Browser</text>
+  <rect class="node" x="24" y="130" width="152" height="48" rx="8"/>
+  <text class="title" x="100" y="158.5">REST and MCP clients</text>
 
-  <!-- Identity -->
-  <rect class="node optional" x="228" y="68" width="160" height="56" rx="10"/>
-  <text class="title" x="308" y="92">Authenticating edge</text>
-  <text class="sub" x="308" y="110">optional</text>
-  <rect class="node" x="228" y="248" width="160" height="48" rx="10"/>
-  <text class="title" x="308" y="277">Identity provider</text>
+  <!-- Ingress: optional, in front of the API -->
+  <rect class="node optional" x="200" y="54" width="200" height="56" rx="8"/>
+  <text class="title" x="300" y="76">Ingress / authenticating edge</text>
+  <text class="sub" x="300" y="94">optional · Web identity</text>
 
-  <!-- DlightRAG -->
-  <rect class="boundary" x="464" y="24" width="240" height="300" rx="14"/>
-  <text class="group" x="484" y="48">DLIGHTRAG</text>
-  <rect class="core" x="484" y="68" width="200" height="56" rx="10"/>
-  <text class="name" x="584" y="92">dlightrag-api</text>
-  <text class="sub" x="584" y="110">REST · Web</text>
-  <rect class="core" x="484" y="156" width="200" height="56" rx="10"/>
-  <text class="name" x="584" y="180">dlightrag-mcp</text>
-  <text class="sub" x="584" y="198">MCP</text>
-  <rect class="core optional" x="484" y="244" width="200" height="56" rx="10"/>
-  <text class="name" x="584" y="268">dlightrag-reader</text>
-  <text class="sub" x="584" y="286">read replica · optional</text>
+  <!-- Identity provider: dashed border and dashed arrow mean optional and signing keys -->
+  <rect class="node optional" x="200" y="240" width="200" height="56" rx="8"/>
+  <text class="title" x="300" y="262">Identity provider</text>
+  <text class="sub" x="300" y="280">signing keys · jwt deployments</text>
 
-  <!-- State and outside services -->
-  <path class="store" d="M760,63 A98,7 0 0 1 956,63 V129 A98,7 0 0 1 760,129 Z"/>
-  <path class="store" d="M760,63 A98,7 0 0 0 956,63" fill="none"/>
-  <text class="title" x="858" y="90">PostgreSQL 18</text>
-  <text class="sub" x="858" y="107">corpus · Runs · memory</text>
-  <text class="sub" x="858" y="123">Connections</text>
-  <path class="store" d="M760,155 A98,7 0 0 1 956,155 V213 A98,7 0 0 1 760,213 Z"/>
-  <path class="store" d="M760,155 A98,7 0 0 0 956,155" fill="none"/>
-  <text class="title" x="858" y="184">Working directory</text>
-  <text class="sub" x="858" y="201">corpus files · key ring</text>
-  <rect class="node" x="760" y="228" width="196" height="88" rx="10"/>
-  <text class="title" x="858" y="252">Outside services</text>
-  <text class="sub" x="858" y="270">model providers · parser</text>
-  <text class="sub" x="858" y="286">corpus sources · web search</text>
-  <text class="sub" x="858" y="302">owners' MCP servers</text>
+  <!-- DlightRAG: the deployment's own service processes -->
+  <rect class="boundary" x="424" y="24" width="264" height="272" rx="14"/>
+  <text class="layer" x="440" y="46">DLIGHTRAG</text>
+  <rect class="core" x="440" y="56" width="232" height="52" rx="8"/>
+  <text class="name" x="556" y="76">dlightrag-api</text>
+  <text class="sub" x="556" y="94">REST · Web</text>
+  <rect class="core" x="440" y="128" width="232" height="52" rx="8"/>
+  <text class="name" x="556" y="148">dlightrag-mcp</text>
+  <text class="sub" x="556" y="166">MCP</text>
+  <rect class="core optional" x="440" y="200" width="232" height="52" rx="8"/>
+  <text class="name" x="556" y="220">dlightrag-reader</text>
+  <text class="sub" x="556" y="238">reader role · corpus read-only · optional</text>
+
+  <!-- Shared state: one bus leaves the boundary once and fans to the three stores -->
+  <path class="wire" d="M688,190 H700"/>
+  <path class="wire" d="M700,80 V280"/>
+  <path class="wire" d="M700,80 H758" marker-end="url(#arrow)"/>
+  <path class="wire" d="M700,180 H758" marker-end="url(#arrow)"/>
+  <path class="wire" d="M700,280 H758" marker-end="url(#arrow)"/>
+  <text class="note mid" x="868" y="338">shared by every service process</text>
+
+  <path class="store" d="M760,52 A108,7 0 0 1 976,52 V116 A108,7 0 0 1 760,116 Z"/>
+  <path class="store" d="M760,52 A108,7 0 0 0 976,52" fill="none"/>
+  <text class="title" x="868" y="74">PostgreSQL 18</text>
+  <text class="sub" x="868" y="91">corpus · Runs · Profile Memory</text>
+  <text class="sub" x="868" y="107">Connections · Agent Accounts</text>
+
+  <path class="store" d="M760,152 A108,7 0 0 1 976,152 V216 A108,7 0 0 1 760,216 Z"/>
+  <path class="store" d="M760,152 A108,7 0 0 0 976,152" fill="none"/>
+  <text class="title" x="868" y="174">Working directory</text>
+  <text class="sub" x="868" y="191">corpus files · operator inputs</text>
+  <text class="sub" x="868" y="207">key ring</text>
+
+  <path class="store" d="M760,252 A108,7 0 0 1 976,252 V316 A108,7 0 0 1 760,316 Z"/>
+  <path class="store" d="M760,252 A108,7 0 0 0 976,252" fill="none"/>
+  <text class="title" x="868" y="274">Agentspace root · Skills roots</text>
+  <text class="sub" x="868" y="291">per-Run work · separate mounts</text>
+
+  <!-- Observability: optional ClickStack reached over the always-on OTLP seam -->
+  <path class="wire" d="M660,296 V334 H720 Q728,334 728,342 V380 Q728,388 736,388 H758" marker-end="url(#arrow)"/>
+  <text class="note" x="666" y="330">OTLP</text>
+  <rect class="node optional" x="760" y="352" width="216" height="72" rx="8"/>
+  <text class="title" x="868" y="382">Observability</text>
+  <text class="sub" x="868" y="399">ClickStack (ClickHouse · HyperDX)</text>
+  <text class="sub" x="868" y="415">optional stack · OTLP</text>
+
+  <!-- Agent Browser: each member has its own internal network, one proxy is the only way out -->
+  <rect class="boundary" x="24" y="340" width="436" height="160" rx="14"/>
+  <text class="layer" x="44" y="364">AGENT BROWSER</text>
+  <rect class="core" x="44" y="384" width="220" height="56" rx="8"/>
+  <text class="title" x="154" y="406">Agent Browser pool</text>
+  <text class="sub" x="154" y="424">2 headless · agent-browser-headed</text>
+  <rect class="core" x="284" y="384" width="160" height="56" rx="8"/>
+  <text class="title" x="364" y="406">Agent Browser egress</text>
+  <text class="sub" x="364" y="424">Squid proxy</text>
+  <text class="note" x="44" y="462">one internal network per member;</text>
+  <text class="note" x="44" y="478">the proxy is its only way out</text>
+
+  <!-- Public Web: reachable only through the egress proxy -->
+  <rect class="node" x="300" y="524" width="140" height="52" rx="8"/>
+  <text class="title" x="370" y="554.5">Public Web</text>
+
+  <!-- Parser: outside the app container, host or cloud -->
+  <rect class="node" x="476" y="344" width="236" height="56" rx="8"/>
+  <text class="title" x="594" y="366">Parser</text>
+  <text class="sub" x="594" y="384">MinerU (host or cloud) · Docling (profile)</text>
+  <text class="note" x="476" y="426">outside the app container</text>
+
+  <!-- Outside services: one band of neighbours -->
+  <rect class="band" x="476" y="478" width="500" height="104" rx="12"/>
+  <text class="layer" x="498" y="502">OUTSIDE SERVICES</text>
+  <text class="sub start" x="498" y="526">model providers · web search</text>
+  <text class="sub start" x="498" y="542">owners' Personal MCP Connections</text>
+  <text class="sub start" x="498" y="558">corpus sources (S3 · Azure · URLs)</text>
+  <text class="sub start" x="714" y="526">Agent Mailbox bucket · mail routing (optional)</text>
+  <text class="sub start" x="714" y="542">Milvus/Zilliz writer-only vector leg (optional)</text>
 
   <!-- Wires -->
-  <path class="wire" d="M192,96 H226" marker-end="url(#arrow)"/>
-  <path class="wire" d="M388,96 H482" marker-end="url(#arrow)"/>
-  <path class="wire" d="M192,184 H482" marker-end="url(#arrow)"/>
-  <path class="wire" d="M430,184 V120 Q430,112 438,112 H482" marker-end="url(#arrow)"/>
-  <circle class="dot" cx="430" cy="184" r="2.5"/>
-  <path class="wire dashed" d="M388,272 H462" marker-end="url(#arrow)"/>
-  <text class="tag" x="426" y="264">signing keys</text>
-  <path class="wire" d="M704,96 H758" marker-end="url(#arrow)"/>
-  <path class="wire" d="M704,184 H758" marker-end="url(#arrow)"/>
-  <path class="wire" d="M704,272 H758" marker-end="url(#arrow)"/>
+  <path class="wire" d="M176,82 H198" marker-end="url(#arrow)"/>
+  <path class="wire" d="M400,82 H438" marker-end="url(#arrow)"/>
+  <path class="wire" d="M176,154 H414"/>
+  <path class="wire" d="M414,154 V98 H438" marker-end="url(#arrow)"/>
+  <path class="wire" d="M414,154 H438" marker-end="url(#arrow)"/>
+  <path class="wire dashed" d="M400,268 H422" marker-end="url(#arrow)"/>
+  <path class="wire" d="M444,296 V312 H248 Q240,312 240,320 V338" marker-end="url(#arrow)"/>
+  <path class="wire" d="M468,296 V458 H520 V476" marker-end="url(#arrow)"/>
+  <path class="wire" d="M640,296 V342" marker-end="url(#arrow)"/>
+  <path class="wire" d="M264,412 H282" marker-end="url(#arrow)"/>
+  <path class="wire" d="M364,440 V522" marker-end="url(#arrow)"/>
+
+  <!-- Legend: exactly three meanings -->
+  <rect class="node legend" x="24" y="512" width="216" height="104" rx="12"/>
+  <text class="layer" x="40" y="532">LEGEND</text>
+  <path class="wire" d="M40,556 H70" marker-end="url(#arrow)"/>
+  <text class="note" x="80" y="560">reaches / uses</text>
+  <rect class="node optional" x="40" y="570" width="30" height="16" rx="3"/>
+  <text class="note" x="80" y="582">optional</text>
+  <path class="wire dashed" d="M40,604 H70" marker-end="url(#arrow)"/>
+  <text class="note" x="80" y="608">signing keys</text>
 </svg>

@@ -5,7 +5,6 @@ import logging
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import replace
-from functools import partial
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
@@ -18,11 +17,13 @@ from dlightrag.adapters.http.artifact_delivery import (
     artifact_range,
     artifact_response,
 )
-from dlightrag.adapters.http.browser.answer_events import browser_frame
+from dlightrag.adapters.http.browser.answer_events import ReaderFrameRenderer
 from dlightrag.adapters.http.browser.app_shell import app_html_response
 from dlightrag.adapters.http.browser.attachment_requests import parse_web_answer_request
 from dlightrag.adapters.http.browser.conversation_models import (
     AcceptedAnswer,
+    AnswerDeliveryReceipt,
+    AnswerSubmissionResponse,
     ConversationTurn,
     WebCommandError,
     WebCommandErrorKind,
@@ -30,6 +31,7 @@ from dlightrag.adapters.http.browser.conversation_models import (
 from dlightrag.adapters.http.browser.conversations import (
     WEB_IMAGE_URL_BASE,
     WEB_SOURCE_DOWNLOAD_BASE,
+    project_answer_delivery,
     project_conversation_summary,
     project_conversation_turn,
 )
@@ -45,38 +47,67 @@ from dlightrag.adapters.http.browser.presentation import (
     build_answer_presentation,
 )
 from dlightrag.adapters.http.browser.routes.skills import require_known_skill
-from dlightrag.adapters.http.browser.run_resources import image_rewrites
-from dlightrag.adapters.http.streaming.answer_stream import follow_run_frames, resume_cursor
-from dlightrag.application.access import AccessAction, owner_id_from_user
-from dlightrag.application.answer_runs import (
-    ACTIVITY_PAGE_DEFAULT_LIMIT,
-    ACTIVITY_PAGE_MAX_LIMIT,
-    CHILD_ROSTER_PAGE_DEFAULT_LIMIT,
-    CHILD_ROSTER_PAGE_MAX_LIMIT,
-    ChildRosterCursorError,
-    ChildRosterPageRequest,
-    child_control_receipt_payload,
-    child_control_succeeded,
+from dlightrag.adapters.http.browser.run_resources import (
+    RUN_RESOURCE_URL_BASE,
+    image_rewrites,
+)
+from dlightrag.adapters.http.streaming.answer_stream import follow_frames, resume_cursor
+from dlightrag.application.access.control import AccessAction
+from dlightrag.application.access.principal import (
+    Principal,
+    owner_id_from_user,
+)
+from dlightrag.application.answer.provenance import (
+    ArtifactAttestation,
+    attest_projected_artifacts,
+    run_attestation,
 )
 from dlightrag.application.answer_runs.artifacts import (
     artifact_descriptor,
     published_artifact_descriptor,
 )
-from dlightrag.application.corpus_admin import workspace_ids_for_names
+from dlightrag.application.answer_runs.child_roster import (
+    CHILD_ROSTER_PAGE_DEFAULT_LIMIT,
+    CHILD_ROSTER_PAGE_MAX_LIMIT,
+    ChildRosterCursorError,
+    ChildRosterPageRequest,
+    stamp,
+)
+from dlightrag.application.answer_runs.service import (
+    ACTIVITY_PAGE_DEFAULT_LIMIT,
+    ACTIVITY_PAGE_MAX_LIMIT,
+    ActiveRunLimitError,
+    child_control_receipt_payload,
+    child_control_succeeded,
+)
+from dlightrag.application.corpus_admin.service import workspace_ids_for_names
 from dlightrag.application.errors import (
     ApplicationConflictError,
     ApplicationInputError,
     ApplicationUnavailableError,
 )
+from dlightrag.application.policies.service import (
+    ANSWER_FEEDBACK,
+)
 from dlightrag.application.runs import IdempotencyKeyConflict, RunAdmissionLimitExceededError
-from dlightrag.application.web_conversations import (
+from dlightrag.application.web_conversations.models import (
+    ConversationSessionBusy,
     ConversationSubmissionConflict,
     LinkedTurn,
+)
+from dlightrag.application.web_conversations.service import (
+    WebAnswerDelivery,
     WebAnswerSubmission,
     WebConversationService,
 )
 from dlightrag.engine.answer.citations.sources import SourceDownloadLinkBuilder
 from dlightrag.engine.answer.errors import AnswerInputError
+from dlightrag.engine.answer.feedback import (
+    FEEDBACK_NOTE_LIMIT,
+    FEEDBACK_REASONS,
+    AnswerFeedback,
+    FeedbackValue,
+)
 from dlightrag.engine.answer.results import (
     project_answer_result,
     project_artifact_sources,
@@ -106,6 +137,25 @@ class _WebChildControl(BaseModel):
     reauthorize_user_cancelled: bool = False
 
 
+# An agent is `main` or a Child Session's id, which is the 36 characters of a UUID. A message's
+# sequence is a PostgreSQL BIGINT, so a larger number would fail the query instead of finding
+# no message.
+_AGENT_ID_LENGTH = 36
+_MAX_SEQUENCE = 2**63 - 1
+
+
+class _WebFeedback(BaseModel):
+    """One reader's judgement of one message. What may be said about it is the Engine's to rule."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    agent: str = Field(min_length=1, max_length=_AGENT_ID_LENGTH)
+    sequence: int = Field(ge=1, le=_MAX_SEQUENCE)
+    value: FeedbackValue
+    reasons: list[str] = Field(default_factory=list, max_length=len(FEEDBACK_REASONS))
+    note: str | None = Field(default=None, max_length=FEEDBACK_NOTE_LIMIT)
+
+
 IdempotencyKey = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=200)]
 
 
@@ -129,18 +179,12 @@ async def design_system_page() -> FileResponse:
     return app_html_response("design-system.html")
 
 
-@page_router.get("/product-showcase", response_class=FileResponse)
-async def product_showcase_page() -> FileResponse:
-    """Serve the product-component showcase entry document."""
-    return app_html_response("product-showcase.html")
-
-
-@router.post("/answer", status_code=202, response_model=AcceptedAnswer)
+@router.post("/answer", status_code=202, response_model=AnswerSubmissionResponse)
 async def start_answer_run(
     request: Request,
     workspace: str = Depends(get_workspace),
     conversation_service: WebConversationService = Depends(get_web_conversation_service),
-) -> AcceptedAnswer:
+) -> AcceptedAnswer | AnswerDeliveryReceipt:
     """Accept one submission as a durable run linked to its conversation entry.
 
     The run, its uploaded bytes, and the conversation turn are committed in one
@@ -157,7 +201,7 @@ async def _start_answer_run(
     request: Request,
     workspace: str,
     conversation_service: WebConversationService,
-) -> AcceptedAnswer:
+) -> AcceptedAnswer | AnswerDeliveryReceipt:
     application = get_application(request)
     cfg = application.config
     # Enforce the probed answer capability at admission (pre-acceptance 4xx).
@@ -190,7 +234,7 @@ async def _start_answer_run(
     for ws in target_workspaces:
         await enforce_web_access(request, AccessAction.WORKSPACE_QUERY, ws)
 
-    submission = await conversation_service.start_answer(
+    submitted = await conversation_service.start_answer(
         getattr(request.state, "user_context", None),
         conversation_id=(str(body.conversation_id) if body.conversation_id is not None else None),
         submission_id=str(body.submission_id),
@@ -200,10 +244,16 @@ async def _start_answer_run(
         mode=mode,
         requested_skill=requested_skill,
         effort=body.effort,
+        delivery=body.delivery,
     )
-    if submission is None:
+    if submitted is None:
         raise _command_error(404, "conversation_missing", "Conversation not found")
-    return await accepted_answer(request, submission)
+    if isinstance(submitted, WebAnswerDelivery):
+        return project_answer_delivery(
+            submitted,
+            mask_reader_text=application.skill_protection.mask,
+        )
+    return await accepted_answer(request, submitted)
 
 
 @router.get("/answer-submissions/{submission_id}", response_model=AcceptedAnswer)
@@ -245,29 +295,15 @@ async def answer_run_status(
                 getattr(request.state, "user_context", None), run_id
             ),
         ),
+        attestation=(
+            await _answer_attestation(
+                request, run_id=run_id, records_pruned=turn.run.events_trimmed_at is not None
+            )
+            if (turn.run.result or {}).get("artifacts")
+            else None
+        ),
+        mask_reader_text=get_application(request).skill_protection.mask,
     )
-
-
-@router.post("/answer/{run_id}/steer", status_code=202)
-async def steer_answer_run(
-    run_id: str,
-    body: _WebAgentControl,
-    request: Request,
-    conversation_service: WebConversationService = Depends(get_web_conversation_service),
-) -> dict[str, Any]:
-    user = getattr(request.state, "user_context", None)
-    if await conversation_service.turn_for_run(user, run_id) is None:
-        raise HTTPException(status_code=404, detail="Answer run not found")
-    receipt = await get_application(request).answers.steer(
-        owner_id=owner_id_from_user(user), run_id=run_id, instruction=body.content
-    )
-    if receipt is None:
-        raise HTTPException(status_code=409, detail="Run is not a live Research session")
-    return {
-        "run_id": receipt.run_id,
-        "control_sequence": receipt.control_sequence,
-        "kind": receipt.kind,
-    }
 
 
 @router.get("/answer/{run_id}/children")
@@ -304,9 +340,12 @@ async def answer_run_children(
         raise HTTPException(status_code=404, detail="Answer run not found")
     return {
         "run_id": run_id,
-        # The Run's own status, so a client can tell a live Run (commands apply)
-        # from a settled one (the server refuses them) without another request.
+        # The Run's own row, stated the way every child row below is: its status and
+        # its clock come from the same record, so a client draws the main agent with
+        # what a child's row is drawn from instead of inventing either.
         "run_status": turn.run.status,
+        "run_started_at": stamp(turn.run.started_at),
+        "run_finished_at": stamp(turn.run.finished_at),
         "children": [dict(child) for child in page.children],
         "next_cursor": (
             answers.child_roster_cursor_codec.encode(page.next_cursor)
@@ -339,6 +378,36 @@ async def observe_answer_child(
     return observation.payload()
 
 
+@router.get("/answer/{run_id}/transcript/search")
+async def answer_run_trace_search(
+    run_id: str,
+    q: Annotated[str, Query(min_length=1, max_length=200)],
+    request: Request,
+    conversation_service: WebConversationService = Depends(get_web_conversation_service),
+) -> dict[str, Any]:
+    """Every message of every agent of one Run that holds ``q``, each in its neighbourhood."""
+    user = getattr(request.state, "user_context", None)
+    if await conversation_service.turn_for_run(user, run_id) is None:
+        raise HTTPException(status_code=404, detail="Answer run not found")
+    answer = await get_application(request).answers.search_run_traces(
+        owner_id=owner_id_from_user(user),
+        run_id=run_id,
+        query=q,
+    )
+    if answer is None:
+        raise HTTPException(status_code=404, detail="Answer run not found")
+    terms, messages, total, matched = answer
+    return {
+        "run_id": run_id,
+        "query": q,
+        # The words the search was for, as the search read them, so the dock marks exactly those.
+        "terms": list(terms),
+        "match": matched,
+        "total": total,
+        "messages": [dict(message) for message in messages],
+    }
+
+
 @router.get("/answer/{run_id}/transcript")
 async def answer_run_activity(
     run_id: str,
@@ -346,9 +415,19 @@ async def answer_run_activity(
     conversation_service: WebConversationService = Depends(get_web_conversation_service),
     child: Annotated[str | None, Query(min_length=1)] = None,
     before: Annotated[int | None, Query(ge=1)] = None,
+    since: Annotated[int | None, Query(ge=1)] = None,
     limit: Annotated[int, Query(ge=1, le=ACTIVITY_PAGE_MAX_LIMIT)] = ACTIVITY_PAGE_DEFAULT_LIMIT,
 ) -> dict[str, Any]:
-    """One page of the Run's main agent transcript, or of the Child named by ``child``."""
+    """One page of the Run's main agent transcript, or of the Child named by ``child``.
+
+    ``since`` reads forward from a sequence instead: the messages written after it, oldest first,
+    which is how a client holding a transcript appends the ones that landed since.
+    """
+    if before is not None and since is not None:
+        raise HTTPException(
+            status_code=422,
+            detail="A transcript read walks back from `before` or forward from `since`, not both",
+        )
     user = getattr(request.state, "user_context", None)
     if await conversation_service.turn_for_run(user, run_id) is None:
         raise HTTPException(status_code=404, detail="Answer run not found")
@@ -358,10 +437,90 @@ async def answer_run_activity(
         child_session_id=child,
         before=before,
         limit=limit,
+        since=since,
     )
     if page is None:
         raise HTTPException(status_code=404, detail="Answer child not found")
     return page.payload()
+
+
+@router.get("/answer/{run_id}/feedback")
+async def answer_run_feedback(
+    run_id: str,
+    request: Request,
+    conversation_service: WebConversationService = Depends(get_web_conversation_service),
+) -> dict[str, Any]:
+    """Whether the reader is offered feedback, and the judgements they gave the messages of a Run.
+
+    The judgements are listed with the Run's own agent first, then each Child, and within an
+    agent the oldest message first. A reader the policy turns feedback off for is told so and
+    given none, and nothing is read.
+    """
+    user = getattr(request.state, "user_context", None)
+    if await conversation_service.turn_for_run(user, run_id) is None:
+        raise HTTPException(status_code=404, detail="Answer run not found")
+    application = get_application(request)
+    if not await application.policies.value_for(ANSWER_FEEDBACK, user):
+        return {"run_id": run_id, "enabled": False, "feedback": []}
+    given = await application.answers.answer_feedback(
+        owner_id=owner_id_from_user(user), run_id=run_id
+    )
+    if given is None:
+        raise HTTPException(status_code=404, detail="Answer run not found")
+    return {"run_id": run_id, "enabled": True, "feedback": [_feedback_view(item) for item in given]}
+
+
+@router.put("/answer/{run_id}/feedback")
+async def record_answer_feedback(
+    run_id: str,
+    body: _WebFeedback,
+    request: Request,
+    conversation_service: WebConversationService = Depends(get_web_conversation_service),
+) -> dict[str, Any]:
+    """Keep the reader's judgement of one message of the Run, replacing an earlier one.
+
+    The Run has to be the reader's own, and the policy has to offer them feedback. Rating one's
+    own answer is the reader's own state, like their history, so it asks for no access to the
+    workspaces the answer searched. Whether the judgement can be kept at all is the Engine's
+    rule, answered as a 422 before the message is looked up.
+    """
+    user = getattr(request.state, "user_context", None)
+    if await conversation_service.turn_for_run(user, run_id) is None:
+        raise HTTPException(status_code=404, detail="Answer run not found")
+    await _require_feedback_offered(request, user)
+    kept = await get_application(request).answers.record_feedback(
+        owner_id=owner_id_from_user(user),
+        run_id=run_id,
+        agent=body.agent,
+        sequence=body.sequence,
+        value=body.value,
+        reasons=body.reasons,
+        note=body.note,
+    )
+    if kept is None:
+        raise HTTPException(status_code=404, detail="Answer message not found")
+    return {"run_id": run_id, **_feedback_view(kept)}
+
+
+@router.delete("/answer/{run_id}/feedback", status_code=204)
+async def retract_answer_feedback(
+    run_id: str,
+    request: Request,
+    agent: Annotated[str, Query(min_length=1, max_length=_AGENT_ID_LENGTH)],
+    sequence: Annotated[int, Query(ge=1, le=_MAX_SEQUENCE)],
+    conversation_service: WebConversationService = Depends(get_web_conversation_service),
+) -> None:
+    """Take the reader's judgement of one message back. One never given is no error.
+
+    The policy is not asked: taking back removes only the reader's own data, so it works for a
+    reader the policy has since turned feedback off for.
+    """
+    user = getattr(request.state, "user_context", None)
+    if await conversation_service.turn_for_run(user, run_id) is None:
+        raise HTTPException(status_code=404, detail="Answer run not found")
+    await get_application(request).answers.retract_feedback(
+        owner_id=owner_id_from_user(user), run_id=run_id, agent=agent, sequence=sequence
+    )
 
 
 @router.post("/answer/{run_id}/children/{child_session_id}/control", status_code=202)
@@ -503,6 +662,7 @@ async def cancel_answer_run(
         replace(turn, run=outcome.run),
         downloadable_workspaces=downloadable,
         visual_workspaces=visual,
+        mask_reader_text=get_application(request).skill_protection.mask,
     )
 
 
@@ -572,7 +732,8 @@ async def answer_artifact_presentation(
     descriptor = artifact_descriptor(turn.run.result, resource_id)
     if not artifact_presentation_available(descriptor):
         raise HTTPException(status_code=404, detail="Artifact presentation not found")
-    blob = await get_application(request).answers.read_artifact(
+    application = get_application(request)
+    blob = await application.answers.read_artifact(
         owner_id=owner_id_from_user(user), run_id=run_id, resource_id=resource_id
     )
     if blob is None:
@@ -590,6 +751,16 @@ async def answer_artifact_presentation(
         image_url_prefix=WEB_IMAGE_URL_BASE,
         run_id=run_id,
         artifact_url_prefix="/web/api/answer",
+        run_resource_prefix=RUN_RESOURCE_URL_BASE,
+        mask_reader_text=application.skill_protection.mask,
+    )
+    projected = await attest_projected_artifacts(
+        projected,
+        runs=application.runs,
+        config=application.config,
+        owner_id=owner_id_from_user(user),
+        run_id=run_id,
+        records_pruned=turn.run.events_trimmed_at is not None,
     )
     sources = project_artifact_sources(
         turn.run.result,
@@ -598,10 +769,15 @@ async def answer_artifact_presentation(
         downloadable_workspaces=downloadable,
         visual_workspaces=visual,
         image_url_prefix=WEB_IMAGE_URL_BASE,
+        mask_reader_text=application.skill_protection.mask,
     )
     response.headers["Cache-Control"] = "private, no-store"
     return build_answer_presentation(
-        answer=markdown,
+        # The Artifact's own bytes are the answer this projection shows, so they pass the
+        # content gate like any other answer text (ADR 0061). Publication refused a file that
+        # reproduced a protected document; an older Artifact, or one whose passage sits below
+        # that 320-character bar, still must not hand the words to a reader here.
+        answer=application.skill_protection.mask(markdown),
         sources=sources,
         evidence_images=[],
         link_cards=projected.get("link_cards") or [],
@@ -629,34 +805,55 @@ async def answer_run_events(
         )
     downloadable, visual = await _projection_workspaces(request, turn.run.request_input())
     owner = owner_id_from_user(user)
+    application = get_application(request)
+    skill_protection = application.skill_protection
     # Resolved once per subscription, beside the other read-time projections: a
     # pinned Connection tool keeps a human name even after the Connection later
     # changes, and the durable event keeps transport-neutral identity.
-    tool_labels = await get_application(request).connections.pinned_tool_labels(
-        owner_id=owner, run_id=run_id
-    )
+    tool_labels = await application.connections.pinned_tool_labels(owner_id=owner, run_id=run_id)
     # The finished answer must show the same stored images a reload would, so the
     # frame resolver reads the run's own recorded sources once per subscription.
     image_sources = image_rewrites(
         run_id,
         await conversation_service.run_external_sources(user, run_id),
     )
-    events = get_application(request).runs.subscribe(
+    events = application.runs.subscribe(
         owner_id=owner,
         run_id=run_id,
         after_sequence=resume_cursor(request),
     )
+    pruned = turn.run.events_trimmed_at is not None
+    publishes = bool((turn.run.result or {}).get("artifacts"))
+
+    async def _attestation() -> ArtifactAttestation | None:
+        """The Artifact record this subscription's terminal frame carries.
+
+        Read at the moment the frame is rendered rather than when the subscription opened: the Run
+        is only settled by then, and this is the same entry point the turn's status read and the
+        conversation history stamp through. A Run that published nothing is not read at all, which
+        is the rule the history route already applies and what keeps a terminal frame as cheap as
+        it was before any record existed -- and what keeps a records read from being able to fail a
+        frame that used to be a pure function of the event.
+        """
+        if not publishes:
+            return None
+        return await _answer_attestation(request, run_id=run_id, records_pruned=pruned)
+
     return StreamingResponse(
-        follow_run_frames(
+        follow_frames(
             events,
-            partial(
-                browser_frame,
+            # One renderer per subscription: its carry is how a protected run that spans
+            # token batches stays out of every frame, and it belongs to this reader alone.
+            ReaderFrameRenderer(
+                skill_protection.index,
+                skill_protection.mask,
                 downloadable_workspaces=downloadable,
                 visual_workspaces=visual,
                 live_after=turn.run.next_event_sequence - 1,
                 run_id=run_id,
                 tool_labels=tool_labels,
                 image_rewrites=image_sources,
+                attestation=_attestation,
             ),
         ),
         media_type="text/event-stream",
@@ -692,6 +889,7 @@ async def accepted_answer(
                     getattr(request.state, "user_context", None), linked.run.run_id
                 ),
             ),
+            mask_reader_text=get_application(request).skill_protection.mask,
         ),
     )
 
@@ -751,6 +949,15 @@ def _answer_command(*, unavailable: str, reuse: str = "request") -> Iterator[Non
         raise _rejected_input(exc) from None
     except ApplicationInputError as exc:
         raise _command_error(422, "invalid_request", str(exc)) from None
+    except ConversationSessionBusy as exc:
+        # The Session already has a live Run: nothing was accepted, and the typed kind
+        # lets the composer offer the queue instead of a second competing send.
+        raise _command_error(
+            409,
+            "submission_conflict",
+            str(exc),
+            error_kind=exc.error_kind,
+        ) from None
     except ConversationSubmissionConflict, IdempotencyKeyConflict:
         raise _command_error(
             409,
@@ -759,6 +966,12 @@ def _answer_command(*, unavailable: str, reuse: str = "request") -> Iterator[Non
         ) from None
     except ApplicationConflictError as exc:
         raise _command_error(409, "submission_conflict", str(exc)) from None
+    except ActiveRunLimitError as exc:
+        # The reader's own limit, not an outage: the status and the error kind say so, while the
+        # command kind stays the retryable one, so the draft is kept and Retry stays offered.
+        raise _command_error(
+            429, "service_unavailable", str(exc), error_kind=exc.error_kind
+        ) from None
     except ApplicationUnavailableError as exc:
         # As the shared handler does: a translated outage keeps its cause's traceback.
         logger.warning(
@@ -768,6 +981,44 @@ def _answer_command(*, unavailable: str, reuse: str = "request") -> Iterator[Non
         )
         message = str(exc) if isinstance(exc, RunAdmissionLimitExceededError) else unavailable
         raise _command_error(503, "service_unavailable", message) from None
+
+
+async def _require_feedback_offered(request: Request, user: Principal | None) -> None:
+    """Refuse a reader the policy turns feedback off for, when they rate."""
+    if not await get_application(request).policies.value_for(ANSWER_FEEDBACK, user):
+        raise HTTPException(status_code=403, detail="Answer feedback is turned off for you")
+
+
+def _feedback_view(feedback: AnswerFeedback) -> dict[str, Any]:
+    return {
+        "agent": feedback.agent,
+        "sequence": feedback.sequence,
+        "value": feedback.value,
+        "reasons": list(feedback.reasons),
+        "note": feedback.note,
+        "updated_at": stamp(feedback.updated_at),
+    }
+
+
+async def _answer_attestation(
+    request: Request, *, run_id: str, records_pruned: bool
+) -> ArtifactAttestation:
+    """The one Artifact record every live projection of one Run stamps through.
+
+    Three browser projections render the same finished Answer -- the live ``done`` frame, this
+    turn's own status read, and the conversation history -- and all three must tell a reader one
+    thing. Each derives here rather than sharing a cached value, because the Run is only settled
+    when its terminal record exists and a read that arrives earlier must not freeze a verdict it
+    would have to keep.
+    """
+    application = get_application(request)
+    return await run_attestation(
+        runs=application.runs,
+        config=application.config,
+        owner_id=owner_id_from_user(getattr(request.state, "user_context", None)),
+        run_id=run_id,
+        records_pruned=records_pruned,
+    )
 
 
 async def _projection_workspaces(

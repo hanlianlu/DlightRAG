@@ -144,11 +144,6 @@ def resolve_sidecar_asset_path(artifact_dir: Path, raw_path: str) -> Path | None
     return candidate if candidate.is_file() else None
 
 
-def load_block_provenance_index(artifact_dir: Path) -> dict[str, BlockProvenance]:
-    """Load ``blockid -> BlockProvenance`` from LightRAG ``*.blocks.jsonl`` files."""
-    return SidecarArtifactIndex.load(artifact_dir).block_provenance
-
-
 def block_ids_from_sidecar(sidecar: dict[str, Any]) -> list[str]:
     """Return source block ids from a LightRAG chunk sidecar payload."""
     block_ids: list[str] = []
@@ -183,15 +178,6 @@ _MULTIMODAL_ITEM_FILES: dict[str, tuple[str, str]] = {
 def is_multimodal_sidecar(sidecar: dict[str, Any]) -> bool:
     """Return whether a chunk sidecar is a table / drawing / equation item."""
     return sidecar.get("type") in _MULTIMODAL_ITEM_FILES
-
-
-def block_ids_from_multimodal_item(artifact_dir: Path, sidecar: dict[str, Any]) -> list[str]:
-    """Resolve a multimodal chunk's source block id from its sidecar item file.
-
-    The compatibility helper keeps the ingestion-facing behavior while retrieval
-    caches the complete :class:`SidecarArtifactIndex` across hydration passes.
-    """
-    return SidecarArtifactIndex.load(artifact_dir).block_ids_for_multimodal_item(sidecar)
 
 
 def first_provenance_for_blocks(

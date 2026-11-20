@@ -400,6 +400,7 @@ class _InteractionStream:
         self._usage: Any = None
         self._status: str | None = None
         self._terminal: Any = None
+        self._pending_reasoning: str | None = None
 
     def accept(self, event: Any) -> str | None:
         """Take one SSE event and return the text it adds, if any."""
@@ -416,6 +417,14 @@ class _InteractionStream:
                     for item in step.get("content") or ()
                     if item.get("type") == "text"
                 )
+            if step.get("type") == "thought":
+                # The first summary chunk can arrive with the step itself rather than
+                # as a delta of its own; stream it like one so the block starts whole.
+                self._pending_reasoning = "".join(
+                    str(item.get("text") or "")
+                    for item in step.get("summary") or ()
+                    if item.get("type") == "text"
+                )
         elif kind == "step.delta":
             metadata = getattr(event, "metadata", None)
             self._usage = getattr(metadata, "total_usage", None) or self._usage
@@ -428,6 +437,12 @@ class _InteractionStream:
             self._terminal = event.interaction
         return None
 
+    def take_reasoning(self) -> str | None:
+        """Return and clear the reasoning text the last accepted event added, if any."""
+        reasoning = self._pending_reasoning
+        self._pending_reasoning = None
+        return reasoning
+
     def _delta(self, index: int, delta: dict[str, Any]) -> str | None:
         kind = delta.get("type")
         if kind == "text":
@@ -439,7 +454,10 @@ class _InteractionStream:
             summary = self._steps.setdefault(index, {"type": "thought"}).setdefault("summary", [])
             content = delta.get("content") or {}
             if content.get("type") == "text":
-                _append_text(summary, str(content.get("text") or ""))
+                text = str(content.get("text") or "")
+                _append_text(summary, text)
+                if text:
+                    self._pending_reasoning = (self._pending_reasoning or "") + text
             else:
                 summary.append(content)
         elif kind == "thought_signature":
@@ -526,11 +544,15 @@ class GeminiProvider(CompletionProvider):
         self,
         request: dict[str, Any],
         stream: _InteractionStream,
+        emit_reasoning: Callable[[str], Awaitable[None]] | None = None,
     ) -> AsyncGenerator[str]:
         events = await self._create({**request, "stream": True})
         async with closing_stream(events):
             async for event in events:
                 text = stream.accept(event)
+                reasoning = stream.take_reasoning()
+                if reasoning and emit_reasoning is not None:
+                    await emit_reasoning(reasoning)
                 if text:
                     yield text
 
@@ -588,6 +610,7 @@ class GeminiProvider(CompletionProvider):
         *,
         tools: list[ToolDefinition],
         emit_text: Callable[[str], Awaitable[None]],
+        emit_reasoning: Callable[[str], Awaitable[None]] | None = None,
         tool_choice: ToolChoice = "auto",
         temperature: float | None = None,
         max_tokens: int | None = None,
@@ -603,7 +626,7 @@ class GeminiProvider(CompletionProvider):
             tool_choice=tool_choice,
         )
         stream = _InteractionStream()
-        events = self._events(request, stream)
+        events = self._events(request, stream, emit_reasoning)
         async with aclosing(events):
             async for text in events:
                 await emit_text(text)

@@ -131,9 +131,6 @@ class ModelCatalogue:
     ) -> None:
         self._builtin_revision = builtin_revision
         self._builtin_entries = tuple(builtin_entries)
-        self._builtin = MappingProxyType(
-            {entry.fingerprint: entry for entry in self._builtin_entries}
-        )
         self._startup: tuple[CatalogueEntry, ...] = ()
         self._overlay: tuple[CatalogueEntry, ...] = ()
         self._snapshot = self._merge(())
@@ -159,9 +156,6 @@ class ModelCatalogue:
     @property
     def overlay(self) -> tuple[CatalogueEntry, ...]:
         return self._overlay
-
-    def is_builtin(self, fingerprint: ModelEndpointFingerprint) -> bool:
-        return fingerprint in self._builtin
 
     def preview(self, overlay: Sequence[CatalogueEntry]) -> CatalogueSnapshot:
         return self._merge(tuple(overlay))

@@ -1,9 +1,10 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** Settings → Connections: the MCP Connection cards.
 
- * The page says `N of M enabled` and nothing about tools: the Capability Catalogue belongs to the
- * Agent, and the UI never receives it. A switch owns discovery, because enabling a Connection with
- * no confirmed catalogue requires a probe first and the user should not have to know that.
+ * The page says `N of M enabled`, and each card states its published catalogue's tool count and
+ * the estimated token cost of its declarations; the Capability Catalogue itself belongs to the
+ * Agent, and the UI never receives it. A switch owns discovery, because enabling a Connection
+ * with no confirmed catalogue requires a probe first and the user should not have to know that.
  * Enabling is gated once per owner session by the whole-Connection warning; the backend records
  * `consent_version=1` on every enable.
  */
@@ -14,46 +15,91 @@ import {repeat} from 'lit/directives/repeat.js';
 import {
   beginConnectionAuthorization,
   changeConnection,
+  ConnectionsApiError,
   getConnections,
   type Connection,
   type ConnectionsView,
+  type EndpointHeaderPair,
   type Preset,
 } from '../api/connections.ts';
 import {icon} from '../design-system/index.ts';
+import {getLocale} from '../i18n/locale.ts';
 import {LightElement} from '../lib/lit-host.ts';
+import {formatCompactCount} from '../lib/number-format.ts';
 import shared from '../styles/settings-page.module.css';
 import styles from '../styles/settings-connections.module.css';
 import {modalResult} from './modal.ts';
 import {reportSettingsSummary} from './settings-summary.ts';
+import {tokenCountLabel} from './token-count.ts';
 
 const POLL_MILLISECONDS = 5000;
+/** An authorization in flight settles seconds after the browser comes back, and the reader waits. */
+const AUTHORIZATION_POLL_MILLISECONDS = 1000;
+/** An authorization nobody finishes stays pending for its whole lifetime, so the quick look is spent. */
+const AUTHORIZATION_POLL_ATTEMPTS = 30;
 type Authentication = Connection['authentication'];
 type Command = Parameters<typeof changeConnection>[1];
 
 const MODE_LABEL: Record<Authentication, () => string> = {
   none: () => msg('None', {id: 'connections.modeNone'}),
   bearer: () => msg('Bearer', {id: 'connections.modeBearer'}),
+  header: () => msg('Header', {id: 'connections.modeHeader'}),
   oauth: () => msg('OAuth', {id: 'connections.modeOauth'}),
 };
 
-export class DlSettingsConnections extends LightElement {
+/** What a Connection holds, as the reader chooses it: nothing, one token, or a provider's grant.
+ *  Where a static token travels is the second, smaller choice — `bearer` is its default answer. */
+type CredentialType = 'none' | 'token' | 'oauth';
+const CREDENTIAL_TYPES = ['none', 'token', 'oauth'] as const;
+const STATIC_TOKEN = 'token';
+
+const CREDENTIAL_TYPE_LABEL: Record<CredentialType, () => string> = {
+  none: () => MODE_LABEL.none(),
+  token: () => msg('Static token', {id: 'connections.typeToken'}),
+  oauth: () => MODE_LABEL.oauth(),
+};
+
+function credentialType(auth: Authentication): CredentialType {
+  if (auth === 'none') return 'none';
+  return auth === 'oauth' ? 'oauth' : STATIC_TOKEN;
+}
+
+/** What a row says while an authorization is the story of a Connection that holds no credential. */
+const AUTHORIZATION_LABEL: Record<'pending' | 'failed' | 'changed', () => string> = {
+  pending: () => msg('Authorization in progress', {id: 'connections.authorizing'}),
+  failed: () => msg('Authorization failed', {id: 'connections.authorizationFailed'}),
+  changed: () => msg('Authorization not saved', {id: 'connections.authorizationChanged'}),
+};
+
+class DlSettingsConnections extends LightElement {
   static properties = {
     view: {state: true},
     openCard: {state: true},
     editingEndpoint: {state: true},
     draftAuth: {state: true},
+    draftHeaders: {state: true},
+    draftCredential: {state: true},
+    newHeaders: {state: true},
     pending: {state: true},
     busy: {state: true},
     deleting: {state: true},
     adding: {state: true},
     error: {state: true},
-    authorizationUrl: {state: true},
+    refusal: {state: true},
   };
 
   declare view: ConnectionsView | null;
   declare openCard: string | null;
   declare editingEndpoint: string | null;
   declare draftAuth: Record<string, Authentication>;
+  /** The endpoint headers a card is editing, seeded from the Connection on first touch. */
+  declare draftHeaders: Record<string, EndpointHeaderPair[]>;
+  /** What a card's credential form holds: the name and prefix a *new* credential would travel
+   *  in. The stored one is read back from the projection (it is not a secret; the token is), and
+   *  this map only holds what the reader has typed since. */
+  declare draftCredential: Record<string, {header: string; prefix: string}>;
+  /** The create form's stated headers: what a preset fills, and the owner may edit. */
+  declare newHeaders: EndpointHeaderPair[];
   /** The Connection whose switch or credential control owns the in-flight command. */
   declare pending: string | null;
   /** Any command is in flight, including create, which has no Connection id yet. */
@@ -62,10 +108,20 @@ export class DlSettingsConnections extends LightElement {
   declare deleting: string | null;
   declare adding: boolean;
   declare error: boolean;
-  declare authorizationUrl: string | null;
+  /** What the Connections module said when it refused, when it said anything: product copy it
+   *  wrote to be read, never remote text, and the reason the banner exists. */
+  declare refusal: string | null;
+  /** Where a started authorization sends the browser; a test replaces it to keep its own page. */
+  navigateTo: (url: string) => void = (url) => {
+    window.location.assign(url);
+  };
 
   #timer: ReturnType<typeof setTimeout> | null = null;
+  // Not a LatestRequest: a command, a newer read, or a disconnect only makes a read still in flight stale,
+  // so its reply is ignored when it lands. Nothing is aborted: the signal is the element's, and commands share it.
   #generation = 0;
+  /** Quick looks spent since a Connection last reported an authorization in flight. */
+  #quickPolls = 0;
   #acknowledged = false;
   /** The tab the last preset asked for, applied to the Connection the next create produces. */
   #presetAuth: Authentication | null = null;
@@ -76,12 +132,15 @@ export class DlSettingsConnections extends LightElement {
     this.openCard = null;
     this.editingEndpoint = null;
     this.draftAuth = {};
+    this.draftHeaders = {};
+    this.draftCredential = {};
+    this.newHeaders = [];
     this.pending = null;
     this.busy = false;
     this.deleting = null;
     this.adding = false;
     this.error = false;
-    this.authorizationUrl = null;
+    this.refusal = null;
     /** One enable per owner session is enough to record the standing authorization. */
     this.#acknowledged = false;
   }
@@ -92,7 +151,6 @@ export class DlSettingsConnections extends LightElement {
   }
 
   override disconnectedCallback(): void {
-    this.authorizationUrl = null;
     this.#generation++;
     if (this.#timer) clearTimeout(this.#timer);
     this.querySelectorAll<HTMLInputElement>('input[type=password]').forEach((input) => {
@@ -111,6 +169,26 @@ export class DlSettingsConnections extends LightElement {
     }
   }
 
+  /**
+   * How long until the next read. A Connection whose authorization is still in flight is about to
+   * change: the provider's code is deposited before the browser is sent back, and the token
+   * exchange and publication follow within seconds, so a reader who has just returned watches the
+   * card settle almost at once instead of a poll later. A first look at a settled page, and an
+   * authorization abandoned at the provider, both keep the steady pace.
+   */
+  #pollDelay(): number {
+    const authorizing = this.view?.connections
+      .some((connection) => connection.authorizationStatus === 'pending') ?? false;
+    if (!authorizing) {
+      this.#quickPolls = 0;
+      return POLL_MILLISECONDS;
+    }
+    this.#quickPolls += 1;
+    return this.#quickPolls <= AUTHORIZATION_POLL_ATTEMPTS
+      ? AUTHORIZATION_POLL_MILLISECONDS
+      : POLL_MILLISECONDS;
+  }
+
   async #load(): Promise<void> {
     const signal = this.lifetime;
     if (signal.aborted || this.busy) return;
@@ -122,6 +200,7 @@ export class DlSettingsConnections extends LightElement {
       if (!signal.aborted && generation === this.#generation) {
         this.view = view;
         this.error = false;
+        this.refusal = null;
         // An owner who already runs an enabled Connection answered the warning before, so the
         // standing authorization covers every later enable in this session too.
         if (view.connections.some((connection) => connection.enabled)) this.#acknowledged = true;
@@ -132,35 +211,91 @@ export class DlSettingsConnections extends LightElement {
     if (!signal.aborted) {
       this.#timer = setTimeout(() => {
         if (!this.pending) void this.#load();
-      }, POLL_MILLISECONDS);
+      }, this.#pollDelay());
+    }
+  }
+
+  /**
+   * Say one command to the server, and say it again once if the owner's revision moved.
+   *
+   * A revision moves for things the reader did not do and cannot see: the background refresh, and
+   * the authorization they just finished. Refusing their word because the page had not read that
+   * yet would answer "the revision changed, reload and retry" at somebody who only flipped a
+   * switch, so the page reads what the owner holds now and says the same word once more.
+   */
+  async #submit(command: Command, revision: string, signal: AbortSignal): Promise<ConnectionsView> {
+    try {
+      return await changeConnection(revision, command, signal);
+    } catch (error) {
+      if (signal.aborted || !(error instanceof ConnectionsApiError) || error.status !== 409) throw error;
+      const current = await getConnections(signal);
+      if (signal.aborted) throw error;
+      this.view = current;
+      return await changeConnection(current.revision, command, signal);
     }
   }
 
   /** Apply one command, then restore focus so a replaced control never loses the user. */
   async #command(command: Command, returnFocus?: HTMLElement | null): Promise<ConnectionsView | null> {
     const signal = this.lifetime;
-    if (!this.view || this.busy || signal.aborted) return null;
+    const read = this.view;
+    if (!read || this.busy || signal.aborted) return null;
     this.#generation++;
     this.busy = true;
     this.pending = command.kind === 'create' ? null : command.connectionId;
     this.error = false;
+    this.refusal = null;
     if (this.#timer) clearTimeout(this.#timer);
     try {
-      const view = await changeConnection(this.view.revision, command, signal);
+      const view = await this.#submit(command, read.revision, signal);
       if (signal.aborted) return null;
       this.view = view;
-      this.authorizationUrl = null;
       return view;
-    } catch {
-      if (!signal.aborted) this.error = true;
+    } catch (error) {
+      if (!signal.aborted) {
+        this.error = true;
+        this.refusal = error instanceof ConnectionsApiError ? error.message : null;
+      }
       return null;
     } finally {
       if (!signal.aborted) await this.#settle(returnFocus);
     }
   }
 
+  /**
+   * The OAuth attempt the server still reports, for a Connection that holds no credential yet.
+   *
+   * It is the whole story of such a Connection: the browser may have left for the provider's
+   * consent page and come back to a fresh page, where the tab the reader had chosen is gone and
+   * nothing is stored yet. Reading the credential alone would show "None" at the reader who has
+   * just authorized, so the row, the light, and the card all read this instead.
+   */
+  #authorizationOf(connection: Connection): 'pending' | 'failed' | 'changed' | null {
+    if (connection.authentication !== 'none') return null;
+    const status = connection.authorizationStatus;
+    return status === null || status === 'succeeded' ? null : status;
+  }
+
+  /**
+   * The OAuth attempt this card should report, when one is its story.
+   *
+   * A Connection authorizing for the first time holds no credential yet, and one whose stored
+   * grant is OAuth can have a re-authorization that failed or was superseded; both are answered
+   * by the flow row. A *token* Connection keeps its last flow row for as long as the row lives,
+   * and that row says nothing about the credential it holds now -- `#authorizationOf` above is
+   * about the first of those cases only, because it also decides the row's own name and light.
+   */
+  #flowOutcome(connection: Connection): 'pending' | 'failed' | 'changed' | null {
+    if (connection.authentication !== 'none' && connection.authentication !== 'oauth') return null;
+    const status = connection.authorizationStatus;
+    return status === null || status === 'succeeded' ? null : status;
+  }
+
   #authOf(connection: Connection): Authentication {
-    return this.draftAuth[connection.connectionId] ?? connection.authentication;
+    const chosen = this.draftAuth[connection.connectionId];
+    if (chosen) return chosen;
+    if (this.#authorizationOf(connection)) return 'oauth';
+    return connection.authentication;
   }
 
   /** One home per observed status: what it says, how it reads, and what it implies. */
@@ -177,10 +312,24 @@ export class DlSettingsConnections extends LightElement {
           note: msg('Research keeps using what was last confirmed.', {id: 'connections.lastConfirmed'}),
         };
       case 'needs-auth':
+        // A credential that did not work says what to do next, and what that is depends on what
+        // the card is showing: only OAuth has an authorization to redo, and a static token can
+        // fail because it travels in the wrong header, which the reader can change right here.
         return {
           label: msg('Needs authorization', {id: 'connections.needsAuth'}),
           tone: styles.dotProblem,
-          note: msg('Reauthorize to use this server again.', {id: 'connections.reauthorize'}),
+          note: this.#refusalAdvice(connection),
+        };
+      case 'no-tools':
+        // Not a fault of the server: it answered, and what it offers under the headers this
+        // Connection states is nothing. The headers are the thing to look at, so the note says so.
+        return {
+          label: msg('No tools', {id: 'connections.noTools'}),
+          tone: styles.dotProblem,
+          note: msg(
+            'This server published no tools under the request headers this Connection states. Check them, then probe again.',
+            {id: 'connections.noToolsNote'},
+          ),
         };
       case 'revoked':
         return {
@@ -196,11 +345,58 @@ export class DlSettingsConnections extends LightElement {
     }
   }
 
+  /**
+   * What the row says about a credential. One word when the transport is the default, and the
+   * header itself when it is not: "TAT or UAT?" is the question a reader cannot answer from a
+   * stored page otherwise, and it is the whole reason the server reads the name back.
+   */
+  #credentialSentence(connection: Connection): string {
+    const auth = this.#authOf(connection);
+    if (auth !== 'header') return MODE_LABEL[auth]();
+    const {header} = this.#credentialDraft(connection);
+    return header === ''
+      ? MODE_LABEL.header()
+      : msg(str`Credential in ${header}`, {id: 'connections.metaHeaderCredential'});
+  }
+
+  /**
+   * What a credential that did not work means, for the credential the card is showing.
+   *
+   * `needs-auth` has two causes and they are not distinguishable from the card: the server
+   * refused the credential, or this deployment cannot open its envelope at all (a lost key ring,
+   * a retired key) -- in which case nothing was sent and no header the reader picks will help.
+   * So the advice names both moves instead of asserting a refusal that may not have happened.
+   */
+  #refusalAdvice(connection: Connection): string {
+    switch (this.#authOf(connection)) {
+      case 'oauth':
+        return msg('Reauthorize to use this server again.', {id: 'connections.reauthorize'});
+      case 'header':
+        return msg(
+          'This credential was refused, or this deployment cannot open it. Check the header name, the prefix, and the kind of token — a user token and an app token are not interchangeable — then save it again.',
+          {id: 'connections.refusedHeader'},
+        );
+      case 'bearer':
+        return msg(
+          'This credential was refused, or this deployment cannot open it. If the service does not take Authorization: Bearer, move the credential to a header of its own; otherwise save it again.',
+          {id: 'connections.refusedBearer'},
+        );
+      default:
+        return msg(
+          'The server asks for a credential. Add a static token, or authorize with OAuth if it uses one.',
+          {id: 'connections.refusedWithout'},
+        );
+    }
+  }
+
   /** The row stays quiet while a Connection is off or plainly working; the light says which. */
   #meta(connection: Connection): string {
     if (this.pending === connection.connectionId) return msg('Connecting…', {id: 'connections.connecting'});
-    const parts = [MODE_LABEL[connection.authentication]()];
-    if (connection.status !== 'disabled' && connection.status !== 'ready') {
+    const parts = [this.#credentialSentence(connection)];
+    const authorization = this.#authorizationOf(connection);
+    if (authorization) {
+      parts.push(AUTHORIZATION_LABEL[authorization]());
+    } else if (connection.status !== 'disabled' && connection.status !== 'ready') {
       parts.push(this.#statusOf(connection).label);
     }
     return parts.join(' · ');
@@ -211,29 +407,65 @@ export class DlSettingsConnections extends LightElement {
    * colour at all while it is switched off, because being off is not a fault.
    */
   #dotClass(connection: Connection): string {
-    if (!connection.enabled || this.pending === connection.connectionId) return styles.dotIdle;
+    if (this.pending === connection.connectionId) return styles.dotIdle;
+    // A refused or superseded authorization is this Connection's fault, looked at or not.
+    const authorization = this.#authorizationOf(connection);
+    if (authorization === 'failed' || authorization === 'changed') return styles.dotProblem;
+    if (!connection.enabled) return styles.dotIdle;
     return this.#statusOf(connection).tone;
   }
 
   #note(connection: Connection): TemplateResult | typeof nothing {
-    if (connection.authorizationStatus === 'changed') {
+    const authorization = this.#flowOutcome(connection);
+    if (authorization === 'changed') {
       return html`<p class=${shared.note} role="alert">${msg(
         'This connection changed while you were authorizing, so nothing was saved. Authorize again.',
         {id: 'connections.oauthChanged'},
       )}</p>`;
     }
-    if (connection.authorizationStatus === 'failed') {
+    if (authorization === 'failed') {
       return html`<p class=${shared.note} role="alert">${msg(
         'Authorization failed or expired. Authorize again to use this server.',
         {id: 'connections.oauthFailed'},
       )}</p>`;
     }
-    if (connection.authorizationStatus === 'pending') {
+    if (authorization === 'pending') {
       return html`<p class=${shared.note} role="status">${msg('Authorization pending.', {id: 'connections.oauthPending'})}</p>`;
     }
     const {note} = this.#statusOf(connection);
     if (!note) return nothing;
     return html`<p class=${shared.note} role="alert">${note}</p>`;
+  }
+
+  /**
+   * What the published catalogue's definitions cost one Research request: one quiet line, drawn
+   * only when the projection holds an estimate. The token figure is the runtime's own estimate,
+   * so the card and the Run cannot disagree; a disabled Connection's figure is hypothetical, and
+   * the line states what switching it on would add rather than hiding it. Nothing is drawn until
+   * a catalogue is published, because there is nothing to estimate.
+   */
+  #declarationCost(connection: Connection): TemplateResult | typeof nothing {
+    const tokens = connection.declarationTokens;
+    if (tokens === null || tokens === undefined) return nothing;
+    const tokensLabel = tokenCountLabel(tokens);
+    const tools = connection.toolCount;
+    if (tools === null || tools === undefined) {
+      return html`<span class=${shared.hint}>${msg(
+        str`≈ ${tokensLabel} per request`,
+        {id: 'connections.declarationCostTokens'},
+      )}</span>`;
+    }
+    if (tools === 1) {
+      return html`<span class=${shared.hint}>${msg(
+        str`≈ ${tokensLabel} per request · 1 tool`,
+        {id: 'connections.declarationCostOne'},
+      )}</span>`;
+    }
+    const toolCount = formatCompactCount(tools, getLocale());
+    return html`<span class=${shared.hint}>${msg(
+      str`≈ ${tokensLabel} per request · ${toolCount} tools`,
+      {id: 'connections.declarationCostMany'},
+    )}</span>`;
   }
 
   #labelOf(connectionId: string): string {
@@ -266,7 +498,7 @@ export class DlSettingsConnections extends LightElement {
     target?.focus();
     this.#timer = setTimeout(() => {
       void this.#load();
-    }, POLL_MILLISECONDS);
+    }, this.#pollDelay());
   }
 
   /**
@@ -363,30 +595,15 @@ export class DlSettingsConnections extends LightElement {
     </div>`;
   }
 
+  /**
+   * The credential, in two steps: what it is, and — for a static token — which header carries it.
+   *
+   * `Authorization: Bearer` is the default answer, not a fourth kind, so a service that wants a
+   * vendor header is the same form with one radio moved. The name and prefix shown here are the
+   * stored credential's own, read back from the server: they are not secrets, and a reader who
+   * reloaded the page still needs to know whether this Connection is sending TAT or UAT.
+   */
   #authBlock(connection: Connection, auth: Authentication): TemplateResult {
-    if (auth === 'bearer') {
-      const input = `bearer-${connection.connectionId}`;
-      return html`<div class=${styles.field}>
-        <label class=${styles.fieldLabel} for=${input}>${msg('Personal bearer (write-only)', {id: 'connections.bearer'})}</label>
-        <span class=${styles.inline}>
-          <input id=${input} class="${styles.input} ${styles.inlineInput}" type="password" autocomplete="off"
-            maxlength="8192" data-bearer=${connection.connectionId}>
-          <button class="dl-btn" type="button"
-            @click=${(event: Event) => {
-              const field = this.querySelector<HTMLInputElement>(`[data-bearer="${connection.connectionId}"]`);
-              if (!field?.value) return;
-              const bearer = field.value;
-              field.value = '';
-              void this.#command({
-                kind: 'bearer',
-                connectionId: connection.connectionId,
-                bearer,
-                endpoint: connection.endpoint,
-              }, event.currentTarget as HTMLElement);
-            }}>${msg('Save bearer', {id: 'connections.saveBearer'})}</button>
-        </span>
-      </div>`;
-    }
     if (auth === 'oauth') {
       return html`<div class=${styles.stackTight}>
         <span class=${styles.inline}>
@@ -399,16 +616,301 @@ export class DlSettingsConnections extends LightElement {
             {id: 'connections.oauthRestart'},
           )}</span>
         </span>
-        ${this.authorizationUrl
-          ? html`<p><a class=${styles.continue} href=${this.authorizationUrl}
-            rel="noreferrer noopener">${msg('Continue to provider authorization', {id: 'connections.oauthContinue'})}</a></p>`
-          : nothing}
       </div>`;
+    }
+    if (auth !== 'none') {
+      return this.#staticTokenBlock(connection, auth);
     }
     return html`<p class=${shared.hint}>${msg(
       'No credential. Anyone who can reach this URL can use it.',
       {id: 'connections.noCredential'},
     )}</p>`;
+  }
+
+  /** One token, and the header the reader says it travels in: the default, or one of their own. */
+  #staticTokenBlock(connection: Connection, auth: Authentication): TemplateResult {
+    const custom = auth === 'header';
+    const {header, prefix} = this.#credentialDraft(connection);
+    const stored = connection.credentialHeader;
+    return html`<div class=${styles.stackTight}>
+      <div class=${styles.transportChoices}>
+        <label class=${styles.transportChoice}>
+          <input type="radio" name="transport-${connection.connectionId}" value="bearer"
+            .checked=${!custom} data-transport="default" data-connection=${connection.connectionId}
+            @change=${() => {
+              this.draftAuth = {...this.draftAuth, [connection.connectionId]: 'bearer'};
+            }}>
+          <span>${msg('In Authorization: Bearer', {id: 'connections.transportDefault'})}</span>
+        </label>
+        <label class=${styles.transportChoice}>
+          <input type="radio" name="transport-${connection.connectionId}" value="header"
+            .checked=${custom} data-transport="custom" data-connection=${connection.connectionId}
+            @change=${() => {
+              this.draftAuth = {...this.draftAuth, [connection.connectionId]: 'header'};
+            }}>
+          <span>${msg('In a header of my own', {id: 'connections.transportCustom'})}</span>
+        </label>
+      </div>
+      ${custom ? html`<span class=${styles.inline}>
+        <label class="${styles.field} ${styles.headerName}">
+          <span class=${styles.fieldLabel}>${msg('Credential header name', {id: 'connections.credentialHeaderName'})}</span>
+          <input class=${styles.input} maxlength="64" autocomplete="off" placeholder="X-Lark-MCP-TAT" required
+            data-credential-header=${connection.connectionId} .value=${header}>
+        </label>
+        <label class="${styles.field} ${styles.headerValue}">
+          <span class=${styles.fieldLabel}>${msg('Value prefix', {id: 'connections.credentialHeaderPrefix'})}</span>
+          <input class=${styles.input} maxlength="64" autocomplete="off" placeholder="Bearer "
+            data-credential-prefix=${connection.connectionId} .value=${prefix}>
+        </label>
+      </span>` : nothing}
+      ${custom && stored === null && connection.authentication === 'header'
+        ? html`<span class=${shared.hint} role="status">${msg(
+          'This deployment cannot read its key ring, so the stored header name cannot be shown here.',
+          {id: 'connections.credentialUnreadable'},
+        )}</span>`
+        : nothing}
+      <span class=${styles.inline}>
+        <input class="${styles.input} ${styles.inlineInput}" type="password" autocomplete="off"
+          maxlength="8192" required aria-label=${msg('Credential value', {id: 'connections.credentialToken'})}
+          data-credential-token=${connection.connectionId}>
+        <button class="dl-btn" type="button"
+          @click=${(event: Event) => this.#saveCredential(connection, event.currentTarget as HTMLElement)}
+          >${msg('Save credential', {id: 'connections.saveHeader'})}</button>
+      </span>
+      <span class=${shared.hint}>${msg(
+        'Written once and never shown again: the token, and the header it travels in with its prefix. Only the header name and prefix are read back.',
+        {id: 'connections.headerHint'},
+      )}</span>
+    </div>`;
+  }
+
+  /** The name and prefix a save would use: what the reader typed, else what is stored, else the
+   *  preset's own default for this endpoint -- never a guess at the token. */
+  #credentialDraft(connection: Connection): {header: string; prefix: string} {
+    const typed = this.draftCredential[connection.connectionId];
+    if (typed) return typed;
+    if (connection.credentialHeader !== null) {
+      return {header: connection.credentialHeader, prefix: connection.credentialPrefix ?? ''};
+    }
+    // A stored credential the deployment cannot read is said, never guessed: offering the
+    // preset's name here would read as a read-back beside the sentence saying it cannot be read.
+    if (this.#storedCredentialUnreadable(connection)) return {header: '', prefix: ''};
+    return this.#presetCredentialFor(connection) ?? {header: '', prefix: ''};
+  }
+
+  #saveCredential(connection: Connection, returnFocus: HTMLElement): void {
+    const token = this.querySelector<HTMLInputElement>(`[data-credential-token="${connection.connectionId}"]`);
+    if (!token?.reportValidity()) return;
+    const value = token.value;
+    if (this.#authOf(connection) === 'header') {
+      const field = this.querySelector<HTMLInputElement>(`[data-credential-header="${connection.connectionId}"]`);
+      const prefix = this.querySelector<HTMLInputElement>(`[data-credential-prefix="${connection.connectionId}"]`);
+      if (!field?.reportValidity()) return;
+      this.draftCredential = {...this.draftCredential, [connection.connectionId]: {
+        header: field.value, prefix: prefix?.value ?? '',
+      }};
+      token.value = '';
+      void this.#command({
+        kind: 'header',
+        connectionId: connection.connectionId,
+        header: field.value,
+        prefix: prefix?.value ?? '',
+        token: value,
+        endpoint: connection.endpoint,
+      }, returnFocus);
+      return;
+    }
+    token.value = '';
+    void this.#command({
+      kind: 'bearer',
+      connectionId: connection.connectionId,
+      bearer: value,
+      endpoint: connection.endpoint,
+    }, returnFocus);
+  }
+
+  /**
+   * The header a shipped preset states for an endpoint, as the default a new credential starts
+   * from. The endpoint decides it, not the owner's label: renaming a Connection does not change
+   * how the service behind it wants a credential sent. A credential the owner already used in
+   * this session wins over it, and the stored one is sealed, so this is only ever a default for
+   * the next save.
+   */
+  #presetCredentialFor(connection: Connection): {header: string; prefix: string} | null {
+    const preset = this.view?.presets.find((item) => item.endpoint === connection.endpoint);
+    return preset ? {header: preset.credentialHeader, prefix: preset.credentialPrefix} : null;
+  }
+
+  /** The rows a card is editing: its own draft once touched, the Connection's statement before. */
+  #headerRows(connection: Connection): EndpointHeaderPair[] {
+    return this.draftHeaders[connection.connectionId]
+      ?? connection.endpointHeaders.map(([name, value]) => [name, value] as EndpointHeaderPair);
+  }
+
+  #setHeaderRows(connection: Connection, rows: EndpointHeaderPair[]): void {
+    this.draftHeaders = {...this.draftHeaders, [connection.connectionId]: rows};
+  }
+
+  #withoutHeader(rows: EndpointHeaderPair[], index: number): EndpointHeaderPair[] {
+    return rows.filter((_, position) => position !== index);
+  }
+
+  /**
+   * One stated header as the form states it: its name, its value, and the way to drop it.
+   *
+   * ``scope`` is what the row belongs to -- a Connection id, or the create form -- so both forms
+   * state a header the same way and a test reaches either by the same names.
+   */
+  #statedHeaderRow(
+    row: EndpointHeaderPair,
+    index: number,
+    scope: string,
+    write: (position: 0 | 1, value: string) => void,
+    remove: () => void,
+    colliding = false,
+  ): TemplateResult {
+    return html`<span class=${styles.headerRow}>
+      <input class="${styles.input} ${styles.headerName} ${colliding ? styles.inputInvalid : ''}"
+        maxlength="64" autocomplete="off" aria-invalid=${String(colliding)}
+        aria-label=${msg('Header name', {id: 'connections.statedHeaderName'})}
+        data-header-name=${scope} data-index=${index} .value=${row[0]}
+        @input=${(event: Event) => write(0, String((event.target as HTMLInputElement).value))}>
+      <input class="${styles.input} ${styles.headerValue}" maxlength="1024" autocomplete="off"
+        aria-label=${msg('Header value', {id: 'connections.statedHeaderValue'})}
+        data-header-value=${scope} data-index=${index} .value=${row[1]}
+        @input=${(event: Event) => write(1, String((event.target as HTMLInputElement).value))}>
+      <button class="dl-btn" type="button"
+        aria-label=${msg('Remove header', {id: 'connections.removeHeader'})}
+        @click=${remove}>${msg('Remove', {id: 'connections.removeHeaderAction'})}</button>
+    </span>`;
+  }
+
+  /** The credential's own header, shown where the request is assembled and edited above it. */
+  #credentialRow(connection: Connection): TemplateResult {
+    const header = this.#credentialHeaderName(connection);
+    const name = header === ''
+      ? msg('The header this deployment cannot read', {id: 'connections.credentialUnknownHeader'})
+      : header;
+    // The link is only a link when the control it names is on the page: a stored OAuth grant
+    // has no transport to edit, and the credential section above says where it stands.
+    const editable = this.#authOf(connection) !== 'oauth';
+    return html`<div class=${styles.credentialRow}>
+      <span class=${styles.tag}>${msg('credential', {id: 'connections.credentialTag'})}</span>
+      <span class=${styles.credentialName}>${name}:</span>
+      <span class=${styles.credentialValue}>••••••</span>
+      <span class=${styles.credentialOwn}>${editable
+        ? html`<a href="#credential-${connection.connectionId}"
+          @click=${(event: Event) => {
+            event.preventDefault();
+            this.querySelector<HTMLElement>(
+              `[data-transport][data-connection="${connection.connectionId}"]`,
+            )?.focus();
+          }}>${msg('edit above', {id: 'connections.credentialEditAbove'})}</a>`
+        : nothing}</span>
+    </div>`;
+  }
+
+  /**
+   * The header this Connection's credential travels in, as the reader or the server states it.
+   *
+   * `bearer` and `oauth` are the default instance and travel in `Authorization`, so they name
+   * themselves. A `header` credential names its own, and when the deployment cannot read it the
+   * answer is empty -- the card says it cannot read it rather than guessing.
+   */
+  #credentialHeaderName(connection: Connection): string {
+    if (this.#authOf(connection) !== 'header') return 'Authorization';
+    return this.#credentialDraft(connection).header.trim();
+  }
+
+  /** A stored header credential this deployment cannot read: not the same as holding none. */
+  #storedCredentialUnreadable(connection: Connection): boolean {
+    return connection.authentication === 'header'
+      && connection.credentialHeader === null
+      && connection.status !== 'revoked';
+  }
+
+  /** What a stated header is, said the same way wherever one is edited. */
+  #headersHint(): TemplateResult {
+    return html`<span class=${shared.hint}>${msg(
+      'Headers every request to this endpoint states. They are configuration, not secrets: a credential is stored separately and never here, and a server may filter what it offers by one of them.',
+      {id: 'connections.endpointHeadersHint'},
+    )}</span>`;
+  }
+
+  #endpointHeadersEditor(connection: Connection): TemplateResult {
+    const rows = this.#headerRows(connection);
+    // The credential's own header is known here, so a row that would collide with it is marked
+    // as the reader types: the server still refuses it, and this is the same fact said earlier.
+    const credential = this.#credentialHeaderName(connection);
+    const collides = (name: string): boolean => (
+      credential !== '' && name.trim().toLowerCase() === credential.toLowerCase()
+    );
+    return html`<div class=${styles.headerSection}>
+      <div class=${styles.stackTight}>
+        <span class=${styles.fieldLabel}>${msg('Request headers', {id: 'connections.requestHeaders'})}</span>
+        ${this.#headersHint()}
+        ${connection.authentication === 'none' || connection.status === 'revoked'
+          ? nothing
+          : this.#credentialRow(connection)}
+        ${rows.some(([name]) => collides(name))
+          ? html`<span class=${styles.collisionNote} role="status">${msg(
+            'A row below names the credential\'s own header; the credential is sent last and would replace it.',
+            {id: 'connections.headerCollision'},
+          )}</span>`
+          : nothing}
+        ${rows.map((row, index) => this.#statedHeaderRow(
+          row,
+          index,
+          connection.connectionId,
+          (position, value) => {
+            const next = [...this.#headerRows(connection)];
+            const current = next[index] ?? ['', ''];
+            next[index] = position === 0 ? [value, current[1]] : [current[0], value];
+            this.#setHeaderRows(connection, next);
+          },
+          () => this.#setHeaderRows(connection, this.#withoutHeader(rows, index)),
+          collides(row[0]),
+        ))}
+        <div class=${styles.actionsEnd}>
+          <button class="dl-btn" type="button"
+            @click=${() => this.#setHeaderRows(connection, [...rows, ['', '']])}
+            >${msg('Add header', {id: 'connections.addHeader'})}</button>
+          <button class="primary-btn" type="button" ?disabled=${this.busy}
+            @click=${(event: Event) => {
+              const stated = this.#readHeaderRows(rows);
+              if (stated === null) return;
+              void this.#command({
+                kind: 'edit',
+                connectionId: connection.connectionId,
+                label: connection.label,
+                endpoint: connection.endpoint,
+                endpointHeaders: stated,
+              }, event.currentTarget as HTMLElement).then((saved) => {
+                if (!saved) return;  // A refusal keeps what the owner typed, to correct and retry.
+                // What is published is the server's statement: re-seed the rows from it.
+                const {[connection.connectionId]: _saved, ...rest} = this.draftHeaders;
+                this.draftHeaders = rest;
+              });
+            }}>${msg('Save headers', {id: 'connections.saveHeaders'})}</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  /**
+   * What the form states: a row that names nothing and states nothing is dropped, and one that
+   * states a value under no name is refused rather than silently left out of the save.
+   */
+  #readHeaderRows(rows: EndpointHeaderPair[]): EndpointHeaderPair[] | null {
+    const named = rows.filter(([name]) => name.trim() !== '');
+    if (rows.some(([name, value]) => name.trim() === '' && value.trim() !== '')) {
+      this.error = true;
+      this.refusal = msg('A stated header needs a name.', {
+        id: 'connections.statedHeaderNeedsName',
+      });
+      return null;
+    }
+    return named.map(([name, value]) => [name, value]);
   }
 
   async #beginAuthorization(connection: Connection, returnFocus: HTMLElement): Promise<void> {
@@ -417,14 +919,19 @@ export class DlSettingsConnections extends LightElement {
     this.busy = true;
     this.pending = connection.connectionId;
     this.error = false;
-    this.authorizationUrl = null;
+    this.refusal = null;
     this.#generation++;
     if (this.#timer) clearTimeout(this.#timer);
     try {
       const url = await beginConnectionAuthorization(
         this.view.revision, connection.connectionId, connection.endpoint, signal,
       );
-      if (!signal.aborted) this.authorizationUrl = url;
+      if (signal.aborted) return;
+      // One click is the whole gesture: the provider's consent page is where the reader is
+      // headed, so the card sends them there. A reader the browser brings back -- Back from the
+      // provider, or a fresh page -- starts again from this same control, and starting again
+      // supersedes the attempt they left rather than resuming it behind their back.
+      this.navigateTo(url);
     } catch {
       if (!signal.aborted) this.error = true;
     } finally {
@@ -469,18 +976,25 @@ export class DlSettingsConnections extends LightElement {
           ${this.#labelField(connection)}
           ${this.#endpointField(connection)}
         </div>
+        ${this.#declarationCost(connection)}
         <div class=${styles.stackTight}>
-          <span class=${styles.fieldLabel}>${msg('Authentication', {id: 'connections.authentication'})}</span>
+          <span class=${styles.fieldLabel}>${msg('Credential', {id: 'connections.credential'})}</span>
           <div class=${styles.segmented}>
-            ${(['none', 'bearer', 'oauth'] as const).map((mode) => html`
-              <button class="${styles.segment} ${mode === auth ? styles.segmentActive : ''}" type="button"
-                aria-pressed=${String(mode === auth)}
+            ${CREDENTIAL_TYPES.map((type) => html`
+              <button class="${styles.segment} ${type === credentialType(auth) ? styles.segmentActive : ''}" type="button"
+                aria-pressed=${String(type === credentialType(auth))}
                 @click=${() => {
-                  this.draftAuth = {...this.draftAuth, [connection.connectionId]: mode};
-                }}>${MODE_LABEL[mode]()}</button>`)}
+                  // Choosing a kind keeps the transport already chosen: a reader who moves from
+                  // OAuth back to a token does not silently lose the header they had stated.
+                  const chosen = type === STATIC_TOKEN
+                    ? (auth === 'header' ? 'header' : 'bearer')
+                    : type;
+                  this.draftAuth = {...this.draftAuth, [connection.connectionId]: chosen};
+                }}>${CREDENTIAL_TYPE_LABEL[type]()}</button>`)}
           </div>
           ${this.#authBlock(connection, auth)}
         </div>
+        ${this.#endpointHeadersEditor(connection)}
         <div class="${shared.dangerRow} ${styles.deleteRow}">
           <span class=${shared.hint}>${msg(
             'Deleting removes the endpoint, the label and the stored credential; to pause it, switch it off instead.',
@@ -498,6 +1012,10 @@ export class DlSettingsConnections extends LightElement {
   /**
    * A preset only ever fills the form: it selects no endpoint policy, stores no credential, and
    * grants no authority -- creating the Connection stays the one act that does any of that.
+   *
+   * What it fills is everything the owner would otherwise have to know: the endpoint, the
+   * non-secret headers that endpoint needs stated, and the tab with the header a credential
+   * would travel in. The credential itself is never part of a preset.
    */
   #applyPreset(preset: Preset): void {
     const label = this.querySelector<HTMLInputElement>('[data-new-label]');
@@ -505,6 +1023,7 @@ export class DlSettingsConnections extends LightElement {
     if (label) label.value = preset.label;
     if (endpoint) endpoint.value = preset.endpoint;
     this.#presetAuth = preset.defaultAuthentication;
+    this.newHeaders = preset.endpointHeaders.map(([name, value]) => [name, value]);
   }
 
   /**
@@ -518,12 +1037,23 @@ export class DlSettingsConnections extends LightElement {
       this.view?.connections.map((connection) => connection.connectionId) ?? [],
     );
     this.#presetAuth = null;
-    const view = await this.#command({kind: 'create', label, endpoint}, returnFocus);
+    const stated = this.#readHeaderRows(this.newHeaders);
+    if (stated === null) return;
+    const view = await this.#command(
+      {kind: 'create', label, endpoint, endpointHeaders: stated},
+      returnFocus,
+    );
     const created = view?.connections.find((connection) => !known.has(connection.connectionId));
-    if (!created || !presetAuth) return;
+    if (!created) return;
+    // The form's statement is now the Connection's, so the next create starts from nothing.
+    this.newHeaders = [];
+    if (!presetAuth) return;
     this.draftAuth = {...this.draftAuth, [created.connectionId]: presetAuth};
     this.openCard = created.connectionId;
   }
+
+  /** The create form's rows are stated under this scope until a Connection holds them. */
+  static readonly #CREATE_SCOPE = 'new';
 
   #createForm(): TemplateResult {
     const presets = this.view?.presets ?? [];
@@ -549,6 +1079,34 @@ export class DlSettingsConnections extends LightElement {
             placeholder="https://example.com/mcp">
         </label>
       </div>
+      <span class=${shared.hint}>${msg(
+        'Not one of the presets? Create it with the endpoint alone: the card then asks two things — the credential (none, a static token in Authorization: Bearer or in a header of its own, or OAuth) and the headers every request to this endpoint states — and says what the server answered once you save a credential or switch the Connection on.',
+        {id: 'connections.manualPath'},
+      )}</span>
+      <div class=${styles.stackTight}>
+        <span class=${styles.fieldLabel}>${msg('Request headers', {id: 'connections.requestHeaders'})}</span>
+        ${this.#headersHint()}
+        ${this.newHeaders.map((row, index) => this.#statedHeaderRow(
+          row,
+          index,
+          DlSettingsConnections.#CREATE_SCOPE,
+          (position, value) => {
+            const next = [...this.newHeaders];
+            const current = next[index] ?? ['', ''];
+            next[index] = position === 0 ? [value, current[1]] : [current[0], value];
+            this.newHeaders = next;
+          },
+          () => {
+            this.newHeaders = this.newHeaders.filter((_, position) => position !== index);
+          },
+        ))}
+        <div class=${styles.actionsEnd}>
+          <button class="dl-btn" type="button" data-new-header-add
+            @click=${() => {
+              this.newHeaders = [...this.newHeaders, ['', '']];
+            }}>${msg('Add header', {id: 'connections.addHeader'})}</button>
+        </div>
+      </div>
       <div class=${styles.footer}>
         <span class=${shared.hint}>${msg('Starts inactive.', {id: 'connections.startsInactive'})}</span>
         <button class="primary-btn" type="button" ?disabled=${this.busy}
@@ -568,7 +1126,7 @@ export class DlSettingsConnections extends LightElement {
     const total = this.view?.connections.length ?? 0;
     const enabled = this.view?.connections.filter((connection) => connection.enabled).length ?? 0;
     const attention = this.view?.connections.filter((connection) => (
-      connection.enabled && (connection.status === 'degraded' || connection.status === 'needs-auth')
+      connection.enabled && this.#statusOf(connection).tone === styles.dotProblem
     )).length ?? 0;
     return html`<p class=${styles.summary}>
       <span class=${styles.summaryName}>MCP</span>
@@ -586,7 +1144,7 @@ export class DlSettingsConnections extends LightElement {
   protected override render(): TemplateResult {
     const connections = this.view?.connections ?? [];
     return html`<div class=${styles.root}>
-      ${this.error ? html`<p class=${shared.note} role="alert">${msg(
+      ${this.error ? html`<p class=${shared.note} role="alert">${this.refusal ?? msg(
         'Connection request failed or the revision changed. Reload and retry.',
         {id: 'connections.error'},
       )}</p>

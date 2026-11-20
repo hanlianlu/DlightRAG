@@ -42,6 +42,7 @@ from dlightrag.engine.rag.retrieval.rerank import (
 from dlightrag.engine.rag.retrieval.rerank_breaker import RerankBreaker, RerankCircuitOpen
 from dlightrag.engine.rag.retrieval.rerank_fallback import rerank_with_fallback
 from dlightrag.engine.rag.workspace.settings import RERANK_DEADLINE_SECONDS, RetrievalSettings
+from tests.unit.conftest import OtlpExport
 
 
 def _chunks() -> list[dict[str, Any]]:
@@ -86,6 +87,53 @@ async def test_ai_rerank_model_owns_http_provider_execution(monkeypatch) -> None
     assert scores == [{"index": 0, "relevance_score": 0.8}]
     client.post.assert_awaited_once()
     client.aclose.assert_awaited_once()
+
+
+async def test_the_rerank_span_names_no_provider_it_does_not_know(
+    monkeypatch: pytest.MonkeyPatch, otlp_export: OtlpExport
+) -> None:
+    """`voyage_reranker` is a strategy key, and `gen_ai.provider.name` wants a provider.
+
+    The HTTP rerank call knows which wire protocol it speaks and not who serves it, so
+    the attribute is absent: a dashboard that groups model calls by provider must not
+    count a protocol as one. The strategy stays where it belongs, in this span's own
+    payload.
+    """
+    from dlightrag.engine.ai import rerank
+
+    provider = MagicMock()
+    provider.requires_api_key = True
+    provider.requires_base_url = False
+    provider.default_model = "rerank-default"
+    provider.request_url.return_value = "https://rerank.example/v1/rerank"
+    provider.request_headers.return_value = {"Authorization": "Bearer key"}
+    provider.build_payload.return_value = {"query": "query", "documents": ["text"]}
+    provider.parse_results.return_value = [{"index": 0, "relevance_score": 0.8}]
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    response.json.return_value = {"results": []}
+    client = AsyncMock()
+    client.post.return_value = response
+    monkeypatch.setattr(rerank, "RERANK_PROVIDERS", {"voyage_reranker": provider})
+    monkeypatch.setattr("dlightrag.engine.ai.rerank.httpx.AsyncClient", lambda **_kwargs: client)
+
+    model = rerank.create_rerank_model(
+        RerankSettings(strategy="voyage_reranker", model="rerank-3-lite", api_key="key"),
+        scheduler=ModelScheduler(max_concurrency=1),
+        telemetry=otlp_export.telemetry,
+    )
+    await model.score("query", [("text", None)], top_n=1)
+    await model.aclose()
+
+    (span,) = otlp_export.spans()
+    assert span.name == "call-rerank-model"
+    attributes = otlp_export.attributes(span)
+    assert "gen_ai.provider.name" not in attributes
+    # The hop is the app's own kind, with no convention operation to name a provider for.
+    assert attributes["dlightrag.observation.kind"] == "span"
+    assert "gen_ai.operation.name" not in attributes
+    assert attributes["gen_ai.request.model"] == "rerank-3-lite"
+    assert otlp_export.payload(span, "dlightrag.metadata")["strategy"] == "voyage_reranker"
 
 
 async def test_rerank_requests_share_scheduler_limit() -> None:
@@ -412,61 +460,46 @@ class TestBuildRerankFunc:
         monkeypatch.setattr(rerank_module, "create_rerank_model", MagicMock(return_value=model))
         return model
 
-    async def test_chat_llm_default_threshold_keeps_all_scored_candidates(self, monkeypatch):
-        captured = self._capture_threshold(monkeypatch, "_chat_llm_rerank")
-        scoring_model = AsyncMock()
-        scoring_model.aclose = AsyncMock()
-        monkeypatch.setattr(
-            rerank_module,
-            "CompletionModel",
-            MagicMock(return_value=scoring_model),
-        )
+    @pytest.mark.parametrize(
+        ("strategy", "reranker", "threshold"),
+        [
+            ("chat_llm_reranker", "_chat_llm_rerank", None),
+            ("voyage_reranker", "_run_http_rerank", None),
+            ("voyage_reranker", "_run_http_rerank", 0.42),
+        ],
+        ids=["chat-llm-default", "provider-default", "provider-explicit"],
+    )
+    async def test_the_configured_score_threshold_reaches_the_reranker_unchanged(
+        self, monkeypatch, strategy: Any, reranker: str, threshold: float | None
+    ):
+        """No threshold keeps every scored candidate; a stated one is forwarded as stated."""
+        captured = self._capture_threshold(monkeypatch, reranker)
+        scoring_settings = None
+        if strategy == "chat_llm_reranker":
+            scoring_model = AsyncMock()
+            scoring_model.aclose = AsyncMock()
+            monkeypatch.setattr(
+                rerank_module, "CompletionModel", MagicMock(return_value=scoring_model)
+            )
+            scoring_settings = ModelSettings(provider="openai", model="scoring-model")
+            settings = RerankSettings(strategy=strategy, score_threshold=threshold)
+        else:
+            self._stub_http_model(monkeypatch)
+            settings = RerankSettings(
+                strategy=strategy, api_key="voyage-key", score_threshold=threshold
+            )
 
         fn = build_rerank_func(
-            RerankSettings(strategy="chat_llm_reranker"),
+            settings,
             scheduler=ModelScheduler(max_concurrency=1),
-            scoring_settings=ModelSettings(provider="openai", model="scoring-model"),
+            scoring_settings=scoring_settings,
             telemetry=NOOP_TELEMETRY,
             breaker=RerankBreaker(),
         )
         assert fn is not None
         await fn("query", [{"content": "chunk"}], 1)
 
-        assert captured["score_threshold"] is None
-
-    async def test_provider_default_threshold_keeps_all_scored_candidates(self, monkeypatch):
-        captured = self._capture_threshold(monkeypatch, "_run_http_rerank")
-        self._stub_http_model(monkeypatch)
-
-        fn = build_rerank_func(
-            RerankSettings(strategy="voyage_reranker", api_key="voyage-key"),
-            scheduler=ModelScheduler(max_concurrency=1),
-            telemetry=NOOP_TELEMETRY,
-            breaker=RerankBreaker(),
-        )
-        assert fn is not None
-        await fn("query", [{"content": "chunk"}], 1)
-
-        assert captured["score_threshold"] is None
-
-    async def test_explicit_provider_threshold_is_preserved(self, monkeypatch):
-        captured = self._capture_threshold(monkeypatch, "_run_http_rerank")
-        self._stub_http_model(monkeypatch)
-
-        fn = build_rerank_func(
-            RerankSettings(
-                strategy="voyage_reranker",
-                api_key="voyage-key",
-                score_threshold=0.42,
-            ),
-            scheduler=ModelScheduler(max_concurrency=1),
-            telemetry=NOOP_TELEMETRY,
-            breaker=RerankBreaker(),
-        )
-        assert fn is not None
-        await fn("query", [{"content": "chunk"}], 1)
-
-        assert captured["score_threshold"] == 0.42
+        assert captured["score_threshold"] == threshold
 
     def test_provider_requires_api_key(self):
         with pytest.raises(ValueError, match="requires api_key"):

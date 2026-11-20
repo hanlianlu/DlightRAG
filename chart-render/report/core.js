@@ -1,4 +1,3 @@
-// Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /**
  * The pure half of `html-report`: everything that turns one chart's spec, the slicers' state and the
  * figure's width into the final ECharts option. No DOM, so the browser runtime and the node preview
@@ -142,6 +141,12 @@ function distinct(rows, field) {
 const TOKEN_WORDS = {
   zh: {all: '全部', join: '、'},
   en: {all: 'All', join: ', '},
+};
+// How a chart the slicer does not drive says so under its own title, so the reader is not left
+// wondering why it alone stands still when the controls move.
+const EXEMPT_WORDS = {
+  zh: {one: '不受「%s」筛选影响', join: '、'},
+  en: {one: 'not filtered by %s', join: ' or '},
 };
 const TOKEN = /\{([^{}|]+)\}/g;
 
@@ -614,6 +619,14 @@ function chartHeight(spec, option, ctx) {
   return Math.round(Math.max(height, minHeight));
 }
 
+/** The note under the title of a chart a slicer does not drive: the slicers it names, or nothing. */
+function exemptNote(spec, defs, words) {
+  const raw = spec.unfiltered;
+  const ids = Array.isArray(raw) ? raw : raw && typeof raw === 'object' ? Object.keys(raw) : [];
+  const names = ids.filter((id) => typeof id === 'string' && id).map((id) => defs[id]?.label || id);
+  return names.length ? words.one.replace('%s', names.join(words.join)) : '';
+}
+
 /**
  * Build everything the runtime needs to draw one chart at one width:
  * `{option, height, theme, caption, empty, profile, horizontal}`.
@@ -626,9 +639,10 @@ function chartHeight(spec, option, ctx) {
 function prepare(spec, state = {}, width = 720, env = {}) {
   const profile = profileFor(width);
   const {name: paletteName, option} = Theme.pick(clone(spec.option ?? {}));
+  const defs = {...env.slicers, ...spec.slicers};
 
   applyTokens(option, {
-    slicers: {...env.slicers, ...spec.slicers},
+    slicers: defs,
     state,
     words: TOKEN_WORDS[env.lang] ?? TOKEN_WORDS.en,
     metric: selectedMetric(spec, state),
@@ -642,9 +656,12 @@ function prepare(spec, state = {}, width = 720, env = {}) {
   // The palette's series rules come before the layout, which gives a line only what the theme left unsaid.
   option.series = Theme.decorate(option, paletteName).series;
 
-  // Caption: the title leaves the chart and becomes HTML, so it wraps like text.
+  // Caption: the title leaves the chart and becomes HTML, so it wraps like text. A chart the slicer
+  // does not drive says so under it, so a reader does not read a still chart as a broken one.
   const title = asList(option.title)[0] ?? {};
   const caption = title.text || title.subtext ? {title: title.text ?? '', subtitle: title.subtext ?? ''} : null;
+  const note = caption ? exemptNote(spec, defs, EXEMPT_WORDS[env.lang] ?? EXEMPT_WORDS.en) : '';
+  if (note) caption.subtitle = caption.subtitle ? `${caption.subtitle} · ${note}` : note;
   delete option.title;
   delete option.toolbox;
   delete option.backgroundColor;

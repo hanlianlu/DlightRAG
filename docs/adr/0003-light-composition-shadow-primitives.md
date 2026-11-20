@@ -17,7 +17,7 @@ All-Shadow would force `::part` holes through the rich-content pipeline. All-Lig
 - **Composition (Light DOM):** Shell, Web Features, lists, and any host of `mountRichHtml` / `typesetRichContent`. Application styles are Feature-owned CSS Modules in `@layer features`. `layout` CSS belongs to the Shell, not Inspector.
 - **Encapsulation (open Shadow DOM):** design-system primitives with no domain stores. `dl-split-layout` exists. `dl-icon-button` and `dl-menu` are the only additional Shadow primitives this decision authorizes. Tokens pierce via CSS variables, not per-control `::part`. Native `<dialog>` stays in Light DOM (focus and `::backdrop`).
 - **Rich HTML host:** sanitized HTML, MathJax, and Mermaid run only in Light DOM. A future card that needs rich rendering is a Feature, or a primitive that *slots* Light children. Typesetting inside `shadowRoot` requires a new ADR.
-- **Handles:** `main` / `dl-app` construct stores once and pass an `AppHandles` object. Primitives never receive it. Features do not import store singletons.
+- **Handles:** `main` / `dl-app` construct stores once and pass an `AppHandles` object. Primitives never receive it. A Feature takes its stores from its `handles` property, which is the page's bag until it is handed another, and follows whichever bag it holds; no store module holds an instance of its own.
 
 ## Considered Options
 

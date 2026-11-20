@@ -76,11 +76,12 @@ class ToolModel:
         messages: list[dict[str, Any]],
         tools: list[ToolDefinition],
         emit_text: Callable[[str], Awaitable[None]],
+        emit_reasoning: Callable[[str], Awaitable[None]] | None = None,
         tool_choice: ToolChoice = "auto",
         max_tokens: int | None = None,
         model_profile: ModelProfile | None = None,
     ) -> AssistantTurn:
-        """Run one tool-capable turn and forward native provider text deltas."""
+        """Run one tool-capable turn and forward native provider deltas."""
         asked = time.monotonic()
         return await self._scheduler.run(
             lambda: self._complete_tool_turn(
@@ -91,6 +92,7 @@ class ToolModel:
                 model_profile=model_profile,
                 asked=asked,
                 emit_text=emit_text,
+                emit_reasoning=emit_reasoning,
             )
         )
 
@@ -104,6 +106,7 @@ class ToolModel:
         model_profile: ModelProfile | None,
         asked: float,
         emit_text: Callable[[str], Awaitable[None]] | None = None,
+        emit_reasoning: Callable[[str], Awaitable[None]] | None = None,
     ) -> AssistantTurn:
         # The scheduler starts this the moment it admits the request, so the time since the
         # caller asked is the time the request waited for a slot.
@@ -144,6 +147,8 @@ class ToolModel:
                 }
                 if emit_text is not None:
                     provider_kwargs["emit_text"] = emit_text
+                    if emit_reasoning is not None:
+                        provider_kwargs["emit_reasoning"] = emit_reasoning
                 outbound = messages_for_model(messages, self.fingerprint)
                 sent_at = time.monotonic()
                 turn = await provider_method(outbound, self.settings.model, **provider_kwargs)
@@ -181,6 +186,7 @@ class ToolModel:
                 },
                 usage_details=turn.usage_details,
                 cost_details=turn.cost_details,
+                response_model=turn.served_model,
             )
             return turn
 
@@ -232,6 +238,8 @@ class ToolModel:
         text_length = 0
         attempts = 0
         reasoning_attempts: list[dict[str, str]] = []
+        # What the wire said answered, kept from the attempt that produced the text.
+        served_model: str | None = None
         # An explicit output cap (compaction's) is the provider's max_tokens, not a raw
         # kwarg that only some wires would accept.
         explicit = None if model_kwargs is None else dict(model_kwargs)
@@ -280,6 +288,7 @@ class ToolModel:
                     took = time.monotonic() - sent_at
                     _accumulate_metrics(usage_details, attempt_usage.get("usage_details"))
                     _accumulate_metrics(cost_details, attempt_usage.get("cost_details"))
+                    served_model = attempt_usage.get("served_model") or served_model
                     if substantive_text:
                         if call_holder is not None:
                             call_holder["call"] = ModelCall.of(
@@ -318,6 +327,7 @@ class ToolModel:
                     output=output,
                     usage_details=usage_details or None,
                     cost_details=cost_details or None,
+                    response_model=served_model,
                 )
 
     def _final_attempt_options(

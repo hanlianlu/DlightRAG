@@ -14,11 +14,7 @@ from uuid import UUID
 
 import pytest
 
-from dlightrag.application.corpus_admin import (
-    IngestSpec,
-    UploadTooLargeError,
-    WorkspaceNotFoundError,
-)
+from dlightrag.application.corpus_admin.errors import UploadTooLargeError, WorkspaceNotFoundError
 from dlightrag.application.corpus_admin.mutations import (
     CorpusMutationExecutor,
     CorpusMutationService,
@@ -28,6 +24,7 @@ from dlightrag.application.corpus_admin.mutations import (
     _result,
     validate_corpus_mutation_prepared_input,
 )
+from dlightrag.application.corpus_admin.service import IngestSpec
 from dlightrag.application.errors import ApplicationUnavailableError
 from dlightrag.engine.dependencies import (
     MAX_DEPENDENCY_DEFERRALS,
@@ -44,7 +41,9 @@ from dlightrag.engine.runtime.records import (
     WaitingForRepair,
     run_request_fingerprint,
 )
-from dlightrag.engine.runtime.records import IdempotencyKeyConflict as RuntimeIdempotencyKeyConflict
+from dlightrag.engine.runtime.records import (
+    IdempotencyKeyConflict as RuntimeIdempotencyKeyConflict,
+)
 
 _RUN_ID = "0199a0a0-0000-7000-8000-000000000001"
 _TRACK_ID = f"dlightrag-corpus-{_RUN_ID}"
@@ -453,7 +452,7 @@ async def test_uploads_that_would_become_one_document_are_refused_before_staging
     tmp_path: Path,
 ) -> None:
     """LightRAG names a document by its basename, whatever folder it was uploaded from."""
-    from dlightrag.application.corpus_admin import CorpusMutationInputError
+    from dlightrag.application.corpus_admin.errors import CorpusMutationInputError
 
     with pytest.raises(CorpusMutationInputError, match="same document 'report.pdf'"):
         await _service(tmp_path).stage_uploads(
@@ -489,7 +488,7 @@ async def test_an_upload_with_nothing_left_to_ingest_is_refused(
     tmp_path: Path, filename: str
 ) -> None:
     """A document's parser input takes its name in the corpus directory, beside its stages."""
-    from dlightrag.application.corpus_admin import CorpusMutationInputError
+    from dlightrag.application.corpus_admin.errors import CorpusMutationInputError
 
     with pytest.raises(CorpusMutationInputError, match="no files to ingest"):
         await _service(tmp_path).stage_uploads(
@@ -1448,7 +1447,7 @@ async def test_a_reader_refuses_every_corpus_write_before_it_happens(tmp_path: P
     bytes for a Run that could never execute and failed it later. Every entry point now
     refuses first, with the remedy, and the workspace stays empty.
     """
-    from dlightrag.application.corpus_admin import CorpusMutationUnavailableError
+    from dlightrag.application.corpus_admin.errors import CorpusMutationUnavailableError
 
     service = CorpusMutationService(
         **_roots(tmp_path),
@@ -1459,7 +1458,7 @@ async def test_a_reader_refuses_every_corpus_write_before_it_happens(tmp_path: P
         writable=False,
     )
 
-    from dlightrag.application.corpus_admin import IngestSpec
+    from dlightrag.application.corpus_admin.service import IngestSpec
 
     spec = IngestSpec(source_type="url", url="https://example.com/report.pdf")
     calls = (
@@ -1496,7 +1495,7 @@ async def test_a_reader_refuses_every_corpus_write_before_it_happens(tmp_path: P
 
 
 async def test_a_reader_refuses_uploads_without_reading_the_catalog(tmp_path: Path) -> None:
-    from dlightrag.application.corpus_admin import CorpusMutationUnavailableError
+    from dlightrag.application.corpus_admin.errors import CorpusMutationUnavailableError
 
     lookups: list[str] = []
 
@@ -1799,7 +1798,7 @@ def _local_spec(path: Path) -> IngestSpec:
 
 
 async def test_blank_selectors_are_the_callers_to_fix(tmp_path: Path) -> None:
-    from dlightrag.application.corpus_admin import CorpusMutationInputError
+    from dlightrag.application.corpus_admin.errors import CorpusMutationInputError
 
     with pytest.raises(CorpusMutationInputError, match="at least one exact document identifier"):
         await _service(tmp_path).create_delete(
@@ -1808,7 +1807,7 @@ async def test_blank_selectors_are_the_callers_to_fix(tmp_path: Path) -> None:
 
 
 async def test_selector_bounds_and_blank_retries_are_the_callers_to_fix(tmp_path: Path) -> None:
-    from dlightrag.application.corpus_admin import CorpusMutationInputError
+    from dlightrag.application.corpus_admin.errors import CorpusMutationInputError
 
     service = _service(tmp_path)
     with pytest.raises(CorpusMutationInputError, match="at most 100 document identifiers"):
@@ -1824,7 +1823,7 @@ async def test_selector_bounds_and_blank_retries_are_the_callers_to_fix(tmp_path
 async def test_an_oversized_corpus_request_is_the_callers_to_fix(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from dlightrag.application.corpus_admin import CorpusMutationInputError
+    from dlightrag.application.corpus_admin.errors import CorpusMutationInputError
 
     monkeypatch.setattr("dlightrag.engine.runtime.records.MAX_PREPARED_INPUT_BYTES", 64)
     store = AsyncMock()
@@ -1844,7 +1843,7 @@ async def test_an_oversized_corpus_request_is_the_callers_to_fix(
 
 
 def test_a_local_folder_cannot_link_outside_its_workspace(tmp_path: Path) -> None:
-    from dlightrag.application.corpus_admin import CorpusMutationInputError
+    from dlightrag.application.corpus_admin.errors import CorpusMutationInputError
 
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -1862,7 +1861,7 @@ def test_a_local_folder_cannot_link_outside_its_workspace(tmp_path: Path) -> Non
 
 
 def test_a_local_folder_may_hold_only_files_and_folders(tmp_path: Path) -> None:
-    from dlightrag.application.corpus_admin import CorpusMutationInputError
+    from dlightrag.application.corpus_admin.errors import CorpusMutationInputError
 
     folder = tmp_path / "inputs" / "default" / "docs"
     folder.mkdir(parents=True)
@@ -1873,7 +1872,7 @@ def test_a_local_folder_may_hold_only_files_and_folders(tmp_path: Path) -> None:
 
 
 def test_a_missing_or_oversized_local_source_is_the_callers_to_fix(tmp_path: Path) -> None:
-    from dlightrag.application.corpus_admin import CorpusMutationInputError
+    from dlightrag.application.corpus_admin.errors import CorpusMutationInputError
 
     service = _service(tmp_path)
     with pytest.raises(CorpusMutationInputError, match="does not exist"):
@@ -1890,7 +1889,8 @@ def test_a_missing_or_oversized_local_source_is_the_callers_to_fix(tmp_path: Pat
 
 
 def test_an_oversized_local_folder_refuses_before_copying(tmp_path: Path, monkeypatch) -> None:
-    from dlightrag.application.corpus_admin import CorpusMutationInputError, mutations
+    from dlightrag.application.corpus_admin import mutations
+    from dlightrag.application.corpus_admin.errors import CorpusMutationInputError
 
     copied: list[tuple[object, ...]] = []
     real_copy = mutations._copy_regular_file
@@ -1912,7 +1912,8 @@ def test_an_oversized_local_folder_refuses_before_copying(tmp_path: Path, monkey
 
 def test_a_folder_swapped_for_a_link_while_copying_refuses(tmp_path: Path, monkeypatch) -> None:
     """The listing is not trusted: every file is reopened without following a link."""
-    from dlightrag.application.corpus_admin import CorpusMutationInputError, mutations
+    from dlightrag.application.corpus_admin import mutations
+    from dlightrag.application.corpus_admin.errors import CorpusMutationInputError
 
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -1940,7 +1941,7 @@ def test_a_folder_swapped_for_a_link_while_copying_refuses(tmp_path: Path, monke
 
 def test_a_file_that_became_a_link_refuses(tmp_path: Path) -> None:
     """A source resolved before the swap is still opened without following a link."""
-    from dlightrag.application.corpus_admin import CorpusMutationInputError
+    from dlightrag.application.corpus_admin.errors import CorpusMutationInputError
     from dlightrag.application.corpus_admin.mutations import _open_below
 
     outside = tmp_path / "outside.txt"
@@ -1958,7 +1959,8 @@ def test_a_file_that_became_a_link_refuses(tmp_path: Path) -> None:
 
 
 def test_a_local_source_too_deep_or_too_wide_refuses(tmp_path: Path, monkeypatch) -> None:
-    from dlightrag.application.corpus_admin import CorpusMutationInputError, mutations
+    from dlightrag.application.corpus_admin import mutations
+    from dlightrag.application.corpus_admin.errors import CorpusMutationInputError
 
     workspace = tmp_path / "inputs" / "default"
     deep = workspace / "deep"
@@ -1992,7 +1994,8 @@ def test_a_local_source_too_deep_or_too_wide_refuses(tmp_path: Path, monkeypatch
 def test_a_local_folder_past_the_entry_bound_refuses_before_reading_the_rest(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from dlightrag.application.corpus_admin import CorpusMutationInputError, mutations
+    from dlightrag.application.corpus_admin import mutations
+    from dlightrag.application.corpus_admin.errors import CorpusMutationInputError
 
     folder = tmp_path / "inputs" / "default" / "wide"
     folder.mkdir(parents=True)
@@ -2025,7 +2028,7 @@ def test_a_local_folder_past_the_entry_bound_refuses_before_reading_the_rest(
 
 
 def test_an_unreadable_local_source_is_the_callers_to_fix(tmp_path: Path) -> None:
-    from dlightrag.application.corpus_admin import CorpusMutationInputError
+    from dlightrag.application.corpus_admin.errors import CorpusMutationInputError
 
     locked = tmp_path / "inputs" / "default" / "locked"
     (locked / "inner").mkdir(parents=True)
@@ -2041,7 +2044,7 @@ def test_an_unreadable_local_source_is_the_callers_to_fix(tmp_path: Path) -> Non
 
 
 def test_a_linked_folder_refuses(tmp_path: Path) -> None:
-    from dlightrag.application.corpus_admin import CorpusMutationInputError
+    from dlightrag.application.corpus_admin.errors import CorpusMutationInputError
 
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -2060,7 +2063,7 @@ def test_a_workspace_root_source_copies_only_what_ingestion_reads(tmp_path: Path
     workspace = tmp_path / "inputs" / "default"
     (workspace / "reports").mkdir(parents=True)
     (workspace / "reports" / "q3.txt").write_text("quarter", encoding="utf-8")
-    (workspace / "reports" / "__uploads__").write_text("x", encoding="utf-8")
+    (workspace / "reports" / "__remote_sources__").write_text("x", encoding="utf-8")
     (workspace / "top.txt").write_text("top", encoding="utf-8")
     (workspace / ".staging").mkdir()
     (workspace / ".staging" / "partial.txt").write_text("x", encoding="utf-8")
@@ -2090,7 +2093,7 @@ def test_a_workspace_root_source_copies_only_what_ingestion_reads(tmp_path: Path
 def test_a_local_source_with_nothing_to_ingest_or_no_path_is_the_callers_to_fix(
     tmp_path: Path,
 ) -> None:
-    from dlightrag.application.corpus_admin import CorpusMutationInputError
+    from dlightrag.application.corpus_admin.errors import CorpusMutationInputError
 
     workspace = tmp_path / "inputs" / "default"
     (workspace / "empty" / ".git").mkdir(parents=True)
@@ -2120,7 +2123,7 @@ def test_a_local_file_is_staged_under_its_own_name(tmp_path: Path) -> None:
 
 
 def test_a_manifest_keeps_each_documents_fields_and_names_only_files(tmp_path: Path) -> None:
-    from dlightrag.application.corpus_admin import CorpusMutationInputError
+    from dlightrag.application.corpus_admin.errors import CorpusMutationInputError
     from dlightrag.engine.rag.corpus.contracts import IngestDocument
 
     workspace = tmp_path / "inputs" / "default"
@@ -2155,7 +2158,7 @@ def test_a_manifest_keeps_each_documents_fields_and_names_only_files(tmp_path: P
 @pytest.mark.parametrize("name", [".hidden.pdf", ".runs", "__parsed__", "__remote_sources__"])
 def test_a_local_file_named_like_a_corpus_entry_is_refused(tmp_path: Path, name: str) -> None:
     """Its parser input would take a Run stage's, a temporary copy's or a corpus folder's place."""
-    from dlightrag.application.corpus_admin import CorpusMutationInputError
+    from dlightrag.application.corpus_admin.errors import CorpusMutationInputError
 
     source = tmp_path / "inputs" / "default" / name
     source.parent.mkdir(parents=True)
@@ -2167,7 +2170,7 @@ def test_a_local_file_named_like_a_corpus_entry_is_refused(tmp_path: Path, name:
 
 
 def test_two_local_files_that_would_become_one_document_are_refused(tmp_path: Path) -> None:
-    from dlightrag.application.corpus_admin import CorpusMutationInputError
+    from dlightrag.application.corpus_admin.errors import CorpusMutationInputError
 
     folder = tmp_path / "inputs" / "default" / "docs"
     (folder / "a").mkdir(parents=True)

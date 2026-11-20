@@ -30,26 +30,42 @@ function writePreference(preference: LanguagePreference): void {
   writeStored(LANGUAGE_STORAGE_KEY, preference === 'auto' ? null : preference);
 }
 
+/** The BCP 47 tag `<html lang>` carries. Chinese names its script, so a reader whose system prefers
+ *  Traditional glyphs is not shown them for Simplified text. */
+function documentLanguage(locale: string): string {
+  return locale === 'zh' ? 'zh-Hans' : locale;
+}
+
 function applyDocumentLanguage(locale: string): void {
-  document.documentElement.lang = locale;
+  document.documentElement.lang = documentLanguage(locale);
 }
 
 export function currentLanguagePreference(): LanguagePreference {
   return readPreference();
 }
 
-/** Apply one language preference: persist, resolve, sync `<html lang>`, and load. */
+/**
+ * Make `locale` the active language and point `<html lang>` at the one that is active once that
+ * settles. The tag moves with the catalog, never ahead of it, and stays where it was when the
+ * catalog fails to load, so it never names a language the page is not speaking. `install` is
+ * injectable so a test can hold a load or fail one.
+ */
+export async function activateLocale(
+  locale: string,
+  install: (locale: string) => Promise<void> = setLocale,
+): Promise<void> {
+  try {
+    await install(locale);
+  } catch {
+    // Keep the current locale when a catalog fails to load.
+  }
+  applyDocumentLanguage(getLocale());
+}
+
+/** Apply one language preference: persist, resolve, load, and sync `<html lang>`. */
 export async function setLanguagePreference(preference: LanguagePreference): Promise<void> {
   writePreference(preference);
-  const locale = resolveLocale(preference, window.navigator.language);
-  applyDocumentLanguage(locale);
-  if (locale !== getLocale()) {
-    try {
-      await setLocale(locale);
-    } catch {
-      // Keep the current locale when a catalog fails to load.
-    }
-  }
+  await activateLocale(resolveLocale(preference, window.navigator.language));
 }
 
 /** Resolve the stored preference once per page before the first Lit render. */

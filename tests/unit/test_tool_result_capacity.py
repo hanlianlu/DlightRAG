@@ -4,7 +4,12 @@
 import pytest
 
 from dlightrag.engine.agent.tool_content import ToolResourceAttachmentPart
-from dlightrag.engine.agent.tools import ToolResult, ToolResultCapacityError, fit_tool_result
+from dlightrag.engine.agent.tools.capacity import fit_tool_result
+from dlightrag.engine.agent.tools.contracts import (
+    OBSERVED_TRUNCATED_DETAIL,
+    ToolResult,
+    ToolResultCapacityError,
+)
 from dlightrag.engine.ai.tokens import estimate_tokens
 
 
@@ -64,3 +69,39 @@ def test_a_continuation_that_cannot_fit_fails_loudly() -> None:
 def test_no_residual_capacity_fails_loudly() -> None:
     with pytest.raises(ToolResultCapacityError, match="residual model input capacity"):
         fit_tool_result(ToolResult.text("x" * 4000), max_tokens=0)
+
+
+def test_a_cut_is_recorded_on_the_result_and_not_only_described_in_the_text() -> None:
+    """The Runtime's own truncation is a fact a reader can check, not a marker to parse.
+
+    A result that describes work it did not finish is the defect this record exists to
+    catch, so a viewer or an audit sees the cut without searching the model-visible text
+    for a marker.
+    """
+    result = ToolResult.text("x" * 4000)
+
+    fitted = fit_tool_result(result, max_tokens=80)
+
+    assert fitted.observed_truncated is True
+    assert fitted.details is not None
+    assert fitted.details[OBSERVED_TRUNCATED_DETAIL] is True
+
+
+def test_a_result_that_fits_records_nothing_and_is_returned_unchanged() -> None:
+    result = ToolResult.text("small answer", details={"pages": 1})
+
+    fitted = fit_tool_result(result, max_tokens=100)
+
+    assert fitted is result
+    assert fitted.observed_truncated is False
+    assert fitted.details == {"pages": 1}
+
+
+def test_a_cut_keeps_the_details_the_tool_reported() -> None:
+    result = ToolResult.text("x" * 4000, details={"rows": 12, "truncated": False})
+
+    fitted = fit_tool_result(result, max_tokens=80)
+
+    assert fitted.details == {"rows": 12, "truncated": False, OBSERVED_TRUNCATED_DETAIL: True}
+    # A tool-level claim is not overwritten by the Runtime's own: they are different facts.
+    assert fitted.details is not None and fitted.details["truncated"] is False

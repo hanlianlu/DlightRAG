@@ -17,62 +17,64 @@ from httpx import ASGITransport, AsyncClient, Response
 
 from dlightrag.adapters.http.rest.auth import get_current_user
 from dlightrag.adapters.http.server import create_app
-from dlightrag.application import ApplicationClosedError
-from dlightrag.application.access import (
-    DEPLOYMENT_OWNER_ID,
+from dlightrag.application.access import authentication as authentication_module
+from dlightrag.application.access.authentication import (
     AuthenticationError,
-    UserContext,
     authenticate_bearer_token,
+)
+from dlightrag.application.access.principal import (
+    DEPLOYMENT_OWNER_ID,
+    UserContext,
     owner_id_from_principal,
 )
-from dlightrag.application.access import authentication as authentication_module
-from dlightrag.application.answer_runs import (
+from dlightrag.application.answer_runs.child_roster import (
     ChildRosterCursor,
     ChildRosterCursorCodec,
     ChildRosterPage,
 )
-from dlightrag.application.config import (
+from dlightrag.application.application import ApplicationClosedError
+from dlightrag.application.config.loading import set_config
+from dlightrag.application.config.sections import (
     AccessControlConfig,
     AccessControlRuleConfig,
     DlightragConfig,
-    set_config,
 )
-from dlightrag.application.corpus_admin import (
-    FilePanelCursor,
-    FilePanelCursorCodec,
+from dlightrag.application.corpus_admin.errors import MetadataValidationError
+from dlightrag.application.corpus_admin.file_panel import FilePanelCursor, FilePanelCursorCodec
+from dlightrag.application.corpus_admin.metadata_search import (
     MetadataSearchCursor,
     MetadataSearchCursorCodec,
     MetadataSearchPage,
-    MetadataValidationError,
-    UploadLimits,
+)
+from dlightrag.application.corpus_admin.mutations import UploadLimits
+from dlightrag.application.corpus_admin.workspace_catalog import (
     WorkspaceCatalogCursor,
     WorkspaceCatalogCursorCodec,
     WorkspaceCatalogPage,
 )
 from dlightrag.application.health import ApplicationHealth
-from dlightrag.application.retrieval import (
+from dlightrag.application.retrieval._answer_projection import project_answer_retrieval
+from dlightrag.application.retrieval.execution import restore_retrieval_result
+from dlightrag.application.retrieval.service import (
     CorpusUnavailableError,
     RetrieveProjection,
     RetrieveResponse,
-    restore_retrieval_result,
 )
-from dlightrag.application.retrieval._answer_projection import project_answer_retrieval
 from dlightrag.application.runs import (
     IdempotencyKeyConflict,
     RunAdmissionLimitExceededError,
     RunRuntimeUnavailableError,
     RunView,
 )
-from dlightrag.application.settings import authentication_settings
-from dlightrag.engine.answer.citations.contracts import SourceReference
+from dlightrag.application.settings.projections import authentication_settings
 from dlightrag.engine.answer.errors import AnswerInputOverflowError
 from dlightrag.engine.runtime.records import (
     RunAccessScope,
     RunCreation,
     RunRecord,
 )
-from tests.config_helpers import clone_config, mutate_config, replace_config
 from tests.support.application_double import application_double
+from tests.support.config_helpers import clone_config, mutate_config, replace_config
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -92,17 +94,6 @@ def _project_stored_retrieval(
         sources=projected.sources,
         trace=result.trace,
         image_descriptions=tuple(result.image_descriptions),
-    )
-
-
-def _finance_source() -> SourceReference:
-    return SourceReference(
-        id="1",
-        title="report.pdf",
-        source_uri="s3://bucket/report.pdf",
-        workspace="finance",
-        document_id="doc-report",
-        download_locator="s3://bucket/report.pdf",
     )
 
 
@@ -332,14 +323,22 @@ class TestAuthMiddleware:
         )
         assert resp.status_code == 200
 
+    @pytest.mark.parametrize(
+        "headers",
+        [{}, {"Authorization": "Basic abc123"}, {"Authorization": "Bearer wrong-token"}],
+        ids=["missing-header", "wrong-scheme", "invalid-token"],
+    )
     @pytest.mark.usefixtures("_patch_application")
-    async def test_simple_missing_auth_header_401(
-        self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig
+    async def test_simple_refuses_a_request_without_the_bearer_token_401(
+        self,
+        client: AsyncClient,
+        mock_config_no_auth_override: DlightragConfig,
+        headers: dict[str, str],
     ) -> None:
         cfg = mock_config_no_auth_override
         mutate_config(cfg, "access.api_token", "secret-token")
         mutate_config(cfg, "access.auth_mode", "simple")
-        resp = await client.get("/files")
+        resp = await client.get("/files", headers=headers)
         assert resp.status_code == 401
 
 
@@ -493,7 +492,7 @@ class TestWorkspaceLifecycleAPI:
     async def test_create_workspace_rejects_duplicate(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        from dlightrag.application.corpus_admin import WorkspaceExistsError
+        from dlightrag.application.corpus_admin.errors import WorkspaceExistsError
 
         app.state.application = mock_application
         mock_application.corpora.create_workspace.side_effect = WorkspaceExistsError(
@@ -508,32 +507,6 @@ class TestWorkspaceLifecycleAPI:
             "detail": "Workspace 'default' already exists",
             "error_type": "conflict",
         }
-
-    @pytest.mark.usefixtures("_patch_application")
-    async def test_simple_wrong_scheme_401(
-        self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig
-    ) -> None:
-        cfg = mock_config_no_auth_override
-        mutate_config(cfg, "access.api_token", "secret-token")
-        mutate_config(cfg, "access.auth_mode", "simple")
-        resp = await client.get(
-            "/files",
-            headers={"Authorization": "Basic abc123"},
-        )
-        assert resp.status_code == 401
-
-    @pytest.mark.usefixtures("_patch_application")
-    async def test_simple_invalid_token_401(
-        self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig
-    ) -> None:
-        cfg = mock_config_no_auth_override
-        mutate_config(cfg, "access.api_token", "secret-token")
-        mutate_config(cfg, "access.auth_mode", "simple")
-        resp = await client.get(
-            "/files",
-            headers={"Authorization": "Bearer wrong-token"},
-        )
-        assert resp.status_code == 401
 
     @pytest.mark.parametrize(
         "method,path,body",
@@ -800,17 +773,14 @@ class TestAuthenticateBearerToken:
         assert ctx.user_id == "anonymous"
         assert ctx.auth_mode == "simple"
 
-    def test_simple_invalid_token_raises_403(self, test_config: DlightragConfig) -> None:
+    @pytest.mark.parametrize("token", ["wrong-token", ""], ids=["wrong", "empty"])
+    def test_simple_rejects_a_wrong_or_empty_token(
+        self, test_config: DlightragConfig, token: str
+    ) -> None:
         mutate_config(test_config, "access.auth_mode", "simple")
         mutate_config(test_config, "access.api_token", "secret-token")
         with pytest.raises(AuthenticationError, match="Invalid token"):
-            self.authenticate("wrong-token", test_config)
-
-    def test_simple_empty_token_raises_403(self, test_config: DlightragConfig) -> None:
-        mutate_config(test_config, "access.auth_mode", "simple")
-        mutate_config(test_config, "access.api_token", "secret-token")
-        with pytest.raises(AuthenticationError, match="Invalid token"):
-            self.authenticate("", test_config)
+            self.authenticate(token, test_config)
 
     def test_simple_default_user_id(self, test_config: DlightragConfig) -> None:
         mutate_config(test_config, "access.auth_mode", "simple")
@@ -1125,11 +1095,6 @@ class TestCorpusMutationEndpoints:
         mock_application.corpus_mutations.create_staged_ingest.assert_not_awaited()
         mock_application.corpus_mutations.create_staged_batch.assert_not_awaited()
 
-    @pytest.mark.usefixtures("_patch_application")
-    async def test_legacy_ingest_and_job_routes_are_absent(self, client: AsyncClient) -> None:
-        assert (await client.post("/ingest", json={})).status_code == 404
-        assert (await client.get("/ingest/jobs/old-job")).status_code == 404
-
     async def test_list_runs_refuses_an_empty_workspace_selector(
         self, client: AsyncClient, mock_application
     ) -> None:
@@ -1170,6 +1135,7 @@ class TestRetrieveEndpoint:
             "status_url": "/runs/0199a0a0-0000-7000-8000-0000000000aa",
             "events_url": "/runs/0199a0a0-0000-7000-8000-0000000000aa/events",
             "cancel_url": "/runs/0199a0a0-0000-7000-8000-0000000000aa",
+            "session_id": None,
             "parent_run_id": None,
             "continuation_kind": None,
         }
@@ -1771,10 +1737,6 @@ class TestDeleteEndpoint:
             "error_type": "validation",
         }
         mock_application.corpus_mutations.create_delete.assert_not_awaited()
-
-    @pytest.mark.usefixtures("_patch_application")
-    async def test_legacy_delete_route_is_not_a_mutator(self, client: AsyncClient) -> None:
-        assert (await client.request("DELETE", "/files", json={})).status_code == 405
 
     async def test_workspace_delete_is_an_explicitly_named_durable_run(
         self, client: AsyncClient, mock_application
@@ -2536,7 +2498,9 @@ class TestMetadataAPI:
         mock_config: DlightragConfig,
         mock_application,
     ) -> None:
-        from dlightrag.application.access import AccessDeniedError
+        from dlightrag.application.access.control import (
+            AccessDeniedError,
+        )
 
         class DenyAllAccess:
             async def check(self, user, action, *, workspace=None):
@@ -2982,7 +2946,10 @@ async def test_a_route_that_rejects_an_oversized_upload_is_not_reported_as_an_au
 
 
 def test_body_limit_split_preserves_non_limit_exception_group_members() -> None:
-    from dlightrag.adapters.http.rest.middleware import _RequestBodyTooLarge, _split_body_too_large
+    from dlightrag.adapters.http.rest.middleware import (
+        _RequestBodyTooLarge,
+        _split_body_too_large,
+    )
 
     matched, remainder = _split_body_too_large(
         ExceptionGroup(

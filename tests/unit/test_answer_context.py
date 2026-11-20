@@ -3,7 +3,9 @@
 
 from dlightrag.engine.answer.images import AnswerImageBudget
 from dlightrag.engine.answer.synthesis_context import AnswerContextPacker
-from dlightrag.engine.rag.retrieval import RetrievalContexts
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalContexts,
+)
 
 _PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="

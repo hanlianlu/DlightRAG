@@ -1,6 +1,8 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Real Web authentication/CSRF and real PostgreSQL owner lifecycle, fake MCP."""
 
+import logging
+
 import jwt
 import pytest
 from fastapi import FastAPI
@@ -9,8 +11,8 @@ from httpx import ASGITransport, AsyncClient
 from dlightrag.adapters.http.browser.auth import WebAuthMiddleware
 from dlightrag.adapters.http.browser.routes.connections import router
 from dlightrag.adapters.postgres.connections import PGConnectionsStore
-from dlightrag.application.config import DlightragConfig
-from dlightrag.application.connections import Connections
+from dlightrag.application.config.sections import DlightragConfig
+from dlightrag.application.connections.service import Connections
 from dlightrag.engine.credential_cipher import CredentialCipher
 from tests.integration.run_runtime_pg_harness import isolated_run_runtime
 from tests.integration.test_connections_pg import FakeMcp
@@ -116,7 +118,7 @@ async def test_web_sdk_oauth_authenticated_callback_strips_query_and_returns_fix
 
     from dlightrag.adapters.http.browser.routes.connections import callback_router
     from dlightrag.adapters.mcp.oauth import PersonalOAuthClient
-    from dlightrag.application.connections import ConnectionPolicy
+    from dlightrag.application.connections.policy import ConnectionPolicy
     from tests.integration.test_connection_authorization_pg import cipher
     from tests.support.dns import public_dns
     from tests.unit.test_connection_oauth import FakeAuthorizationServer
@@ -248,7 +250,7 @@ async def test_web_sdk_oauth_authenticated_callback_strips_query_and_returns_fix
 async def test_published_client_metadata_is_fetchable_without_a_session(tmp_path, monkeypatch):
     """An authorization server has no cookie, so the document must be public, minimal, and exact."""
     from dlightrag.adapters.http.browser.routes.connections import callback_router
-    from dlightrag.application.connections import ConnectionPolicy
+    from dlightrag.application.connections.policy import ConnectionPolicy
 
     monkeypatch.chdir(tmp_path)
     config = DlightragConfig(
@@ -317,3 +319,134 @@ async def test_published_client_metadata_is_fetchable_without_a_session(tmp_path
             assert (
                 await client.get("/web/oauth/connections/mcp/client-metadata")
             ).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_a_refused_callback_finishes_the_flow_it_named(tmp_path, monkeypatch, caplog):
+    """A refusal must not leave the card reading `pending` for the flow's whole lifetime.
+
+    The callback is refused before anything is deposited - here because it named both a code and
+    an error - and the state it carried identifies the flow, so that flow is finished then and
+    there and its Connection reports `failed`. A refusal that names no live flow is refused the
+    same way and leaves every flow where it was.
+    """
+    from urllib.parse import parse_qs, urlsplit
+
+    import httpx2
+
+    from dlightrag.adapters.http.browser.routes.connections import callback_router
+    from dlightrag.adapters.mcp.oauth import PersonalOAuthClient
+    from dlightrag.application.connections.policy import ConnectionPolicy
+    from tests.integration.test_connection_authorization_pg import cipher
+    from tests.support.dns import public_dns
+    from tests.unit.test_connection_oauth import FakeAuthorizationServer
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
+    config = DlightragConfig(
+        _env_file=None,
+        models={
+            "chat": {
+                "roles": {
+                    role: {"model": "fixture-model"}
+                    for role in ("extract", "query", "keyword", "vlm")
+                }
+            }
+        },
+        access={
+            "auth_mode": "jwt",
+            "jwt_verification_key": "test-only-web-jwt-key-not-for-production",
+        },
+    )
+    server = FakeAuthorizationServer()
+    async with isolated_run_runtime("oauth_refusal") as (_, pool):
+        store = PGConnectionsStore(pool=pool)
+        await store.initialize(validate_only=False)
+        service = Connections(
+            store=store,
+            mcp=FakeMcp(),
+            cipher=cipher(),
+            policy=ConnectionPolicy(),
+            oauth=PersonalOAuthClient(transport_factory=lambda: httpx2.MockTransport(server)),
+        )
+        app = FastAPI()
+        app.include_router(router, prefix="/web/api")
+        app.include_router(callback_router, prefix="/web")
+        app.state.application = application_double(config, connections=service)
+        app.add_middleware(WebAuthMiddleware, config_getter=lambda: config)
+        bearer = {
+            "Authorization": "Bearer "
+            + jwt.encode(
+                {"iss": "fixture-issuer", "sub": "a"},
+                "test-only-web-jwt-key-not-for-production",
+                algorithm="HS256",
+            )
+        }
+        callback = "/web/oauth/connections/mcp/callback"
+        async with AsyncClient(
+            transport=ASGITransport(app), base_url="https://app.example", headers=bearer
+        ) as client:
+            try:
+                view = (await client.get("/web/api/connections/mcp")).json()
+                headers = {
+                    "Origin": "https://app.example",
+                    "X-CSRF-Token": client.cookies.get("dlightrag_web_csrf", ""),
+                }
+                view = (
+                    await client.post(
+                        "/web/api/connections/mcp",
+                        headers=headers,
+                        json={
+                            "expected_revision": view["revision"],
+                            "label": "A",
+                            "endpoint": "https://mcp.example/mcp",
+                        },
+                    )
+                ).json()
+                identity = view["connections"][0]["connection_id"]
+                start = await client.post(
+                    f"/web/api/connections/mcp/{identity}/oauth",
+                    json={"expected_revision": view["revision"]},
+                    headers=headers,
+                )
+                assert start.status_code == 200
+                state = parse_qs(urlsplit(start.json()["authorization_url"]).query)["state"][0]
+                listed = (await client.get("/web/api/connections/mcp")).json()["connections"][0]
+                assert listed["authorization_status"] == "pending"
+
+                # A state no live flow holds refuses the callback and leaves the live flow alone.
+                stranger = await client.get(
+                    callback, params={"state": "not-this-flow", "code": "x"}
+                )
+                assert (
+                    stranger.headers["location"]
+                    == "/web/?settings=connections&authorization=restart"
+                )
+                listed = (await client.get("/web/api/connections/mcp")).json()["connections"][0]
+                assert listed["authorization_status"] == "pending"
+
+                # The flow's own state, refused: finished at once, so the card says so at once,
+                # and the refusal says why in the log - a silent refusal is indistinguishable from
+                # a flow that never came back.
+                with caplog.at_level(
+                    logging.WARNING,
+                    logger="dlightrag.adapters.http.browser.routes.connections",
+                ):
+                    refused = await client.get(
+                        callback,
+                        params={"state": state, "code": "test-code", "error": "access_denied"},
+                    )
+                assert "Refused an authorization callback: Authorization callback invalid" in (
+                    caplog.text
+                )
+                assert "test-code" not in caplog.text
+                assert (
+                    refused.headers["location"]
+                    == "/web/?settings=connections&authorization=restart"
+                )
+                assert "test-code" not in refused.headers["location"]
+                listed = (await client.get("/web/api/connections/mcp")).json()["connections"][0]
+                assert listed["authorization_status"] == "failed"
+                assert listed["authentication"] == "none"
+            finally:
+                await service.aclose()

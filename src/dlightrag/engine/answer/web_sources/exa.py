@@ -64,11 +64,7 @@ class ExaWebSource:
     async def extract(self, url: str) -> WebExtractResult:
         response = await self._post(
             _EXTRACT_ENDPOINT,
-            {
-                "urls": [url],
-                "text": True,
-                "livecrawl": "fallback",
-            },
+            {"urls": [url], "text": True, "livecrawl": "fallback"},
             operation="extract",
         )
         payload = response
@@ -121,8 +117,9 @@ class ExaWebSource:
                 ) as response:
                     if response.is_error:
                         reason = _STATUS_REASONS.get(response.status_code, "error")
-                        logger.warning("Exa %s returned HTTP %d", operation, response.status_code)
-                        raise WebSourceUnavailable(self.name, operation, reason)
+                        raise WebSourceUnavailable(
+                            self.name, operation, reason, status=response.status_code
+                        )
                     raw = await _bounded_response_bytes(response, operation=operation)
         except (TimeoutError, httpx.TimeoutException) as exc:
             raise WebSourceUnavailable(self.name, operation, "timeout") from exc

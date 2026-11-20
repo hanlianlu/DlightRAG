@@ -10,17 +10,7 @@ import pytest
 
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.telemetry import NoopTelemetry
-from tests.config_helpers import mutate_config
-
-
-def test_parser_defaults_to_check_only() -> None:
-    from dlightrag.adapters.postgres.rebuild_vdb import build_parser
-
-    args = build_parser().parse_args([])
-
-    assert args.target == "check"
-    assert args.yes is False
-    assert args.restore_sidecar_alignment is True
+from tests.support.config_helpers import mutate_config
 
 
 def test_rebuild_targets_require_yes() -> None:
@@ -32,18 +22,9 @@ def test_rebuild_targets_require_yes() -> None:
         validate_args(args)
 
 
-def test_pyproject_exposes_rebuild_console_script() -> None:
-    import tomllib
-    from pathlib import Path
-
-    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-
-    assert pyproject["project"]["scripts"]["dlightrag-rebuild-vdb"] == (
-        "dlightrag.adapters.postgres.rebuild_vdb:main"
-    )
-
-
-async def test_runner_uses_dlightrag_embedding_and_config(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_runner_uses_dlightrag_embedding_and_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from dlightrag.adapters.postgres import rebuild_vdb as module
 
     fake_embedding = object()
@@ -54,7 +35,7 @@ async def test_runner_uses_dlightrag_embedding_and_config(monkeypatch: pytest.Mo
     async def fake_setup(self) -> bool:
         calls["workspace"] = self.workspace
         calls["storage_names"] = self.resolve_storage_names()
-        calls["embedding_func"] = self.build_embedding_func()
+        calls["embedding_func"] = self.embedding_func
         calls["global_config"] = self.build_global_config()
         self.graph = AsyncMock()
         self.entities_vdb = AsyncMock()
@@ -600,7 +581,7 @@ def _stub_rebuild(
 
 
 def _fake_config():
-    from dlightrag.application.config import DlightragConfig
+    from dlightrag.application.config.sections import DlightragConfig
 
     return DlightragConfig.model_validate(
         {

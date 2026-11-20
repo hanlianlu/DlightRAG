@@ -1,20 +1,24 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import type {ReactiveController, ReactiveControllerHost} from 'lit';
+import {isImeKey} from '../design-system/index.ts';
 
-export interface TriggerPopoverOptions {
+interface TriggerPopoverOptions {
     /** The control the reader opened it with; closing by Escape or a choice gives focus back here. */
     trigger: () => HTMLElement | null;
     /** Move focus into the open popover; `which` is the end a menu button's key asked for. */
     enter: (which: 'first' | 'last') => void;
-    /** Whether the host shows the popover at all while it is open. Defaults to always. */
+    /** Whether the host shows the surface the popover belongs to. A host that stops showing it has
+     *  closed the popover: open is a state its surface shows, not one it remembers. Defaults to
+     *  always shown, for a trigger that never leaves the page. */
     showing?: () => boolean;
 }
 
 /**
  * The state and dismissal of a popover its host opens from one trigger: it closes on a click
- * outside the host and on Escape, unless a modal dialog holds the page, and a host that leaves the
- * document closes it. The host draws it from `open`.
+ * outside the host and on Escape, unless a modal dialog holds the page, when the host stops
+ * showing the surface it belongs to, and when the host leaves the document. The host draws it
+ * from `open`.
  *
  * Both listeners exist only while it is open. The outside click is armed on the next tick so the
  * click that opened it does not close it again.
@@ -58,8 +62,14 @@ export class TriggerPopover implements ReactiveController {
         }
     }
 
+    /** A host that stops showing the surface has closed the popover for the render that hides it,
+     *  so the state it would come back with is not a popover the reader left open. */
+    hostUpdate(): void {
+        if (this.#open && !(this.#options.showing?.() ?? true)) this.close();
+    }
+
     hostUpdated(): void {
-        if (this.#open && (this.#options.showing?.() ?? true)) this.#listen();
+        if (this.#open) this.#listen();
         else this.#stop();
     }
 
@@ -88,7 +98,9 @@ export class TriggerPopover implements ReactiveController {
     };
 
     readonly #escape = (event: KeyboardEvent): void => {
-        if (event.key !== 'Escape' || !this.#open || document.querySelector('dialog[open]')) return;
+        // This listener sees the key before the popover's own fields do, so an Escape that cancels a
+        // composition in one of them is let through to it, not taken as the popover's dismissal.
+        if (event.key !== 'Escape' || isImeKey(event) || !this.#open || document.querySelector('dialog[open]')) return;
         event.preventDefault();
         event.stopImmediatePropagation();
         this.close(true);

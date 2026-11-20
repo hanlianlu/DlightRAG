@@ -6,26 +6,28 @@ from dataclasses import asdict
 from typing import Any
 from uuid import uuid7
 
-from dlightrag.application.answer_runs import (
+from dlightrag.application.answer_runs.service import (
     AnswerInputArtifact,
     AnswerRequest,
     AnswerRunAcceptor,
     AnswerService,
+    Caller,
     RunResourceDescriptor,
 )
 from dlightrag.application.runs import RunStatus, RunView
-from dlightrag.application.web_conversations import (
+from dlightrag.application.web_conversations.models import (
     AnswerTurnCreation,
     ConversationSummary,
     LinkedTurn,
-    WebAnswerSubmission,
 )
+from dlightrag.application.web_conversations.service import WebAnswerSubmission
 from dlightrag.engine.answer.runs.envelope import accepted_input_envelope
 from dlightrag.engine.runtime.records import (
     PendingArtifact,
     PreparedRunEnvelope,
     RunAccessScope,
 )
+from tests.support.resource_ids import attachment_ordinal
 
 NOW = datetime.datetime(2026, 8, 12, tzinfo=datetime.UTC)
 RUN_ID = "019893f4-0000-7000-8000-000000000001"
@@ -44,6 +46,7 @@ class FakeAnswers(AnswerService):
         self.artifacts = dict(artifacts or {})
         self.external_sources = dict(external_sources or {})
         self.prepared: list[AnswerRequest] = []
+        self.callers: list[Caller | None] = []
         self.reads: list[tuple[str, str, int]] = []
 
     async def accept[T](
@@ -51,6 +54,7 @@ class FakeAnswers(AnswerService):
         *,
         request: AnswerRequest,
         owner_id: str,
+        caller: Caller | None,
         idempotency_key: str,
         idempotency_fingerprint: str,
         acceptor: AnswerRunAcceptor[T],
@@ -66,6 +70,7 @@ class FakeAnswers(AnswerService):
         if replay is not None:
             return replay
         self.prepared.append(request)
+        self.callers.append(caller)
         prepared_input = {
             "query": request.query,
             "workspaces": list(request.workspaces),
@@ -98,7 +103,7 @@ class FakeAnswers(AnswerService):
     async def read_run_resource(
         self, *, owner_id: str, run_id: str, resource_id: str
     ) -> tuple[RunResourceDescriptor, bytes] | None:
-        ordinal = _resource_ordinal(resource_id)
+        ordinal = attachment_ordinal(resource_id)
         if ordinal is None:
             return None
         self.reads.append((owner_id, run_id, ordinal))
@@ -119,17 +124,6 @@ class FakeAnswers(AnswerService):
     async def run_external_source_map(self, *, owner_id: str, run_id: str) -> dict[str, str]:
         del owner_id, run_id
         return dict(self.external_sources)
-
-
-def _resource_ordinal(resource_id: str) -> int | None:
-    """Read the ordinal one accepted upload's resource id spells."""
-    prefix = "attachment-"
-    if not resource_id.startswith(prefix):
-        return None
-    try:
-        return int(resource_id[len(prefix) :])
-    except ValueError:
-        return None
 
 
 def input_artifact(
@@ -219,7 +213,8 @@ def answer_run(
         error_kind=error_kind,
         error_message=error_message,
         created_at=NOW,
-        started_at=None,
+        # A queued Run has not started; a running one has not finished.
+        started_at=None if status == "queued" else NOW,
         finished_at=NOW if terminal else None,
         request=accepted if accepted is not None else request or run_request(),
     )

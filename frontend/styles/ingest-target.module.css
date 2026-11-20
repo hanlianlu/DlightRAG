@@ -26,7 +26,7 @@
     gap: var(--space-inline);
     min-height: var(--size-button);
     padding: var(--space-inline) var(--space-tight);
-    transition: background 0.15s, border-color 0.15s;
+    transition: background var(--duration-control), border-color var(--duration-control);
     user-select: none;
     white-space: nowrap;
 }
@@ -52,25 +52,6 @@
 
 .ingest-target.open .ingest-target-caret {
     transform: rotate(180deg);
-}
-
-/* Radio circle */
-.ingest-target-popover-radio {
-    border: 1.5px solid var(--color-text-subtle);
-    border-radius: var(--radius-circle);
-    flex-shrink: 0;
-    height: var(--size-radio);
-    transition: all 0.15s;
-    width: var(--size-radio);
-}
-
-.ingest-target-popover-radio.on {
-    background: radial-gradient(
-        circle at 50% 50%,
-        var(--color-accent-action) 0 calc(var(--size-radio) * 0.23),
-        transparent calc(var(--size-radio) * 0.24)
-    );
-    border-color: var(--color-accent-action);
 }
 
 }

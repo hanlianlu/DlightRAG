@@ -8,7 +8,7 @@ from dlightrag.adapters.postgres.corpus.pg_metadata_index import (
     METADATA_TABLE,
     metadata_visibility_condition,
 )
-from dlightrag.application.corpus_admin import (
+from dlightrag.application.corpus_admin.file_panel import (
     FailedFileRow,
     FailedFileRowPage,
     FilePanelPageRequest,

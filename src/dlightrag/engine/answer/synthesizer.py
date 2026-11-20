@@ -38,9 +38,12 @@ from dlightrag.engine.answer.errors import (
 from dlightrag.engine.answer.evidence import EvidenceLedger, has_unrepresentable_text
 from dlightrag.engine.answer.images import AnswerImageBudget, AnswerImagePolicy
 from dlightrag.engine.answer.memory import standing_memory_message
-from dlightrag.engine.answer.prompts import clock_line, fast_answer_prompt
+from dlightrag.engine.answer.prompts.answer import fast_answer_prompt
+from dlightrag.engine.answer.prompts.identity import clock_line
 from dlightrag.engine.answer.synthesis_context import AnswerContextPacker
-from dlightrag.engine.rag.retrieval import RetrievalContexts
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalContexts,
+)
 
 logger = logging.getLogger(__name__)
 

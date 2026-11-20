@@ -8,8 +8,8 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from dlightrag.application.config import DlightragConfig
-from dlightrag.application.settings import answer_executor_settings
+from dlightrag.application.config.sections import DlightragConfig
+from dlightrag.application.settings.projections import answer_executor_settings
 from dlightrag.engine.agent.session.ids import SessionId
 from dlightrag.engine.answer.tools.subagents import (
     MAX_CHILDREN_PER_SPAWN,
@@ -20,7 +20,7 @@ from dlightrag.engine.answer.tools.subagents import (
     subagent_declarations,
     subagent_tools,
 )
-from tests.tool_helpers import tool_runtime
+from tests.support.tool_helpers import tool_runtime
 from tests.unit.test_child_model_roles import _prepared_executor
 from tests.unit.test_subagents import _context_snapshot
 

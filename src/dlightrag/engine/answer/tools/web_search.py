@@ -6,7 +6,9 @@ from collections.abc import Iterable
 from typing import Any
 
 from dlightrag.engine.answer.citations.utils import WEB_SEARCH_WORKSPACE
-from dlightrag.engine.answer.web_sources import WebSearchHit
+from dlightrag.engine.answer.web_sources.contracts import (
+    WebSearchHit,
+)
 from dlightrag.engine.public_http import normalize_public_http_url_identity
 
 

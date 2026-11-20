@@ -144,8 +144,13 @@ def _install_busy_settings_routes(page: Page) -> None:
                 "activation_epoch": 1,
                 "generation": 1,
                 "authentication": authentication,
+                "endpoint_headers": [],
+                "credential_header": None,
+                "credential_prefix": None,
                 "authorization_status": None,
                 "status": status,
+                "tool_count": None,
+                "declaration_tokens": None,
             }
 
         route.fulfill(
@@ -157,12 +162,18 @@ def _install_busy_settings_routes(page: Page) -> None:
                         "label": "Notion",
                         "endpoint": "https://mcp.notion.com/mcp",
                         "default_authentication": "oauth",
+                        "endpoint_headers": [],
+                        "credential_header": "Authorization",
+                        "credential_prefix": "Bearer ",
                     },
                     {
                         "preset_id": "hugging-face",
                         "label": "Hugging Face",
                         "endpoint": "https://huggingface.co/mcp",
                         "default_authentication": "none",
+                        "endpoint_headers": [],
+                        "credential_header": "Authorization",
+                        "credential_prefix": "Bearer ",
                     },
                 ],
                 "connections": [
@@ -334,15 +345,37 @@ def _walk_settings(page: Page, settings: Locator, check: Callable[[str], None]) 
     connections.get_by_role("button", name="Team wiki").click()
     connections.get_by_role("button", name="Change endpoint").click()
     check("an open Connection whose endpoint is being changed")
-    connections.get_by_role("button", name="Bearer", exact=True).click()
-    expect(connections.get_by_label("Personal bearer (write-only)")).to_be_visible()
-    check("a Connection on bearer authentication")
+    connections.get_by_role("button", name="Static token", exact=True).click()
+    expect(connections.get_by_label("Credential value")).to_be_visible()
+    check("a Connection on a static token in the default header")
+    connections.get_by_label("In a header of my own").click()
+    expect(connections.get_by_label("Credential header name")).to_be_visible()
+    check("a Connection on a credential in a header of its own")
+    # A stated header is a row of its own: the name, the value, and the way to drop it.
+    connections.get_by_role("button", name="Add header").click()
+    connections.get_by_label("Header name").first.fill("X-Lark-MCP-Allowed-Tools")
+    expect(connections.get_by_label("Header value").first).to_be_visible()
+    check("a Connection stating a request header")
+    connections.get_by_role("button", name="Remove header").first.click()
+    check("a Connection whose stated header was dropped")
     connections.get_by_role("button", name="OAuth", exact=True).click()
+    # The one click on `Authorize with OAuth` sends the browser to the provider, and this walk
+    # reads *this* app: the navigation is stubbed at the seam the component's own browser test
+    # stubs, so what is read here is the card's own state. A real navigation replaces the
+    # document, and every later locator then reports a missing element - which is exactly what
+    # it did on any machine that answered for the provider's name.
+    settings.evaluate(
+        "dialog => { const feature = dialog.querySelector('dl-settings-connections');"
+        " if (feature) feature.navigateTo = () => {}; }"
+    )
     connections.get_by_role("button", name="Authorize with OAuth").click()
+    # One click is the gesture: the browser is on its way to the provider, and a reader the
+    # browser brings back starts again from this same control. Nothing else asks to be clicked.
+    expect(connections.get_by_role("button", name="Authorize with OAuth")).to_be_visible()
     expect(
         connections.get_by_role("link", name="Continue to provider authorization")
-    ).to_be_visible()
-    check("a Connection on OAuth with its provider's link")
+    ).to_have_count(0)
+    check("a Connection on OAuth after its one click")
     connections.get_by_role("button", name="Add MCP connection").click()
     expect(connections.get_by_role("button", name="Use the Notion preset")).to_be_visible()
     check("the form that adds a Connection")
@@ -490,7 +523,7 @@ def test_every_word_in_settings_reads_at_4_5_to_1_in_both_themes(
 @pytest.mark.e2e
 def test_profile_memory_shows_the_whole_text_of_a_memory(page: Page) -> None:
     text = (
-        "Reports go to the investment committee and use tables and short bullets, never long "
+        "Reports go to the steering committee and use tables and short bullets, never long "
         "paragraphs, and every figure carries the page it came from.\n"
         "Ask before sending anything outside the firm."
     )
@@ -595,5 +628,5 @@ def test_the_language_chosen_in_settings_is_the_one_the_app_starts_in(page: Page
 
     page.reload()
     page.locator("[aria-current='page']").wait_for()
-    expect(page.locator("html")).to_have_attribute("lang", "zh")
+    expect(page.locator("html")).to_have_attribute("lang", "zh-Hans")
     expect(page.get_by_role("button", name="设置", exact=True)).to_be_visible()

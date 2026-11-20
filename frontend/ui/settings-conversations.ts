@@ -14,7 +14,7 @@ import shared from '../styles/settings-page.module.css';
 import {dangerCard} from './settings-parts.ts';
 import {reportSettingsSummary} from './settings-summary.ts';
 
-export class DlSettingsConversations extends LightElement {
+class DlSettingsConversations extends LightElement {
   static properties = {
     handles: {attribute: false},
     deleteAll: {attribute: false},
@@ -32,7 +32,7 @@ export class DlSettingsConversations extends LightElement {
     this.handles = productionHandles();
     this.deleteAll = async () => false;
     /** Store reads: conversations.length. */
-    new StoreController(this, this.handles.conversations);
+    new StoreController(this, () => [this.handles.conversations]);
   }
 
   protected override updated(_changed: PropertyValues<this>): void {

@@ -116,10 +116,9 @@ class TavilyWebSource:
                 async with self._client.stream("POST", endpoint, json=payload) as response:
                     if response.is_error:
                         reason = _STATUS_REASONS.get(response.status_code, "error")
-                        logger.warning(
-                            "Tavily %s returned HTTP %d", operation, response.status_code
+                        raise WebSourceUnavailable(
+                            self.name, operation, reason, status=response.status_code
                         )
-                        raise WebSourceUnavailable(self.name, operation, reason)
                     raw = await _bounded_response_bytes(response, operation=operation)
         except (TimeoutError, httpx.TimeoutException) as exc:
             raise WebSourceUnavailable(self.name, operation, "timeout") from exc

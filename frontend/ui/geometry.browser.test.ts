@@ -1,9 +1,16 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+// Runs on the product-styles page (web-test-runner.config.mjs): the application's shipped stylesheets are
+// linked, and CSS Modules carry the class names the build gave them, which these tests read from the same
+// imports the components use.
+
 import {expect} from '@esm-bundle/chai';
-import {resetMouse, sendKeys, sendMouse} from '@web/test-runner-commands';
+import {emulateMedia, resetMouse, sendKeys, sendMouse} from '@web/test-runner-commands';
 import type {AnswerPresentation} from '../api/conversations.ts';
 import {productionHandles} from '../stores/app-handles.ts';
+import activityStyles from '../styles/activity.module.css';
+import answerStyles from '../styles/answer-presentation.module.css';
+import chatStyles from '../styles/chat.module.css';
 import {DEFAULT_CHANGES} from '../testing/workspaces.ts';
 import type {AnswerPresentationElement} from './answer-presentation.ts';
 import type {DlChatMessageList} from './chat-message-list.ts';
@@ -12,34 +19,6 @@ import type {DlIngestTarget} from './ingest-target.ts';
 import './ingest-target.ts';
 import type {DlWorkspaceScope} from './workspace-scope.ts';
 import './workspace-scope.ts';
-
-// app.css is the product's entry for the global sheets: it imports each into its
-// cascade layer, where a sheet linked on its own would be unlayered and outrank
-// every Feature module.
-const stylesheets = [
-  '../design-system/index.css',
-  '../styles/app.css',
-  '../styles/layout.css',
-  '../styles/inspector-files.module.css',
-  '../styles/ingest-target.module.css',
-  '../styles/workspaces.module.css',
-  '../styles/failed-file-recovery.module.css',
-  '../styles/inspector-sources.module.css',
-  '../styles/answer-presentation.module.css',
-  '../styles/chat.module.css',
-  '../styles/lightbox.module.css',
-];
-
-before(async () => {
-  await Promise.all(stylesheets.map(async (href) => new Promise<void>((resolve, reject) => {
-    const link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.href = new URL(href, import.meta.url).href;
-    link.addEventListener('load', () => { resolve(); }, {once: true});
-    link.addEventListener('error', () => { reject(new Error(`could not load ${href}`)); }, {once: true});
-    document.head.appendChild(link);
-  })));
-});
 
 function element(className: string): HTMLElement {
   const node = document.createElement('div');
@@ -89,43 +68,44 @@ function contrastRatio(first: Rgba, second: Rgba): number {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
-function radius(className: string): string {
-  return getComputedStyle(element(className)).borderRadius;
-}
-
 afterEach(() => {
   document.body.replaceChildren();
 });
 
-it('publishes the approved Soft semantic radius ladder', () => {
-  const tokens = getComputedStyle(document.documentElement);
-  expect(tokens.getPropertyValue('--radius-control').trim()).to.equal('0.625rem');
-  expect(tokens.getPropertyValue('--radius-card').trim()).to.equal('1rem');
-  expect(tokens.getPropertyValue('--radius-popover').trim()).to.equal('1.125rem');
-  expect(tokens.getPropertyValue('--radius-dialog').trim()).to.equal('1.375rem');
-  expect(tokens.getPropertyValue('--radius-composer').trim()).to.equal('1.5rem');
-});
+/** What a token resolves to in a property, read from a probe's computed style: the shipped stylesheet is
+ *  minified, so the text a token was written with is not what the page holds. */
+function resolved(property: string, token: string): string {
+  const probe = element('');
+  probe.style.setProperty(property, `var(${token})`);
+  return getComputedStyle(probe).getPropertyValue(property);
+}
 
-it('assigns geometry by surface role rather than component size', () => {
-  expect(radius('primary-btn')).to.equal('10px');
-  expect(radius('userMessage')).to.equal('16px');
-  expect(radius('source-chunk')).to.equal('16px');
-  expect(radius('source-doc')).to.equal('0px');
-  expect(radius('panel')).to.equal('0px');
-  expect(radius('dl-popover')).to.equal('18px');
-  expect(radius('workspace-dialog')).to.equal('22px');
-  expect(radius('settings-dialog')).to.equal('22px');
-  expect(radius('composer-form')).to.equal('24px');
-  const app = element('app');
-  expect(getComputedStyle(app).borderRadius).to.equal('0px');
-  expect(getComputedStyle(app).clipPath).to.equal('none');
-  expect(radius('workspace-selector-trigger')).to.equal('999px');
-  expect(radius('imageLightboxPrev')).to.equal('0px 10px 10px 0px');
+it('centres the composer input line on the composer, level with its buttons', () => {
+  const form = element('composer-form');
+  const plus = document.createElement('button');
+  plus.className = 'composer-plus';
+  const wrap = document.createElement('div');
+  wrap.className = 'composer-input-wrap';
+  const input = document.createElement('textarea');
+  input.className = 'composer-input';
+  input.rows = 1;
+  wrap.appendChild(input);
+  const send = document.createElement('button');
+  send.className = 'composer-send';
+  form.append(plus, wrap, send);
+
+  const middle = (node: Element): number => {
+    const box = node.getBoundingClientRect();
+    return box.top + (box.height / 2);
+  };
+  expect(wrap.getBoundingClientRect().height).to.be.closeTo(input.getBoundingClientRect().height, 0.01);
+  expect(middle(input)).to.be.closeTo(middle(form), 0.01);
+  expect(middle(input)).to.be.closeTo(middle(send), 0.01);
 });
 
 it('uses the DlightRAG focus ring without changing the control geometry', () => {
   const reference = document.createElement('button');
-  reference.className = 'answer-ref-item';
+  reference.className = answerStyles['answer-ref-item'];
   document.body.appendChild(reference);
   reference.focus();
 
@@ -140,12 +120,12 @@ it('uses the DlightRAG focus ring without changing the control geometry', () => 
 });
 
 it('keeps reconnect text and focus indicators contrast-safe in every theme and state', () => {
-  const notice = element('answerReconnect');
+  const notice = element(chatStyles.answerReconnect);
   const status = document.createElement('span');
-  status.className = 'answerReconnectStatus';
+  status.className = chatStyles.answerReconnectStatus;
   status.textContent = 'Connection lost while this answer is running.';
   const action = document.createElement('button');
-  action.className = 'answerReconnectAction';
+  action.className = chatStyles.answerReconnectAction;
   action.textContent = 'Reconnect';
   notice.append(status, action);
   action.focus();
@@ -243,7 +223,7 @@ it('rings a keyboard-focused popover row, keeps its radio legible, and keeps the
         return scope;
       },
       trigger: '#workspace-trigger', popover: '#workspace-popover',
-      rows: '[data-workspace-choice]', radio: '.workspacePopoverCheck',
+      rows: '[data-workspace-choice]', radio: '.dl-popover-radio',
     },
     {
       mount: (): DlIngestTarget => {
@@ -253,7 +233,7 @@ it('rings a keyboard-focused popover row, keeps its radio legible, and keeps the
         return target;
       },
       trigger: '#ingest-target-trigger', popover: '#ingest-target-popover',
-      rows: '[data-ingest-workspace-choice]', radio: '.ingest-target-popover-radio',
+      rows: '[data-ingest-workspace-choice]', radio: '.dl-popover-radio',
     },
   ];
 
@@ -290,10 +270,16 @@ it('rings a keyboard-focused popover row, keeps its radio legible, and keeps the
     }
     document.documentElement.dataset.colorMode = 'dark';
 
-    // A ring cut off at the scroll edge loses a whole side, so every step keeps all of it.
+    // A ring cut off at the scroll edge loses a whole side, so every step keeps all of it. The walk dispatches
+    // the keydown the list's own handler steps on, instead of ~50 round trips to the browser's keyboard.
+    const press = (key: string): void => {
+      (document.activeElement as HTMLElement).dispatchEvent(new KeyboardEvent('keydown', {
+        key, bubbles: true, cancelable: true,
+      }));
+    };
     for (const key of ['ArrowDown', 'ArrowUp']) {
       for (let step = 0; step < rows; step += 1) {
-        await sendKeys({press: key});
+        press(key);
         const focused = document.activeElement as HTMLElement;
         const style = getComputedStyle(focused);
         const reach = Number.parseFloat(style.outlineOffset) + Number.parseFloat(style.outlineWidth);
@@ -302,6 +288,7 @@ it('rings a keyboard-focused popover row, keeps its radio legible, and keeps the
         const top = port.top + popover.clientTop;
         const left = port.left + popover.clientLeft;
         const where = `${key} to ${focused.textContent?.trim()}`;
+        expect(focused.matches(':focus-visible'), where).to.equal(true);
         expect(box.top - reach, where).to.be.at.least(top - 0.5);
         expect(box.bottom + reach, where).to.be.at.most(top + popover.clientHeight + 0.5);
         expect(box.left - reach, where).to.be.at.least(left - 0.5);
@@ -364,7 +351,7 @@ it('labels Canvas layout controls, truncates long titles, and preserves compact 
 });
 
 it('rounds and clips rich-content containers without rounding table cells', () => {
-  const answer = element('aiMessageContent markdownContent');
+  const answer = element(`${chatStyles.aiMessageContent} ${chatStyles.markdownContent}`);
   const table = document.createElement('table');
   const row = table.insertRow();
   row.insertCell().textContent = 'A';
@@ -419,14 +406,14 @@ async function answerHosts(): Promise<[chat: HTMLElement, canvas: HTMLElement]> 
     runId: 'run-1',
     state: 'succeeded',
     streamText: '',
+    processEntries: [],
     presentation: answerPresentation,
     usage: {},
-    error: '',
-    progress: '',
-    liveStatus: '',
-    sawChildren: false,
+    error: null,
+    activity: null,
     cancelRequested: false,
     steeringMessages: [],
+    answerSequence: null, feedback: null,
     toolRows: [],
   }];
   const canvas = document.createElement('dl-artifact-canvas');
@@ -459,11 +446,14 @@ it('keeps Markdown typography inside Markdown parts in chat and in the Artifact 
   // The presentation's own chrome renders alike whichever host wraps it: every
   // section title is one caption label and evidence thumbnails fill their tiles.
   const title = ['font-size', 'font-weight', 'color', 'text-transform', 'margin-top', 'margin-bottom'];
-  const caption = styleOf(canvas.querySelector('.answer-references > h3'), title);
+  const caption = styleOf(canvas.querySelector(`.${answerStyles['answer-references']} .${answerStyles['answer-section-title']}`), title);
   expect(caption['font-size']).to.equal(getComputedStyle(captionSize).fontSize);
   expect(caption['text-transform']).to.equal('uppercase');
   for (const [name, host] of [['chat', chat], ['canvas', canvas]] as const) {
-    for (const selector of ['.answer-evidence > h3', '.answer-references > h3']) {
+    for (const selector of [
+      '.answer-evidence > h3',
+      `.${answerStyles['answer-references']} .${answerStyles['answer-section-title']}`,
+    ]) {
       expect(styleOf(host.querySelector(selector), title), `${name} ${selector}`).to.deep.equal(caption);
     }
   }
@@ -516,4 +506,285 @@ it('places popovers and menus from their trigger through one anchored primitive'
   expect(px(skills.bottom)).to.be.closeTo(40 + token('--space-2xs'), 0.5);
   expect(px(skills.left)).to.equal(0);
   expect(px(skills.right)).to.equal(0);
+});
+
+/** A composer form as the product draws it: Attach, the input wrap holding the mirror and the textarea,
+ *  and Send. */
+function composerForm(): {
+  form: HTMLElement;
+  wrap: HTMLElement;
+  mirror: HTMLElement;
+  input: HTMLTextAreaElement;
+} {
+  const form = element('composer-form');
+  const plus = document.createElement('button');
+  plus.className = 'composer-plus';
+  const wrap = document.createElement('div');
+  wrap.className = 'composer-input-wrap';
+  const mirror = document.createElement('div');
+  mirror.className = 'composer-input-mirror';
+  mirror.setAttribute('aria-hidden', 'true');
+  const input = document.createElement('textarea');
+  input.className = 'composer-input';
+  input.rows = 1;
+  wrap.append(mirror, input);
+  const send = document.createElement('button');
+  send.className = 'composer-send';
+  form.append(plus, wrap, send);
+  return {form, wrap, mirror, input};
+}
+
+it('draws the composer textarea and its mirror as one box that stays inside its wrap', () => {
+  const {wrap, mirror, input} = composerForm();
+  const box = (node: Element): DOMRect => node.getBoundingClientRect();
+
+  expect(box(input).left, 'left edge').to.be.closeTo(box(mirror).left, 0.01);
+  expect(box(input).right, 'right edge').to.be.closeTo(box(mirror).right, 0.01);
+  expect(box(input).width, 'width').to.be.closeTo(box(mirror).width, 0.01);
+  expect(box(input).left, 'inside the wrap on the left').to.be.at.least(box(wrap).left - 0.01);
+  expect(box(input).right, 'inside the wrap on the right').to.be.at.most(box(wrap).right + 0.01);
+  expect(input.scrollWidth, 'nothing spills sideways').to.be.at.most(input.clientWidth);
+
+  // One width means one set of line breaks, so the ghost hint in the mirror stands where the text does.
+  for (let words = 1; words <= 60; words += 1) {
+    const draft = Array.from({length: words}, (_, index) => 'abcdefghij'.slice(0, 3 + (index % 8))).join(' ');
+    input.value = draft;
+    mirror.textContent = draft;
+    expect(mirror.scrollHeight, `${words} words wrap alike`).to.equal(input.scrollHeight);
+  }
+});
+
+// The composer is the one control that shows focus by its border and a soft halo rather than the 2px
+// outline, so its border carries the change: at least the 3:1 the focus contract asks of any focus
+// indicator, against the border it had at rest, over whatever surface the form is drawn on.
+it('moves the composer border 3:1 against its rest on every surface when it takes focus', () => {
+  const {form, input} = composerForm();
+  const settle = (): void => {
+    for (const animation of form.getAnimations()) animation.finish();
+  };
+  try {
+    for (const colorMode of ['dark', 'light']) {
+      document.documentElement.dataset.colorMode = colorMode;
+      input.blur();
+      settle();
+      const rest = rgba(getComputedStyle(form).borderTopColor);
+      input.focus();
+      settle();
+      expect(form.matches(':focus-within')).to.equal(true);
+      const focused = rgba(getComputedStyle(form).borderTopColor);
+      for (const surface of surfaces) {
+        const back = resolveToken('backgroundColor', surface);
+        expect(contrastRatio(composite(focused, back), composite(rest, back)), `${colorMode} ${surface}`)
+          .to.be.at.least(3);
+      }
+    }
+  } finally {
+    document.documentElement.dataset.colorMode = 'dark';
+  }
+});
+
+/**
+ * The rules the shipped stylesheet keeps for `(pointer: coarse)`, read back as plain rules in the layer they
+ * live in. A page cannot be given a touch pointer here, so the test applies the same rules unconditionally.
+ */
+function coarsePointerRules(): HTMLStyleElement {
+  const found: string[] = [];
+  const collect = (rules: CSSRuleList, layers: readonly string[]): void => {
+    for (const rule of rules) {
+      if (rule instanceof CSSLayerBlockRule) {
+        collect(rule.cssRules, [...layers, rule.name]);
+      } else if (rule instanceof CSSMediaRule && /pointer:\s*coarse/.test(rule.conditionText)) {
+        const inner = [...rule.cssRules].map((each) => each.cssText).join('\n');
+        found.push(layers.reduceRight((css, name) => `@layer ${name} {${css}}`, inner));
+      }
+    }
+  };
+  for (const sheet of document.styleSheets) collect(sheet.cssRules, []);
+  expect(found, 'the stylesheets keep rules for a touch pointer').to.not.have.length(0);
+  const style = document.createElement('style');
+  style.textContent = found.join('\n');
+  document.head.append(style);
+  return style;
+}
+
+it('keeps every text-entry control at 16px or more under a touch pointer', () => {
+  const fontSize = (node: Element): number => Number.parseFloat(getComputedStyle(node).fontSize);
+  const control = (tag: string, className = '', type = ''): HTMLElement => {
+    const node = document.createElement(tag);
+    node.className = className;
+    if (type) node.setAttribute('type', type);
+    document.body.appendChild(node);
+    return node;
+  };
+  const typed = [
+    control('input', 'dl-input', 'search'),
+    control('textarea', 'dl-dialog-input'),
+    control('input', 'dl-dialog-input', 'text'),
+    control('input', 'dl-popover-input', 'text'),
+    control('input', '', 'text'),
+    control('input', '', 'url'),
+    control('input', '', 'password'),
+    control('input'),
+    control('textarea'),
+    control('select'),
+  ];
+  const untyped = ['checkbox', 'radio', 'range', 'file', 'button', 'submit'].map((type) => control('input', '', type));
+  const {form, mirror, input} = composerForm();
+  const entry = element('');
+  entry.style.fontSize = 'var(--font-size-touch-entry)';
+
+  const before = [...typed, ...untyped, input, mirror].map(fontSize);
+  expect(fontSize(entry), 'the entry floor').to.equal(16);
+  for (const [index, node] of [...typed, input].entries()) {
+    expect(before[index], `${node.className || node.tagName} is small before`).to.be.below(16);
+  }
+  const inputBefore = getComputedStyle(input).minHeight;
+
+  const rules = coarsePointerRules();
+  try {
+    for (const node of typed) {
+      expect(fontSize(node), `${node.tagName} ${node.className} ${node.getAttribute('type') ?? ''}`).to.equal(16);
+    }
+    untyped.forEach((node, index) => {
+      expect(fontSize(node), `${node.getAttribute('type')} keeps its size`).to.equal(before[typed.length + index]);
+    });
+
+    // The composer's mirror lays out the same text at the same size, and the input line's minimum height
+    // follows it, so the line holds its text.
+    expect(fontSize(input)).to.equal(16);
+    expect(fontSize(mirror)).to.equal(16);
+    expect(Number.parseFloat(getComputedStyle(input).minHeight)).to.equal(16 * 1.5);
+    expect(inputBefore).to.not.equal(getComputedStyle(input).minHeight);
+    expect(input.getBoundingClientRect().height).to.be.at.least(16 * 1.5 - 0.01);
+    expect(form.getBoundingClientRect().height).to.be.above(0);
+
+    // A fixed-height field still holds the larger line.
+    const field = typed[0];
+    expect(Number.parseFloat(getComputedStyle(field).lineHeight)).to.be.at.most(field.clientHeight);
+  } finally {
+    rules.remove();
+  }
+});
+
+it('sets the composer menus, notices and Run rows in the type scale', () => {
+  const sized = (token: string): string => {
+    const probe = element('');
+    probe.style.fontSize = `var(${token})`;
+    return getComputedStyle(probe).fontSize;
+  };
+  const within = (parent: string | null, tag: string, className: string): HTMLElement => {
+    const host = parent ? element(parent) : document.body;
+    const node = document.createElement(tag);
+    node.className = className;
+    host.appendChild(node);
+    return node;
+  };
+  const roles: Array<[HTMLElement, string]> = [
+    [within('composer-mode', 'button', 'composer-mode-trigger'), '--font-size-detail'],
+    [within('composer-mode-menu', 'button', ''), '--font-size-detail'],
+    [within(null, 'span', 'composer-effort-default'), '--font-size-caption'],
+    [within('skill-menu', 'span', 'skill-menu-name'), '--font-size-detail'],
+    [within('skill-menu', 'span', 'skill-menu-desc'), '--font-size-caption'],
+    [within('skill-menu', 'span', 'skill-menu-source'), '--font-size-caption'],
+    [within(null, 'div', 'skill-notice'), '--font-size-detail'],
+    [within(null, 'div', chatStyles.toolRow), '--font-size-detail'],
+    [within(null, 'span', chatStyles.toolDuration), '--font-size-caption'],
+    [within(null, 'span', `${chatStyles.streamingDot} ${chatStyles.progressPhase}`), '--font-size-detail'],
+  ];
+  for (const [node, token] of roles) {
+    expect(getComputedStyle(node).fontSize, `${node.className || node.tagName} takes ${token}`).to.equal(sized(token));
+  }
+});
+
+it('zeroes the change durations under reduced motion and leaves the loop periods alone', async () => {
+  const {form} = composerForm();
+  const durations = ['--duration-instant', '--duration-control', '--duration-overlay', '--duration-shell'];
+  const loops = ['--duration-spin', '--duration-pulse', '--duration-pulse-slow'];
+  const seconds = (name: string): number => Number.parseFloat(resolved('transition-duration', name));
+  try {
+    for (const name of durations) expect(seconds(name), name).to.be.greaterThan(0);
+    expect(getComputedStyle(form).transitionDuration).to.equal('0.2s, 0.2s');
+
+    await emulateMedia({reducedMotion: 'reduce'});
+    for (const name of durations) expect(seconds(name), name).to.equal(0);
+    for (const name of loops) expect(seconds(name), name).to.be.greaterThan(0);
+    expect(getComputedStyle(form).transitionDuration).to.equal('0s, 0s');
+  } finally {
+    await emulateMedia({reducedMotion: 'no-preference'});
+  }
+});
+
+it('wraps an unbroken query and an unbroken answer inside the chat column', async () => {
+  const unbroken = 'x'.repeat(400);
+  const list = document.createElement('dl-chat-message-list') as DlChatMessageList;
+  list.style.cssText = 'display:block;width:360px';
+  list.turns = [{
+    id: 'turn-1',
+    userText: unbroken,
+    userAttachments: [],
+    runId: 'run-1',
+    state: 'succeeded',
+    streamText: '',
+    processEntries: [],
+    presentation: {
+      ...answerPresentation,
+      parts: [{...answerPresentation.parts[0]!, html: `<p>${unbroken}</p>`}],
+    },
+    usage: {},
+    error: null,
+    activity: null,
+    cancelRequested: false,
+    steeringMessages: [],
+    answerSequence: null, feedback: null,
+    toolRows: [],
+  }];
+  document.body.append(list);
+  await list.updateComplete;
+  await list.querySelector<AnswerPresentationElement>('dl-answer-presentation')?.updateComplete;
+
+  const column = list.getBoundingClientRect();
+  for (const className of [chatStyles.userMessage, chatStyles.aiMessageContent]) {
+    const node = list.querySelector<HTMLElement>(`.${className}`)!;
+    expect(node.scrollWidth, `${className} holds its words`).to.be.at.most(node.clientWidth);
+    expect(node.getBoundingClientRect().right, `${className} stays in the column`).to.be.at.most(column.right + 0.5);
+  }
+});
+
+it('lets a panel\'s content be shorter than what it holds, so the child that scrolls has something to scroll', () => {
+  const panel = element('panel');
+  panel.style.height = '240px';
+  const content = document.createElement('div');
+  content.className = 'panel-content';
+  const scroller = document.createElement('div');
+  scroller.style.cssText = 'overflow-y:auto;height:100%';
+  const tall = document.createElement('div');
+  tall.style.height = '1000px';
+  scroller.append(tall);
+  content.append(scroller);
+  panel.append(content);
+
+  expect(panel.getBoundingClientRect().height).to.equal(240);
+  expect(content.getBoundingClientRect().height).to.be.at.most(240);
+  expect(scroller.scrollHeight).to.be.greaterThan(scroller.clientHeight);
+});
+
+it('marks a searched word in the accent gold under text it can be read in, in both themes', () => {
+  const pane = element(activityStyles.pane);
+  pane.textContent = 'Clause ';
+  const mark = document.createElement('mark');
+  mark.textContent = 'nine';
+  pane.append(mark);
+  try {
+    for (const colorMode of ['dark', 'light']) {
+      document.documentElement.dataset.colorMode = colorMode;
+      const surface = rgba(getComputedStyle(pane).backgroundColor);
+      const style = getComputedStyle(mark);
+      const fill = composite(rgba(style.backgroundColor), composite(surface, rgba(getComputedStyle(document.body).backgroundColor)));
+      expect(style.backgroundColor, `${colorMode} the word is marked in gold`)
+        .to.equal(resolved('background-color', '--color-gold-200'));
+      expect(contrastRatio(rgba(style.color), fill), `${colorMode} the marked word reads`).to.be.at.least(4.5);
+    }
+  } finally {
+    document.documentElement.dataset.colorMode = 'dark';
+  }
 });

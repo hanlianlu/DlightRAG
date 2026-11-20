@@ -9,8 +9,13 @@ import sys
 from collections.abc import Mapping, Sequence
 from uuid import uuid7
 
-from dlightrag.application.access import AccessAction, AccessGate, AllowAllAccessControl
-from dlightrag.application.corpus_admin import CorpusAdmin, CorpusMutationService
+from dlightrag.application.access.control import (
+    AccessAction,
+    AllowAllAccessControl,
+)
+from dlightrag.application.access.workspaces import AccessGate
+from dlightrag.application.corpus_admin.mutations import CorpusMutationService
+from dlightrag.application.corpus_admin.service import CorpusAdmin
 from dlightrag.application.runs import RunService, RunView
 from dlightrag.engine.rag.workspace.workspaces import normalize_workspace
 
@@ -131,7 +136,7 @@ def _print_run(run: RunView) -> None:
 
 async def _run(*, workspace: str | None, reset_all: bool) -> tuple[RunView, ...]:
     from dlightrag import create_application
-    from dlightrag.application.config import get_config
+    from dlightrag.application.config.loading import get_config
 
     config = get_config()
     application = await create_application(config)

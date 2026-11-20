@@ -23,15 +23,16 @@ from dlightrag.adapters.http.rest.models import (
     RunDescriptor,
     WorkspaceDeleteRequest,
 )
-from dlightrag.application.access import (
-    UserContext,
+from dlightrag.application.access.control import (
     corpus_mutation_access_action,
+)
+from dlightrag.application.access.principal import (
+    UserContext,
     owner_id_from_user,
 )
-from dlightrag.application.corpus_admin import (
-    CorpusMutationAction,
-    UnsafeUploadNameError,
-    UploadTooLargeError,
+from dlightrag.application.corpus_admin.errors import UnsafeUploadNameError, UploadTooLargeError
+from dlightrag.application.corpus_admin.mutations import CorpusMutationAction
+from dlightrag.application.corpus_admin.service import (
     ingest_spec_from_payload,
     managed_local_ingest_documents,
     managed_local_ingest_path,

@@ -1,116 +1,15 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+/** The Agent traces dock's roster: the children it lists, how it pages them, how it follows a Run,
+ *  and the agent page mounted beside a roster that is still loading. */
+
 import {expect} from '@esm-bundle/chai';
-import {sendKeys, setViewport} from '@web/test-runner-commands';
-import {defineDesignSystemElements} from '../design-system/index.ts';
-import type {AnswerPresentation} from '../api/conversations.ts';
-import {NOW, activityPage, ago, answeredTurn, observation, question, receipt, refusal, roster, row, serve, sourceFor} from '../testing/traces.ts';
-import {linkStyles, waitFor} from '../testing/dom.ts';
+import {activityPage, ago, answeredTurn, NOW, observation, overview, roster, row, serve, sourceFor} from '../testing/traces.ts';
+import {button, deferred, immediateFollowRefreshes, mount, openChild, restoreDockFixtures, rowFor, rows, session, settle, shown, stated, title} from '../testing/traces-dock.ts';
+import {waitFor} from '../testing/dom.ts';
 import './inspector-traces.ts';
-import type {TracesSource, DlInspectorTraces} from './inspector-traces.ts';
 
-defineDesignSystemElements();
-
-const originalFetch = window.fetch;
-const originalNow = Date.now;
-const originalSetTimeout = window.setTimeout;
-const originalClearTimeout = window.clearTimeout;
-const originalSetInterval = window.setInterval;
-const originalClearInterval = window.clearInterval;
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => { resolve = done; });
-  return {promise, resolve};
-}
-
-async function mount(source: TracesSource | null, width = 420): Promise<DlInspectorTraces> {
-  const dock = document.createElement('dl-inspector-traces');
-  // The dock measures itself: a pane at least 40rem wide shows the list beside the child.
-  dock.style.cssText = `display:block;width:${width}px;height:600px`;
-  dock.source = source;
-  dock.active = true;
-  document.body.append(dock);
-  await dock.updateComplete;
-  return dock;
-}
-
-/** The children's rows; the main agent heads the list and has its own tests. */
-function rows(dock: DlInspectorTraces): {id: string; text: string}[] {
-  return [...dock.querySelectorAll<HTMLElement>('[data-agent-session]:not([data-agent-session="main"])')].map((button) => ({
-    id: button.dataset.agentSession!,
-    text: button.textContent!.replace(/\s+/g, ' ').trim(),
-  }));
-}
-
-function rowFor(dock: DlInspectorTraces, id: string): HTMLButtonElement {
-  return dock.querySelector<HTMLButtonElement>(`[data-agent-session="${id}"]`)!;
-}
-
-function session(dock: DlInspectorTraces) {
-  return dock.querySelector('dl-agent-session')!;
-}
-
-/** The title of the child on show, once there is one. */
-function title(dock: DlInspectorTraces): string | undefined {
-  return dock.querySelector('dl-agent-session h3')?.textContent?.trim();
-}
-
-/** The text of the child on show, as a reader takes it in. */
-function shown(dock: DlInspectorTraces): string {
-  return (dock.querySelector('dl-agent-session')?.textContent ?? '').replace(/\s+/g, ' ').trim();
-}
-
-function composer(dock: DlInspectorTraces): HTMLTextAreaElement {
-  return session(dock).querySelector<HTMLTextAreaElement>('form textarea[data-draft]:not([data-reply])')!;
-}
-
-function button(root: ParentNode, name: string): HTMLButtonElement | null {
-  return [...root.querySelectorAll<HTMLButtonElement>('button')].find((candidate) => (
-    (candidate.getAttribute('aria-label') ?? candidate.textContent!.trim()) === name
-  )) ?? null;
-}
-
-async function type(dock: DlInspectorTraces, field: HTMLTextAreaElement, text: string): Promise<void> {
-  field.value = text;
-  field.dispatchEvent(new Event('input', {bubbles: true}));
-  await session(dock).updateComplete;
-}
-
-/** Watch the writes the page makes to a box's value. What the browser itself puts in the box, as an
- *  IME does while the reader composes, goes through `enter` and is not counted. */
-function watchWrites(field: HTMLTextAreaElement) {
-  const native = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!;
-  const writes: string[] = [];
-  Object.defineProperty(field, 'value', {
-    configurable: true,
-    get: () => native.get!.call(field) as string,
-    set: (value: string) => {
-      writes.push(value);
-      native.set!.call(field, value);
-    },
-  });
-  const enter = (text: string, caret: number, composing: boolean) => {
-    native.set!.call(field, text);
-    field.setSelectionRange(caret, caret);
-    field.dispatchEvent(new InputEvent('input', {
-      inputType: 'insertCompositionText', isComposing: composing, bubbles: true,
-    }));
-  };
-  return {writes, enter};
-}
-
-async function openChild(dock: DlInspectorTraces, id: string): Promise<void> {
-  rowFor(dock, id).click();
-  await waitFor(() => session(dock).querySelector('[data-draft]') !== null);
-}
-
-const settle = (ms = 30) => new Promise<void>((resolve) => { originalSetTimeout(resolve, ms); });
-
-/** Followed-activity refreshes share a one-second window with opening; run it at once. */
-function immediateFollowRefreshes(): void {
-  window.setTimeout = ((handler: TimerHandler) => originalSetTimeout(handler, 0)) as typeof window.setTimeout;
-}
+restoreDockFixtures();
 
 /** Record the dock's timers instead of running them. */
 function recordTimers() {
@@ -124,18 +23,6 @@ function recordTimers() {
   window.clearTimeout = ((id?: number) => { if (id !== undefined) cleared.push(id); }) as typeof window.clearTimeout;
   return {timers, cleared};
 }
-
-afterEach(() => {
-  window.fetch = originalFetch;
-  Date.now = originalNow;
-  window.setTimeout = originalSetTimeout;
-  window.clearTimeout = originalClearTimeout;
-  window.setInterval = originalSetInterval;
-  window.clearInterval = originalClearInterval;
-  document.body.replaceChildren();
-});
-
-// ── The roster ──
 
 it('lists each child with its state, how long it ran, and a settled child\'s summary', async () => {
   Date.now = () => NOW;
@@ -151,7 +38,7 @@ it('lists each child with its state, how long it ran, and a settled child\'s sum
   await waitFor(() => rows(dock).length === 6);
 
   expect(rows(dock).map((child) => child.text)).to.deep.equal([
-    'objective a Running · 2m 14s Question',
+    'objective a Running · 2m 14s Asks parent',
     'objective b Done · 1m 8s Clause 9.2 caps the penalty.',
     'objective c Failed · 41s The PDF has no text layer.',
     'objective d Cancelled by you · 12s',
@@ -187,7 +74,6 @@ it('appends older pages without repeating a child, one request at a time', async
 
   expect(rows(dock).map((child) => child.id)).to.deep.equal(['newest', 'older']);
   expect(dock.querySelector('[data-load-older="children"]')).to.equal(null);
-  expect(dock.querySelector('[data-load-older-status="children"]')!.textContent).to.contain('Loaded 1 older child.');
 });
 
 it('keeps the loaded children when an older page fails, and offers it again', async () => {
@@ -222,7 +108,7 @@ it('starts its traversal over on a refresh and drops an older page that arrives 
   await waitFor(() => rows(dock).length === 1);
 
   dock.querySelector<HTMLButtonElement>('[data-load-older="children"]')!.click();
-  dock.refreshIfFollowing('run-1');
+  stated(dock, 'run-1');
   await waitFor(() => firstPages === 2);
   older.resolve(roster([row('stale')]));
   await waitFor(() => rows(dock)[0]?.id === 'fresh');
@@ -265,17 +151,41 @@ it('says so when the first page cannot be loaded, and loads again on Retry', asy
   expect(dock.querySelector('[role="alert"]')).to.equal(null);
 });
 
-it('shows only the main agent for a Run that started no child, with no list beside it', async () => {
+it('shows only the main agent for a Run that started no child, with no children to choose between', async () => {
   serve({page: () => roster([], null, 'succeeded')});
   const dock = await mount(sourceFor('run-1', answeredTurn()).source, 800);
   await waitFor(() => shown(dock).includes('No activity yet.'));
+  const empty = [...dock.querySelectorAll<HTMLElement>('.dl-note')]
+    .find((line) => line.textContent?.includes('No activity yet.'));
+  expect(empty, 'the empty activity line is the design system\'s quiet line').to.not.equal(undefined);
 
   expect(title(dock)).to.equal('What changed?');
   expect(shown(dock)).to.contain('Main agent');
   expect(shown(dock)).to.contain('Done');
-  expect(dock.querySelector('[data-agent-session]')).to.equal(null, 'nothing to choose between');
-  expect(button(session(dock), 'Cancel child')).to.equal(null, 'there is nothing of the main agent to cancel here');
-  expect(session(dock).querySelector('form'), 'and nothing to steer here').to.equal(null);
+  expect(rows(dock), 'nothing to choose between').to.deep.equal([]);
+  expect(dock.querySelector('[data-switcher-current]')!.textContent).to.contain('Main agent');
+  expect(dock.querySelector('textarea, form, [data-draft]'), 'and nothing to steer here').to.equal(null);
+});
+
+it('mounts the agent page before the roster answers, so its transcript reads in parallel', async () => {
+  const pending = deferred<Response>();
+  const served = serve({
+    page: () => pending.promise,
+    transcript: () => activityPage([{role: 'assistant', content: 'the main transcript'}], {running: true}),
+  });
+  const dock = await mount(sourceFor().source, 800);
+
+  // The roster is still on the wire: the page is up anyway and the status near the switcher says so.
+  expect(dock.querySelector('dl-agent-session'), 'the page does not wait for the roster').to.not.equal(null);
+  expect(dock.querySelector('[data-roster-loading]')).to.not.equal(null);
+  expect(rows(dock)).to.have.length(0);
+  // Its transcript is read while the roster is still loading, not after it.
+  await waitFor(() => served.some((request) => request.path.endsWith('/transcript')));
+  await waitFor(() => (dock.textContent ?? '').includes('the main transcript'));
+
+  pending.resolve(roster([row('a')]));
+  await waitFor(() => rows(dock).length === 1);
+  expect(dock.querySelector('[data-roster-loading]'), 'the loading line goes with the roster').to.equal(null);
 });
 
 // ── Following the Run ──
@@ -290,8 +200,8 @@ it('refetches a followed roster at most once per interval, counting its opening'
   const dock = await mount(sourceFor().source);
   await waitFor(() => pages === 1);
 
-  for (let activity = 0; activity < 30; activity += 1) dock.refreshIfFollowing('run-1');
-  dock.refreshIfFollowing('another-run');
+  for (let activity = 0; activity < 30; activity += 1) stated(dock, 'run-1');
+  stated(dock, 'another-run');
   await settle(20);
 
   expect(pages).to.equal(1, 'activity right after opening waits for the window');
@@ -302,8 +212,165 @@ it('refetches a followed roster at most once per interval, counting its opening'
   await waitFor(() => pages === 2);
 
   // That refresh opened a window of its own.
-  dock.refreshIfFollowing('run-1');
+  stated(dock, 'run-1');
   expect([...timers.values()].filter(({delay}) => delay > 0)).to.have.length(2);
+});
+
+it('re-reads the Run\'s own pane when a Run with no children moves', async () => {
+  immediateFollowRefreshes();
+  const served = serve({
+    page: () => roster([], null, 'running'),
+    transcript: () => activityPage([{role: 'assistant', content: 'a step'}], {running: true}),
+  });
+  const dock = await mount(sourceFor().source, 800);
+  const reads = () => served.filter((one) => one.path.endsWith('/transcript')).length;
+  const pages = () => served.filter((one) => one.path.endsWith('/children')).length;
+  await waitFor(() => reads() > 0);
+  const openedPages = pages();
+
+  // The Run moved. Its roster page is the same empty list it always was, and the pane the reader
+  // is looking at is the Run's own agent: it still has to follow.
+  stated(dock, 'run-1');
+  await waitFor(() => pages() > openedPages);
+  await waitFor(() => reads() > 1);
+});
+
+it('re-reads the Run\'s own pane after the first page arrived empty', async () => {
+  immediateFollowRefreshes();
+  let reads = 0;
+  serve({
+    page: () => roster([], null, 'running'),
+    transcript: () => {
+      reads += 1;
+      return activityPage(reads === 1 ? [] : [{role: 'assistant', content: 'a step'}], {
+        running: true,
+      });
+    },
+  });
+  const dock = await mount(sourceFor().source, 800);
+  await waitFor(() => reads > 0);
+  await waitFor(() => shown(dock).includes('No activity yet.'));
+
+  // The first page landed before the Run wrote anything; the pane holds that empty page. A later
+  // event must make it look again rather than leave the reader with the empty first read.
+  stated(dock, 'run-1');
+  await waitFor(() => reads > 1);
+  await waitFor(() => shown(dock).includes('a step'));
+});
+
+it('keeps a live pane reading itself when the dock thinks the Run has settled', async () => {
+  let reads = 0;
+  serve({
+    // The roster says settled, so the dock never pokes the page; the transcript page itself says
+    // the agent is working. The pane must believe its own page rather than freeze on the first read.
+    page: () => roster([], null, 'succeeded'),
+    transcript: () => {
+      reads += 1;
+      return activityPage(reads === 1 ? [] : [{role: 'assistant', content: 'a step'}], {
+        running: true,
+      });
+    },
+  });
+  const dock = await mount(sourceFor().source, 800);
+  await waitFor(() => reads === 1);
+  await waitFor(() => shown(dock).includes('No activity yet.'));
+  await waitFor(() => shown(dock).includes('a step'), 3000);
+  expect(reads, 'the pane read itself forward').to.be.greaterThan(1);
+});
+
+it('takes a Run\'s tokens as liveness, without reading a page for them', async () => {
+  const served = serve({page: () => roster([], null, 'running')});
+  const dock = await mount(sourceFor().source, 800);
+  await waitFor(() => shown(dock).includes('Main agent'));
+  const before = served.length;
+
+  dock.applyEvents('run-1', [{kind: 'token', text: 'Half an answer'}]);
+  await dock.updateComplete;
+
+  expect(shown(dock), 'the Run\'s own agent is on screen').to.contain('Main agent');
+  expect(served.length, 'a token is the chat\'s words, not a trace read').to.equal(before);
+});
+
+it('keeps a running child on show current, whatever the batch was about', async () => {
+  immediateFollowRefreshes();
+  const served = serve({page: () => roster([row('a', 'running')])});
+  const dock = await mount(sourceFor().source);
+  await waitFor(() => rows(dock).length === 1);
+  await openChild(dock, 'a');
+  const reads = () => served.filter((one) => one.path.endsWith('/transcript')).length;
+  const opened = reads();
+
+  // The Run's log states nothing about a child's own work, so a token — any batch — keeps the
+  // pane the reader is watching as current as the interval allows.
+  dock.applyEvents('run-1', [{kind: 'token', text: 'still working'}]);
+  await waitFor(() => reads() > opened);
+});
+
+it('appends what landed since the last message the pane holds', async () => {
+  immediateFollowRefreshes();
+  let landed = 0;
+  const served = serve({
+    page: () => roster([row('a', 'running')]),
+    transcript: (_agent, _before, since) => {
+      // A delta answers with what the reader does not hold yet, exactly as the route does.
+      if (since !== null) {
+        landed += 1;
+        return activityPage([{sequence: landed, role: 'assistant', content: `step ${landed}`}]);
+      }
+      landed = 1;
+      return activityPage([{sequence: 1, role: 'assistant', content: 'step 1'}]);
+    },
+  });
+  const dock = await mount(sourceFor().source);
+  await waitFor(() => rows(dock).length === 1);
+  await openChild(dock, 'a');
+  await waitFor(() => shown(dock).includes('step 1'));
+
+  // The Run stated something and a second step landed: the pane reads forward from what it holds
+  // and keeps what it had — a delta is an append, not the page that replaces the history.
+  stated(dock, 'run-1');
+
+  await waitFor(() => shown(dock).includes('step 2'));
+  expect(shown(dock), 'the history stays beside what landed').to.include('step 1');
+  expect(served.some((one) => one.search.includes('since=')), 'read forward').to.equal(true);
+});
+
+it('reads the pages again when an event states something', async () => {
+  immediateFollowRefreshes();
+  const served = serve({page: () => roster([], null, 'running')});
+  const dock = await mount(sourceFor().source, 800);
+  await waitFor(() => served.length > 0);
+  const before = served.length;
+
+  dock.applyEvents('run-1', [{kind: 'tool', eventType: 'tool_start', payload: {}}]);
+  await waitFor(() => served.length > before);
+});
+
+it('re-reads the pane on show when the Run moves again', async () => {
+  immediateFollowRefreshes();
+  const served = serve({
+    page: () => roster([row('a', 'running')]),
+    transcript: () => activityPage([{role: 'assistant', content: 'a step'}], {running: true}),
+  });
+  const dock = await mount(sourceFor().source);
+  await waitFor(() => rows(dock).length === 1);
+  await openChild(dock, 'a');
+  const reads = () => served.filter((one) => one.path.endsWith('/transcript')).length;
+  const pages = () => served.filter((one) => one.path.endsWith('/children')).length;
+  const opened = reads();
+  expect(opened, 'opening a child reads its transcript').to.be.greaterThan(0);
+
+  const shown = session(dock);
+  const pane = shown.querySelector('dl-activity')!;
+  expect(pane, 'the pane on show is the transcript').to.not.equal(null);
+  expect(pane.loaded, 'the pane holds its first page').to.equal(true);
+  const openedPages = pages();
+
+  // The Run moved: the dock refreshes its roster, and what the reader is looking at follows it.
+  stated(dock, 'run-1');
+  await waitFor(() => pages() > openedPages);
+  expect(shown.entry?.status, 'the row the pane draws says it is still running').to.equal('running');
+  await waitFor(() => reads() > opened);
 });
 
 it('drops a trailing refresh when the source goes or the dock leaves the page', async () => {
@@ -316,7 +383,7 @@ it('drops a trailing refresh when the source goes or the dock leaves the page', 
   const dock = await mount(sourceFor().source);
   await waitFor(() => pages === 1);
 
-  dock.refreshIfFollowing('run-1');
+  stated(dock, 'run-1');
   const closing = [...timers.keys()].at(-1)!;
   dock.source = null;
   await dock.updateComplete;
@@ -324,7 +391,7 @@ it('drops a trailing refresh when the source goes or the dock leaves the page', 
 
   dock.source = sourceFor().source;
   await waitFor(() => pages === 2);
-  dock.refreshIfFollowing('run-1');
+  stated(dock, 'run-1');
   const leaving = [...timers.keys()].at(-1)!;
   dock.remove();
   expect(cleared).to.include(leaving);
@@ -342,1316 +409,155 @@ it('does not follow while another Inspector kind is showing', async () => {
 
   dock.active = false;
   await dock.updateComplete;
-  dock.refreshIfFollowing('run-1');
+  stated(dock, 'run-1');
   await settle(50);
 
   expect(pages).to.equal(1);
 });
 
-it('runs one clock that redraws the elapsed times without asking the server, and only while it is needed', async () => {
-  let now = NOW;
-  Date.now = () => now;
-  const intervals = new Map<number, () => void>();
-  const stopped: number[] = [];
-  window.setInterval = ((handler: TimerHandler) => {
-    const id = intervals.size + 100;
-    intervals.set(id, handler as () => void);
-    return id;
-  }) as typeof window.setInterval;
-  window.clearInterval = ((id?: number) => { if (id !== undefined) stopped.push(id); }) as typeof window.clearInterval;
-  const requests = serve({page: () => roster([
-    row('a', 'running', {started_at: ago(134)}),
-    row('b', 'succeeded', {started_at: ago(600), finished_at: ago(540)}),
-  ])});
-  const dock = await mount(sourceFor().source);
-  await waitFor(() => rows(dock).length === 2);
+// ── One pane, one switcher ──
 
-  expect(intervals.size).to.equal(1, 'one clock for every row and the child on show');
-  expect(rows(dock)[0]!.text).to.contain('2m 14s');
-  now += 5000;
-  [...intervals.values()][0]!();
-  await dock.updateComplete;
-  expect(rows(dock)[0]!.text).to.contain('2m 19s');
-  expect(rows(dock)[1]!.text).to.contain('1m 0s', 'a settled child\'s time does not move');
-  // The roster once: the tick asks for nothing, and a narrow dock with children has not opened the main agent.
-  expect(requests.map((request) => request.path)).to.deep.equal(['/web/api/answer/run-1/children']);
+/** One Run's whole-Run facts with two agents and one finding: what the Run panel draws. */
+function runOverview(): Record<string, unknown> {
+  return overview({
+    totals: {
+      steps: 6,
+      kinds: {thinking: 0, tool: 3, say: 1, answer: 1, instruction: 0, delivery: 1},
+      decisions: 1,
+      marks: {failed: 1, degraded: 0, repeated: 0, redirect: 0},
+      tool_time_ms: 2400,
+    },
+    agents: [
+      {
+        agent: 'main', label: 'main', order: 0, steps: 3, tool_calls: 1,
+        marks: {failed: 1, degraded: 0, repeated: 0, redirect: 0},
+        tool_time_ms: 1200, first_at: '2026-10-05T12:00:00Z', last_at: '2026-10-05T12:00:30Z',
+      },
+      {
+        agent: 'a', label: 'objective a', order: 1, steps: 3, tool_calls: 2,
+        marks: {failed: 0, degraded: 0, repeated: 0, redirect: 0},
+        tool_time_ms: 1200, first_at: '2026-10-05T12:00:10Z', last_at: '2026-10-05T12:00:50Z',
+      },
+    ],
+    findings: [{
+      agent: 'main', sequence: 2, kind: 'tool', at: '2026-10-05T12:00:20Z', name: 'read',
+      subject: 'northwind-msa.pdf', outcome: 'failed', marks: ['failed'], excerpt: 'No file.',
+    }],
+    findings_total: 1,
+  });
+}
 
-  dock.active = false;
-  await dock.updateComplete;
-  expect(stopped).to.deep.equal([100]);
-});
-
-it('keeps no clock when nothing runs', async () => {
-  const intervals: number[] = [];
-  window.setInterval = ((_handler: TimerHandler) => intervals.push(1)) as typeof window.setInterval;
-  serve({page: () => roster([row('a', 'succeeded')])});
-  const dock = await mount(sourceFor().source);
-  await waitFor(() => rows(dock).length === 1);
-
-  expect(intervals).to.have.length(0);
-});
-
-// ── One child at a time, or beside the list ──
-
-it('shows the list or one child in a narrow dock, and Back returns to the row that opened it', async () => {
+it('folds the Run overview into one summary line above the page in a narrow dock', async () => {
   serve({
     page: () => roster([row('a', 'running'), row('b', 'succeeded')]),
     observe: (id) => observation(row(id, id === 'a' ? 'running' : 'succeeded')),
+    overview: () => Response.json(runOverview()),
   });
   const dock = await mount(sourceFor().source, 420);
   await waitFor(() => rows(dock).length === 2);
-  const listPane = dock.querySelector<HTMLElement>('ul')!.parentElement!;
-  expect(listPane.hidden).to.equal(false);
-  expect(session(dock).hidden).to.equal(true);
+  await waitFor(() => dock.querySelector('[data-overview]') !== null);
+
+  // The Run panel is one summary line, shut, with the page under the switcher as the only pane.
+  const panel = dock.querySelector<HTMLElement>('[data-overview]')!;
+  expect(panel.tagName).to.equal('DETAILS');
+  expect(panel.hasAttribute('open')).to.equal(false);
+  expect(dock.querySelector('[data-overview-title]')!.textContent).to.contain('Run overview');
+  const summary = dock.querySelector<HTMLElement>('[data-overview-summary]')!;
+  expect(summary.textContent).to.contain('2 agents');
+  expect(summary.textContent).to.contain('6 steps');
+  expect(dock.querySelector('[data-switcher-current]')!.textContent).to.contain('Main agent');
+  expect(dock.querySelector('[data-switcher-current]')!.textContent).to.contain('Running');
 
   rowFor(dock, 'b').click();
   await waitFor(() => title(dock) === 'objective b');
-  expect(listPane.hidden).to.equal(true);
-  expect(session(dock).hidden).to.equal(false);
-  expect(button(dock, 'All agents')).to.not.equal(null);
-  await waitFor(() => document.activeElement === session(dock).querySelector('h3'));
   expect(rowFor(dock, 'b').getAttribute('aria-current')).to.equal('true');
+  expect(dock.querySelector('[data-switcher-current]')!.textContent).to.contain('Child 2');
 
-  button(dock, 'All agents')!.click();
+  // The reader opens the summary: the Run's dossier shows above the page, which keeps its place.
+  const fold = dock.querySelector<HTMLDetailsElement>('[data-overview]')!;
+  fold.open = true;
+  fold.dispatchEvent(new Event('toggle'));
   await dock.updateComplete;
-  expect(listPane.hidden).to.equal(false);
-  expect(session(dock).hidden).to.equal(true);
-  await waitFor(() => document.activeElement === rowFor(dock, 'b'));
-  expect(button(dock, 'All agents')).to.equal(null);
+  await waitFor(() => dock.querySelector('dl-run-overview [data-run-overview]') !== null);
+  expect(dock.querySelector('dl-run-overview [data-ledger]')).to.not.equal(null);
+  expect(title(dock)).to.equal('objective b');
 });
 
-it('opens a wide dock on the main agent beside the list, with the children under it, and the child the reader picks after that', async () => {
+it('opens a wide dock as the Run overview column beside the switcher and the agent page', async () => {
   serve({
     page: () => roster([row('a', 'running'), row('b', 'succeeded')]),
     observe: (id) => observation(row(id, id === 'a' ? 'running' : 'succeeded')),
+    overview: () => Response.json(runOverview()),
   });
   const dock = await mount(sourceFor().source, 800);
   await waitFor(() => rows(dock).length === 2);
-  await waitFor(() => !session(dock).hidden && session(dock).childSessionId === 'main');
+  await waitFor(() => dock.querySelector('dl-run-overview [data-run-overview]') !== null);
 
-  expect(rowFor(dock, 'main').getAttribute('aria-current')).to.equal('true');
-  expect(rowFor(dock, 'main').textContent).to.contain('Main agent');
-  // The children hang off the main agent: one list inside its item, not beside it.
-  expect(rowFor(dock, 'a').closest('li')!.parentElement!.closest('li')).to.equal(rowFor(dock, 'main').closest('li'));
-  expect(button(dock, 'All agents')).to.equal(null, 'both are showing, so there is nothing to go back to');
-  expect(dock.querySelector<HTMLElement>('ul')!.parentElement!.hidden).to.equal(false);
+  // The Run panel is a column, not a fold, and its 44px band leads it.
+  expect(dock.querySelector('[data-overview]')!.tagName).to.equal('SECTION');
+  expect(dock.querySelector('[data-overview-title]')!.textContent).to.contain('Run overview');
+  expect(dock.querySelector('[data-overview-summary]')!.textContent).to.contain('6 steps');
+  const dossier = dock.querySelector('dl-run-overview')!;
+  expect(dossier.querySelector('[data-delivery]'), 'what the Run delivered').to.not.equal(null);
+  expect(dossier.querySelector('[data-attention]'), 'what needs attention').to.not.equal(null);
+  expect(dossier.querySelector('[data-agent-row][data-agent="main"]')).to.not.equal(null);
+  expect(dock.querySelector('[data-switcher-current]')!.textContent).to.contain('Main agent');
+  const writing = [...dock.querySelectorAll('textarea, form, [data-draft], [data-cancel]')];
+  expect(writing, 'the Inspector only reads').to.deep.equal([]);
 
   rowFor(dock, 'b').click();
   await waitFor(() => title(dock) === 'objective b');
-  expect(rowFor(dock, 'b').getAttribute('aria-current')).to.equal('true');
-  expect(rowFor(dock, 'main').hasAttribute('aria-current')).to.equal(false);
-
+  expect(dock.querySelector('[data-switcher-current]')!.textContent).to.contain('Child 2');
   rowFor(dock, 'main').click();
   await waitFor(() => session(dock).childSessionId === 'main');
   expect(rowFor(dock, 'main').getAttribute('aria-current')).to.equal('true');
 });
 
-it('follows the width of the pane: narrower shows the child the reader picked, wider shows the list too', async () => {
+it('remembers the agent a Run was left on when the dock is opened again', async () => {
   serve({
     page: () => roster([row('a', 'running'), row('b', 'succeeded')]),
     observe: (id) => observation(row(id, id === 'a' ? 'running' : 'succeeded')),
   });
+  const first = await mount(sourceFor().source, 800);
+  await waitFor(() => rows(first).length === 2);
+  rowFor(first, 'b').click();
+  await waitFor(() => title(first) === 'objective b');
+  first.remove();
+
+  const again = await mount(sourceFor().source, 800);
+  await waitFor(() => rows(again).length === 2);
+  await waitFor(() => title(again) === 'objective b');
+  expect(rowFor(again, 'b').getAttribute('aria-current')).to.equal('true');
+  expect(again.querySelector('[data-switcher-current]')!.textContent).to.contain('Child 2');
+
+  // Another Run remembers its own agent: the Run's own, since nobody chose one there.
+  await mount(sourceFor('run-2').source, 800);
+  await waitFor(() => rows(again).length === 2);
+  const other = await mount(sourceFor('run-2').source, 800);
+  await waitFor(() => other.querySelector('[data-agent-session="main"]') !== null);
+  expect(other.querySelector('[data-agent-session="main"]')!.getAttribute('aria-current')).to.equal('true');
+});
+
+it('follows the width of the pane: the narrow summary becomes the wide Run panel', async () => {
+  serve({
+    page: () => roster([row('a', 'running'), row('b', 'succeeded')]),
+    observe: (id) => observation(row(id, id === 'a' ? 'running' : 'succeeded')),
+    overview: () => Response.json(runOverview()),
+  });
   const dock = await mount(sourceFor().source, 800);
   await waitFor(() => rows(dock).length === 2);
-  const listPane = dock.querySelector<HTMLElement>('ul')!.parentElement!;
+  await waitFor(() => dock.querySelector('[data-overview]')!.tagName === 'SECTION');
   rowFor(dock, 'b').click();
   await waitFor(() => title(dock) === 'objective b');
 
   dock.style.width = '420px';
-  await waitFor(() => listPane.hidden === true);
-  expect(button(dock, 'All agents')).to.not.equal(null);
-  expect(title(dock)).to.equal('objective b');
+  await waitFor(() => dock.querySelector('[data-overview]')!.tagName === 'DETAILS');
+  expect(title(dock), 'the page the reader chose is still on show').to.equal('objective b');
+  expect(dock.querySelector('[data-switcher-current]')!.textContent).to.contain('Child 2');
 
   dock.style.width = '800px';
-  await waitFor(() => listPane.hidden === false);
-  expect(button(dock, 'All agents')).to.equal(null);
+  await waitFor(() => dock.querySelector('[data-overview]')!.tagName === 'SECTION');
+  expect(title(dock)).to.equal('objective b');
 });
 
 // ── The child on show ──
-
-it('shows a running child\'s question with when it expires, and its activity as the main trace words it', async () => {
-  Date.now = () => NOW;
-  serve({
-    page: () => roster([row('a', 'running', {started_at: ago(134), pending_questions: 1})]),
-    observe: () => observation(row('a', 'running', {started_at: ago(134), pending_questions: 1}), {
-      transcript: [
-        {role: 'user', content: 'objective a'},
-        {role: 'assistant', content: '', tool_calls: [{id: 't1', name: 'search_knowledge_base'}]},
-        {role: 'tool', content: '12 results\nTop: MSA §9.2', tool_call_id: 't1', name: 'search_knowledge_base', is_error: false},
-        {role: 'assistant', content: 'Checking the amendment.', tool_calls: [{id: 't2', name: 'read'}]},
-      ],
-      questions: [
-        question('q1'),
-        question('q0', {status: 'replied', reply: 'Swedish law.', reply_origin: 'parent', expires_at: null}),
-        question('q9', {expires_at: ago(5)}),
-      ],
-    }),
-  });
-  const dock = await mount(sourceFor().source, 420);
-  await waitFor(() => rows(dock).length === 1);
-  await openChild(dock, 'a');
-  await waitFor(() => shown(dock).includes('Checking the amendment'));
-
-  const text = shown(dock);
-  expect(text).to.contain('Running 2m 14s · Query model');
-  expect(text).to.contain('Asking the parent · expires in 4 min Question q1? Answer instead');
-  expect(text.match(/Asking the parent/g), 'a question past its expiry is no longer waiting').to.have.length(1);
-  expect(text).to.contain('Activity Searching the knowledge base 12 results');
-  expect(text).to.contain('Checking the amendment. Running: Reading a document');
-  expect(session(dock).querySelector('details')!.open, 'a running child\'s activity is open').to.equal(true);
-  // Quiet history: what was answered, and what lapsed.
-  expect(text).to.contain('Question q0? Answered · Parent Swedish law.');
-  expect(text).to.contain('Question q9? Expired');
-});
-
-it('says who sent each steer, even when a short one is part of an older one', async () => {
-  const running = row('a', 'running', {started_at: ago(5)});
-  const control = (sequence: number, content: string, origin: string) => ({
-    control_sequence: sequence, kind: 'steer', content, origin, consumed: true,
-    consumed_at: ago(3), created_at: ago(4), operation_id: 'op-a',
-  });
-  serve({
-    page: () => roster([running]),
-    observe: () => observation(running, {
-      transcript: [
-        {role: 'user', content: 'objective a'},
-        {role: 'user', content: 'Parent steer: Continue with the amendment review'},
-        {role: 'user', content: 'User steer: Continue'},
-      ],
-      // Newest first, as the server lists them.
-      controls: [control(2, 'Continue', 'user'), control(1, 'Continue with the amendment review', 'parent')],
-    }),
-  });
-  const dock = await mount(sourceFor().source, 420);
-  await waitFor(() => rows(dock).length === 1);
-  await openChild(dock, 'a');
-  await waitFor(() => shown(dock).includes('Continue with the amendment review'));
-
-  expect(shown(dock)).to.contain('Activity Parent Continue with the amendment review You Continue');
-});
-
-it('leads a settled child with its result, and folds its evidence and activity', async () => {
-  const settled = row('a', 'succeeded', {
-    started_at: ago(68), finished_at: ago(0), usage: {total_tokens: 9400}, summary: 'Clause 9.2 caps it at 6%.',
-    result_handles: ['ev-1', 'ev-2'],
-  });
-  serve({
-    page: () => roster([settled]),
-    observe: () => observation(settled, {
-      transcript: [
-        {role: 'user', content: 'objective a'},
-        {role: 'assistant', content: '', tool_calls: [{id: 't1', name: 'read'}]},
-        {role: 'tool', content: 'ok', tool_call_id: 't1', name: 'read', is_error: false},
-      ],
-      result: {status: 'succeeded', summary: 'Clause 9.2 caps it at 6%.', handles: ['ev-1', 'ev-2'], operation_id: 'op-a'},
-    }),
-  });
-  Date.now = () => NOW;
-  const dock = await mount(sourceFor().source, 420);
-  await waitFor(() => rows(dock).length === 1);
-  await openChild(dock, 'a');
-  await waitFor(() => shown(dock).includes('Activity · 1 step'));
-
-  const text = shown(dock);
-  expect(text.indexOf('Result')).to.be.lessThan(text.indexOf('Activity'));
-  expect(text).to.contain('Done 1m 8s · Query model · 9.4K tokens');
-  expect(text).to.contain('Result Clause 9.2 caps it at 6%.');
-  expect(text).to.contain('Evidence · 2');
-  const [evidence, activity] = session(dock).querySelectorAll('details');
-  expect(evidence!.open).to.equal(false);
-  expect(activity!.open, 'a settled child\'s activity is folded').to.equal(false);
-  expect(evidence!.textContent).to.contain('ev-1');
-  expect(button(session(dock), 'Cancel child'), 'nothing is left to cancel').to.equal(null);
-});
-
-/** Assistant messages numbered `from` to `to`, as the transcript route sends them. */
-function steps(from: number, to: number): Record<string, unknown>[] {
-  return Array.from({length: to - from + 1}, (_, index) => (
-    {sequence: from + index, role: 'assistant', content: `Step ${from + index}.`, tool_calls: []}
-  ));
-}
-
-const transcriptRequests = (requests: {path: string; search: string}[]) => requests
-  .filter((request) => request.path.endsWith('/transcript'))
-  .map((request) => request.search);
-
-it('shows a child\'s newest steps first and the earlier ones on request', async () => {
-  const running = row('a', 'running', {started_at: ago(5)});
-  const requests = serve({
-    page: () => roster([running]),
-    observe: () => observation(running),
-    transcript: (agent, before) => {
-      if (agent !== 'a') return undefined;
-      return before === null
-        ? activityPage(steps(21, 40), {nextBefore: 21, running: true})
-        : activityPage(steps(1, 20), {running: true});
-    },
-  });
-  const dock = await mount(sourceFor().source, 420);
-  await waitFor(() => rows(dock).length === 1);
-  await openChild(dock, 'a');
-  await waitFor(() => shown(dock).includes('Step 40.'));
-
-  expect(shown(dock)).to.not.contain('Step 20.');
-  session(dock).querySelector<HTMLButtonElement>('[data-load-older="activity"]')!.click();
-  await waitFor(() => shown(dock).includes('Step 1.Step 2.'));
-
-  expect(session(dock).querySelector('[data-load-older="activity"]'), 'the start has been reached').to.equal(null);
-  expect(transcriptRequests(requests)).to.deep.equal(['?child=a', '?child=a&before=21']);
-});
-
-it('keeps the earlier steps a reader has shown when the newest page is read again, and starts over when the agent has moved on by more than a page', async () => {
-  immediateFollowRefreshes();
-  let newest = steps(21, 40);
-  let cursor: number | null = 21;
-  const running = row('a', 'running', {started_at: ago(5)});
-  serve({
-    page: () => roster([running]),
-    observe: () => observation(running),
-    transcript: (agent, before) => {
-      if (agent !== 'a') return undefined;
-      return before === null
-        ? activityPage(newest, {nextBefore: cursor, running: true})
-        : activityPage(steps(1, 20), {running: true});
-    },
-  });
-  const dock = await mount(sourceFor().source, 420);
-  await waitFor(() => rows(dock).length === 1);
-  await openChild(dock, 'a');
-  await waitFor(() => shown(dock).includes('Step 40.'));
-  session(dock).querySelector<HTMLButtonElement>('[data-load-older="activity"]')!.click();
-  await waitFor(() => shown(dock).includes('Step 1.Step 2.'));
-
-  newest = steps(22, 41);
-  cursor = 22;
-  dock.refreshIfFollowing('run-1');
-  await waitFor(() => shown(dock).includes('Step 41.'));
-  expect(shown(dock)).to.contain('Step 1.Step 2.');
-  expect(shown(dock).match(/Step 25\./g), 'a step is shown once').to.have.length(1);
-
-  newest = steps(100, 119);
-  cursor = 100;
-  dock.refreshIfFollowing('run-1');
-  await waitFor(() => shown(dock).includes('Step 119.'));
-  expect(shown(dock), 'the older pages gave way to the page that left a gap').to.not.contain('Step 1.');
-  expect(session(dock).querySelector('[data-load-older="activity"]')).to.not.equal(null);
-});
-
-it('gives the main agent what a child has: its answer as the Result, its token count, and its cited sources as Evidence that open the source', async () => {
-  serve({page: () => roster([], null, 'succeeded')});
-  const presentation = {
-    answerText: 'Clause 9.2 caps the penalty at 6%.', parts: [], linkCards: [], evidenceImages: [], artifacts: [],
-    artifactOutcome: null,
-    sources: [
-      {id: '1', title: 'northwind-msa.pdf', sourceUrl: null, downloadUrl: null, chunks: []},
-      {id: '2', title: 'amendment-3.pdf', sourceUrl: null, downloadUrl: null, chunks: []},
-    ],
-  } as unknown as AnswerPresentation;
-  const turn = answeredTurn({presentation, usage: {usage_details: {total_tokens: 9400}}});
-  const dock = await mount(sourceFor('run-1', turn).source, 800);
-  await waitFor(() => shown(dock).includes('Evidence · 2'));
-  const opened: {referenceId: string; presentation: unknown}[] = [];
-  dock.addEventListener('dl-answer-source-open', (event) => {
-    opened.push((event as CustomEvent).detail);
-  });
-
-  const text = shown(dock);
-  expect(text).to.contain('Main agent What changed? Show full objective Done 9.4K tokens');
-  expect(text).to.contain('Result Clause 9.2 caps the penalty at 6%.');
-  const fold = [...session(dock).querySelectorAll('details')].find((candidate) => candidate.textContent!.includes('Evidence'))!;
-  expect(fold.open).to.equal(false);
-  expect(fold.textContent).to.contain('[1] northwind-msa.pdf');
-  fold.querySelector<HTMLButtonElement>('[data-evidence-ref="2"]')!.click();
-
-  expect(opened.map((detail) => detail.referenceId)).to.deep.equal(['2']);
-  expect(opened[0]!.presentation).to.equal(presentation);
-});
-
-it('says why a Run failed in the main agent\'s result, and shows no Result for a Run that is still going', async () => {
-  serve({page: () => roster([], null, 'failed')});
-  const failed = await mount(sourceFor('run-1', answeredTurn({state: 'failed', error: 'Service error. Please try again.'})).source, 800);
-  await waitFor(() => shown(failed).includes('Failed'));
-  expect(shown(failed)).to.contain('Result Service error. Please try again.');
-  failed.remove();
-
-  serve({page: () => roster([], null, 'running')});
-  const going = await mount(sourceFor('run-1', answeredTurn({state: 'streaming', error: 'ignored'})).source, 800);
-  await waitFor(() => shown(going).includes('Running'));
-  expect(shown(going)).to.not.contain('Result');
-});
-
-it('opens a child\'s Evidence line on the answer\'s source it cites, and leaves a line the answer does not hold as text', async () => {
-  const settled = row('a', 'succeeded', {
-    started_at: ago(68), finished_at: ago(0), summary: 'Clause 9.2 caps it.',
-    result_handles: ['[1] northwind-msa.pdf', '[7] not-in-the-answer.pdf'],
-  });
-  serve({page: () => roster([settled]), observe: () => observation(settled)});
-  const presentation = {
-    answerText: '', parts: [], linkCards: [], evidenceImages: [], artifacts: [], artifactOutcome: null,
-    sources: [{id: '1', title: 'northwind-msa.pdf', sourceUrl: null, downloadUrl: null, chunks: []}],
-  } as unknown as AnswerPresentation;
-  const dock = await mount(sourceFor('run-1', answeredTurn({presentation})).source, 420);
-  await waitFor(() => rows(dock).length === 1);
-  await openChild(dock, 'a');
-  await waitFor(() => shown(dock).includes('Evidence · 2'));
-
-  const links = [...session(dock).querySelectorAll<HTMLElement>('[data-evidence-ref]')].map((link) => link.dataset.evidenceRef);
-  expect(links).to.deep.equal(['1']);
-  expect(shown(dock)).to.contain('[7] not-in-the-answer.pdf');
-});
-
-it('shows a token count only when the child reports a finite total', async () => {
-  Date.now = () => NOW;
-  const read = async (usage: Record<string, number> | null) => {
-    const settled = row('a', 'succeeded', {started_at: ago(10), finished_at: ago(0), usage});
-    serve({page: () => roster([settled]), observe: () => observation(settled)});
-    const dock = await mount(sourceFor().source, 420);
-    await waitFor(() => rows(dock).length === 1);
-    await openChild(dock, 'a');
-    await waitFor(() => shown(dock).includes('Done'));
-    const text = shown(dock);
-    dock.remove();
-    return text;
-  };
-
-  expect(await read({input_tokens: 5, output_tokens: 7})).to.not.contain('tokens');
-  expect(await read(null)).to.not.contain('tokens');
-  expect(await read({total_tokens: 12})).to.contain('Done 10s · Query model · 12 tokens');
-});
-
-// ── Commands ──
-
-it('sends a steer to a running child with the Operation it was typed for, and says what became of it', async () => {
-  const running = row('a', 'running', {started_at: ago(5)});
-  const requests = serve({
-    page: () => roster([running]),
-    observe: () => observation(running),
-    control: () => receipt('steer', 'queued'),
-  });
-  const {source, controls} = sourceFor();
-  const dock = await mount(source, 420);
-  await waitFor(() => rows(dock).length === 1);
-  await openChild(dock, 'a');
-
-  expect(shown(dock)).to.contain("Delivered at the child's next safe checkpoint.");
-  const field = composer(dock);
-  expect(field.placeholder).to.equal('Steer this child…');
-  field.focus();
-  await type(dock, field, '  focus on dates ');
-  session(dock).querySelector('form')!.requestSubmit();
-  await waitFor(() => shown(dock).includes('Queued. The child has not necessarily followed it yet.'));
-
-  expect(controls.map(([id, action, content, reauthorize, operationId]) => [id, action, content, reauthorize, operationId]))
-    .to.deep.equal([['a', 'steer', 'focus on dates', false, 'op-a']]);
-  // The command settled, so the child is read again and its roster row follows.
-  const reads = (path: string) => requests.filter((request) => request.method === 'GET' && request.path === path).length;
-  await waitFor(() => reads('/web/api/answer/run-1/children') === 2 && reads('/web/api/answer/run-1/children/a') >= 2);
-  const sent = requests.find((request) => request.method === 'POST')!;
-  expect(sent.path).to.equal('/web/api/answer/run-1/children/a/control');
-  expect(sent.body).to.deep.equal({action: 'steer', content: 'focus on dates', reauthorize_user_cancelled: false});
-  expect(sent.headers.get('Idempotency-Key')).to.match(/^[0-9a-f-]{36}$/);
-  expect(field.value, 'an accepted command empties its box').to.equal('');
-  expect(document.activeElement, 'and leaves the reader where they were typing').to.equal(field);
-});
-
-it('continues a settled child, with a reauthorization the reader gives for work they cancelled', async () => {
-  const stopped = row('a', 'cancelled', {cancellation_origin: 'user', started_at: ago(12), finished_at: ago(0)});
-  const requests = serve({
-    page: () => roster([stopped]),
-    observe: () => observation(stopped),
-    control: () => receipt('continue', 'accepted', {operation_id: 'op-a2'}),
-  });
-  const {source, controls} = sourceFor();
-  const dock = await mount(source, 420);
-  await waitFor(() => rows(dock).length === 1);
-  await openChild(dock, 'a');
-
-  expect(composer(dock).placeholder).to.equal('Continue this child…');
-  expect(shown(dock)).to.contain('Starts a new operation on this child.');
-  const reauthorize = session(dock).querySelector<HTMLInputElement>('input[type="checkbox"]')!;
-  expect(reauthorize.closest('label')!.textContent!.trim()).to.equal('Reauthorize this user-cancelled work');
-  reauthorize.click();
-  await type(dock, composer(dock), 'try again');
-  session(dock).querySelector('form')!.requestSubmit();
-  await waitFor(() => controls.length === 1);
-
-  expect(controls[0]!.slice(0, 5)).to.deep.equal(['a', 'continue', 'try again', true, 'op-a']);
-  const sent = requests.find((request) => request.method === 'POST')!;
-  expect(sent.body).to.deep.equal({action: 'continue', content: 'try again', reauthorize_user_cancelled: true});
-});
-
-it('offers no reauthorization for a child the reader did not cancel', async () => {
-  const failed = row('a', 'failed', {started_at: ago(12), finished_at: ago(0)});
-  serve({page: () => roster([failed]), observe: () => observation(failed), control: () => receipt('continue', 'accepted')});
-  const {source, controls} = sourceFor();
-  const dock = await mount(source, 420);
-  await waitFor(() => rows(dock).length === 1);
-  await openChild(dock, 'a');
-
-  expect(session(dock).querySelector('input[type="checkbox"]')).to.equal(null);
-  await type(dock, composer(dock), 'retry');
-  session(dock).querySelector('form')!.requestSubmit();
-  await waitFor(() => controls.length === 1);
-  expect(controls[0]![3]).to.equal(false);
-});
-
-it('asks before it cancels a child, and keeps it running if the reader says so', async () => {
-  const running = row('a', 'running', {started_at: ago(5)});
-  const requests = serve({
-    page: () => roster([running]),
-    observe: () => observation(running),
-    control: () => receipt('cancel', 'cancellation_requested'),
-  });
-  const {source, controls} = sourceFor();
-  const dock = await mount(source, 420);
-  await waitFor(() => rows(dock).length === 1);
-  await openChild(dock, 'a');
-
-  button(session(dock), 'Cancel child')!.click();
-  await waitFor(() => shown(dock).includes('Cancel this child? Its work so far is kept.'));
-  const confirmation = session(dock).querySelector<HTMLElement>('[role="group"]')!;
-  expect(confirmation.getAttribute('aria-labelledby')).to.equal(confirmation.querySelector('p')!.id);
-  await waitFor(() => document.activeElement === button(confirmation, 'Keep running'));
-
-  button(confirmation, 'Keep running')!.click();
-  await waitFor(() => !shown(dock).includes('Cancel this child?'));
-  expect(requests.filter((request) => request.method === 'POST')).to.have.length(0);
-  await waitFor(() => document.activeElement === button(session(dock), 'Cancel child'));
-
-  button(session(dock), 'Cancel child')!.click();
-  await waitFor(() => session(dock).querySelector('[role="group"]') !== null);
-  button(session(dock).querySelector<HTMLElement>('[role="group"]')!, 'Cancel child')!.click();
-  await waitFor(() => shown(dock).includes('Cancellation requested.'));
-
-  expect(controls.map((call) => call.slice(0, 5))).to.deep.equal([['a', 'cancel', '', false, 'op-a']]);
-  expect(session(dock).querySelector('[role="group"]')).to.equal(null);
-});
-
-it('drops the question about cancelling a child that settles before the reader answers it', async () => {
-  immediateFollowRefreshes();
-  let status = 'running';
-  const current = () => row('a', status, {started_at: ago(5), finished_at: status === 'running' ? null : ago(0)});
-  serve({page: () => roster([current()]), observe: () => observation(current())});
-  const dock = await mount(sourceFor().source, 420);
-  await waitFor(() => rows(dock).length === 1);
-  await openChild(dock, 'a');
-  button(session(dock), 'Cancel child')!.click();
-  await waitFor(() => shown(dock).includes('Cancel this child?'));
-
-  status = 'succeeded';
-  dock.refreshIfFollowing('run-1');
-  await waitFor(() => shown(dock).includes('Done'));
-
-  expect(shown(dock)).to.not.contain('Cancel this child?');
-  expect(button(session(dock), 'Cancel child')).to.equal(null);
-});
-
-const FINISHED_NOTE = 'This answer has finished, so its child agents can no longer be steered or continued.';
-
-it('offers a box and a Cancel only while the Run can take what they send', async () => {
-  const cases: [string | null, boolean][] = [
-    [null, true], ['queued', true], ['running', true],
-    ['succeeded', false], ['failed', false], ['cancelled', false],
-    ['a-status-the-server-adds-later', true],
-  ];
-  for (const [runStatus, commandable] of cases) {
-    serve({
-      page: () => roster([
-        row('a', 'running', {started_at: ago(5)}),
-        row('b', 'succeeded', {started_at: ago(9), finished_at: ago(1), summary: 'A summary.'}),
-      ], null, runStatus),
-      observe: (id) => observation(id === 'a'
-        ? row('a', 'running', {started_at: ago(5)})
-        : row('b', 'succeeded', {started_at: ago(9), finished_at: ago(1), summary: 'A summary.'})),
-    });
-    const dock = await mount(sourceFor().source, 800);
-    await waitFor(() => rows(dock).length === 2);
-    for (const id of ['a', 'b']) {
-      rowFor(dock, id).click();
-      await waitFor(() => title(dock) === `objective ${id}` && shown(dock).includes('Activity'));
-
-      const where = `a ${id === 'a' ? 'running' : 'settled'} child of a Run that is ${runStatus ?? 'not said to be anything'}`;
-      expect(session(dock).querySelector('form') !== null, `${where}: its box`).to.equal(commandable);
-      expect(button(session(dock), 'Cancel child') !== null, `${where}: its Cancel`).to.equal(commandable && id === 'a');
-      expect(shown(dock).includes(FINISHED_NOTE), `${where}: the note`).to.equal(!commandable);
-      // Opening on a Run that is over says nothing out loud: only its ending under the reader does.
-      expect(session(dock).querySelector(':scope > [role="status"]')!.textContent!.trim()).to.equal('');
-    }
-    dock.remove();
-  }
-});
-
-it('puts a note where the box was when the Run ends under a reader, and keeps what the child did', async () => {
-  immediateFollowRefreshes();
-  let runStatus = 'running';
-  const running = row('a', 'running', {started_at: ago(5)});
-  const requests = serve({
-    page: () => roster([running], null, runStatus),
-    observe: () => observation(running, {
-      transcript: [{role: 'assistant', content: 'Checking the amendment.', tool_calls: []}],
-    }),
-  });
-  const dock = await mount(sourceFor().source, 420);
-  await waitFor(() => rows(dock).length === 1);
-  await openChild(dock, 'a');
-  await waitFor(() => shown(dock).includes('Checking the amendment.'));
-  await type(dock, composer(dock), 'one more thing');
-  button(session(dock), 'Cancel child')!.click();
-  await waitFor(() => shown(dock).includes('Cancel this child?'));
-
-  runStatus = 'succeeded';
-  dock.refreshIfFollowing('run-1');
-  await waitFor(() => shown(dock).includes(FINISHED_NOTE));
-
-  expect(session(dock).querySelector('form')).to.equal(null);
-  expect(button(session(dock), 'Cancel child')).to.equal(null);
-  expect(shown(dock), 'the question about cancelling lapses with the Run').to.not.contain('Cancel this child?');
-  expect(shown(dock)).to.contain('Checking the amendment.');
-  expect(session(dock).querySelector(':scope > [role="status"]')!.textContent!.trim()).to.equal(FINISHED_NOTE);
-  expect(requests.filter((request) => request.method === 'POST'), 'nothing was sent').to.have.length(0);
-});
-
-it('answers a question for the parent through a box the reader opens', async () => {
-  const running = row('a', 'running', {started_at: ago(5), pending_questions: 1});
-  const requests = serve({
-    page: () => roster([running]),
-    observe: () => observation(running, {questions: [question('req-a')]}),
-    reply: () => Response.json({
-      run_id: 'run-1', request_id: 'req-a', action: 'reply', outcome: 'replied',
-    }, {status: 202}),
-  });
-  const {source, replies} = sourceFor();
-  Date.now = () => NOW;
-  const dock = await mount(source, 420);
-  await waitFor(() => rows(dock).length === 1);
-  await openChild(dock, 'a');
-  await waitFor(() => button(session(dock), 'Answer instead') !== null);
-  expect(session(dock).querySelector('[data-reply]')).to.equal(null);
-
-  button(session(dock), 'Answer instead')!.click();
-  await waitFor(() => session(dock).querySelector('[data-reply]') !== null);
-  const reply = session(dock).querySelector<HTMLTextAreaElement>('[data-reply]')!;
-  await waitFor(() => document.activeElement === reply);
-
-  button(session(dock), 'Cancel answer')!.click();
-  await waitFor(() => session(dock).querySelector('[data-reply]') === null);
-  await waitFor(() => document.activeElement === button(session(dock), 'Answer instead'));
-
-  button(session(dock), 'Answer instead')!.click();
-  await waitFor(() => session(dock).querySelector('[data-reply]') !== null);
-  await type(dock, session(dock).querySelector<HTMLTextAreaElement>('[data-reply]')!, 'Use the report');
-  session(dock).querySelector<HTMLFormElement>('form[data-request]')!.requestSubmit();
-  await waitFor(() => shown(dock).includes('Reply sent.'));
-
-  expect(replies.map(([requestId, content]) => [requestId, content])).to.deep.equal([['req-a', 'Use the report']]);
-  const sent = requests.find((request) => request.method === 'POST')!;
-  expect(sent.path).to.equal('/web/api/answer/run-1/child-guidance/req-a/reply');
-  expect(sent.body).to.deep.equal({content: 'Use the report'});
-  expect(session(dock).querySelector('[data-reply]'), 'the box closes once the reply is accepted').to.equal(null);
-  // The box took the focus with it, so the reader goes to the title and not to the page behind.
-  await waitFor(() => document.activeElement === session(dock).querySelector('h3'));
-});
-
-it('says why a reply was refused, and shows the question as it now stands at once', async () => {
-  Date.now = () => NOW;
-  const refusals: [string, string, Record<string, unknown>, string][] = [
-    ['expired', 'This question expired before the reply arrived.', {status: 'expired', expires_at: ago(5)}, 'Expired'],
-    ['cancelled', 'This question was cancelled.', {status: 'cancelled', expires_at: null}, 'Cancelled'],
-    [
-      'already_replied', 'This question was already answered.',
-      {status: 'replied', reply: 'Swedish law.', reply_origin: 'parent', expires_at: null}, 'Answered · Parent',
-    ],
-  ];
-  for (const [outcome, sentence, standsNow, history] of refusals) {
-    let refused = false;
-    const running = row('a', 'running', {started_at: ago(5), pending_questions: 1});
-    const requests = serve({
-      page: () => roster([running]),
-      observe: () => observation(running, {questions: [question('req-a', refused ? standsNow : {})]}),
-      reply: () => {
-        refused = true;
-        return refusal(outcome);
-      },
-    });
-    const dock = await mount(sourceFor().source, 420);
-    await waitFor(() => rows(dock).length === 1);
-    await openChild(dock, 'a');
-    await waitFor(() => button(session(dock), 'Answer instead') !== null);
-    button(session(dock), 'Answer instead')!.click();
-    await waitFor(() => session(dock).querySelector('[data-reply]') !== null);
-    const reply = session(dock).querySelector<HTMLTextAreaElement>('[data-reply]')!;
-    reply.focus();
-    await type(dock, reply, 'Use the report');
-    const reads = (suffix: string) => requests.filter((request) => (
-      request.method === 'GET' && request.path.endsWith(suffix)
-    )).length;
-    const before = {roster: reads('/children'), child: reads('/children/a')};
-    session(dock).querySelector<HTMLFormElement>('form[data-request]')!.requestSubmit();
-
-    await waitFor(() => session(dock).querySelector(':scope > [role="status"]')!.textContent!.trim() === sentence);
-    // The card gives way to the question's record at once, not at the next tick of the roster.
-    await waitFor(() => shown(dock).includes(history) && !shown(dock).includes('Asking the parent'));
-    expect(reads('/children'), 'the roster is asked about the child again').to.be.greaterThan(before.roster);
-    expect(reads('/children/a'), 'and so is the child').to.be.greaterThan(before.child);
-    await waitFor(() => document.activeElement === session(dock).querySelector('h3'));
-    dock.remove();
-  }
-});
-
-it('sends on Enter, breaks the line on Shift+Enter, and never sends on the Enter of an IME composition', async () => {
-  const running = row('a', 'running', {started_at: ago(5)});
-  serve({page: () => roster([running]), observe: () => observation(running), control: () => receipt('steer', 'queued')});
-  const {source, controls} = sourceFor();
-  const dock = await mount(source, 420);
-  await waitFor(() => rows(dock).length === 1);
-  await openChild(dock, 'a');
-  const field = composer(dock);
-  field.focus();
-
-  await sendKeys({type: 'first'});
-  await sendKeys({press: 'Shift+Enter'});
-  await sendKeys({type: 'second'});
-  expect(field.value).to.equal('first\nsecond');
-  expect(controls).to.have.length(0);
-
-  // The Enter that commits a composition is the composition's.
-  const composing = new InputEvent('beforeinput', {
-    inputType: 'insertLineBreak', isComposing: true, bubbles: true, cancelable: true,
-  });
-  field.dispatchEvent(composing);
-  expect(composing.defaultPrevented).to.equal(false);
-  expect(controls).to.have.length(0);
-
-  await sendKeys({press: 'Enter'});
-  await waitFor(() => controls.length === 1);
-  expect(controls[0]![2]).to.equal('first\nsecond');
-});
-
-it('writes nothing to a box while the reader composes in it, whether the steer box or a reply box', async () => {
-  Date.now = () => NOW;
-  const running = row('a', 'running', {started_at: ago(5), pending_questions: 1});
-  serve({page: () => roster([running]), observe: () => observation(running, {questions: [question('req-a')]})});
-  const dock = await mount(sourceFor().source, 420);
-  await waitFor(() => rows(dock).length === 1);
-  await openChild(dock, 'a');
-  await waitFor(() => button(session(dock), 'Answer instead') !== null);
-  button(session(dock), 'Answer instead')!.click();
-  await waitFor(() => session(dock).querySelector('[data-reply]') !== null);
-  const reply = session(dock).querySelector<HTMLTextAreaElement>('[data-reply]')!;
-
-  for (const field of [composer(dock), reply]) {
-    await type(dock, field, 'ab');
-    const {writes, enter} = watchWrites(field);
-    field.focus();
-    field.setSelectionRange(1, 1);
-
-    // Composing between the two letters: the browser keeps the text and the caret it is composing at.
-    field.dispatchEvent(new CompositionEvent('compositionstart', {bubbles: true}));
-    enter('a\u65e5b', 2, true);
-    await session(dock).updateComplete;
-    expect([field.value, field.selectionStart, field.selectionEnd]).to.deep.equal(['a\u65e5b', 2, 2]);
-    enter('a\u65e5\u672cb', 3, true);
-    await session(dock).updateComplete;
-    expect([field.value, field.selectionStart, field.selectionEnd]).to.deep.equal(['a\u65e5\u672cb', 3, 3]);
-
-    enter('a\u65e5\u672c\u8a9eb', 4, false);
-    field.dispatchEvent(new CompositionEvent('compositionend', {bubbles: true}));
-    await session(dock).updateComplete;
-    expect([field.value, field.selectionStart, field.selectionEnd]).to.deep.equal(['a\u65e5\u672c\u8a9eb', 4, 4]);
-    expect(writes, 'the page never wrote the box while it was composed in').to.deep.equal([]);
-    expect(document.activeElement).to.equal(field);
-    // The page has the text all the same: the Send button took it.
-    const send = field.closest('form')!.querySelector('button[type="submit"]')!;
-    expect(send.hasAttribute('aria-disabled')).to.equal(false);
-  }
-});
-
-it('names each refusal, and says when the child is gone', async () => {
-  const running = row('a', 'running', {started_at: ago(5)});
-  let answer: () => Response = () => refusal('terminal_child');
-  const requests = serve({page: () => roster([running]), observe: () => observation(running), control: () => answer()});
-  const dock = await mount(sourceFor().source, 420);
-  await waitFor(() => rows(dock).length === 1);
-  await openChild(dock, 'a');
-
-  const send = async (text: string, expected: string) => {
-    await type(dock, composer(dock), text);
-    session(dock).querySelector('form')!.requestSubmit();
-    await waitFor(() => shown(dock).includes(expected));
-  };
-  const reads = (path: string) => requests.filter((request) => request.method === 'GET' && request.path === path).length;
-  const before = {roster: reads('/web/api/answer/run-1/children'), child: reads('/web/api/answer/run-1/children/a')};
-  await send('one', 'This child is already terminal and was not revived.');
-  expect(composer(dock).value, 'a refused command keeps what was typed').to.equal('one');
-  // A refusal says the child is not as the page shows it: the page and the roster read it again.
-  await waitFor(() => reads('/web/api/answer/run-1/children') > before.roster
-    && reads('/web/api/answer/run-1/children/a') > before.child);
-  answer = () => refusal('queue_full');
-  await send('two', 'The pending control queue is full.');
-  answer = () => new Response('unavailable', {status: 503});
-  await send('three', 'The child intervention could not be sent.');
-  expect(session(dock).querySelector(':scope > [role="status"]')!.textContent!.trim()).to.equal('The child intervention could not be sent.');
-
-  answer = () => Response.json({detail: 'Answer child not found'}, {status: 404});
-  await send('four', 'That child is no longer available.');
-  expect(session(dock).querySelector(':scope > [role="status"]')!.textContent!.trim()).to.equal('That child is no longer available.');
-  expect(session(dock).querySelector('form')).to.equal(null);
-});
-
-it('words every outcome a command can meet', async () => {
-  const running = row('a', 'running', {started_at: ago(5)});
-  let answer: () => Response = () => receipt('steer', 'queued');
-  serve({
-    page: () => roster([running]),
-    observe: () => observation(running),
-    control: () => answer(),
-    reply: () => answer(),
-  });
-  const dock = await mount(sourceFor().source, 420);
-  await waitFor(() => rows(dock).length === 1);
-  await openChild(dock, 'a');
-
-  const outcomes: [Response, string][] = [
-    [receipt('steer', 'queued'), 'Queued. The child has not necessarily followed it yet.'],
-    [receipt('steer', 'consumed'), 'Consumed at a safe checkpoint. This does not prove the model complied.'],
-    [receipt('continue', 'accepted'), 'Continuation accepted as a new operation.'],
-    [receipt('cancel', 'cancellation_requested'), 'Cancellation requested.'],
-    [refusal('terminal_child'), 'This child is already terminal and was not revived.'],
-    [refusal('run_terminal'), 'The parent run is terminal, so this child cannot continue.'],
-    [refusal('child_running'), 'This child is still running.'],
-    [refusal('reauthorization_required'), 'User-cancelled work needs explicit reauthorization.'],
-    [refusal('queue_full'), 'The pending control queue is full.'],
-    [refusal('idempotency_conflict'), 'This submission id was already used for a different request.'],
-    [refusal('unknown_outcome'), 'The child outcome is unknown.'],
-  ];
-  for (const [response, words] of outcomes) {
-    answer = () => response.clone();
-    await type(dock, composer(dock), 'go');
-    session(dock).querySelector('form')!.requestSubmit();
-    await waitFor(() => session(dock).querySelector(':scope > [role="status"]')!.textContent!.trim() === words);
-    await waitFor(() => !composer(dock).readOnly);
-  }
-});
-
-it('keeps child A\'s late receipt, busy state and answer off child B\'s page', async () => {
-  const late = deferred<Response>();
-  serve({
-    page: () => roster([row('a', 'running', {started_at: ago(5)}), row('b', 'running', {started_at: ago(5)})]),
-    observe: (id) => observation(row(id, 'running', {started_at: ago(5)})),
-    control: () => late.promise,
-  });
-  const {source, controls} = sourceFor();
-  const dock = await mount(source, 420);
-  await waitFor(() => rows(dock).length === 2);
-  await openChild(dock, 'a');
-  await type(dock, composer(dock), 'only child A');
-  session(dock).querySelector('form')!.requestSubmit();
-  await waitFor(() => controls.length === 1);
-  expect(composer(dock).readOnly, 'A\'s own box waits for its command').to.equal(true);
-
-  button(dock, 'All agents')!.click();
-  await dock.updateComplete;
-  await openChild(dock, 'b');
-  await type(dock, composer(dock), 'child B draft');
-  expect(composer(dock).readOnly).to.equal(false);
-
-  late.resolve(receipt('steer', 'queued', {child_session_id: 'a'}));
-  await settle();
-  await session(dock).updateComplete;
-
-  expect(shown(dock)).to.not.contain('Queued.');
-  expect(composer(dock).value).to.equal('child B draft');
-  expect(composer(dock).readOnly).to.equal(false);
-  // Back on A, its receipt has landed: the box is free and empty again.
-  button(dock, 'All agents')!.click();
-  await dock.updateComplete;
-  await openChild(dock, 'a');
-  expect(composer(dock).value).to.equal('');
-  expect(composer(dock).readOnly).to.equal(false);
-});
-
-it('does not attach a late receipt to the same child of a Run opened afterwards', async () => {
-  const late = deferred<Response>();
-  serve({
-    page: () => roster([row('a', 'running', {started_at: ago(5)})]),
-    observe: () => observation(row('a', 'running', {started_at: ago(5)})),
-    control: () => late.promise,
-  });
-  const first = sourceFor();
-  const dock = await mount(first.source, 420);
-  await waitFor(() => rows(dock).length === 1);
-  await openChild(dock, 'a');
-  await type(dock, composer(dock), 'first Run');
-  session(dock).querySelector('form')!.requestSubmit();
-  await waitFor(() => first.controls.length === 1);
-
-  dock.source = sourceFor().source;
-  await waitFor(() => rows(dock).length === 1 && session(dock).hidden === true);
-  await openChild(dock, 'a');
-  expect(composer(dock).value, 'what was typed for the earlier Run is gone').to.equal('');
-  late.resolve(receipt('steer', 'queued'));
-  await settle();
-
-  expect(shown(dock)).to.not.contain('Queued.');
-  expect(composer(dock).readOnly).to.equal(false);
-});
-
-it('keeps what the reader typed across refreshes and across children, for each Operation apart', async () => {
-  immediateFollowRefreshes();
-  let operation = 'op-a';
-  serve({
-    page: () => roster([
-      row('a', 'running', {operation_id: operation, started_at: ago(5)}),
-      row('b', 'running', {started_at: ago(5)}),
-    ]),
-    observe: (id) => observation(id === 'a'
-      ? row('a', 'running', {operation_id: operation, started_at: ago(5)})
-      : row('b', 'running', {started_at: ago(5)})),
-  });
-  const dock = await mount(sourceFor().source, 420);
-  await waitFor(() => rows(dock).length === 2);
-  await openChild(dock, 'a');
-  const aBox = composer(dock);
-  await type(dock, aBox, 'for A, first Operation');
-  aBox.focus();
-  aBox.setSelectionRange(4, 9);
-
-  // A refresh redraws the page around the box without taking the text, the focus, or the selection.
-  dock.refreshIfFollowing('run-1');
-  await settle(60);
-  expect(composer(dock)).to.equal(aBox);
-  expect(aBox.value).to.equal('for A, first Operation');
-  expect(document.activeElement).to.equal(aBox);
-  expect([aBox.selectionStart, aBox.selectionEnd]).to.deep.equal([4, 9]);
-
-  // Another child has a box of its own, and the first one is waiting when the reader returns.
-  button(dock, 'All agents')!.click();
-  await dock.updateComplete;
-  await openChild(dock, 'b');
-  expect(composer(dock).value).to.equal('');
-  await type(dock, composer(dock), 'for B');
-  button(dock, 'All agents')!.click();
-  await dock.updateComplete;
-  await openChild(dock, 'a');
-  expect(composer(dock).value).to.equal('for A, first Operation');
-
-  // A new Operation of the same child starts with an empty box, and the old one comes back with it.
-  operation = 'op-a2';
-  dock.refreshIfFollowing('run-1');
-  await waitFor(() => composer(dock).value === '');
-  await type(dock, composer(dock), 'for A, second Operation');
-  operation = 'op-a';
-  dock.refreshIfFollowing('run-1');
-  await waitFor(() => composer(dock).value === 'for A, first Operation');
-});
-
-it('keeps what was typed for a running child when it settles under the reader, and starts a new Operation empty', async () => {
-  immediateFollowRefreshes();
-  let status = 'running';
-  let operation = 'op-a';
-  const current = () => row('a', status, {
-    operation_id: operation, started_at: ago(5), finished_at: status === 'running' ? null : ago(0),
-  });
-  serve({page: () => roster([current()]), observe: () => observation(current())});
-  const dock = await mount(sourceFor().source, 420);
-  await waitFor(() => rows(dock).length === 1);
-  await openChild(dock, 'a');
-  await type(dock, composer(dock), 'one more thing');
-  expect(composer(dock).placeholder).to.equal('Steer this child…');
-
-  status = 'succeeded';
-  dock.refreshIfFollowing('run-1');
-  await waitFor(() => composer(dock).placeholder === 'Continue this child…');
-  expect(composer(dock).value, 'the text stays with the Operation it was typed for').to.equal('one more thing');
-
-  operation = 'op-a2';
-  status = 'running';
-  dock.refreshIfFollowing('run-1');
-  await waitFor(() => composer(dock).placeholder === 'Steer this child…');
-  expect(composer(dock).value, 'a new Operation has a box of its own').to.equal('');
-});
-
-it('reads a running child again after each roster refresh, and a settled one only when its row changed', async () => {
-  immediateFollowRefreshes();
-  const stateOf = {a: row('a', 'running', {started_at: ago(5)}), b: row('b', 'succeeded', {started_at: ago(9), finished_at: ago(1)})};
-  const requests = serve({
-    page: () => roster([stateOf.a, stateOf.b]),
-    observe: (id) => observation(id === 'a' ? stateOf.a : stateOf.b),
-  });
-  const dock = await mount(sourceFor().source, 420);
-  await waitFor(() => rows(dock).length === 2);
-  const observed = (id: string) => requests.filter((request) => request.path.endsWith(`/children/${id}`)).length;
-  const refreshed = async () => {
-    const before = requests.filter((request) => request.path.endsWith('/children')).length;
-    dock.refreshIfFollowing('run-1');
-    await waitFor(() => requests.filter((request) => request.path.endsWith('/children')).length > before);
-    await settle(40);
-  };
-
-  await openChild(dock, 'a');
-  await waitFor(() => observed('a') === 1);
-  await refreshed();
-  expect(observed('a'), 'a running child\'s transcript grows without its row changing').to.equal(2);
-
-  button(dock, 'All agents')!.click();
-  await dock.updateComplete;
-  await openChild(dock, 'b');
-  await waitFor(() => observed('b') === 1);
-  await refreshed();
-  expect(observed('b'), 'a settled child that has not changed is not read again').to.equal(1);
-
-  stateOf.b = row('b', 'succeeded', {started_at: ago(9), finished_at: ago(1), summary: 'A late summary.'});
-  await refreshed();
-  expect(observed('b'), 'a settled child whose row changed is').to.equal(2);
-});
-
-it('says so when the child on show is no longer on the roster', async () => {
-  immediateFollowRefreshes();
-  let children = [row('a', 'running'), row('b', 'running')];
-  serve({page: () => roster(children), observe: (id) => observation(row(id, 'running'))});
-  const dock = await mount(sourceFor().source, 420);
-  await waitFor(() => rows(dock).length === 2);
-  await openChild(dock, 'a');
-
-  children = [row('b', 'running')];
-  dock.refreshIfFollowing('run-1');
-  await waitFor(() => shown(dock).includes('That child is no longer available.'));
-
-  expect(shown(dock)).to.contain('Pick another from the list.');
-  expect(session(dock).querySelector(':scope > [role="status"]')!.textContent!.trim()).to.equal('That child is no longer available.');
-  expect(session(dock).querySelector('form')).to.equal(null);
-  button(dock, 'All agents')!.click();
-  await dock.updateComplete;
-  expect(rows(dock).map((child) => child.id)).to.deep.equal(['b']);
-});
-
-it('says so when the server no longer knows the child it was asked about', async () => {
-  serve({
-    page: () => roster([row('a', 'running')]),
-    observe: () => Response.json({detail: 'Answer child not found'}, {status: 404}),
-  });
-  const dock = await mount(sourceFor().source, 420);
-  await waitFor(() => rows(dock).length === 1);
-  rowFor(dock, 'a').click();
-  await waitFor(() => shown(dock).includes('That child is no longer available.'));
-});
-
-it('keeps what is on screen when a later read of the child fails, and offers a retry when the first does', async () => {
-  immediateFollowRefreshes();
-  let fail = true;
-  let reads = 0;
-  serve({
-    page: () => roster([row('a', 'running', {started_at: ago(5)})]),
-    observe: () => {
-      reads += 1;
-      return fail ? new Response('unavailable', {status: 503}) : observation(row('a', 'running', {started_at: ago(5)}));
-    },
-    // The activity is read apart from the child's details, and is on screen whichever way they go.
-    transcript: (agent) => agent === 'a'
-      ? activityPage([{role: 'assistant', content: 'Still here.', tool_calls: []}], {running: true})
-      : undefined,
-  });
-  const dock = await mount(sourceFor().source, 420);
-  await waitFor(() => rows(dock).length === 1);
-  rowFor(dock, 'a').click();
-  await waitFor(() => session(dock).querySelector('[role="alert"]') !== null);
-  expect(session(dock).querySelector('[role="alert"]')!.textContent!.trim()).to.equal('Child details could not be loaded.');
-
-  fail = false;
-  button(session(dock), 'Retry')!.click();
-  await waitFor(() => shown(dock).includes('Still here.'));
-
-  fail = true;
-  const before = reads;
-  dock.refreshIfFollowing('run-1');
-  await waitFor(() => reads > before);
-  await settle(40);
-  expect(shown(dock)).to.contain('Still here.');
-  expect(session(dock).querySelector('[role="alert"]')).to.equal(null);
-});
-
-it('names a child by its id when it has no objective', async () => {
-  serve({page: () => roster([row('a', 'running', {objective: null})])});
-  const dock = await mount(sourceFor().source, 420);
-  await waitFor(() => rows(dock).length === 1);
-
-  expect(rows(dock)[0]!.text).to.equal('a Running');
-});
-
-// ── A child's page, laid out ──
-
-describe('the page of a child', () => {
-  let unlink: () => void;
-  before(async () => {
-    // Scrolling needs the page laid out as the product lays it out.
-    unlink = await linkStyles([
-      '../design-system/index.css',
-      '../styles/activity.module.css',
-      '../styles/agent-session.module.css',
-      '../styles/inspector-traces.module.css',
-    ].map((href) => new URL(href, import.meta.url).href));
-  });
-  after(() => { unlink(); });
-
-  const says = (count: number) => Array.from({length: count}, (_, index) => (
-    {role: 'assistant', content: `Step ${index}`, tool_calls: []}
-  ));
-  const page = (dock: DlInspectorTraces) => session(dock).querySelector<HTMLElement>('[data-scroller]')!;
-  const pane = (dock: DlInspectorTraces) => session(dock).querySelector<HTMLElement>('[data-activity-pane]')!;
-  /** How far a box lies below what is on screen, in pixels. */
-  const below = (box: HTMLElement) => box.scrollHeight - box.clientHeight - box.scrollTop;
-  const frames = () => new Promise<void>((resolve) => {
-    requestAnimationFrame(() => { requestAnimationFrame(() => { resolve(); }); });
-  });
-  /** The reader scrolls: the box is moved, and given the frames it takes to see it. */
-  const scrollTo = async (box: HTMLElement, top: number) => {
-    box.scrollTop = top;
-    await frames();
-  };
-
-  it('opens its activity on the newest step, keeps it in view for a reader at the bottom, and lets go when they scroll up', async () => {
-    immediateFollowRefreshes();
-    let steps = 40;
-    const running = row('a', 'running', {started_at: ago(5)});
-    serve({page: () => roster([running]), observe: () => observation(running, {transcript: says(steps)})});
-    const dock = await mount(sourceFor().source, 420);
-    await waitFor(() => rows(dock).length === 1);
-    await openChild(dock, 'a');
-    await waitFor(() => shown(dock).includes('Step 39'));
-    const box = pane(dock);
-    expect(box.scrollHeight, 'the activity is taller than its pane').to.be.greaterThan(box.clientHeight + 100);
-    expect(below(box), 'it opens on the newest step').to.be.lessThan(1);
-    const arrive = async (total: number) => {
-      steps = total;
-      dock.refreshIfFollowing('run-1');
-      await waitFor(() => shown(dock).includes(`Step ${total - 1}`));
-    };
-
-    await arrive(44);
-    expect(below(box)).to.be.lessThan(1);
-    await arrive(48);
-    expect(below(box)).to.be.lessThan(1);
-
-    // Once the reader scrolls up the pane stays where they are.
-    await scrollTo(box, 100);
-    await arrive(52);
-    expect(box.scrollTop).to.equal(100);
-    expect(below(box)).to.be.greaterThan(100);
-  });
-
-  it('opens each child on its title, even from the bottom of another', async () => {
-    immediateFollowRefreshes();
-    const loadingB = deferred<Response>();
-    const running = (id: string) => row(id, 'running', {started_at: ago(5)});
-    serve({
-      page: () => roster([running('a'), running('b')]),
-      observe: (id) => (id === 'b' ? loadingB.promise : observation(running(id))),
-      transcript: (agent) => (agent === null ? undefined : activityPage(says(40), {running: true})),
-    });
-    const dock = await mount(sourceFor().source, 800);
-    // A dock shorter than the page, so the page itself scrolls.
-    dock.style.height = '360px';
-    await waitFor(() => rows(dock).length === 2);
-    rowFor(dock, 'a').click();
-    await waitFor(() => title(dock) === 'objective a' && shown(dock).includes('Step 39'));
-    const box = page(dock);
-    await scrollTo(box, box.scrollHeight);
-    expect(box.scrollTop, 'the page is scrolled down').to.be.greaterThan(0);
-
-    // The next child is still loading, so its page is short, when the scroll back to the top is seen.
-    rowFor(dock, 'b').click();
-    await waitFor(() => title(dock) === 'objective b');
-    await scrollTo(box, 0);
-    loadingB.resolve(observation(running('b')));
-    await waitFor(() => shown(dock).includes('Step 39'));
-    expect(page(dock) === box, 'the same page is on show').to.equal(true);
-    expect(box.scrollTop, 'the next child opens on its title').to.equal(0);
-    dock.refreshIfFollowing('run-1');
-    await settle(60);
-    expect(box.scrollTop, 'and nothing carries the earlier child\'s place over').to.equal(0);
-  });
-
-  it('lets go of a reader who opens a step at the bottom, which grows the pane without scrolling it', async () => {
-    immediateFollowRefreshes();
-    let steps = 30;
-    const running = row('a', 'running', {started_at: ago(5)});
-    const transcript = () => [
-      ...says(steps),
-      {role: 'assistant', content: '', tool_calls: [{id: 't1', name: 'read'}]},
-      {role: 'tool', content: Array.from({length: 40}, (_, line) => `line ${line}`).join('\n'), tool_call_id: 't1', name: 'read', is_error: false},
-    ];
-    serve({page: () => roster([running]), observe: () => observation(running, {transcript: transcript()})});
-    const dock = await mount(sourceFor().source, 420);
-    await waitFor(() => rows(dock).length === 1);
-    await openChild(dock, 'a');
-    await waitFor(() => shown(dock).includes('Reading a document'));
-    const box = pane(dock);
-
-    // The reader opens the last step: its whole result lengthens the pane below where they stand.
-    session(dock).querySelector<HTMLElement>('summary:has(+ pre)')!.click();
-    await waitFor(() => below(box) > 100);
-    const stood = box.scrollTop;
-    steps = 34;
-    dock.refreshIfFollowing('run-1');
-    await waitFor(() => shown(dock).includes('Step 33'));
-
-    expect(box.scrollTop, 'a reader who is no longer at the bottom is not pulled back to it').to.equal(stood);
-  });
-
-  it('offers the whole objective when the dock is narrowed until the title is cut off', async () => {
-    const objective = 'Make the strongest case for terminating the Northwind supply agreement early, citing the notice clause and its penalty';
-    const settled = row('a', 'succeeded', {objective, started_at: ago(9), finished_at: ago(1)});
-    serve({page: () => roster([settled]), observe: () => observation(settled)});
-    // A narrow dock either way, so nothing but the width changes: a settled child has no clock to redraw it.
-    const dock = await mount(sourceFor().source, 620);
-    await waitFor(() => rows(dock).length === 1);
-    await openChild(dock, 'a');
-    const more = session(dock).querySelector<HTMLElement>('[data-more]')!;
-    expect(more.hidden, 'the objective fits at first').to.equal(true);
-
-    // The observer reports in the next frame's rendering step, so frames are what is waited for.
-    dock.style.width = '300px';
-    await frames();
-    expect(more.hidden, 'the title is cut off at 300px').to.equal(false);
-    expect(more.textContent!.trim()).to.equal('Show full objective');
-
-    dock.style.width = '620px';
-    await frames();
-    expect(more.hidden, 'and whole again at 620px').to.equal(true);
-  });
-
-  it('does not follow a child that has settled', async () => {
-    immediateFollowRefreshes();
-    let steps = 40;
-    let summary = 'First summary.';
-    const settled = () => row('a', 'succeeded', {started_at: ago(9), finished_at: ago(1), summary});
-    serve({page: () => roster([settled()]), observe: () => observation(settled(), {transcript: says(steps)})});
-    const dock = await mount(sourceFor().source, 420);
-    await waitFor(() => rows(dock).length === 1);
-    await openChild(dock, 'a');
-    await waitFor(() => shown(dock).includes('Activity · 40 steps'));
-    // Its activity is folded; the reader opens it, and it opens on the newest step.
-    session(dock).querySelector<HTMLDetailsElement>('details:has([data-activity-pane])')!.open = true;
-    const box = pane(dock);
-    await waitFor(() => box.scrollHeight > box.clientHeight + 100 && below(box) < 1);
-    const stood = box.scrollTop;
-
-    steps = 46;
-    summary = 'A later summary.';
-    dock.refreshIfFollowing('run-1');
-    await waitFor(() => shown(dock).includes('Step 45'));
-    expect(box.scrollTop).to.equal(stood);
-    expect(below(box)).to.be.greaterThan(50);
-  });
-
-  it('keeps the step a reader is at where it is while earlier steps come in above it', async () => {
-    const running = row('a', 'running', {started_at: ago(5)});
-    serve({
-      page: () => roster([running]),
-      observe: () => observation(running),
-      transcript: (agent, before) => {
-        if (agent !== 'a') return undefined;
-        return before === null
-          ? activityPage(steps(21, 40), {nextBefore: 21, running: true})
-          : activityPage(steps(1, 20), {running: true});
-      },
-    });
-    const dock = await mount(sourceFor().source, 420);
-    await waitFor(() => rows(dock).length === 1);
-    await openChild(dock, 'a');
-    await waitFor(() => shown(dock).includes('Step 40.'));
-    const box = pane(dock);
-    const first = [...box.querySelectorAll('li')].find((item) => item.textContent!.includes('Step 21.'))!;
-    await scrollTo(box, 60);
-    const at = () => first.getBoundingClientRect().top - box.getBoundingClientRect().top;
-    const before = at();
-
-    session(dock).querySelector<HTMLButtonElement>('[data-load-older="activity"]')!.click();
-    await waitFor(() => shown(dock).includes('Step 1.Step 2.'));
-    await frames();
-
-    expect(at()).to.be.closeTo(before, 1);
-  });
-
-  it('scrolls a long Evidence list in a pane of its own', async () => {
-    const handles = Array.from({length: 40}, (_, index) => `[${index + 1}] source-${index + 1}.pdf`);
-    const settled = row('a', 'succeeded', {started_at: ago(9), finished_at: ago(1), summary: 'Done.', result_handles: handles});
-    serve({page: () => roster([settled]), observe: () => observation(settled)});
-    const dock = await mount(sourceFor().source, 420);
-    await waitFor(() => rows(dock).length === 1);
-    await openChild(dock, 'a');
-    await waitFor(() => shown(dock).includes('Evidence · 40'));
-    session(dock).querySelector<HTMLDetailsElement>('details')!.open = true;
-    const list = session(dock).querySelector<HTMLElement>('ul[aria-label="Evidence · 40"]')!;
-    await waitFor(() => list.scrollHeight > list.clientHeight + 100);
-
-    await scrollTo(list, 50);
-    expect(list.scrollTop, 'the list scrolls within the page').to.equal(50);
-  });
-});
-
-// ── On a phone ──
-
-describe('on a phone', () => {
-  const originalViewport = {width: window.innerWidth, height: window.innerHeight};
-  let unlink: () => void;
-  before(async () => {
-    await setViewport({width: 390, height: 844});
-    unlink = await linkStyles([
-      '../design-system/index.css',
-      '../styles/global.css',
-      '../styles/layout.css',
-      '../styles/activity.module.css',
-      '../styles/agent-session.module.css',
-      '../styles/inspector-traces.module.css',
-    ].map((href) => new URL(href, import.meta.url).href));
-  });
-  after(async () => {
-    unlink();
-    await setViewport(originalViewport);
-  });
-
-  it('gives everything the reader can press the product\'s hit target, in the list and on a child\'s page', async () => {
-    const running = row('a', 'running', {started_at: ago(5), pending_questions: 1});
-    serve({
-      page: () => roster([running, row('b', 'succeeded', {summary: 'Done.', result_handles: ['ev-1']})]),
-      observe: () => observation(running, {
-        transcript: [
-          {role: 'assistant', content: 'Looking.', tool_calls: [{id: 't1', name: 'read'}]},
-          {role: 'tool', content: 'first line\nsecond line', tool_call_id: 't1', name: 'read', is_error: false},
-        ],
-        controls: [{
-          control_sequence: 1, kind: 'steer', content: 'focus', origin: 'user', consumed: true,
-          consumed_at: ago(3), created_at: ago(4), operation_id: 'op-a',
-        }],
-        questions: [question('q1')],
-      }),
-    });
-    Date.now = () => NOW;
-    const probe = document.createElement('div');
-    probe.style.height = 'var(--control-hit-target)';
-    document.body.append(probe);
-    const target = probe.getBoundingClientRect().height;
-    probe.remove();
-    const dock = await mount(sourceFor().source, 390);
-    await waitFor(() => rows(dock).length === 2);
-    const pressable = () => [...dock.querySelectorAll<HTMLElement>('button, summary')]
-      .filter((element) => element.getClientRects().length > 0)
-      .map((element) => ({
-        name: (element.getAttribute('aria-label') ?? element.textContent!).replace(/\s+/g, ' ').trim(),
-        height: element.getBoundingClientRect().height,
-      }));
-
-    expect(target, 'the product\'s hit target is known').to.be.greaterThan(40);
-    const list = pressable();
-    // The main agent and its two children.
-    expect(list).to.have.length(3);
-    await openChild(dock, 'a');
-    await waitFor(() => shown(dock).includes('Looking.') && shown(dock).includes('Control history'));
-    const page = pressable();
-    // The page offers Back, Cancel, Answer instead, Send, the Activity and Control history folds, and a step.
-    expect(page.length).to.be.greaterThan(6);
-    const short = [...list, ...page].filter((item) => item.height < target - 0.5).map((item) => `${item.name}: ${item.height}`);
-    expect(short, 'what is pressable and shorter than the hit target').to.deep.equal([]);
-  });
-});

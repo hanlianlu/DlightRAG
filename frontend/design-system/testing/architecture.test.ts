@@ -35,24 +35,15 @@ const RAW_SVG_ALLOWLIST = new Set([
   'ui/mermaid.ts', // Mermaid returns sanitized content SVG, never a control icon.
 ]);
 
-test('design-system source graph cannot import product infrastructure', () => {
-  const forbidden = [
-    '/api/',
-    '/stores/',
-    '/router',
-    '/events/',
-    'xstate',
-    'mermaid',
-    'dompurify',
-    'messageIds',
-  ];
+test('design-system sources import only Lit and one another', () => {
+  // Product layers are locked by layers.structure.test.ts; this is the third-party half.
   for (const path of designSystemSources) {
-    const content = source(path).toLowerCase();
-    for (const needle of forbidden.map((value) => value.toLowerCase())) {
-      assert.equal(
-        content.includes(needle),
-        false,
-        `${relative(frontend, path)} crosses the design-system boundary via ${needle}`,
+    const specifiers = [...source(path).matchAll(/(?:\bfrom\s*|\bimport\s*\(?\s*)['"]([^'"]+)['"]/g)]
+      .map((match) => match[1]!);
+    for (const specifier of specifiers) {
+      assert.ok(
+        specifier.startsWith('.') || specifier === 'lit' || specifier.startsWith('lit/'),
+        `${relative(frontend, path)} imports ${specifier}, which the design system may not depend on`,
       );
     }
   }
@@ -69,21 +60,37 @@ test('features consume only the public design-system entries', () => {
   }
 });
 
-test('legacy class namespace and Web Awesome are absent', () => {
-  const packageJson = source(join(frontend, 'package.json'));
-  assert.equal(packageJson.includes('@awesome.me/webawesome'), false);
+test('visually hidden text wears the design system\'s dl-sr-only', () => {
   for (const path of governedSources) {
-    const content = source(path);
-    assert.equal(content.includes('ui-'), false, `${relative(frontend, path)} retains .ui-*`);
-    assert.equal(/(?<![\w-])sr-only\b/.test(content), false,
+    assert.equal(/(?<![\w-])sr-only\b/.test(source(path)), false,
       `${relative(frontend, path)} uses sr-only; use the design system's dl-sr-only`);
-    assert.equal(/<\/?wa-|@awesome\.me\/webawesome|--wa-/.test(content), false,
-      `${relative(frontend, path)} retains Web Awesome`);
   }
 });
 
+/** The text characters that stand in for an icon: a close cross, a play triangle, a chevron, a dot, a check. */
+const GLYPH = /[✕×▶‹›●✓]|\\27(?:13|15)/u;
+
+/** A multiplication sign between two values -- `${width}×${height}`, `1920×1080` -- is arithmetic written
+ *  in words, not an icon, so the glyph rule skips it. An optional space may stand on either side of the
+ *  sign. A lone sign (`<button>×</button>`, `content: '×'`) has no value on one side and stays caught. */
+const MULTIPLICATION = /(?<=[\d}] ?)×(?= ?[\d$])/gu;
+
+function hasGlyph(text: string): boolean {
+  return GLYPH.test(text.replace(MULTIPLICATION, ' '));
+}
+
+test('the glyph rule allows a multiplication sign between values and catches a lone one', () => {
+  assert.equal(hasGlyph(`<span>\${artifact.width}×\${artifact.height}</span>`), false);
+  assert.equal(hasGlyph('const size = "1920×1080";'), false);
+  assert.equal(hasGlyph('const size = "1920 × 1080";'), false);
+  assert.equal(hasGlyph('<button aria-label="Close">×</button>'), true);
+  assert.equal(hasGlyph("content: '×';"), true);
+  assert.equal(hasGlyph(`<span>\${count}×</span>`), true);
+  assert.equal(hasGlyph(`<span>×\${count}</span>`), true);
+  assert.equal(hasGlyph('<span>✕</span>'), true);
+});
+
 test('feature UI has no raw SVG or text-glyph icons', () => {
-  const glyph = /[✕×▶‹›●✓]|\\27(?:13|15)/u;
   for (const path of featureSources) {
     const content = source(path);
     const projectPath = relative(frontend, path);
@@ -91,11 +98,11 @@ test('feature UI has no raw SVG or text-glyph icons', () => {
       assert.equal(/<svg\b/i.test(content), false,
         `${projectPath} must use icon() instead of raw SVG`);
     }
-    assert.equal(glyph.test(content), false,
+    assert.equal(hasGlyph(content), false,
       `${relative(frontend, path)} must use icon() instead of a text glyph`);
   }
   for (const path of filesUnder(join(frontend, 'styles'), ['.css'])) {
-    assert.equal(glyph.test(source(path)), false,
+    assert.equal(hasGlyph(source(path)), false,
       `${relative(frontend, path)} must not synthesize a glyph icon in CSS`);
   }
 });

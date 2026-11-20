@@ -13,7 +13,9 @@ from the shared integration-test PostgreSQL environment; skipped if unavailable.
 """
 
 import asyncio
+import datetime
 import hashlib
+import json
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -24,12 +26,8 @@ from typing import Any, cast
 import asyncpg
 import pytest
 
-from dlightrag.adapters.postgres.answer.agent_accounts import (
-    AGENT_ACCOUNT_SETTINGS_SCHEMA_TABLE,
-    AGENT_ACCOUNTS_SCHEMA_TABLE,
-)
-from dlightrag.adapters.postgres.answer.workspace import (
-    PGWorkspaceStore,
+from dlightrag.adapters.postgres.answer.agentspace import (
+    PGAgentspaceStore,
     write_committed_spill,
     write_inventory,
 )
@@ -41,13 +39,17 @@ from dlightrag.adapters.postgres.runtime.run_blob_store import (
     write_complete_blob,
 )
 from dlightrag.adapters.postgres.runtime.run_store import (
-    _ENFORCE_RUN_EVENT_CONSTRAINTS,
-    RUN_MIGRATION_SCOPE,
-    RUN_MIGRATIONS,
     RUN_SCHEMA_TABLES,
     PGRunStore,
 )
-from dlightrag.engine.agent.session.ids import StageIntentId
+from dlightrag.engine.agent.session.ids import SessionId, StageIntentId
+from dlightrag.engine.answer.research.runtime import _check_child_write
+from dlightrag.engine.answer.tools.subagents import SubagentHost, subagent_tools
+from dlightrag.engine.runtime.agentspace import (
+    CommittedSpillRecord,
+    HandoffCommit,
+    HandoffConflict,
+)
 from dlightrag.engine.runtime.blob_chunks import BLOB_CHUNK_BYTES
 from dlightrag.engine.runtime.errors import RunSchemaError
 from dlightrag.engine.runtime.policy import (
@@ -56,6 +58,7 @@ from dlightrag.engine.runtime.policy import (
 )
 from dlightrag.engine.runtime.progress import StageTerminalCommit
 from dlightrag.engine.runtime.records import (
+    ActiveRunLimitExceededError,
     DeletedRun,
     IdempotencyKeyConflict,
     PendingArtifact,
@@ -65,15 +68,9 @@ from dlightrag.engine.runtime.records import (
     run_request_fingerprint,
 )
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
-from dlightrag.engine.runtime.workspace import (
-    CommittedSpillRecord,
-    HandoffCommit,
-    HandoffConflict,
-)
 from tests.conftest import FingerprintingRunStore
 from tests.support.pg import (
     PG_CONN_KWARGS,
-    catalog_definitions,
     catalog_table,
     catalog_tables,
     declared_shape,
@@ -82,6 +79,7 @@ from tests.support.pg import (
     notification_hub,
     skip_without_postgres,
 )
+from tests.support.tool_helpers import tool_runtime
 
 pytestmark = [
     pytest.mark.integration,
@@ -95,93 +93,11 @@ _OTHER_OWNER = "owner-beta"
 _WORKER = "worker-1"
 _ABANDONED_ERROR_MESSAGE = "Run exceeded its reclaim-without-progress bound."
 
-# The Answer-run table of release 2.0.5 (main@5c66e5b2), verbatim. Its presence marks
-# a database this revision refuses, with the reset remedy, instead of migrating.
-_BASELINE_ANSWER_RUNS_DDL = """
-CREATE TABLE IF NOT EXISTS dlightrag_answer_runs (
-    owner_id            TEXT        NOT NULL,
-    run_id              UUID        NOT NULL,
-    idempotency_key     TEXT,
-    prepared_input_json JSONB,
-    accepted_input_json JSONB        NOT NULL DEFAULT '{}'::jsonb,
-    request_fingerprint TEXT        NOT NULL,
-    status              TEXT        NOT NULL DEFAULT 'queued',
-    phase               TEXT,
-    stop_reason         TEXT,
-    cancel_requested_at TIMESTAMPTZ,
-    lease_owner         TEXT,
-    lease_expires_at    TIMESTAMPTZ,
-    fencing_epoch       BIGINT      NOT NULL DEFAULT 0,
-    durable_progress_version       BIGINT  NOT NULL DEFAULT 0,
-    last_reclaim_progress_version  BIGINT  NOT NULL DEFAULT 0,
-    reclaims_without_progress      INTEGER NOT NULL DEFAULT 0,
-    next_event_sequence BIGINT      NOT NULL DEFAULT 1,
-    events_trimmed_at   TIMESTAMPTZ,
-    result_json         JSONB,
-    error_kind          TEXT,
-    error_message       TEXT,
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    started_at          TIMESTAMPTZ,
-    finished_at         TIMESTAMPTZ,
-    workspace_epoch     BIGINT,
-    PRIMARY KEY (owner_id, run_id),
-    CONSTRAINT dlightrag_answer_runs_status_check
-        CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
-    CONSTRAINT dlightrag_answer_runs_phase_check
-        CHECK (phase IS NULL OR phase IN ('routing', 'planning', 'searching', 'researching', 'generating')),
-    CONSTRAINT dlightrag_answer_runs_counter_check
-        CHECK (fencing_epoch >= 0 AND next_event_sequence >= 1
-               AND durable_progress_version >= 0
-               AND last_reclaim_progress_version >= 0
-               AND reclaims_without_progress >= 0),
-    CONSTRAINT dlightrag_answer_runs_lease_check
-        CHECK ((lease_owner IS NULL) = (lease_expires_at IS NULL)),
-    CONSTRAINT dlightrag_answer_runs_terminal_check
-        CHECK ((status IN ('succeeded', 'failed', 'cancelled')) = (finished_at IS NOT NULL)),
-    CONSTRAINT dlightrag_answer_runs_result_check
-        CHECK (status <> 'succeeded' OR result_json IS NOT NULL),
-    CONSTRAINT dlightrag_answer_runs_error_check
-        CHECK ((status = 'failed') = (error_kind IS NOT NULL)),
-    CONSTRAINT dlightrag_answer_runs_prepared_input_check
-        CHECK ((status IN ('queued', 'running')) = (prepared_input_json IS NOT NULL)),
-    CONSTRAINT dlightrag_answer_runs_workspace_epoch_check
-        CHECK (workspace_epoch IS NULL OR workspace_epoch >= 1)
-)
-"""
-
-# The Agent Accounts table as it first shipped (feat/agent-browser), before it kept when an
-# account was registered or last used and before an owner had a switch for new sign-ups.
-_EARLIER_AGENT_ACCOUNTS_DDL = """
-CREATE TABLE dlightrag_agent_accounts (
-    owner_id           TEXT        NOT NULL,
-    site               TEXT        NOT NULL,
-    account_id         TEXT        NOT NULL,
-    email              TEXT,
-    username           TEXT,
-    key_id             TEXT        NOT NULL,
-    encrypted_envelope TEXT        NOT NULL,
-    updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (owner_id, site),
-    CONSTRAINT dlightrag_agent_accounts_identity_check
-        CHECK (email IS NOT NULL OR username IS NOT NULL)
-)
-"""
-
 
 def _blob_store(store: PGRunStore) -> PGRunBlobStore:
     pool = store._operation_pool  # noqa: SLF001 - bind the separate blob seam in tests
     assert pool is not None
     return PGRunBlobStore(pool=pool)
-
-
-async def _constraint_body(conn: Any) -> str:
-    """The stored body of the run-event trigger function, as the database holds it."""
-    return str(
-        await conn.fetchval(
-            "SELECT prosrc FROM pg_proc WHERE proname = 'dlightrag_enforce_run_event_constraints'"
-        )
-    )
 
 
 @pytest.fixture
@@ -490,76 +406,6 @@ async def _assert_run_event_parent_guard(store: FingerprintingRunStore, pool: An
 
 
 class TestSchema:
-    async def test_refuses_a_pre_runtime_answer_schema_with_the_reset_remedy(self, pool) -> None:
-        """A database still holding the 2.0.0-2.0.5 Answer table is reset, never migrated.
-
-        Both roles refuse to start on it and name the reset as the remedy.
-        """
-        async with pool.acquire() as conn:
-            await conn.execute(_BASELINE_ANSWER_RUNS_DDL)
-
-        for validate_only in (False, True):
-            with pytest.raises(RunSchemaError, match="full development reset"):
-                await PGRunStore(pool=pool).initialize(validate_only=validate_only)
-
-        async with pool.acquire() as conn:
-            assert await conn.fetchval("SELECT to_regclass('dlightrag_runs')") is None
-            assert await conn.fetchval("SELECT to_regclass('dlightrag_schema_migrations')") is None
-
-    async def test_later_migrations_change_nothing_on_a_fresh_baseline(self, pool) -> None:
-        """The baseline is the whole current schema; later versions only advance older ones.
-
-        Every later migration restates what it introduced for databases created before
-        it. On a fresh baseline each must therefore be a no-op, down to the definition of
-        every constraint, index, trigger, and column; a restatement that drifted from the
-        baseline would make fresh and upgraded databases disagree.
-        """
-        async with pool.acquire() as conn:
-            await apply_migrations(
-                conn,
-                scope=RUN_MIGRATION_SCOPE,
-                migrations=RUN_MIGRATIONS[:1],
-                tables=RUN_SCHEMA_TABLES,
-                schema_error=RunSchemaError,
-            )
-            baseline = await catalog_definitions(conn)
-            await apply_migrations(
-                conn,
-                scope=RUN_MIGRATION_SCOPE,
-                migrations=RUN_MIGRATIONS,
-                tables=RUN_SCHEMA_TABLES,
-                schema_error=RunSchemaError,
-            )
-
-            assert await catalog_definitions(conn) == baseline
-
-    async def test_a_stale_function_body_is_reconciled_at_the_next_writer_start(self, pool) -> None:
-        """PostgreSQL never rewrites a function body when the table it names is renamed.
-
-        A database initialized before such a rename keeps the old name inside the body, and every
-        run-event write then fails at runtime - that is how a long-lived deployment lost its runs,
-        its cancellations, and its reclaims at once. The body is stored code rather than data, so
-        a writer reconciles it with this revision instead of a migration that already ran.
-        """
-        # A database a previous revision already initialized: its baseline and migrations ran,
-        # so nothing but a writer's reconciliation can repair what a rename leaves behind.
-        await PGRunStore(pool=pool).initialize(validate_only=False)
-
-        async with pool.acquire() as conn:
-            # The body a rename leaves behind: PostgreSQL accepted it while that name existed,
-            # which is why nothing failed until the table was renamed away.
-            await conn.execute("SET check_function_bodies = off")
-            await conn.execute(
-                _ENFORCE_RUN_EVENT_CONSTRAINTS.replace("dlightrag_runs", "dlightrag_old_runs")
-            )
-            assert "dlightrag_old_runs" in await _constraint_body(conn)
-
-            await PGRunStore(pool=pool).initialize(validate_only=False)
-
-            body = await _constraint_body(conn)
-            assert "dlightrag_runs" in body
-            assert "dlightrag_old_runs" not in body
-
     async def test_a_refused_ledger_releases_the_scope_lock(self, pool) -> None:
         """A runner that refuses its ledger must not leave other callers waiting on it."""
         created = Migration("lock_probe", "first", ("CREATE TABLE lock_probe (id TEXT)",))
@@ -601,70 +447,6 @@ class TestSchema:
     async def test_fresh_schema_enforces_run_event_parent_contract(self, store, pool) -> None:
         await _assert_run_event_parent_guard(store, pool)
 
-    async def test_current_schema_migration_drops_active_permit(self, store, pool) -> None:
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "ALTER TABLE dlightrag_runs "
-                "ADD COLUMN active_permit BOOLEAN NOT NULL DEFAULT FALSE, "
-                "ADD CONSTRAINT dlightrag_runs_permit_check "
-                "CHECK (NOT active_permit OR (status = 'running' AND lease_owner IS NOT NULL))"
-            )
-            versions = [migration.version for migration in RUN_MIGRATIONS]
-            unapplied = versions[versions.index("remove_run_active_permit") :]
-            await conn.execute(
-                "DELETE FROM dlightrag_schema_migrations"
-                " WHERE scope = 'runs' AND version = ANY($1::text[])",
-                unapplied,
-            )
-
-        migrated = PGRunStore(pool=pool)
-        await migrated.initialize()
-
-        async with pool.acquire() as conn:
-            assert not await conn.fetchval(
-                "SELECT EXISTS (SELECT 1 FROM information_schema.columns "
-                "WHERE table_name = 'dlightrag_runs' AND column_name = 'active_permit')"
-            )
-            assert not await conn.fetchval(
-                "SELECT EXISTS (SELECT 1 FROM pg_constraint "
-                "WHERE conrelid = 'dlightrag_runs'::regclass "
-                "AND conname = 'dlightrag_runs_permit_check')"
-            )
-
-    async def test_accounts_made_before_their_times_and_the_switch_gain_both(
-        self, store, pool
-    ) -> None:
-        """A database holding the table as it first shipped is advanced, never reset.
-
-        It gains the two times and the owner's switch, keeps the account it held, and a reader
-        then verifies it as it verifies a fresh database.
-        """
-        async with pool.acquire() as conn:
-            await conn.execute("DROP TABLE dlightrag_agent_account_settings")
-            await conn.execute("DROP TABLE dlightrag_agent_accounts")
-            await conn.execute(_EARLIER_AGENT_ACCOUNTS_DDL)
-            await conn.execute(
-                "INSERT INTO dlightrag_agent_accounts"
-                " (owner_id, site, account_id, email, key_id, encrypted_envelope)"
-                " VALUES ('alice', 'shop.example', 'id', 'a@alias.example', 'k', '{}')"
-            )
-            await conn.execute(
-                "DELETE FROM dlightrag_schema_migrations"
-                " WHERE scope = 'runs' AND version = 'agent_account_activity_and_sign_ups'"
-            )
-
-        await PGRunStore(pool=pool).initialize()
-
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT site, last_used_at FROM dlightrag_agent_accounts WHERE owner_id = 'alice'"
-            )
-            assert row is not None
-            assert (row["site"], row["last_used_at"]) == ("shop.example", None)
-            for declared in (AGENT_ACCOUNTS_SCHEMA_TABLE, AGENT_ACCOUNT_SETTINGS_SCHEMA_TABLE):
-                assert await catalog_table(conn, declared.name) == declared_shape(declared)
-        await PGRunStore(pool=pool).initialize(validate_only=True)
-
     async def test_creates_exactly_the_answer_schema_tables(self, store, pool) -> None:
         async with pool.acquire() as conn:
             rows = await conn.fetch(
@@ -678,6 +460,7 @@ class TestSchema:
             "dlightrag_agent_session_entries",
             "dlightrag_agent_session_registers",
             "dlightrag_answer_run_stages",
+            "dlightrag_answer_goals",
             "dlightrag_answer_evidence",
             "dlightrag_answer_resources",
             "dlightrag_blobs",
@@ -685,6 +468,11 @@ class TestSchema:
             "dlightrag_answer_run_artifacts",
             "dlightrag_answer_artifact_attachments",
             "dlightrag_answer_session_notes",
+            "dlightrag_session_workspace_heads",
+            "dlightrag_session_work_heads",
+            "dlightrag_session_workspace_snapshots",
+            "dlightrag_session_memory_progress",
+            "dlightrag_answer_feedback",
             "dlightrag_answer_workspace_inventory",
             "dlightrag_answer_committed_spills",
             "dlightrag_answer_run_routing",
@@ -697,6 +485,8 @@ class TestSchema:
             "dlightrag_agent_accounts",
             "dlightrag_agent_account_settings",
             "dlightrag_corpus_mutation_windows",
+            "dlightrag_runtime_policies",
+            "dlightrag_privacy_settings",
         }
 
     async def test_artifact_reference_constraint_uses_one_output_kind(self, store, pool) -> None:
@@ -983,6 +773,109 @@ class TestCreation:
         async with pool.acquire() as conn, conn.transaction():
             with pytest.raises(RunAdmissionLimitExceededError):
                 await limited.create_run_in(conn, owner_id=_OWNER, request=_request("second"))
+
+    async def test_an_owners_active_limit_admits_exactly_that_many_of_concurrent_submissions(
+        self, pool
+    ) -> None:
+        """Counted under the lane's acceptance lock, so submissions racing for the last places
+        through several connections cannot all be admitted, and another owner is not touched."""
+        stores = [FingerprintingRunStore(pool=pool) for _ in range(4)]
+        await stores[0].initialize()
+        owners = [_OWNER] * 8 + [_OTHER_OWNER] * 2
+
+        results = await asyncio.gather(
+            *(
+                stores[index % len(stores)].create_run(
+                    owner_id=owner,
+                    request=_request(f"question {index}"),
+                    idempotency_key=f"key-{index}",
+                    active_run_limit=3,
+                )
+                for index, owner in enumerate(owners)
+            ),
+            return_exceptions=True,
+        )
+
+        mine, theirs = results[:8], results[8:]
+        assert sum(not isinstance(result, BaseException) for result in mine) == 3
+        assert sum(isinstance(result, ActiveRunLimitExceededError) for result in mine) == 5
+        assert all(not isinstance(result, BaseException) for result in theirs)
+        async with pool.acquire() as conn:
+            held = {
+                row["owner_id"]: row["held"]
+                for row in await conn.fetch(
+                    "SELECT owner_id, count(*) AS held FROM dlightrag_runs"
+                    " WHERE status IN ('queued', 'running') GROUP BY owner_id"
+                )
+            }
+        assert held == {_OWNER: 3, _OTHER_OWNER: 2}, "a refusal leaves no run behind"
+
+    async def test_a_replay_at_the_limit_is_answered_and_only_a_run_that_ended_makes_room(
+        self, store, pool
+    ) -> None:
+        async def submit(key: str, limit: int | None = 2) -> Any:
+            return await store.create_run(
+                owner_id=_OWNER, request=_request(key), idempotency_key=key, active_run_limit=limit
+            )
+
+        first, second = await submit("a"), await submit("b")
+
+        # At the limit a retried key is still answered, and a new one is not.
+        replay = await submit("a")
+        assert (replay.replayed, replay.run.run_id) == (True, first.run.run_id)
+        with pytest.raises(ActiveRunLimitExceededError) as refused:
+            await submit("c")
+        assert refused.value.limit == 2
+
+        # A run waiting out a dependency is queued still, and keeps counting.
+        claim = await _claimed(store)
+        assert await store.defer(
+            owner_id=_OWNER,
+            run_id=claim.run.run_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+            checkpoint={"phase": "deferred_dependency"},
+            next_attempt_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1),
+        )
+        with pytest.raises(ActiveRunLimitExceededError):
+            await submit("c")
+
+        # A limit lowered below what the owner holds refuses more and cancels nothing.
+        with pytest.raises(ActiveRunLimitExceededError):
+            await submit("c", limit=1)
+        async with pool.acquire() as conn:
+            statuses = await conn.fetchval(
+                "SELECT array_agg(status ORDER BY created_at) FROM dlightrag_runs"
+            )
+        assert statuses == ["queued", "queued"]
+
+        # The one that ended makes room for exactly one more, under the key that was refused.
+        cancelled = await store.request_cancellation(owner_id=_OWNER, run_id=second.run.run_id)
+        assert cancelled.outcome == "cancelled"
+        admitted = await submit("c")
+        assert admitted.replayed is False
+        with pytest.raises(ActiveRunLimitExceededError):
+            await submit("d")
+
+    async def test_linked_acceptance_honours_the_owners_active_limit(self, store, pool) -> None:
+        await store.create_run(
+            owner_id=_OWNER, request=_request("first"), idempotency_key="first", active_run_limit=1
+        )
+
+        async with pool.acquire() as conn, conn.transaction():
+            with pytest.raises(ActiveRunLimitExceededError):
+                await store.create_run_in(
+                    conn, owner_id=_OWNER, request=_request("second"), active_run_limit=1
+                )
+
+    @pytest.mark.parametrize("limit", [0, -1])
+    async def test_a_limit_below_one_is_no_limit_the_store_will_count_by(
+        self, store, limit: int
+    ) -> None:
+        with pytest.raises(ValueError, match="active run limit"):
+            await store.create_run(
+                owner_id=_OWNER, request=_request(), idempotency_key="k", active_run_limit=limit
+            )
 
     async def test_replay_normalizes_key_order_but_not_list_order(self, store) -> None:
         first = await store.create_run(
@@ -1276,7 +1169,7 @@ class TestClaiming:
     ) -> None:
         creation = await store.create_run(owner_id=_OWNER, request=_request())
         claim = await _claimed(store)
-        workspace = PGWorkspaceStore(
+        workspace = PGAgentspaceStore(
             pool=pool,
             owner_id=_OWNER,
             run_id=uuid.UUID(creation.run.run_id),
@@ -1302,7 +1195,7 @@ class TestClaiming:
     ) -> None:
         creation = await store.create_run(owner_id=_OWNER, request=_request())
         claim = await _claimed(store)
-        workspace = PGWorkspaceStore(
+        workspace = PGAgentspaceStore(
             pool=pool,
             owner_id=_OWNER,
             run_id=uuid.UUID(creation.run.run_id),
@@ -1337,7 +1230,7 @@ class TestClaiming:
         creation = await store.create_run(owner_id=_OWNER, request=_request())
         claim = await _claimed(store)
         run_id = uuid.UUID(creation.run.run_id)
-        workspace = PGWorkspaceStore(
+        workspace = PGAgentspaceStore(
             pool=pool,
             owner_id=_OWNER,
             run_id=run_id,
@@ -1389,7 +1282,7 @@ class TestClaiming:
         creation = await store.create_run(owner_id=_OWNER, request=_request())
         claim = await _claimed(store)
         run_id = uuid.UUID(creation.run.run_id)
-        workspace = PGWorkspaceStore(
+        workspace = PGAgentspaceStore(
             pool=pool,
             owner_id=_OWNER,
             run_id=run_id,
@@ -1491,6 +1384,50 @@ class TestLeaseFencing:
                 fencing_epoch=claim.run.fencing_epoch,
             )
         ).cancel_requested is True
+
+    async def test_a_lapsed_lease_is_renewed_by_the_worker_that_still_owns_it(
+        self, store, pool
+    ) -> None:
+        """A lapse is reclaimability, not ownership loss: the epoch decides, not the clock.
+
+        This test used to assert the opposite -- "an expired lease is never revived" -- which made a
+        busy worker's lapse fatal to a Run it was still working on. What keeps that safe is the
+        fencing epoch: a worker only renews while it is still the row's lease_owner at the epoch it
+        was granted, so a reclaimed Run refuses it (``test_stale_worker_cannot_write_after_reclaim``
+        and ``test_run_lease_renewal_pg.py`` pin that half).
+        """
+        creation = await store.create_run(owner_id=_OWNER, request=_request())
+        claim = await _claimed(store)
+        await _expire_lease(pool, creation.run.run_id)
+        renewal = await store.heartbeat(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        assert renewal.renewed is True
+        assert (
+            await pool.fetchval(
+                "SELECT lease_expires_at > NOW() FROM dlightrag_runs WHERE run_id = $1",
+                creation.run.run_id,
+            )
+            is True
+        )
+
+        # And the worker that no longer owns it is still refused, which is what the old assertion
+        # was protecting.
+        await pool.execute(
+            "UPDATE dlightrag_runs SET lease_owner = 'worker-2', "
+            "fencing_epoch = fencing_epoch + 1 WHERE run_id = $1",
+            creation.run.run_id,
+        )
+        refused = await store.heartbeat(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        assert refused.renewed is False
 
     async def test_stale_worker_cannot_write_after_reclaim(self, store, pool) -> None:
         creation = await store.create_run(owner_id=_OWNER, request=_request())
@@ -1628,6 +1565,147 @@ class TestEvents:
         assert [(event.event_type, event.payload) for event in events] == [
             ("thinking", {"step": 1})
         ]
+
+    async def test_tool_subjects_join_selects_one_non_empty_label_per_call(
+        self, store, pool
+    ) -> None:
+        creation = await store.create_run(owner_id=_OWNER, request=_request())
+        claim = await _claimed(store)
+        args = dict(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        run_id = creation.run.run_id
+        # A start event and a subject-less streaming update are not subject sources.
+        await store.append_event(
+            **args,
+            phase=None,
+            event_type="tool_start",
+            payload={"call_id": "c1", "tool_name": "bash"},
+        )
+        await store.append_event(
+            **args,
+            phase=None,
+            event_type="tool_progress",
+            payload={"call_id": "c1", "text_chars": 0},
+        )
+        await store.append_event(
+            **args,
+            phase=None,
+            event_type="tool_progress",
+            payload={"call_id": "c1", "object_label": "rg -n TODO src"},
+        )
+        # A later update of the same call does not replace the first subject.
+        await store.append_event(
+            **args,
+            phase=None,
+            event_type="tool_progress",
+            payload={"call_id": "c1", "object_label": "a later label"},
+        )
+        await store.append_event(
+            **args,
+            phase=None,
+            event_type="tool_progress",
+            payload={"call_id": "c2", "object_label": "quarterly revenue 2026"},
+        )
+
+        subjects = await store.load_tool_subjects(
+            owner_id=_OWNER, run_id=run_id, call_ids=["c1", "c2", "missing"]
+        )
+        assert subjects == {"c1": "rg -n TODO src", "c2": "quarterly revenue 2026"}
+        assert (
+            await store.load_tool_subjects(owner_id=_OTHER_OWNER, run_id=run_id, call_ids=["c1"])
+            == {}
+        )
+        assert (
+            await store.load_tool_subjects(
+                owner_id=_OWNER, run_id=str(uuid.uuid7()), call_ids=["c1"]
+            )
+            == {}
+        )
+        assert await store.load_tool_subjects(owner_id=_OWNER, run_id=run_id, call_ids=[]) == {}
+
+        # A trimmed event log loses only the calls whose rows are gone.
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM dlightrag_run_events WHERE owner_id = $1 AND run_id = $2 "
+                "AND payload->>'call_id' = 'c2'",
+                _OWNER,
+                uuid.UUID(run_id),
+            )
+        assert await store.load_tool_subjects(
+            owner_id=_OWNER, run_id=run_id, call_ids=["c1", "c2"]
+        ) == {"c1": "rg -n TODO src"}
+
+    async def test_tool_call_arguments_read_the_run_transcript_in_call_order(
+        self, store, pool
+    ) -> None:
+        session = "0f0f0f0f-0000-7000-8000-0000000000ab"
+        creation = await store.create_run(
+            owner_id=_OWNER, request=_request(agent_session_id=session)
+        )
+        run_id = str(creation.run.run_id)
+        first, second = uuid.uuid4(), uuid.uuid4()
+        now = datetime.datetime.now(datetime.UTC)
+        command = "cd . && python scripts/validate_model.py case.draft.json"
+        first_payload = {
+            "content": "",
+            "tool_calls": [
+                {"id": "c1", "name": "bash", "arguments": {"command": command}},
+                # A call the model shaped illegally is not executable evidence; the reader still
+                # keeps its id out of the mapping rather than guessing at arguments.
+                {"id": "bad", "name": "bash", "arguments": "not-an-object"},
+            ],
+        }
+        second_payload = {
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "c2",
+                    "name": "write",
+                    "arguments": {"path": "notes/x.md", "content": "x"},
+                },
+                # A later entry reusing a call id never replaces the call the Run recorded first.
+                {"id": "c1", "name": "bash", "arguments": {"command": "a later duplicate"}},
+            ],
+        }
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO dlightrag_agent_sessions (owner_id, session_id, lease_run_id, "
+                "fencing_epoch) VALUES ($1, $2, $3, 1) ON CONFLICT DO NOTHING",
+                _OWNER,
+                uuid.UUID(session),
+                uuid.UUID(run_id),
+            )
+            await conn.execute(
+                "INSERT INTO dlightrag_agent_session_entries (owner_id, session_id, sequence, "
+                "entry_id, parent_entry_id, entry_type, schema_version, timestamp, payload_json, "
+                "search_text, run_id) VALUES "
+                "($1, $2, 1, $3, NULL, 'assistant_message', 1, $4, $6::jsonb, '', $8), "
+                "($1, $2, 2, $5, $3, 'assistant_message', 1, $7, $9::jsonb, '', $8)",
+                _OWNER,
+                uuid.UUID(session),
+                first,
+                now,
+                second,
+                json.dumps(first_payload),
+                now,
+                uuid.UUID(run_id),
+                json.dumps(second_payload),
+            )
+
+        calls = await store.load_tool_call_arguments(owner_id=_OWNER, run_id=run_id)
+
+        assert [(call.call_id, call.tool_name) for call in calls] == [
+            ("c1", "bash"),
+            ("c2", "write"),
+        ]
+        assert calls[0].arguments == {"command": command}
+        assert calls[1].arguments == {"path": "notes/x.md", "content": "x"}
+        assert await store.load_tool_call_arguments(owner_id=_OTHER_OWNER, run_id=run_id) == ()
+        assert await store.load_tool_call_arguments(owner_id=_OWNER, run_id=str(uuid.uuid7())) == ()
 
     async def test_sequences_are_gap_free_under_concurrent_appends(self, store) -> None:
         creation = await store.create_run(owner_id=_OWNER, request=_request())
@@ -4258,7 +4336,7 @@ class TestAgentControlsAndChildren:
             return "completed"
 
         # Exercise the actual runtime-to-adapter callback: a loose AsyncMock
-        # previously hid the missing parent owner/run arguments at this seam.
+        # would hide the missing parent owner/run arguments at this seam.
         renewed = _check_child_write(
             partial(
                 store.heartbeat_child_session,
@@ -4401,6 +4479,282 @@ class TestAgentControlsAndChildren:
         assert questions == ()
         assert foreign == ()
         assert transcript == ()
+
+    async def test_a_run_reads_only_the_messages_it_wrote(self, store, pool) -> None:
+        """One conversation's agent is one Session across its Runs, and its lane head walks back
+        through every earlier turn of it.
+
+        Each Entry states the Run that wrote it, so the newest Run's trace reads its own messages:
+        without that fact the lane head draws the Runs before it beside its own.
+        """
+        session = "0f0f0f0f-0000-7000-8000-0000000000aa"
+        earlier = await store.create_run(
+            owner_id=_OWNER, request=_request(agent_session_id=session)
+        )
+        latest = await store.create_run(owner_id=_OWNER, request=_request(agent_session_id=session))
+        async with pool.acquire() as conn:
+            # The Session an Entry hangs off, leased to the Run whose messages they are.
+            await conn.execute(
+                "INSERT INTO dlightrag_agent_sessions (owner_id, session_id, lease_run_id, "
+                "fencing_epoch) VALUES ($1, $2, $3, 1) ON CONFLICT DO NOTHING",
+                _OWNER,
+                uuid.UUID(session),
+                earlier.run.run_id,
+            )
+            created = await conn.fetchval(
+                "SELECT created_at FROM dlightrag_runs WHERE run_id = $1", latest.run.run_id
+            )
+            older, newer = uuid.uuid4(), uuid.uuid4()
+            # Two Runs of one Session, with the boundary between them made explicit: the earlier
+            # Run's message an hour before the newest Run started, its own a second after.
+            await conn.execute(
+                "INSERT INTO dlightrag_agent_session_entries (owner_id, session_id, sequence, "
+                "entry_id, parent_entry_id, entry_type, schema_version, timestamp, payload_json, "
+                "search_text, run_id) VALUES "
+                "($1, $2, 1, $3, NULL, 'user_message', 1, $4, '{}'::jsonb, '', $7), "
+                "($1, $2, 2, $5, $3, 'assistant_message', 1, $6, '{}'::jsonb, '', $8)",
+                _OWNER,
+                uuid.UUID(session),
+                older,
+                created - datetime.timedelta(hours=1),
+                newer,
+                created + datetime.timedelta(seconds=1),
+                earlier.run.run_id,
+                latest.run.run_id,
+            )
+            await conn.execute(
+                "INSERT INTO dlightrag_agent_session_registers (owner_id, session_id, "
+                "register_kind, register_key, sequence, payload_json) "
+                "VALUES ($1, $2, 'lane_head', 'main', 2, $3::jsonb) "
+                "ON CONFLICT (owner_id, session_id, register_kind, register_key) "
+                "DO UPDATE SET sequence = 2, payload_json = $3::jsonb",
+                _OWNER,
+                uuid.UUID(session),
+                json.dumps({"entry_id": str(newer)}),
+            )
+
+        page = await store.load_agent_transcript(
+            owner_id=_OWNER, run_id=str(latest.run.run_id), session_id=session, limit=20
+        )
+
+        assert [row["sequence"] for row in page] == [2], "the earlier Run's message stays out"
+        assert earlier.run.run_id != latest.run.run_id
+
+        # A reader holding a transcript asks forward from what it holds, and gets only what landed.
+        delta = await store.load_agent_transcript(
+            owner_id=_OWNER,
+            run_id=str(latest.run.run_id),
+            session_id=session,
+            limit=20,
+            since=1,
+        )
+        assert [row["sequence"] for row in delta] == [2], "a delta reads forward from a sequence"
+        assert (
+            await store.load_agent_transcript(
+                owner_id=_OWNER,
+                run_id=str(latest.run.run_id),
+                session_id=session,
+                limit=20,
+                since=2,
+            )
+            == ()
+        ), "nothing landed after the last message, so the delta is empty rather than the page again"
+
+
+async def test_run_timeline_reads_state_the_run_and_its_page_entries(store: Any, pool: Any) -> None:
+    """The two Run-timeline reads against real PostgreSQL: step rows, then the page's entries."""
+    session = "0f0f0f0f-0000-7000-8000-0000000000ac"
+    creation = await store.create_run(owner_id=_OWNER, request=_request(agent_session_id=session))
+    run_id = str(creation.run.run_id)
+    now = datetime.datetime.now(datetime.UTC)
+    invocation, tool, user, answer, compacted = (uuid.uuid4() for _ in range(5))
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO dlightrag_agent_sessions (owner_id, session_id, lease_run_id, "
+            "fencing_epoch) VALUES ($1, $2, $3, 1) ON CONFLICT DO NOTHING",
+            _OWNER,
+            uuid.UUID(session),
+            creation.run.run_id,
+        )
+        await conn.execute(
+            "INSERT INTO dlightrag_agent_session_entries (owner_id, session_id, sequence, "
+            "entry_id, parent_entry_id, entry_type, schema_version, timestamp, payload_json, "
+            "search_text, run_id) VALUES "
+            "($1, $2, 1, $3, NULL, 'assistant_message', 1, $8, $9::jsonb, '', $13), "
+            "($1, $2, 2, $4, $3, 'tool_result', 1, $10, $11::jsonb, 'two files', $13), "
+            "($1, $2, 3, $5, $4, 'user_message', 1, $10, $12::jsonb, 'next', $13), "
+            "($1, $2, 4, $6, $5, 'assistant_message', 1, $10, $14::jsonb, 'answer', $13), "
+            "($1, $2, 5, $7, $6, 'compaction', 1, $10, '{}'::jsonb, '', $13)",
+            _OWNER,
+            uuid.UUID(session),
+            invocation,
+            tool,
+            user,
+            answer,
+            compacted,
+            now,
+            json.dumps(
+                {
+                    "content": "",
+                    "tool_calls": [{"id": "call-1", "name": "read", "arguments": {"path": "a.md"}}],
+                }
+            ),
+            now + datetime.timedelta(seconds=1),
+            json.dumps(
+                {
+                    "call_id": "call-1",
+                    "tool_name": "read",
+                    "outcome": "succeeded",
+                    "content": [{"type": "text", "text": "two files"}],
+                    "facts": {"path": "a.md", "hits": 2},
+                }
+            ),
+            json.dumps({"content": "next"}),
+            creation.run.run_id,
+            json.dumps({"content": "answer", "tool_calls": []}),
+        )
+        await conn.execute(
+            "INSERT INTO dlightrag_agent_session_registers (owner_id, session_id, "
+            "register_kind, register_key, sequence, payload_json) "
+            "VALUES ($1, $2, 'lane_head', 'main', 5, $3::jsonb) "
+            "ON CONFLICT (owner_id, session_id, register_kind, register_key) "
+            "DO UPDATE SET sequence = 5, payload_json = $3::jsonb",
+            _OWNER,
+            uuid.UUID(session),
+            json.dumps({"entry_id": str(compacted)}),
+        )
+
+    steps = await store.load_run_timeline_steps(owner_id=_OWNER, run_id=run_id)
+
+    assert [step["sequence"] for step in steps] == [1, 2, 3, 4], "compaction states no step"
+    invocation_row, tool_row, user_row, answer_row = steps
+    assert invocation_row["tool_call_ids"] == ("call-1",)
+    assert invocation_row["tool_calls"] == 1 and invocation_row["has_content"] is False
+    assert (tool_row["call_id"], tool_row["tool_name"]) == ("call-1", "read")
+    assert tool_row["failed"] is False and tool_row["degraded"] is False
+    assert user_row["entry_type"] == "user_message"
+    assert answer_row["tool_calls"] == 0 and answer_row["has_content"] is True
+    assert await store.load_run_timeline_steps(owner_id=_OTHER_OWNER, run_id=run_id) == ()
+    assert await store.load_run_timeline_steps(owner_id=_OWNER, run_id=str(uuid.uuid7())) == ()
+
+    entries = await store.load_timeline_entries(
+        owner_id=_OWNER,
+        run_id=run_id,
+        keys=[(session, 2), (session, 4), (session, 99), (session, 2)],
+    )
+
+    assert [(row["session_id"], row["sequence"]) for row in entries] == [
+        (session, 2),
+        (session, 4),
+    ], "a key names one entry, and a key the Run does not hold reads nothing"
+    tool_message, answer_message = entries
+    assert tool_message["role"] == "tool"
+    assert tool_message["content"] == "two files"
+    assert tool_message["facts"] == {"path": "a.md", "hits": 2}
+    assert answer_message["role"] == "assistant"
+    assert answer_message["content"] == "answer"
+    assert (
+        await store.load_timeline_entries(
+            owner_id=_OWNER, run_id=str(uuid.uuid7()), keys=[(session, 2)]
+        )
+        == ()
+    )
+
+
+async def test_an_assistant_turns_whitespace_beside_its_calls_states_no_say(
+    store: Any, pool: Any
+) -> None:
+    """The kind rule trims the words the way the old page read did, not only spaces."""
+    session = "0f0f0f0f-0000-7000-8000-0000000000ad"
+    creation = await store.create_run(owner_id=_OWNER, request=_request(agent_session_id=session))
+    entry_id = uuid.uuid4()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO dlightrag_agent_sessions (owner_id, session_id, lease_run_id, "
+            "fencing_epoch) VALUES ($1, $2, $3, 1) ON CONFLICT DO NOTHING",
+            _OWNER,
+            uuid.UUID(session),
+            creation.run.run_id,
+        )
+        await conn.execute(
+            "INSERT INTO dlightrag_agent_session_entries (owner_id, session_id, sequence, "
+            "entry_id, parent_entry_id, entry_type, schema_version, timestamp, payload_json, "
+            "search_text, run_id) VALUES ($1, $2, 1, $3, NULL, 'assistant_message', 1, NOW(), "
+            "$4::jsonb, ' ', $5)",
+            _OWNER,
+            uuid.UUID(session),
+            entry_id,
+            json.dumps(
+                {
+                    "content": " \n\t ",
+                    "tool_calls": [{"id": "call-1", "name": "read"}],
+                }
+            ),
+            creation.run.run_id,
+        )
+        await conn.execute(
+            "INSERT INTO dlightrag_agent_session_registers (owner_id, session_id, "
+            "register_kind, register_key, sequence, payload_json) "
+            "VALUES ($1, $2, 'lane_head', 'main', 1, $3::jsonb) "
+            "ON CONFLICT (owner_id, session_id, register_kind, register_key) "
+            "DO UPDATE SET sequence = 1, payload_json = $3::jsonb",
+            _OWNER,
+            uuid.UUID(session),
+            json.dumps({"entry_id": str(entry_id)}),
+        )
+
+    steps = await store.load_run_timeline_steps(owner_id=_OWNER, run_id=str(creation.run.run_id))
+
+    assert len(steps) == 1
+    assert steps[0]["has_content"] is False, "whitespace beside calls does not state a say"
+
+
+async def test_a_delivery_warning_reads_as_a_delivery_message_and_step(
+    store: Any, pool: Any
+) -> None:
+    session = "0f0f0f0f-0000-7000-8000-0000000000ae"
+    creation = await store.create_run(owner_id=_OWNER, request=_request(agent_session_id=session))
+    entry_id = uuid.uuid4()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO dlightrag_agent_sessions (owner_id, session_id, lease_run_id, "
+            "fencing_epoch) VALUES ($1, $2, $3, 1) ON CONFLICT DO NOTHING",
+            _OWNER,
+            uuid.UUID(session),
+            creation.run.run_id,
+        )
+        await conn.execute(
+            "INSERT INTO dlightrag_agent_session_entries (owner_id, session_id, sequence, "
+            "entry_id, parent_entry_id, entry_type, schema_version, timestamp, payload_json, "
+            "search_text, run_id) VALUES ($1, $2, 1, $3, NULL, 'delivery_warning', 1, NOW(), "
+            "$4::jsonb, 'findings', $5)",
+            _OWNER,
+            uuid.UUID(session),
+            entry_id,
+            json.dumps({"attempt": 2, "findings": ["first finding", "second finding"]}),
+            creation.run.run_id,
+        )
+        await conn.execute(
+            "INSERT INTO dlightrag_agent_session_registers (owner_id, session_id, "
+            "register_kind, register_key, sequence, payload_json) "
+            "VALUES ($1, $2, 'lane_head', 'main', 1, $3::jsonb) "
+            "ON CONFLICT (owner_id, session_id, register_kind, register_key) "
+            "DO UPDATE SET sequence = 1, payload_json = $3::jsonb",
+            _OWNER,
+            uuid.UUID(session),
+            json.dumps({"entry_id": str(entry_id)}),
+        )
+
+    steps = await store.load_run_timeline_steps(owner_id=_OWNER, run_id=str(creation.run.run_id))
+    entries = await store.load_timeline_entries(
+        owner_id=_OWNER, run_id=str(creation.run.run_id), keys=[(session, 1)]
+    )
+
+    assert [step["entry_type"] for step in steps] == ["delivery_warning"]
+    (message,) = entries
+    assert message["role"] == "delivery"
+    assert message["content"] == "first finding\nsecond finding"
+    assert message["attempt"] == 2
 
 
 async def _interactive_terminal_child(store: Any) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -4615,6 +4969,136 @@ async def test_rejected_owner_cancel_receipt_cannot_target_later_continuation(
     assert current["outcome"] == "cancellation_requested"
 
 
+class TestChildToolRefusals:
+    """What the parent's control tools tell the Model when it names an id the Run never issued."""
+
+    @staticmethod
+    async def _parent_tools(store: PGRunStore, live: _LiveChild) -> tuple[dict[str, Any], str]:
+        """The parent's tools over the real store, and the parent Session the Child belongs to."""
+        guidance = await store.load_child_guidance(
+            owner_id=_OWNER, run_id=live.run_id, request_id=live.request_id
+        )
+        assert guidance is not None
+        parent_id = str(guidance["parent_session_id"])
+        fence = {"worker_id": _WORKER, "fencing_epoch": live.fencing_epoch}
+        host = SubagentHost(
+            parent_session_id=SessionId(parent_id),
+            run_id=live.run_id,
+            owner_id=_OWNER,
+            load_child=store.load_child_session,
+            list_children=store.list_child_sessions,
+            load_guidance=store.load_child_guidance,
+            list_guidance=store.list_pending_child_guidance,
+            steer_child=_check_child_write(partial(store.enqueue_child_control, **fence)),
+            continue_child=_check_child_write(partial(store.continue_child_session, **fence)),
+            reply_guidance=_check_child_write(partial(store.reply_child_guidance, **fence)),
+        )
+        return {tool.name: tool for tool in subagent_tools(host=host)}, parent_id
+
+    @pytest.mark.parametrize("tool", ["steer_subagent", "continue_subagent"])
+    @pytest.mark.parametrize("unknown", [str(uuid.uuid7()), "not-a-uuid"])
+    async def test_a_child_id_the_run_never_issued_is_refused_not_raised(
+        self, store, tool: str, unknown: str
+    ) -> None:
+        live = await _run_with_a_live_child(store, "unknown-child")
+        tools, _parent = await self._parent_tools(store, live)
+
+        result = await tools[tool].execute(
+            tools[tool].input_model(child_session_id=unknown, content="look again"),
+            tool_runtime(tool_name=tool),
+        )
+
+        assert result.is_error
+        assert result.text_content == (
+            f"Unknown child session {unknown}. This Run's children: {live.child_session_id}."
+        )
+
+    @pytest.mark.parametrize("tool", ["steer_subagent", "continue_subagent"])
+    async def test_a_child_of_another_parent_is_refused_by_the_store_outcome(
+        self, store, tool: str
+    ) -> None:
+        live = await _run_with_a_live_child(store, "foreign-child")
+        tools, _parent = await self._parent_tools(store, live)
+        stranger = str(uuid.uuid7())
+        other_parent = str(uuid.uuid7())
+        assert await store.upsert_child_session(
+            owner_id=_OWNER,
+            run_id=live.run_id,
+            child_session_id=stranger,
+            parent_session_id=other_parent,
+            parent_call_id="other-call",
+            parent_intent_id=str(uuid.uuid7()),
+            objective="not ours",
+            context_mode="isolated",
+            model_role="query",
+            tools=("search_knowledge_base",),
+            depth=1,
+            context_snapshot={
+                "parent_session_id": other_parent,
+                "parent_entry_id": str(uuid.uuid7()),
+                "depth": 0,
+                "messages": [],
+                "evidence_state": {},
+            },
+            plan={"schema_version": 2, "tools": ["search_knowledge_base"]},
+            budget={"provider_attempt_limit": 2},
+            worker_id=_WORKER,
+            fencing_epoch=live.fencing_epoch,
+        )
+
+        # The roster holds it, so only the store's own outcome says it is not this parent's.
+        result = await tools[tool].execute(
+            tools[tool].input_model(child_session_id=stranger, content="look again"),
+            tool_runtime(tool_name=tool),
+        )
+
+        assert result.is_error
+        assert result.text_content == (
+            f"Unknown child session {stranger}. This Run's children: {live.child_session_id}."
+        )
+
+    @pytest.mark.parametrize("unknown", [str(uuid.uuid7()), "not-a-uuid"])
+    async def test_a_request_nobody_asked_is_refused_with_the_questions_waiting(
+        self, store, unknown: str
+    ) -> None:
+        live = await _run_with_a_live_child(store, "unknown-request")
+        tools, _parent = await self._parent_tools(store, live)
+
+        result = await tools["reply_subagent"].execute(
+            tools["reply_subagent"].input_model(request_id=unknown, content="use the report"),
+            tool_runtime(tool_name="reply_subagent"),
+        )
+
+        assert result.is_error
+        assert result.text_content == (
+            f"Unknown guidance request {unknown}. Questions waiting for a reply: {live.request_id}."
+        )
+
+    async def test_replaying_a_reply_that_was_taken_returns_the_original_receipt(
+        self, store
+    ) -> None:
+        live = await _run_with_a_live_child(store, "replayed-reply")
+        tools, _parent = await self._parent_tools(store, live)
+        reply = tools["reply_subagent"]
+        # One tool call, run again as a recovered Run runs it: the same submission key.
+        runtime = tool_runtime(tool_name="reply_subagent")
+        arguments = reply.input_model(request_id=live.request_id, content="use the report")
+
+        first = await reply.execute(arguments, runtime)
+        replay = await reply.execute(arguments, runtime)
+        # No question is pending any more, and the request is still the Run's.
+        refused = await reply.execute(
+            reply.input_model(request_id=str(uuid.uuid7()), content="use the report"),
+            tool_runtime(tool_name="reply_subagent"),
+        )
+
+        assert not first.is_error and '"outcome":"replied"' in first.text_content
+        assert not replay.is_error
+        assert replay.text_content == first.text_content
+        assert refused.is_error
+        assert refused.text_content.endswith("No child question is waiting for a reply.")
+
+
 class TestForkPoints:
     async def test_records_the_settled_head_under_a_live_claim(self, store, pool) -> None:
         creation = await store.create_run(owner_id=_OWNER, request=_request())
@@ -4698,84 +5182,323 @@ class TestForkPoints:
             is False
         )
 
-    async def test_published_artifact_resources_arrive_for_an_older_deployment(
-        self, store, pool
-    ) -> None:
-        """A deployment whose constraint predates the kind converges by migration."""
+
+async def test_a_succeeded_run_commits_the_session_workspace_head_with_cas(
+    store: FingerprintingRunStore, pool: Any
+) -> None:
+    from dlightrag.adapters.postgres.answer.agentspace import PGAgentspaceStore
+    from dlightrag.engine.runtime.agentspace import AgentspaceHeadCommit
+
+    session_id = "00000000-0000-7000-8000-000000000001"
+
+    async def commit(*, expected: str | None, digest_character: str) -> str:
+        creation = await store.create_run(owner_id=_OWNER, request=_request("head"))
         async with pool.acquire() as conn:
             await conn.execute(
-                "ALTER TABLE dlightrag_answer_resources "
-                "DROP CONSTRAINT dlightrag_answer_resources_kind_check"
-            )
-            await conn.execute(
-                "ALTER TABLE dlightrag_answer_resources "
-                "ADD CONSTRAINT dlightrag_answer_resources_kind_check "
-                "CHECK (kind IN ('accepted_blob', 'evidence', 'fetched_blob', 'committed_spill'))"
-            )
-            versions = [migration.version for migration in RUN_MIGRATIONS]
-            unapplied = versions[versions.index("published_artifact_resources") :]
-            await conn.execute(
-                "DELETE FROM dlightrag_schema_migrations"
-                " WHERE scope = 'runs' AND version = ANY($1::text[])",
-                unapplied,
-            )
-
-        migrated = PGRunStore(pool=pool)
-        await migrated.initialize()
-
-        async with pool.acquire() as conn:
-            definition = await conn.fetchval(
-                "SELECT pg_get_constraintdef(oid) FROM pg_constraint"
-                " WHERE conname = 'dlightrag_answer_resources_kind_check'"
-            )
-        assert definition is not None and "published_artifact" in definition
-
-        # The kind a later turn adopts has to be insertable, not merely allowed by text.
-        accepted = await store.create_run(owner_id=_OWNER, request=_request("older deployment"))
-        digest = hashlib.sha256(b"recovered product").hexdigest()
-        async with pool.acquire() as conn, conn.transaction():
-            await write_blob_content(
-                conn, owner_id=_OWNER, digest=digest, content=b"recovered product"
-            )
-            await conn.execute(
-                "INSERT INTO dlightrag_answer_resources ("
-                " owner_id, run_id, resource_id, kind, safe_name, media_type, capabilities,"
-                " ordinal, blob_digest, session_id)"
-                " VALUES ($1, $2, $3, 'published_artifact', 'analysis.md', 'text/markdown',"
-                " '{}'::jsonb, 0, $4, $5)",
+                "INSERT INTO dlightrag_agent_sessions"
+                " (owner_id, session_id, lease_run_id, fencing_epoch)"
+                " VALUES ($1, $2, $3, 1) ON CONFLICT DO NOTHING",
                 _OWNER,
-                uuid.UUID(str(accepted.run.run_id)),
-                "artifact-recovered",
-                digest,
-                uuid.uuid4(),
+                uuid.UUID(session_id),
+                uuid.UUID(creation.run.run_id),
             )
+        claim = await _claimed(store)
+        outcome = await store.finish_success(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+            result={"answer": "done"},
+            workspace_head=AgentspaceHeadCommit(
+                session_id=session_id,
+                head_run_id=creation.run.run_id,
+                manifest_digest=digest_character * 64,
+                expected_head_run_id=expected,
+            ),
+        )
+        assert outcome.committed
+        return creation.run.run_id
 
-    async def test_fork_point_columns_arrive_for_an_older_deployment(self, store, pool) -> None:
-        """A deployment whose routing table predates the point converges by migration."""
+    first = await commit(expected=None, digest_character="a")
+    reader = PGAgentspaceStore(
+        pool=pool,
+        owner_id=_OWNER,
+        run_id=uuid.UUID(first),
+        worker_id=_WORKER,
+        lease_owner=_WORKER,
+        fencing_epoch=0,
+    )
+    head = await reader.load_session_agentspace_head(session_id=session_id)
+    assert head is not None
+    assert (head.head_run_id, head.revision, head.manifest_digest) == (first, 1, "a" * 64)
+
+    second = await commit(expected=first, digest_character="b")
+    head = await reader.load_session_agentspace_head(session_id=session_id)
+    assert head is not None
+    assert (head.head_run_id, head.revision, head.manifest_digest) == (second, 2, "b" * 64)
+
+    # A Run that read the first head cannot commit over the second: its CAS names a moved-on
+    # head, and the terminal write still succeeds without advancing the pointer.
+    await commit(expected=first, digest_character="c")
+    head = await reader.load_session_agentspace_head(session_id=session_id)
+    assert head is not None
+    assert (head.head_run_id, head.revision) == (second, 2)
+
+    # The pointer belongs to the Session: deleting it cascades the row away, so no
+    # conversation can leave a dangling head behind.
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM dlightrag_agent_sessions WHERE owner_id = $1 AND session_id = $2::uuid",
+            _OWNER,
+            uuid.UUID(session_id),
+        )
+        assert (
+            await conn.fetchval(
+                "SELECT count(*) FROM dlightrag_session_workspace_heads"
+                " WHERE owner_id = $1 AND session_id = $2::uuid",
+                _OWNER,
+                uuid.UUID(session_id),
+            )
+        ) == 0
+
+
+async def test_a_failed_run_has_no_workspace_head_channel(
+    store: FingerprintingRunStore, pool: Any
+) -> None:
+    from dlightrag.engine.runtime.agentspace import AgentspaceHeadCommit
+
+    session_id = "00000000-0000-7000-8000-000000000001"
+    creation = await store.create_run(owner_id=_OWNER, request=_request("head"))
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO dlightrag_agent_sessions"
+            " (owner_id, session_id, lease_run_id, fencing_epoch)"
+            " VALUES ($1, $2, $3, 1) ON CONFLICT DO NOTHING",
+            _OWNER,
+            uuid.UUID(session_id),
+            uuid.UUID(creation.run.run_id),
+        )
+    claim = await _claimed(store)
+    await store.finish_failure(
+        owner_id=_OWNER,
+        run_id=creation.run.run_id,
+        worker_id=_WORKER,
+        fencing_epoch=claim.run.fencing_epoch,
+        error_kind="ANSWER_STREAM_FAILED",
+        error_message="failed",
+    )
+    async with pool.acquire() as conn:
+        assert (
+            await conn.fetchval(
+                "SELECT count(*) FROM dlightrag_session_workspace_heads"
+                " WHERE owner_id = $1 AND session_id = $2::uuid",
+                _OWNER,
+                uuid.UUID(session_id),
+            )
+        ) == 0
+    # The finished protocol has no head parameter at all: a failed settlement cannot name one.
+    import inspect
+
+    assert "workspace_head" not in inspect.signature(store.finish_failure).parameters
+    del AgentspaceHeadCommit
+
+
+async def test_a_fork_branches_its_lane_head_and_seeds_from_the_fork_point_snapshot(
+    store: FingerprintingRunStore, pool: Any, tmp_path: Any
+) -> None:
+    from dlightrag.adapters.postgres.answer.agentspace import PGAgentspaceStore
+    from dlightrag.engine.answer.agentspace import (
+        AgentspaceSeed,
+        bind_run_agentspace,
+        head_run_agentspace,
+        seed_epoch_from_head,
+        session_heads_root,
+        stage_session_head,
+    )
+    from dlightrag.engine.runtime.agentspace import AgentspaceHeadCommit
+
+    session_id = "00000000-0000-7000-8000-000000000001"
+    root = tmp_path / "workspace"
+    root.mkdir(parents=True)
+
+    async def round(
+        *, lane_id: str, expected: str | None, files: dict[str, str], parent: str | None
+    ) -> tuple[str, Any]:
+        creation = await store.create_run(owner_id=_OWNER, request=_request("phase"))
         async with pool.acquire() as conn:
             await conn.execute(
-                "ALTER TABLE dlightrag_answer_run_routing "
-                "DROP COLUMN fork_point_entry_id, "
-                "DROP COLUMN fork_point_projection_id"
+                "INSERT INTO dlightrag_agent_sessions"
+                " (owner_id, session_id, lease_run_id, fencing_epoch)"
+                " VALUES ($1, $2, $3, 1) ON CONFLICT DO NOTHING",
+                _OWNER,
+                uuid.UUID(session_id),
+                uuid.UUID(creation.run.run_id),
             )
-            versions = [migration.version for migration in RUN_MIGRATIONS]
-            unapplied = versions[versions.index("write_model_fork_points") :]
-            await conn.execute(
-                "DELETE FROM dlightrag_schema_migrations"
-                " WHERE scope = 'runs' AND version = ANY($1::text[])",
-                unapplied,
-            )
+        claim = await _claimed(store)
+        assert claim is not None
+        bound = await bind_run_agentspace(
+            workspace_root=root,
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            fencing_epoch=claim.run.fencing_epoch,
+            recorded_epoch=None,
+            store=None,
+        )
+        for relative, content in files.items():
+            path = bound.workspace / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+        staged = stage_session_head(
+            workspace=bound.workspace,
+            heads_root=session_heads_root(root, _OWNER, session_id),
+            run_id=creation.run.run_id,
+        )
+        outcome = await store.finish_success(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+            result={"answer": "phase done"},
+            workspace_head=AgentspaceHeadCommit(
+                session_id=session_id,
+                lane_id=lane_id,
+                head_run_id=creation.run.run_id,
+                manifest_digest=staged.manifest_digest,
+                expected_head_run_id=expected,
+                parent_run_id=parent,
+                manifest=staged.files,
+            ),
+        )
+        assert outcome.committed
+        return creation.run.run_id, bound
 
-        migrated = PGRunStore(pool=pool)
-        await migrated.initialize()
+    # The main line settles two phases.
+    first, _ = await round(
+        lane_id="main", expected=None, files={"scripts/model.py": "model = {}\n"}, parent=None
+    )
+    second, _ = await round(
+        lane_id="main",
+        expected=first,
+        files={"scripts/model.py": "model = {}\n", "case.draft.json": "{}\n"},
+        parent=first,
+    )
 
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name = 'dlightrag_answer_run_routing' "
-                "AND column_name LIKE 'fork_point%'"
-            )
-        assert {str(row["column_name"]) for row in rows} == {
-            "fork_point_entry_id",
-            "fork_point_projection_id",
-        }
+    # A fork at the first phase reads that phase's snapshot, not the newer main head.
+    reader = PGAgentspaceStore(
+        pool=pool,
+        owner_id=_OWNER,
+        run_id=uuid.UUID(first),
+        worker_id=_WORKER,
+        lease_owner=_WORKER,
+        fencing_epoch=0,
+    )
+    snapshot = await reader.load_run_agentspace_snapshot(run_id=first)
+    assert snapshot is not None
+    assert (snapshot.run_id, snapshot.parent_run_id) == (first, None)
+    fork_destination = tmp_path / "fork-epoch"
+    fork_destination.mkdir()
+    seed_epoch_from_head(
+        AgentspaceSeed(
+            head_run_id=snapshot.run_id,
+            manifest_digest=snapshot.manifest_digest,
+            workspace=head_run_agentspace(
+                session_heads_root(root, _OWNER, session_id), snapshot.run_id
+            ),
+        ),
+        fork_destination,
+    )
+    assert (fork_destination / "scripts/model.py").read_text() == "model = {}\n"
+    assert not (fork_destination / "case.draft.json").exists(), "the fork is turn-accurate"
+
+    # The fork commits its own lane head; the main line is untouched.
+    fork_run, _ = await round(
+        lane_id="fork-1",
+        expected=None,
+        files={"scripts/model.py": "model = {}\n", "branch.txt": "fork\n"},
+        parent=first,
+    )
+
+    async with pool.acquire() as conn:
+        heads = await conn.fetch(
+            "SELECT lane_id, head_run_id::text AS head_run_id"
+            " FROM dlightrag_session_workspace_heads"
+            " WHERE owner_id = $1 AND session_id = $2::uuid ORDER BY lane_id",
+            _OWNER,
+            uuid.UUID(session_id),
+        )
+        snapshots = await conn.fetch(
+            "SELECT run_id::text AS run_id, parent_run_id::text AS parent_run_id"
+            " FROM dlightrag_session_workspace_snapshots"
+            " WHERE owner_id = $1 AND session_id = $2::uuid ORDER BY created_at",
+            _OWNER,
+            uuid.UUID(session_id),
+        )
+    assert {str(row["lane_id"]): str(row["head_run_id"]) for row in heads} == {
+        "fork-1": fork_run,
+        "main": second,
+    }
+    assert {
+        str(row["run_id"]): (str(row["parent_run_id"]) if row["parent_run_id"] else None)
+        for row in snapshots
+    } == {first: None, second: first, fork_run: first}
+
+
+async def test_a_completed_goals_workspace_archive_is_published_as_a_resource(
+    store: FingerprintingRunStore, pool: Any
+) -> None:
+    import gzip
+
+    from dlightrag.engine.runtime.records import PendingPublication
+
+    session_id = "00000000-0000-7000-8000-000000000001"
+    archive = gzip.compress(b"an archived workspace tree")
+    creation = await store.create_run(owner_id=_OWNER, request=_request("goal"))
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO dlightrag_agent_sessions"
+            " (owner_id, session_id, lease_run_id, fencing_epoch)"
+            " VALUES ($1, $2, $3, 1) ON CONFLICT DO NOTHING",
+            _OWNER,
+            uuid.UUID(session_id),
+            uuid.UUID(creation.run.run_id),
+        )
+    claim = await _claimed(store)
+    outcome = await store.finish_success(
+        owner_id=_OWNER,
+        run_id=creation.run.run_id,
+        worker_id=_WORKER,
+        fencing_epoch=claim.run.fencing_epoch,
+        result={"answer": "goal complete"},
+        publications=(
+            PendingPublication(
+                resource_id="artifact-0123456789abcdef0123",
+                reference_kind="published_artifact",
+                filename="workspace-snapshot.tar.gz",
+                mime_type="application/gzip",
+                content=archive,
+                session_id=session_id,
+                relative_path="workspace-snapshot.tar.gz",
+                presentation="download",
+                label="Completed goal workspace",
+            ),
+        ),
+    )
+    assert outcome.committed
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT resource.kind, resource.safe_name, resource.media_type,"
+            "       blob.byte_size"
+            " FROM dlightrag_answer_resources AS resource"
+            " JOIN dlightrag_blobs AS blob"
+            "   ON blob.owner_id = resource.owner_id AND blob.digest = resource.blob_digest"
+            " WHERE resource.owner_id = $1 AND resource.run_id = $2",
+            _OWNER,
+            uuid.UUID(creation.run.run_id),
+        )
+    assert row is not None
+    assert (str(row["kind"]), str(row["media_type"])) == (
+        "published_artifact",
+        "application/gzip",
+    )
+    assert str(row["safe_name"]).endswith(".tar.gz")
+    assert int(row["byte_size"]) == len(archive)

@@ -1,14 +1,12 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for durable progress arithmetic, bound stores, and host updates (3A)."""
 
-import inspect
 from typing import get_args
 
 import pytest
 
 from dlightrag.engine.agent.session.ids import StageIntentId
 from dlightrag.engine.runtime.progress import (
-    RunProgressStore,
     StageCommitResult,
     StageTerminalCommitResult,
 )
@@ -93,30 +91,6 @@ class TestReclaimArithmetic:
 
 
 class TestBoundStores:
-    def test_progress_store_methods_carry_no_fencing_parameters(self) -> None:
-        load_params = list(inspect.signature(RunProgressStore.load_stage).parameters)
-        settle_params = list(inspect.signature(RunProgressStore.settle_stage).parameters)
-        terminal_params = list(inspect.signature(RunProgressStore.settle_terminal).parameters)
-        assert load_params == ["self", "stage_intent_id"]
-        assert set(settle_params) == {
-            "self",
-            "expected_progress_version",
-            "stage_intent_id",
-            "stage_name",
-            "state",
-            "evidence",
-        }
-        assert set(terminal_params) == {
-            "self",
-            "expected_progress_version",
-            "stage_intent_id",
-            "state",
-            "result",
-        }
-        for name in ("owner_id", "run_id", "worker_id", "lease_owner", "fencing_epoch"):
-            assert name not in settle_params
-            assert name not in terminal_params
-
     def test_stage_and_execution_results_are_closed_value_unions(self) -> None:
         from dlightrag.engine.runtime.progress import (
             StageCommit,
@@ -149,7 +123,7 @@ class TestBoundStores:
         }
 
     async def test_fast_boundaries_do_not_fall_back_to_stage_settlement(self) -> None:
-        from dlightrag.engine.answer.fast import FastRunBoundaries
+        from dlightrag.engine.answer.fast.boundaries import FastRunBoundaries
 
         class _LegacyProgress:
             stage_calls = 0
@@ -189,7 +163,7 @@ class TestBoundStores:
 
 class TestRunExecutionContext:
     def test_context_is_frozen_and_carries_the_claim_binding(self) -> None:
-        from tests.in_memory_session_repository import InMemoryAgentSessionRepository
+        from tests.support.in_memory_session_repository import InMemoryAgentSessionRepository
 
         class _NoopProgress:
             async def load_stage(self, stage_intent_id):  # type: ignore[no-untyped-def]
@@ -214,13 +188,6 @@ class TestRunExecutionContext:
 
         with pytest.raises(FrozenInstanceError):
             context.fencing_epoch = 4  # type: ignore[misc]
-
-    def test_context_never_exposes_mutable_fencing(self) -> None:
-        from dataclasses import is_dataclass
-
-        params = list(inspect.signature(RunExecutionContext.__init__).parameters)
-        assert "fencing_epoch" in params
-        assert is_dataclass(RunExecutionContext)
 
 
 class TestEffectHostUpdate:

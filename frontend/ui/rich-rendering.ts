@@ -16,7 +16,7 @@ import {renderDiagrams} from './mermaid.ts';
 /** Harden the anchors the sanitizer keeps: external links open in a new tab
  *  and never inherit this page's origin. Download anchors keep their contract
  *  so save-to-file behavior is untouched. */
-export function secureExternalLinks(container: ParentNode): void {
+function secureExternalLinks(container: ParentNode): void {
   container.querySelectorAll<HTMLAnchorElement>('a[href]').forEach((link) => {
     if (link.hasAttribute('download')) return;
     link.target = '_blank';

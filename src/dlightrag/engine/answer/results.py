@@ -3,14 +3,19 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 from urllib.parse import quote
 
 from pydantic import BaseModel, Field, field_validator
 
-from dlightrag.engine.answer.citations.contracts import SourceReference, SourceReferencePayload
+from dlightrag.engine.agent.skill_protection import MASK_PLACEHOLDER
+from dlightrag.engine.answer.citations.contracts import (
+    ChunkSnippet,
+    SourceReference,
+    SourceReferencePayload,
+)
 from dlightrag.engine.answer.citations.sources import (
     SourceDownloadLinkBuilder,
     can_project_workspace_visual,
@@ -19,9 +24,12 @@ from dlightrag.engine.answer.citations.sources import (
 )
 from dlightrag.engine.answer.citations.utils import context_chunk_key
 from dlightrag.engine.answer.links.cards import project_link_cards
+from dlightrag.engine.answer.markdown import mask_markdown
 from dlightrag.engine.answer.reference import markdown_references, resolve_artifact_target
 from dlightrag.engine.answer.runs.snapshots import dump_answer_snapshot, load_answer_snapshot
-from dlightrag.engine.rag.retrieval import RetrievalContexts
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalContexts,
+)
 
 IMAGE_URL_PREFIX = "/images"
 
@@ -80,6 +88,10 @@ class EvidenceImage:
     thumbnail_url: str
     label: str
     answer_image_sent: bool = True
+    #: Set only when this image is one of the Run's own held Resources rather than a corpus chunk.
+    #: ``None`` is the corpus case, and which of the two is set is what tells a transport which
+    #: route serves the bytes -- so an empty string would blur a real distinction.
+    resource_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,7 +141,7 @@ def store_answer_result(
     """Store one canonical Markdown Answer and transport-neutral identities."""
     workspaces = _image_workspaces(sources)
     usage = trace.get("usage")
-    return {
+    stored = {
         "answer": answer,
         "contexts": dict(contexts),
         "sources": dump_answer_snapshot(list(sources))["sources"],
@@ -150,6 +162,7 @@ def store_answer_result(
         },
         "link_cards": [dict(card) for card in link_cards],
     }
+    return stored
 
 
 def restore_answer_result(stored: Mapping[str, Any]) -> AnswerResult:
@@ -177,6 +190,68 @@ def restore_answer_result(stored: Mapping[str, Any]) -> AnswerResult:
     )
 
 
+def _mask_retrieval_contexts(
+    contexts: RetrievalContexts,
+    mask: Callable[[str], str] | None,
+) -> RetrievalContexts:
+    """The contexts a reader may read, with protected passages replaced.
+
+    A retrieval row carries the passage text an answer cited; when a Run copied a protected
+    document into its workspace and read it back, that passage is the document (the evidence
+    surface, ADR 0061). Only the text fields are touched: identities, scores and links are
+    facts about the passage, not the passage.
+    """
+    if mask is None:
+        return contexts
+    masked: RetrievalContexts = {"chunks": [], "entities": [], "relationships": []}
+    for collection in ("chunks", "entities", "relationships"):
+        rows: list[dict[str, Any]] = []
+        for row in contexts.get(collection, []):
+            copied = dict(row)
+            for key in ("content", "description", "text"):
+                value = copied.get(key)
+                if isinstance(value, str):
+                    copied[key] = mask(value)
+            phrases = copied.get("highlight_phrases")
+            if isinstance(phrases, list):
+                copied["highlight_phrases"] = [
+                    mask(phrase) if isinstance(phrase, str) else phrase for phrase in phrases
+                ]
+            rows.append(copied)
+        masked[collection] = rows
+    return masked
+
+
+def _mask_source_evidence(
+    payloads: Sequence[SourceReferencePayload],
+    mask: Callable[[str], str] | None,
+) -> list[SourceReferencePayload]:
+    """The sources a reader may read, with protected passage text replaced.
+
+    A source carries the chunk text the answer cited, and a client renders it beside the
+    citation -- the same passage the contexts carry, reached by a second route. Only the
+    chunk text is touched: ids, titles and addresses name the document rather than quote it.
+    """
+    if mask is None:
+        return list(payloads)
+
+    def masked_chunk(chunk: ChunkSnippet) -> ChunkSnippet:
+        update: dict[str, Any] = {"content": mask(chunk.content)}
+        if chunk.highlight_phrases:
+            update["highlight_phrases"] = [mask(phrase) for phrase in chunk.highlight_phrases]
+        return chunk.model_copy(update=update)
+
+    masked: list[SourceReferencePayload] = []
+    for payload in payloads:
+        chunks = (
+            [masked_chunk(chunk) for chunk in payload.chunks]
+            if payload.chunks is not None
+            else None
+        )
+        masked.append(payload.model_copy(update={"chunks": chunks}))
+    return masked
+
+
 def project_answer_result(
     stored: Mapping[str, Any],
     *,
@@ -186,31 +261,58 @@ def project_answer_result(
     image_url_prefix: str = IMAGE_URL_PREFIX,
     run_id: str | None = None,
     artifact_url_prefix: str | None = None,
+    run_resource_prefix: str | None = None,
+    mask_reader_text: Callable[[str], str] | None = None,
     include_contexts: bool = True,
 ) -> dict[str, Any]:
     """Project a stored result for one authenticated reader.
 
+    ``mask_reader_text`` is the reader's content gate: it replaces a passage that is a
+    protected Skill document's own text with ``[...]`` (ADR 0061). It is applied to the
+    answer, to every context the reader is handed, and to every source chunk's evidence
+    text, and it never reaches the model's own transcript — the bytes stay whole in the
+    record, and only this projection is masked.
+
     ``include_contexts=False`` is for a reader projection that never renders the retrieval
-    contexts (the conversation-history page draws only the answer, its parts and its sources),
-    so a page that cannot show them does not pay to project them.
+    contexts (the conversation-history page draws only the answer, its parts and its sources).
+    The contexts are the content gate's largest input, so a page that cannot show them does not
+    pay to project or mask them.
 
     ``artifact_url_prefix=None`` deliberately omits browser-cookie URLs for MCP.
-    REST/Web callers pass their owner-scoped route prefix and the owning run id.
+    REST/Web callers pass their owner-scoped route prefix and the owning run id, and
+    ``run_resource_prefix`` names the route that serves a Run's own held bytes, so Evidence Images
+    the Agent looked at are addressed the same way the Artifacts it published are.
     """
     sources = load_answer_snapshot(
         {"sources": stored.get("sources") or []}, image_url_prefix=image_url_prefix
     )
-    source_payloads = project_source_payloads(
-        sources,
-        resolver=source_link_builder,
-        downloadable_workspaces=downloadable_workspaces,
-        visual_workspaces=visual_workspaces,
+    source_payloads = _mask_source_evidence(
+        project_source_payloads(
+            sources,
+            resolver=source_link_builder,
+            downloadable_workspaces=downloadable_workspaces,
+            visual_workspaces=visual_workspaces,
+        ),
+        mask_reader_text,
     )
     answer = str(stored.get("answer") or "")
+    if mask_reader_text is not None:
+        answer = mask_markdown(answer, mask_reader_text, MASK_PLACEHOLDER)
     images = [
-        _public_evidence_image(image, image_url_prefix=image_url_prefix)
+        _public_evidence_image(
+            image,
+            image_url_prefix=image_url_prefix,
+            run_id=run_id,
+            run_resource_prefix=run_resource_prefix,
+        )
         for image in stored.get("evidence_images") or ()
-        if image and can_project_workspace_visual(image.get("workspace"), visual_workspaces)
+        # A held image belongs to the Run and carries no workspace, so the workspace gate -- which
+        # exists to keep one corpus out of another's answer -- has nothing to judge for it.
+        if image
+        and (
+            image.get("resource_id")
+            or can_project_workspace_visual(image.get("workspace"), visual_workspaces)
+        )
     ]
     artifacts = [
         _public_artifact(
@@ -224,7 +326,7 @@ def project_answer_result(
     outcome = _public_outcome(stored.get("artifact_outcome"))
     artifact_bindings = dict(stored.get("artifact_bindings") or {})
     link_cards = project_link_cards(stored.get("link_cards") or ())
-    return {
+    projected = {
         "answer": answer,
         "link_cards": link_cards,
         "parts": answer_parts_from_markdown(
@@ -234,10 +336,13 @@ def project_answer_result(
             artifact_bindings=artifact_bindings,
         ),
         "contexts": (
-            project_contexts_for_client(
-                dict(stored.get("contexts") or {}),
-                image_url_prefix=image_url_prefix,
-                visual_workspaces=visual_workspaces,
+            _mask_retrieval_contexts(
+                project_contexts_for_client(
+                    dict(stored.get("contexts") or {}),
+                    image_url_prefix=image_url_prefix,
+                    visual_workspaces=visual_workspaces,
+                ),
+                mask_reader_text,
             )
             if include_contexts
             else {}
@@ -255,6 +360,7 @@ def project_answer_result(
         "artifact_outcome": outcome,
         "artifact_bindings": artifact_bindings,
     }
+    return projected
 
 
 def answer_parts_from_markdown(
@@ -307,18 +413,26 @@ def project_artifact_sources(
     downloadable_workspaces: set[str] | None = None,
     visual_workspaces: set[str] | None = None,
     image_url_prefix: str = IMAGE_URL_PREFIX,
+    mask_reader_text: Callable[[str], str] | None = None,
 ) -> list[SourceReferencePayload]:
-    """Project citation sources belonging to one Markdown Artifact."""
+    """Project citation sources belonging to one Markdown Artifact.
+
+    ``mask_reader_text`` is the same reader's content gate the Answer projection applies:
+    the Artifact's citations carry their own copy of the evidence passages.
+    """
     snapshots = stored.get("artifact_sources")
     source_values = snapshots.get(resource_id, []) if isinstance(snapshots, Mapping) else []
-    return project_source_payloads(
-        load_answer_snapshot(
-            {"sources": source_values},
-            image_url_prefix=image_url_prefix,
+    return _mask_source_evidence(
+        project_source_payloads(
+            load_answer_snapshot(
+                {"sources": source_values},
+                image_url_prefix=image_url_prefix,
+            ),
+            resolver=source_link_builder,
+            downloadable_workspaces=downloadable_workspaces,
+            visual_workspaces=visual_workspaces,
         ),
-        resolver=source_link_builder,
-        downloadable_workspaces=downloadable_workspaces,
-        visual_workspaces=visual_workspaces,
+        mask_reader_text,
     )
 
 
@@ -411,6 +525,10 @@ def _store_evidence_image(
     return {
         "id": image_id,
         "chunk_id": chunk_id,
+        # A run-held image carries the id of the resource that holds its bytes; a corpus image
+        # carries the workspace and chunk it came from. Both are stored, because which one is set is
+        # exactly what tells a transport which route serves it.
+        "resource_id": str(image.get("resource_id") or ""),
         "workspace": workspaces.get(image_id) or workspaces.get(chunk_id) or "",
         "source_ref": str(image.get("source_ref") or ""),
         "label": str(image.get("label") or ""),
@@ -419,19 +537,49 @@ def _store_evidence_image(
 
 
 def _public_evidence_image(
-    image: Mapping[str, Any], *, image_url_prefix: str = IMAGE_URL_PREFIX
+    image: Mapping[str, Any],
+    *,
+    image_url_prefix: str = IMAGE_URL_PREFIX,
+    run_id: str | None = None,
+    run_resource_prefix: str | None = None,
 ) -> dict[str, Any]:
-    base = (
-        f"{image_url_prefix.rstrip('/')}/"
-        f"{quote(str(image.get('workspace') or ''), safe='')}/"
-        f"{quote(str(image.get('chunk_id') or ''), safe='')}"
-    )
+    """Project one Evidence Image to the address this transport serves its bytes on.
+
+    Two provenances reach here, and they are addressed by two different routes because they are two
+    different things. A corpus image is a chunk's visual asset, served under its own workspace and
+    chunk, where one route answers both a full size and a thumbnail of it. A Run's held image is a
+    Resource like any other the Run holds, served by the run-resource route -- and it asks for no
+    thumbnail, because the Run prepared those pixels before it attached them: they are already the
+    display-sized copy, so a second derivative would only spend work to redraw bytes the reader
+    already has. A transport that publishes no run-resource route (MCP keeps its calls cookie-free)
+    leaves both addresses unset rather than inventing one.
+    """
+    resource_id = str(image.get("resource_id") or "") or None
+    if resource_id is not None:
+        base = (
+            ""
+            if run_resource_prefix is None or run_id is None
+            else f"{run_resource_prefix.rstrip('/')}/{quote(run_id, safe='')}/resources/"
+            f"{quote(resource_id, safe='')}"
+        )
+        # No separate thumbnail: the Run prepared these pixels before attaching them, so they are
+        # already the display-sized copy and a second derivative would redraw what the reader has.
+        url, thumbnail_url = base, ""
+    else:
+        base = (
+            f"{image_url_prefix.rstrip('/')}/"
+            f"{quote(str(image.get('workspace') or ''), safe='')}/"
+            f"{quote(str(image.get('chunk_id') or ''), safe='')}"
+        )
+        url, thumbnail_url = (f"{base}?size=full", f"{base}?size=thumb") if base else ("", "")
     return {
         "id": str(image.get("id") or ""),
         "chunk_id": str(image.get("chunk_id") or ""),
+        # The address is what a client follows; the id is what the projector needed to compose it,
+        # and it is dropped here rather than shipped as a second way to say the same thing.
         "source_ref": str(image.get("source_ref") or ""),
-        "url": f"{base}?size=full",
-        "thumbnail_url": f"{base}?size=thumb",
+        "url": url,
+        "thumbnail_url": thumbnail_url,
         "label": str(image.get("label") or ""),
         "answer_image_sent": image.get("answer_image_sent") is not False,
     }
@@ -483,6 +631,7 @@ def _evidence_model(value: Mapping[str, Any]) -> EvidenceImage:
         thumbnail_url=str(value["thumbnail_url"]),
         label=str(value["label"]),
         answer_image_sent=value.get("answer_image_sent") is not False,
+        resource_id=(str(value["resource_id"]) if value.get("resource_id") else None),
     )
 
 

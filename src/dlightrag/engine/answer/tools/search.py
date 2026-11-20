@@ -10,18 +10,27 @@ model reads back, so a passage reaches the model once, where it arrived.
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import date
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from dlightrag.engine.agent.tools import AgentTool, ToolDeclaration, ToolResult, ToolRuntime
+from dlightrag.engine.agent.tools.contracts import (
+    AgentTool,
+    ToolDeclaration,
+    ToolResult,
+    ToolRuntime,
+)
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.tools.web_search import web_context_rows
-from dlightrag.engine.answer.web_sources import (
+from dlightrag.engine.answer.web_sources.contracts import (
+    WebSearchHit,
     WebSearchRequest,
     WebSearchResult,
     WebSourceUnavailable,
 )
-from dlightrag.engine.rag.retrieval import RetrievalResult
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalResult,
+)
 
 KnowledgeRetrieval = Callable[[str], Awaitable[RetrievalResult]]
 WebSearch = Callable[[WebSearchRequest], Awaitable[WebSearchResult]]
@@ -43,6 +52,15 @@ class SearchInput(BaseModel):
 class WebSearchInput(SearchInput):
     """Provider-neutral controls accepted by every configured search adapter."""
 
+    # Overrides the knowledge base's wording: a hosted engine takes a short run of key terms,
+    # and one adapter caps the whole query at 128 characters.
+    query: str = Field(
+        min_length=1,
+        description=(
+            "A short search query of key terms, under about 100 characters. Search one "
+            "angle per call rather than combining several."
+        ),
+    )
     max_results: int = Field(
         default=10,
         ge=1,
@@ -149,12 +167,19 @@ def web_search_tool(
     evidence: EvidenceLedger,
     trace: dict[str, Any],
     register_web_source: RegisterWebSource | None,
+    browser_available: bool = False,
 ) -> AgentTool:
     async def execute(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = _as(raw, WebSearchInput)
         await runtime.emit_update(ToolResult.text("", subject=args.query))
         return await _search_open_web(
-            search, args.request(), evidence, trace, register_web_source, runtime
+            search,
+            args.request(),
+            evidence,
+            trace,
+            register_web_source,
+            runtime,
+            browser_available=browser_available,
         )
 
     return web_search_declaration().bind(execute)
@@ -181,7 +206,15 @@ async def _search_corpus(
     if delta.dropped_rows:
         content += f" Dropped {delta.dropped_rows} unusable evidence item(s)."
     searched = _searched_workspaces(result.trace, result.contexts.get("chunks") or ())
-    return ToolResult.text(f"{content} {searched}" if searched else content)
+    return ToolResult.text(
+        f"{content} {searched}" if searched else content,
+        # The query is already the row's bounded subject; repeating it here would put the
+        # model's own words on a reader surface through a second carrier (ADR 0061).
+        facts={
+            "new_chunks": delta.new_chunks,
+            "dropped_rows": delta.dropped_rows,
+        },
+    )
 
 
 def _searched_workspaces(trace: Mapping[str, Any], chunks: Sequence[Mapping[str, Any]]) -> str:
@@ -212,6 +245,49 @@ def _searched_workspaces(trace: Mapping[str, Any], chunks: Sequence[Mapping[str,
     return f"Searched {', '.join(parts)}."
 
 
+#: How many Web search hits a result states as structured sources. Enough for a step card to
+#: list what the search found without repeating the passages the result already carries.
+_SEARCH_FACT_SOURCES = 10
+
+
+def _search_source_fact(hit: WebSearchHit) -> dict[str, Any]:
+    """One Web search hit as the bounded fact a step card lists: where it came from, not its text."""
+    fact: dict[str, Any] = {}
+    if hit.url:
+        fact["url"] = hit.url
+        domain = urlparse(hit.url).hostname
+        if domain:
+            fact["domain"] = domain
+    # The title is the page's words, not a structural fact about where the hit came from: a
+    # reader gets it from the passage the result already carries, through the content gate.
+    if hit.published_date:
+        fact["published_at"] = hit.published_date
+    return fact
+
+
+def _web_search_facts(result: WebSearchResult) -> dict[str, Any]:
+    """The structure a settled Web search states: who answered, what it cost, and what it found."""
+    facts: dict[str, Any] = {
+        "provider": result.provider,
+        "hits": len(result.hits),
+        "degraded": result.degradation is not None,
+        "cost": round(result.cost_dollars, 6),
+    }
+    # A provider may cut several passages from one page; a card states the page once.
+    sources: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for hit in result.hits:
+        if len(sources) >= _SEARCH_FACT_SOURCES:
+            break
+        if hit.url in seen:
+            continue
+        seen.add(hit.url)
+        sources.append(_search_source_fact(hit))
+    if sources:
+        facts["sources"] = sources
+    return facts
+
+
 async def _search_open_web(
     search: WebSearch,
     request: WebSearchRequest,
@@ -219,11 +295,13 @@ async def _search_open_web(
     trace: dict[str, Any],
     register_web_source: RegisterWebSource | None,
     runtime: ToolRuntime,
+    *,
+    browser_available: bool,
 ) -> ToolResult:
     try:
         result = await search(request)
-    except WebSourceUnavailable:
-        raise
+    except WebSourceUnavailable as exc:
+        return _open_web_unavailable(exc, browser_available=browser_available)
     except Exception as exc:
         raise RuntimeError("open-web search failed") from exc
     await runtime.in_source_order()
@@ -248,7 +326,47 @@ async def _search_open_web(
         content += f" Dropped {result.dropped_results} malformed result(s)."
     if result.degradation:
         content += f"\n{result.degradation}"
-    return ToolResult.text(content)
+    return ToolResult.text(
+        content,
+        telemetry={
+            "web_search_provider": result.provider,
+            "web_search_hits": len(result.hits),
+            "web_search_degraded": result.degradation is not None,
+            "web_search_cost_dollars": round(result.cost_dollars, 6),
+        },
+        facts=_web_search_facts(result),
+    )
+
+
+def _open_web_unavailable(
+    failure: WebSourceUnavailable,
+    *,
+    browser_available: bool,
+) -> ToolResult:
+    """What the model is told when no provider of the Search chain answered.
+
+    The failure is reported, not raised: the Run should read it as one failed call with something
+    to do next, and it is the caller here — not the provider layer — that knows what else this Run
+    can reach. A Run with the Agent Browser is pointed at it, because a search engine's own page is
+    a search this product can still make.
+    """
+    next_step = (
+        " The Agent Browser is available in this Run: drive a search engine's page with the browser "
+        "tool, or read a URL you already know with read."
+        if browser_available
+        else " Answer from the evidence you already have, or read a URL you already know with read."
+    )
+    return ToolResult.text(
+        f"Open-web search is unavailable: {failure}.{next_step}",
+        is_error=True,
+        telemetry={
+            "web_search_provider": "",
+            "web_search_hits": 0,
+            "web_search_degraded": True,
+            "web_search_cost_dollars": 0.0,
+        },
+        facts={"provider": "", "hits": 0, "degraded": True, "cost": 0.0},
+    )
 
 
 def _as[T: BaseModel](value: BaseModel, expected: type[T]) -> T:

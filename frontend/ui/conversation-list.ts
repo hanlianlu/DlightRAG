@@ -6,6 +6,7 @@ import {repeat} from 'lit/directives/repeat.js';
 import type {ConversationSummary} from '../api/conversations.ts';
 import {
   type DlMenu,
+  isImeKey,
   menuButtonFocus,
   type MenuDismissDetail,
   type MenuFocus,
@@ -53,8 +54,9 @@ export class DlConversationList extends LightElement {
     this.busy = false;
     this.openMenuId = null;
     this.renameId = null;
-    /** Store reads: conversations, listState, olderConversations, activeConversationId. */
-    new StoreController(this, this.handles.conversations);
+    /** Store reads: conversations, listState, olderConversations, activeConversationId, and the
+     *  Run activity that puts a running or unread marker on a row. */
+    new StoreController(this, () => [this.handles.conversations, this.handles.runActivity]);
   }
 
   override connectedCallback(): void {
@@ -181,6 +183,8 @@ export class DlConversationList extends LightElement {
         maxlength="120"
         .value=${conversation.title ?? ''}
         @keydown=${(event: KeyboardEvent) => {
+          // The Enter or Escape that ends an IME composition is the composition's, not the rename's.
+          if (isImeKey(event)) return;
           if (event.key === 'Enter') {
             event.preventDefault();
             this.#finishKeyboardRename(
@@ -205,13 +209,21 @@ export class DlConversationList extends LightElement {
     `;
   }
 
+  /** What names a row's actions button and the menu it opens: the conversation they act on, so a list of
+   *  rows is not the same name read out again and again. */
+  #actionsName(conversation: ConversationSummary): string {
+    return conversation.title
+      ? msg(str`Actions for ${conversation.title}`, {id: 'conversationList.actionsFor'})
+      : msg('Conversation actions', {id: 'conversationList.conversationActions'});
+  }
+
   #renderMenu(conversation: ConversationSummary): TemplateResult {
     const conversationId = conversation.conversationId;
     return html`
       <dl-menu
         id=${actionsMenuId(conversationId)}
         class="conversation-actions-menu dl-anchored dl-anchored--end"
-        aria-label=${msg('Conversation actions', {id: 'conversationList.conversationActions'})}
+        aria-label=${this.#actionsName(conversation)}
         @dl-menu-dismiss=${(event: CustomEvent<MenuDismissDetail>) => {
           this.closeMenu(event.detail.restoreFocus);
         }}
@@ -235,6 +247,31 @@ export class DlConversationList extends LightElement {
         >${msg('Delete', {id: 'conversationList.delete'})}</button>
       </dl-menu>
     `;
+  }
+
+  /** A row's run markers: a dot while one of its Runs is still going, and one while its settled
+   *  answer has not been opened. The label is the mark's copy; the dot is what a reader sees. */
+  #renderRunMarkers(conversationId: string): TemplateResult | typeof nothing {
+    const activity = this.handles.runActivity;
+    const running = activity.activeConversationIds.has(conversationId);
+    const unread = activity.unreadConversationIds.has(conversationId);
+    if (!running && !unread) return nothing;
+    return html`<span class="conversation-row-status">
+      ${running ? html`
+        <span
+          class="conversation-run-dot conversation-run-dot--running"
+          role="img"
+          aria-label=${msg('Running', {id: 'conversationList.running'})}
+        ></span>
+      ` : nothing}
+      ${unread ? html`
+        <span
+          class="conversation-run-dot conversation-run-dot--unread"
+          role="img"
+          aria-label=${msg('Finished, unread', {id: 'conversationList.unreadFinished'})}
+        ></span>
+      ` : nothing}
+    </span>`;
   }
 
   #renderRow(conversation: ConversationSummary): TemplateResult {
@@ -269,10 +306,11 @@ export class DlConversationList extends LightElement {
             </span>
           ` : nothing}
         </div>
+        ${this.#renderRunMarkers(conversationId)}
         <button
           type="button"
           class="conversation-actions-button"
-          aria-label=${msg('Conversation actions', {id: 'conversationList.conversationActionsButton'})}
+          aria-label=${this.#actionsName(conversation)}
           aria-haspopup="menu"
           aria-controls=${expanded ? actionsMenuId(conversationId) : nothing}
           aria-expanded=${expanded ? 'true' : 'false'}

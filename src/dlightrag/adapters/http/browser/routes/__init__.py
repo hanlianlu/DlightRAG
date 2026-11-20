@@ -16,9 +16,15 @@ from .conversations import router as conversations_router
 from .corpus_runs import router as corpus_runs_router
 from .files import router as files_router
 from .images import router as images_router
+from .live_browser import router as live_browser_router
 from .memory import router as memory_router
 from .model_catalogue import router as model_catalogue_router
+from .overview import router as overview_router
+from .privacy import router as privacy_router
+from .run_activity import router as run_activity_router
+from .runtime_policies import router as runtime_policies_router
 from .skills import router as skills_router
+from .step_search import router as step_search_router
 from .video_playback import router as video_playback_router
 from .workspaces import router as workspaces_router
 
@@ -31,15 +37,21 @@ api_router = APIRouter(prefix="/api")
 api_router.include_router(bootstrap_router)
 api_router.include_router(chat_api_router)
 api_router.include_router(conversations_router)
+api_router.include_router(run_activity_router)
 api_router.include_router(corpus_runs_router)
 api_router.include_router(images_router)
+api_router.include_router(live_browser_router)
 api_router.include_router(files_router)
 api_router.include_router(memory_router)
 api_router.include_router(connections_router)
 api_router.include_router(agent_accounts_router)
+api_router.include_router(privacy_router)
 api_router.include_router(workspaces_router)
 api_router.include_router(model_catalogue_router)
+api_router.include_router(overview_router)
+api_router.include_router(runtime_policies_router)
 api_router.include_router(skills_router)
+api_router.include_router(step_search_router)
 api_router.include_router(video_playback_router)
 api_router.include_router(client_errors_router)
 router.include_router(api_router)

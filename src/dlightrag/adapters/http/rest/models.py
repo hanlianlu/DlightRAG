@@ -6,8 +6,11 @@ from typing import Any, Literal, Self
 
 from pydantic import Field, model_validator
 
-from dlightrag.application.access import validate_query_workspace_selection
-from dlightrag.application.corpus_admin import IngestSpec
+from dlightrag.application.access.workspaces import (
+    validate_query_workspace_selection,
+)
+from dlightrag.application.answer.provenance import ArtifactAttestationResponse
+from dlightrag.application.corpus_admin.service import IngestSpec
 from dlightrag.application.runs import RunPhase, RunStatus
 from dlightrag.engine.answer.citations.contracts import SourceReferencePayload
 from dlightrag.engine.answer.client_contracts import (
@@ -158,6 +161,12 @@ class AnswerArtifactResponse(ClientContractModel):
     presentation_url: str | None = None
     issue: ArtifactIssueResponse | None = None
     artifact_bindings: dict[str, str] = Field(default_factory=dict)
+    attestation: ArtifactAttestationResponse | None = None
+    """What the Run's own records settle about this Artifact, derived rather than declared.
+
+    ``None`` only for a projection that did not read the Run's records back; the Artifact
+    surfaces derive it, and the same record is carried by the Web presentation model.
+    """
 
 
 class EvidenceImageResponse(ClientContractModel):
@@ -215,6 +224,7 @@ class RunDescriptor(ClientContractModel):
     status_url: str
     events_url: str
     cancel_url: str
+    session_id: str | None = None
     parent_run_id: str | None = None
     continuation_kind: str | None = None
 

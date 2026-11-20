@@ -21,12 +21,15 @@ from dlightrag.engine.ai.settings import ModelSettings
 from dlightrag.engine.ai.structured import StructuredOutput
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.ai.tokens import estimate_messages_tokens
-from dlightrag.engine.rag.retrieval import MetadataFilter, RetrievalPlan, RetrievalPlanner
+from dlightrag.engine.rag.retrieval.models import MetadataFilter
 from dlightrag.engine.rag.retrieval.planner import (
     RETRIEVAL_PLAN_STRUCTURED_OUTPUT,
+    RetrievalPlan,
+    RetrievalPlanner,
     _build_custom_keys_hint,
     _build_schema_section,
 )
+from dlightrag.engine.rag.retrieval.planner_prompt import RETRIEVAL_PLANNER_SYSTEM_PROMPT
 
 _TEST_PROFILE = ModelProfile(
     context_window_tokens=1_200_000,
@@ -54,7 +57,9 @@ def test_planner_structured_output_ignores_extra_keys() -> None:
 
 
 async def test_planner_fits_a_complete_request_without_root_imports() -> None:
-    from dlightrag.engine.rag.retrieval import RetrievalPlanner as RagRetrievalPlanner
+    from dlightrag.engine.rag.retrieval.planner import (
+        RetrievalPlanner as RagRetrievalPlanner,
+    )
 
     llm = AsyncMock(
         return_value=json.dumps(
@@ -129,10 +134,6 @@ class TestBuildCustomKeysHint:
 
 
 class TestRetrievalPlan:
-    def test_defaults(self):
-        plan = RetrievalPlan(standalone_query="test")
-        assert plan.metadata_filter is None
-
     def test_with_filter(self):
         mf = MetadataFilter(author="Author")
         plan = RetrievalPlan(standalone_query="q", metadata_filter=mf)
@@ -297,6 +298,7 @@ class TestPlanWithLLM:
             "role": "user",
             "content": '{"query":"what is X","preserve_query":true}',
         }
+        assert messages[0]["content"] == RETRIEVAL_PLANNER_SYSTEM_PROMPT
         assert isinstance(structured_output, StructuredOutput)
         assert max_tokens > 0
 

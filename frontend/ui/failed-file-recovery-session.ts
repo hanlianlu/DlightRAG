@@ -6,56 +6,46 @@
  *  recovery Run. This session is the retry request and its confirmation.
  */
 
+import {LatestRequest} from '../lib/latest-request.ts';
+
 export class FailedFileRecoverySession {
-  #mutation: AbortController | null = null;
-  #modal: AbortController | null = null;
+  readonly #mutation = new LatestRequest();
+  readonly #modal = new LatestRequest();
   #contextGeneration = 0;
 
   get contextGeneration(): number {
     return this.#contextGeneration;
   }
 
-  startMutation(): AbortController {
-    this.#mutation?.abort();
-    const controller = new AbortController();
-    this.#mutation = controller;
-    return controller;
+  startMutation(): AbortSignal {
+    return this.#mutation.start();
   }
 
   /** Cancelling the context drops the mutation, so a mutation that is still held belongs to this one. */
   isMutationCurrent(
-    controller: AbortController,
+    signal: AbortSignal,
     workspace: string,
     currentWorkspace: string,
     active: boolean,
   ): boolean {
-    return this.#mutation === controller && workspace === currentWorkspace && active;
+    return this.#mutation.isCurrent(signal) && workspace === currentWorkspace && active;
   }
 
-  finishMutation(controller: AbortController): boolean {
-    if (this.#mutation !== controller) return false;
-    this.#mutation = null;
-    return true;
+  finishMutation(signal: AbortSignal): boolean {
+    return this.#mutation.finish(signal);
   }
 
-  startModal(): AbortController {
-    this.#modal?.abort();
-    const controller = new AbortController();
-    this.#modal = controller;
-    return controller;
+  startModal(): AbortSignal {
+    return this.#modal.start();
   }
 
-  finishModal(controller: AbortController): boolean {
-    if (this.#modal !== controller) return false;
-    this.#modal = null;
-    return true;
+  finishModal(signal: AbortSignal): boolean {
+    return this.#modal.finish(signal);
   }
 
   cancelContext(): void {
     this.#contextGeneration += 1;
-    this.#mutation?.abort();
-    this.#mutation = null;
-    this.#modal?.abort();
-    this.#modal = null;
+    this.#mutation.cancel();
+    this.#modal.cancel();
   }
 }

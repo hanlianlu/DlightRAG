@@ -66,17 +66,20 @@ from dlightrag.engine.rag.corpus.sources.source_contract import (
 from dlightrag.engine.rag.corpus.visual_assets import ThumbnailCache, VisualAssetResolver
 from dlightrag.engine.rag.lightrag.models import LightRagChatModels, build_lightrag_embedding
 from dlightrag.engine.rag.lightrag.status import lightrag_status
-from dlightrag.engine.rag.retrieval import MetadataFilter, RetrievalResult
 from dlightrag.engine.rag.retrieval.metadata_fields import (
     INGEST_FINALIZATION_COMPLETE_FIELD,
     PARSER_INPUT_SHA256_FIELD,
     SOURCE_RETRIEVAL_OPTIONS_FIELD,
 )
+from dlightrag.engine.rag.retrieval.models import MetadataFilter
 from dlightrag.engine.rag.retrieval.rerank import (
     build_rerank_func,
     rerank_consumes_images,
 )
 from dlightrag.engine.rag.retrieval.rerank_breaker import RerankBreaker
+from dlightrag.engine.rag.retrieval.results import (
+    RetrievalResult,
+)
 from dlightrag.engine.rag.retrieval.visibility import ingest_finalization_complete
 from dlightrag.engine.rag.workspace.lifecycle import (
     defer_cancellation,
@@ -1680,12 +1683,6 @@ class WorkspaceRag:
         )
         if not updated:
             raise KeyError(doc_id)
-
-    async def asearch_metadata(self, filters: MetadataFilter) -> list[str]:
-        """Search metadata by filters, return matching doc_ids."""
-        if self._metadata_index is None or filters is None:
-            return []
-        return await self._metadata_index.query(filters)
 
     # === FILE MANAGEMENT API ===
 

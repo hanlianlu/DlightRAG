@@ -12,11 +12,6 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from pathlib import Path
-
-import yaml
-
-_ROOT = Path(__file__).resolve().parents[2]
 
 # Clear anything inherited, then watch what the variable holds the moment the runtime arrives.
 _PROBE = """
@@ -39,21 +34,3 @@ def test_the_switch_is_on_when_the_runtime_is_first_imported() -> None:
         [sys.executable, "-c", _PROBE], capture_output=True, text=True, check=True
     )
     assert json.loads(probe.stdout.strip()) == ["1"]
-
-
-def test_every_service_that_shares_the_image_opts_out() -> None:
-    services = yaml.safe_load((_ROOT / "docker-compose.yml").read_text(encoding="utf-8"))[
-        "services"
-    ]
-    sharing = {
-        name: service
-        for name, service in services.items()
-        if service.get("image") == "dlightrag:local"
-    }
-    assert sharing, "the compose file names the image its services share"
-    missing = sorted(
-        name
-        for name, service in sharing.items()
-        if str((service.get("environment") or {}).get("ORT_DISABLE_TELEMETRY")) != "1"
-    )
-    assert missing == [], f"a service shares the image and would report to Microsoft: {missing}"

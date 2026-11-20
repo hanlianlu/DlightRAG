@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from dlightrag.adapters.postgres.core._connection import pg_connection_kwargs
-from dlightrag.application.config import PostgresSettings
+from dlightrag.application.config.sections import PostgresSettings
 from tests.support.loopback import (
     LoopbackCertificate,
     loopback_certificate,

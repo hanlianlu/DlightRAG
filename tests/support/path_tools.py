@@ -5,8 +5,13 @@ Production composes these tools through the answer tool registry; tests that
 exercise the tools themselves assemble them here.
 """
 
-from dlightrag.engine.agent.environment import AccessScheduler, SearchToolchain
+from dlightrag.engine.agent.environment.access import (
+    AccessScheduler,
+)
 from dlightrag.engine.agent.environment.execution import ExecutionEnvironment
+from dlightrag.engine.agent.environment.toolchain import (
+    SearchToolchain,
+)
 from dlightrag.engine.agent.tools.contracts import AgentTool
 from dlightrag.engine.agent.tools.files import (
     bash_tool,

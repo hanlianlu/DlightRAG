@@ -9,13 +9,17 @@ contracts, [Security](security.md) for trust boundaries, and
 
 ## Runtime Ownership
 
-![DlightRAG code layers](diagrams/architecture.svg)
+![DlightRAG code layers: inbound HTTP and MCP adapters and the in-process
+create_application facade, Access and the Application capabilities, the Engine
+owners, the outbound adapters, and the separately distributed packages, all
+constructed and wired by the composition root](diagrams/architecture.svg)
 
-Arrows are imports the [import contracts](#code-layering) allow, and the
-composition root wires every layer. Inbound HTTP and MCP adapters call
-Application use cases; a trusted embedding caller enters the public
-`create_application` facade directly. Outbound adapters implement narrow ports
-owned by Application or Engine, so a call through a port never imports its
+Arrows are imports the [import contracts](#code-layering) allow. Inbound HTTP and
+MCP adapters and a trusted embedding caller entering the public
+`create_application` facade call Application use cases; the composition root
+constructs the Application, injects the adapters and operation executors, and
+wires the separately distributed packages. Outbound adapters implement narrow
+ports owned by Application or Engine, so a call through a port never imports its
 concrete adapter.
 
 `create_application` enters the private composition root, which constructs one
@@ -27,14 +31,15 @@ service.
 
 Inside Engine, Runtime, Answer, RAG, Agent, and AI are sibling owners. Answer
 depends on Runtime, RAG, Agent, AI, and the Memory package; RAG and Agent depend
-on AI; Runtime imports neither Answer nor RAG. Answer, Retrieval, and Corpus
-Mutation services accept top-level work through the Run runtime, which owns
+on AI; Runtime imports neither Answer nor RAG, and the Agent Session contracts its
+durable records name are the one Engine import it takes. Answer, Retrieval, and
+Corpus Mutation services accept top-level work through the Run runtime, which owns
 lifecycle, fencing, events, capacity, and dispatch for every lane
 ([Run runtime](run-runtime.md)). Answer-internal retrieval calls the same raw
 Retrieval Stage directly rather than creating a nested Run. Engine RAG alone owns
 the LightRAG dependency.
 
-### LightRAG Versus DlightRAG
+### LightRAG versus DlightRAG
 
 | LightRAG owns | DlightRAG adds |
 |---|---|
@@ -102,7 +107,7 @@ retrieval capability as an internal stage when needed:
   deployment's [Agent Browser](#agent-browser) when configured, rooted
   files and Bash when enabled, the owner's
   [Personal MCP Connections](personal-mcp-connections.md), Profile Memory,
-  Skills, and bounded Child Sessions.
+  Skills, the session's Goal tools, and bounded Child Sessions.
 
 Tool acceptance consumes immutable `ToolDeclaration` values; adjacent read-only
 calls of one turn run at once and settle in source order
@@ -133,8 +138,8 @@ parent Research attach_artifact
   -> Published Artifacts + canonical result
 ```
 
-`artifact:` links control placement and dependencies but never authorize a
-workspace file. Fast and Child Sessions cannot attach roots
+`artifact:` links control placement and dependencies but never authorize an
+Agentspace file. Fast and Child Sessions cannot attach roots
 ([ADR 0004](adr/0004-structured-artifact-attachment-authority.md)).
 `RetrievalPlanner` is internal to retrieval: it may derive lexical terms,
 metadata filters, and image context but never receives attachment bytes or
@@ -144,7 +149,7 @@ the Access boundary before Engine RAG runs.
 ### Answer Resources
 
 Attachments and fetched links become Resources scoped to one Answer Run, read as
-bounded text, viewed as images, or, with `trust`, copied into the Agent Workspace, on
+bounded text, viewed as images, or, with `trust`, copied into the Agentspace, on
 demand ([Resource reading](resource-reading.md)).
 Accepted uploads and settled Web fetches are owner-scoped content-addressed
 blobs, so recovery neither re-fetches nor crosses owners. A Web Resource can also
@@ -158,16 +163,15 @@ Resources never become corpus documents, chunks, vectors, BM25 rows, or KG data.
 ### Agent Execution
 
 Agent execution is `disabled` or `trust`. `trust` exposes rooted file tools and
-confines every Agent process to its Agent Workspace: the corpus, the
-deployment's configuration, the project tree, and other Runs' workspaces stay
+confines every Agent process to its Agentspace: the corpus, the
+deployment's configuration, the project tree, and other Runs' Agentspaces stay
 outside the process view, while Bash keeps network authority for the deployment
 to enforce ([ADR 0024](adr/0024-the-agent-sees-only-its-workspace.md)). Skills
 come from packaged built-ins (`council`, `office-documents`, which tells the agent
-that its workspace Python can build a requested Word, Excel or PowerPoint file,
+that the Python in its Agentspace can build a requested Word, Excel or PowerPoint file,
 `charts`, `interactive-html`, and `skill-creator`), the global root (default `~/.dlightrag/skills`),
-and the owner's own published Skills (default `~/.dlightrag/owner_skills`). A name is
-served by one Skill, held by the strongest of those tiers, and `publish_skill` refuses a name
-another tier serves. Research parents may publish, turn off and delete their owner's
+and the owner's own published Skills (default `~/.dlightrag/owner_skills`), in
+that precedence. Research parents may publish, turn off and delete their owner's
 Skills; built-in and global Skills are read-only. The image ships the commands the
 chart Skills call: `echarts-render`, and `html-report`, which turns an HTML fragment into one
 self-contained interactive report that runs in the Artifact sandbox
@@ -175,7 +179,15 @@ self-contained interactive report that runs in the Artifact sandbox
 Outside tools come only from the owner's enabled Personal MCP Connections,
 pinned per Run, and the deployment's [Agent Browser](#agent-browser), which no
 owner enables and which is no Connection; Fast has no external tools
-([ADR 0012](adr/0012-personal-connections-and-hot-plug.md)).
+([ADR 0012](adr/0012-personal-connections-and-hot-plug.md)). Every enabled
+Connection's published tool definitions are declared whole on every Research
+request, with no search tool, deferral, or per-Run declaration budget
+([ADR 0062](adr/0062-mcp-tools-are-declared-whole-and-resources-read-on-demand.md)).
+A Run with a Connection also composes three shared read-only resource tools and
+carries the servers' bounded `initialize` instructions as attributed external
+guidance, so a server's own documentation is read on demand rather than declared
+into the prompt ([Personal MCP
+Connections](personal-mcp-connections.md#resources-and-server-instructions)).
 
 ### Agent Browser
 
@@ -224,7 +236,7 @@ read(rendered=true), the Extract chain's browser step, or a browser(...) call
   `PageRenderer` and the tool a `BrowserToolHost`, never a driver; composition
   (`_compose`) builds the provider only when `answer.agent.browser` names endpoints.
 - **The tool is composed beside `read`.** `browser` is one tool with an `action`, declared
-  when the Run has a browser, with `upload` only where it has an Agent Workspace
+  when the Run has a browser, with `upload` only where it has an Agentspace
   ([contract](retrieval-answer.md#agent-browser)). A capture and a file a page downloads
   are admitted through the ResourceRegistry as Resources of the call that made them
   ([Resource reading](resource-reading.md#browser-captures-and-downloads)).
@@ -251,6 +263,24 @@ read(rendered=true), the Extract chain's browser step, or a browser(...) call
 - **Fails closed, and the Run goes on.** A busy or unreachable pool, a page that fails,
   or a lost browser is a model-visible reason on that `read` or `browser` call, not a Run
   failure.
+- **Watching the page, and taking the wheel.** The same lease is what the live preview
+  shows. `adapters/http/browser/routes/live_browser.py` serves four routes under
+  `/web/api/runs/{run_id}/browser/live/`: a WebSocket of frames (`frames`), the driving
+  seat (`control`), the input events a person who took that seat sends back (`input`), and
+  the Run's last stored screenshot for a reader with nothing live (`screenshot`). They reach
+  the browser through the Application's `application/live_browser` use case and the Engine's
+  `LiveBrowserPage` port, which `PlaywrightLivePage` in `adapters/agent_browser/live.py`
+  implements over the page the Run already drives; the Web transport imports no driver
+  ([ADR 0032](adr/0032-the-agent-browser.md), [interfaces](interfaces.md#web)).
+  One CDP screencast per page serves every reader: the first subscriber starts it, the last
+  one to leave stops it, and a page nobody is watching is never encoded. Frames are
+  latest-wins per reader and acknowledged to the browser when they are superseded, so CDP's
+  own flow control — not a growing queue — bounds how far the page may run ahead of the
+  stream, and each frame carries its capture time and its sequence number so a reader can
+  drop a stale frame and say how far behind it is. The driving seat is one flag on the lease
+  (`LiveControl`), read by the `browser` tool so that a person's turn on the page refuses the
+  agent's calls as `taken_over` while the Run goes on; taking it mints a credential that only
+  the answer to that request carries, and nothing every reader of the stream can see is one.
 
 ## Durable Execution
 
@@ -278,17 +308,66 @@ design-system primitives with no domain state
 ([ADR 0003](adr/0003-light-composition-shadow-primitives.md)).
 
 State is divided by lifetime: the History API owns active conversation routing,
-and focused stores own conversations, workspaces, attachments, ingest, and
-answer-event cursors. `createAppHandles()` constructs that bag of stores and
-`productionHandles()` holds it for the page, so the Shell and its Features share
-one set; store modules hold no instance of their own. Chat owns answer-run
-intent, following, and replay through its `RunController`. Features receive
-properties and raise typed events; the Shell may query sibling Feature elements,
-not their internals.
+and focused stores own conversations, workspaces, attachments, ingest,
+answer-event cursors, the answers being submitted, the judgements this page has
+seen kept, the child pages each Run's dock has read, and what each answer's
+memory notice has read of the memory its Run left. `createAppHandles()`
+constructs that bag of stores and `productionHandles()` holds it for the page, so
+the Shell and its Features share one set; store modules hold no instance of their
+own, and signing out calls the bag's `reset()` once instead of forgetting each
+cache by name. A Feature reads, follows, and writes the bag in its `handles`
+property, which is the page's bag until a parent hands it another after the
+Feature was built (`StoreController` takes its stores from a function for that
+reason), so a Feature given another bag answers to that bag alone. Chat owns
+answer-run intent, following, and replay through its `RunController`. A
+`ConversationRouteController` on the Shell joins the address, the conversation
+store, and Chat: it follows the router, opens the conversation a route names,
+holds the view the Shell binds to Chat declaratively, and guards the moves that
+would lose an unsent message or a question still being accepted. The sidebar
+keeps the conversation list and its drawer, and asks the controller for the
+rest. The Shell names the page for the conversation it shows
+(`{title} · DlightRAG`, plain `DlightRAG` for a new chat) and carries one
+visually hidden heading level 1 that says the same; it keeps one class on
+`<body>` for each open panel, for the stylesheets to read, and tells the split
+layouts what is open directly — including the Inspector's read grain. A docked
+panel's default width is a share of the split it lives in, computed in one module
+(`frontend/lib/panel-share.ts`, ADR 0068), not a fixed token; the pixels a reader
+drags are theirs and are kept. Features receive properties and raise typed
+events; the Shell may query sibling Feature elements, not their internals. An
+unsent message is the one thing that outlives the page: the composer keeps it in
+browser storage, restores it on the next load - a provider return included - and
+forgets it when the box is cleared or the sign-in ends. The box is cleared only
+for a message Chat has taken: the composer offers each one in a cancelable
+`dl-composer-submit`, and Chat cancels it when it cannot take the message - an
+earlier failed one still waits on Retry, Edit, or Discard, or the conversation is
+still loading or unavailable - so those words stay in the box and in storage, and
+the reader is taken to the failure banner, not to a choice in it. Edit puts the
+failed message first and keeps what the reader typed since after a blank line.
+Staged attachments stay in memory, so leaving with those is still a question the
+browser asks.
+
+Frontend modules sit in layers, and an import runs one way: toward the layer that
+knows less of the product. A type-only import counts as an import.
+`frontend/layers.structure.test.ts` locks the matrix, and that no two modules
+import one another:
+
+| Layer | May import |
+|---|---|
+| `api` | nothing of the product, but the pure helpers of `lib` (modules that import only `lib`, such as who an agent is) |
+| `lib` | `api`, `design-system` |
+| `stores` | `api`, `lib` |
+| `i18n` | `lib` |
+| `design-system` | nothing of the product |
+| `ui` | all of the above |
+
+Wire code lives in `api`: request bodies, the event-stream parser, the agent
+efforts the server accepts, and the one reading of a refusal's envelope.
 
 The package design system owns tokens, icons, Shadow primitives, and split
 layout ([Web Theme Design](web-theme-design.md)). Sanitized answer and source HTML
-is the only same-DOM HTML sink. Active HTML Artifacts require explicit consent
+is the only same-DOM HTML sink: `lib/safe-html.ts` alone turns a string of unknown
+markup into nodes, and `ui/rich-rendering.ts` alone runs its stages, which
+`frontend/html-sink.structure.test.ts` locks. Active HTML Artifacts require explicit consent
 and render in a destroyed-on-close, opaque-origin iframe
 ([Security](security.md#answer-artifact-browser-boundary)); an external video
 plays in one cross-origin player the reader activates
@@ -306,7 +385,20 @@ lazily, newest first within the count limit. Retention and conversation deletion
 release blobs only when no surviving Run references them. See
 [Interfaces](interfaces.md#web) for browser contracts.
 
-## Deployment And Storage
+## Deployment and Storage
+
+| Path | PostgreSQL | Parser | Security |
+|---|---|---|---|
+| Local Docker | Compose PG18 | Self-hosted MinerU by default, or Compose Docling | Loopback, `auth_mode: none` |
+| Native API | Compose or external PG18 | Any reachable MinerU or Docling | Local or explicit auth |
+| Shared service | Managed or self-hosted PG18 | Independently operated parser | `jwt`; `simple` is one owner |
+| Enterprise | Managed PG18 | Independently operated parser | `jwt` with Access Rules and workspace creators |
+
+The parser runs outside the DlightRAG application container. The checked-in
+Docker configuration uses self-hosted MinerU at `http://host.docker.internal:8210`;
+Compose Docling and MinerU's own cloud remain supported. Which parser a deployment
+chooses, and how to run each, is in [Parser Sidecars](configuration.md#parser-sidecars)
+and [Parser Services](operations.md#parser-services).
 
 Every service process uses the same PostgreSQL 18 primary and embeds LightRAG;
 LightRAG is not a separate deployment node. The default `writer` owns
@@ -339,14 +431,20 @@ storage and is writer-only: PostgreSQL text chunks remain the BM25 and chunk
 metadata source, and readers use the PostgreSQL vector leg. See
 [PostgreSQL](postgresql.md) for deployment details.
 
+Observability leaves every process over OTLP into ClickStack, and one ClickStack can serve
+several products at once ([Observability](observability.md)).
+
 ## Code Layering
 
 The UV workspace contains the root DlightRAG wheel and the independently
-installable `dlightrag-memory` and `dlightrag-observability` distributions. Application imports no adapter and
-never composes; no Engine module imports Application or a transport; RAG owns
-the LightRAG dependency and never imports PostgreSQL code; Runtime imports
-neither Answer, RAG, nor storage. Import contracts in `pyproject.toml` enforce
-these directions in source and built wheels:
+installable `dlightrag-memory`, `dlightrag-observability`, and host-side
+`dlightrag-mineru` distributions. The first two are runtime dependencies; the
+MinerU manager is a development tool for a host and never ships in the image
+([ADR 0054](adr/0054-mineru-is-a-workspace-package.md)). Application imports no
+adapter and never composes; no Engine module imports Application or a transport;
+RAG owns the LightRAG dependency and never imports PostgreSQL code; Runtime
+imports neither Answer, RAG, nor storage. Import contracts in `pyproject.toml`
+enforce these directions in source and built wheels:
 
 ```bash
 uv run lint-imports
@@ -357,14 +455,16 @@ Playwright is a runtime dependency with one importer: `adapters/agent_browser`
 image ([Operations](operations.md#agent-browser-pool)), because client and server
 must agree on the protocol.
 
-`dlightrag-memory` owns its PostgreSQL schema, migrations, retrieval, operation
+`dlightrag-memory` owns its PostgreSQL schema, retrieval, operation
 journal, and stdio MCP server, and imports no DlightRAG, AI, Agent, or RAG
-module. DlightRAG supplies owner identity, eligibility, rendering, and the
-capability gate; Memory records are low-authority, non-citable context.
-`dlightrag-observability` owns the privacy classifier, the OTLP export, and the
-ClickStack stack, and imports no DlightRAG module: the composition root hands it
-the span registry and the provider usage mapper as data
-([Observability](observability.md), [ADR 0040](adr/0040-observability-lands-in-clickstack.md)).
+module. It also owns the host-neutral half of the Session Memory Pass
+([ADR 0045](adr/0045-profile-memory-is-maintained-per-session-and-owned-across-them.md)):
+the consolidation prompt and the eligibility rules it states, the verdict a model
+returns, and the plan a verdict becomes — data and text, never a model call.
+DlightRAG supplies owner identity, the capability gate, the trigger, the
+Session's transcript, the model that answers that prompt, and the rendering of
+recall into a Run; Memory records are low-authority, non-citable context.
 `DlightragConfig` mirrors ownership through frozen sections: AI owns model
 settings, RAG owns corpus settings, and root modules own product settings
 ([ADR 0006](adr/0006-configuration-ownership-and-deployment-bindings.md)).
+

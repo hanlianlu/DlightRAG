@@ -22,7 +22,7 @@ from lightrag.utils_pipeline import (
 )
 from PIL import Image
 
-from dlightrag.application.config import DlightragConfig
+from dlightrag.application.config.sections import DlightragConfig
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.dependencies import ParserUnavailableError, classify_transient_dependency
 from dlightrag.engine.rag.corpus.ingestion.document_embedding import (
@@ -4041,7 +4041,7 @@ async def test_recovery_after_a_stop_finalizes_only_what_was_not_published(
     document settles from its finalization marker without replaying anything, and
     the one LightRAG processed after the stop replays only DlightRAG's finalization.
     """
-    from dlightrag.application.settings import rag_settings
+    from dlightrag.application.settings.projections import rag_settings
     from dlightrag.engine.ai.scheduler import ModelScheduler
     from dlightrag.engine.ai.telemetry import NoopTelemetry
     from dlightrag.engine.rag.retrieval.rerank_breaker import RerankBreaker

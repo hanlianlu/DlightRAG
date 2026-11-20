@@ -20,7 +20,7 @@
     font-weight: 600;
     letter-spacing: 0;
     vertical-align: baseline;
-    transition: background 0.15s, color 0.15s;
+    transition: background var(--duration-control), color var(--duration-control);
     margin: 0 1px;
 }
 
@@ -71,7 +71,7 @@
     line-height: 1.5;
     cursor: pointer;
     border-radius: var(--radius-control);
-    transition: background 0.1s;
+    transition: background var(--duration-instant);
 }
 
 .answer-ref-item:hover {
@@ -83,30 +83,40 @@
     outline-offset: 2px;
 }
 
-/* One gutter width for the reference id column and the disclosure column. */
-.answer-ref-id,
-.answer-references-toggle-icon {
-    flex-shrink: 0;
-    min-width: 24px;
+/* The row a trace sent the reader to: lit long enough to be found, then back to the list.
+ * A background and an inset rule, never a border or padding change, so lighting one row can
+ * never move the rows a reader is comparing. */
+.answer-ref-item-highlighted {
+    background: var(--color-accent-surface);
+    box-shadow: inset 2px 0 0 var(--color-accent-text);
 }
 
+/* A caption that folds its list is the control itself: the whole line answers
+ * the pointer and the keyboard, so the reader never has to find the words at its
+ * end. It keeps the caption's own box and typography — the words it adds are an
+ * aside, soft until the bar is live. */
 .answer-references-toggle {
-    align-items: center;
+    align-items: baseline;
     background: transparent;
     border: 0;
     border-radius: var(--radius-control);
-    color: var(--color-accent-text);
     cursor: pointer;
     display: flex;
     font: inherit;
-    font-size: var(--font-size-detail);
     gap: var(--space-tight);
-    padding: var(--space-tight) 0;
+    padding: var(--space-inline) 0;
     text-align: left;
     width: 100%;
+
+    /* A control resets case and colour, so the caption states them again here and
+     * the words inside the bar read exactly as the caption does without one. */
+    color: var(--color-text-muted);
+    text-transform: uppercase;
 }
 
-.answer-references-toggle:hover {
+/* The same lit row the list's own rows draw under the pointer. */
+.answer-references-toggle:hover,
+.answer-references-toggle:focus-visible {
     background: var(--color-accent-ghost);
 }
 
@@ -115,51 +125,34 @@
     outline-offset: 2px;
 }
 
-/* The disclosure column shares the reference id gutter and keeps its glyph
- * flush left, so the chevron's ink lines up with [n]. The glyph itself carries
- * the rotation, which keeps the pivot on the glyph instead of the column. */
-.answer-references-toggle-icon {
+/* How many rows are folded away, in the caption's size but not in its caps. */
+.answer-references-count {
     color: var(--color-text-muted);
-    display: flex;
-    justify-content: flex-start;
+    font-weight: 400;
+    text-transform: none;
+    white-space: nowrap;
 }
 
-.answer-references-toggle-icon svg {
-    transition: transform var(--duration-control) var(--easing-standard);
+.answer-references-toggle:hover .answer-references-count,
+.answer-references-toggle:focus-visible .answer-references-count {
+    color: var(--color-accent-text);
 }
 
-.answer-references-toggle[aria-expanded='true'] .answer-references-toggle-icon svg {
-    transform: rotate(90deg);
+/* A collapsed list shows its first two rows, at every width: the top references
+ * are what a reader checks an answer against, and the rest are one click away.
+ * The caption is the control, and it is rendered only while a row is folded
+ * away, so no width can put the reader on a control that has nothing to do. */
+.answer-reference-list:not(.expanded) .answer-ref-item:nth-child(n + 3) {
+    display: none;
 }
 
-/* A collapsed list shows the first five rows, and three on a narrow answer
- * column. The control is the list's next sibling, so each threshold hides it
- * only when that threshold hides no row. Both halves stay in their own query:
- * a viewport-wide "nothing to reveal" rule would hide the control on a narrow
- * column whose fourth row is collapsed away. */
-@media (width > 640px) {
-    .answer-reference-list:not(.expanded) .answer-ref-item:nth-child(n + 6) {
-        display: none;
-    }
-
-    .answer-references:not(:has(.answer-reference-list.expanded), :has(.answer-reference-list .answer-ref-item:nth-child(6))) .answer-references-toggle {
-        display: none;
-    }
-}
-
-@media (width <= 640px) {
-    .answer-reference-list:not(.expanded) .answer-ref-item:nth-child(n + 4) {
-        display: none;
-    }
-
-    .answer-references:not(:has(.answer-reference-list.expanded), :has(.answer-reference-list .answer-ref-item:nth-child(4))) .answer-references-toggle {
-        display: none;
-    }
-}
-
+/* The reference id column keeps one gutter width, so [n] and every title line
+ * up down the list. */
 .answer-ref-id {
     color: var(--color-accent-text);
+    flex-shrink: 0;
     font-weight: 600;
+    min-width: 24px;
 }
 
 .answer-ref-title {
@@ -199,7 +192,7 @@
     overflow: hidden;
     position: relative;
     border: 1px solid var(--color-border-subtle);
-    transition: border-color 0.15s;
+    transition: border-color var(--duration-control);
 }
 
 .answer-image-item:hover {

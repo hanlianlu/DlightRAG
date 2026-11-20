@@ -12,7 +12,7 @@ import styles from '../styles/video-playback.module.css';
 const ACTIVATE = 'dl-video-playback-activate';
 
 /** Reader-owned external playback; never an execution mode of Artifact HTML. */
-export class DlVideoPlayback extends LightElement {
+class DlVideoPlayback extends LightElement {
   static properties = {
     link: {attribute: false}, preview: {attribute: false}, cover: {attribute: false},
     state: {state: true}, source: {state: true}, aspectRatio: {state: true},

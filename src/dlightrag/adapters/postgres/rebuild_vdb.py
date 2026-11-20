@@ -23,8 +23,9 @@ from dlightrag.adapters.postgres.corpus.corpus import (
 )
 from dlightrag.adapters.postgres.corpus.lightrag_environment import apply_lightrag_environment
 from dlightrag.adapters.postgres.rebuild_bm25 import canonical_workspace_config, run_rebuild_bm25
-from dlightrag.application.config import DlightragConfig, get_config, load_config, set_config
-from dlightrag.application.settings import rag_settings
+from dlightrag.application.config.loading import get_config, load_config, set_config
+from dlightrag.application.config.sections import DlightragConfig
+from dlightrag.application.settings.projections import rag_settings
 from dlightrag.engine.ai.embedding import create_embedding_model
 from dlightrag.engine.ai.providers.base import provider_usage_buckets
 from dlightrag.engine.ai.scheduler import ModelScheduler
@@ -114,9 +115,6 @@ class DlightRAGRebuildTool(RebuildTool):
             "kv": self.config.storage.lightrag.kv_storage,
             "doc_status": self.config.storage.lightrag.doc_status_storage,
         }
-
-    def build_embedding_func(self) -> Any:
-        return self.embedding_func
 
     def build_global_config(self) -> dict[str, Any]:
         if not self.storage_names:

@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from dlightrag.engine.agent.session.fold import PriorTurns
-from dlightrag.engine.ai.capacity import ModelProfile
+from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ModelProfile
 from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS, ChatModelSelector
 from dlightrag.engine.ai.tokens import estimate_messages_tokens
 from dlightrag.engine.answer.capabilities import RequestModelContext
@@ -27,13 +27,20 @@ from dlightrag.engine.answer.execution.acceptance import (
 )
 from dlightrag.engine.answer.execution.executor import _worst_case_recall_block
 from dlightrag.engine.answer.execution.input import AnswerRunInput
-from dlightrag.engine.answer.history import HistoryProjectionTarget
+from dlightrag.engine.answer.history import (
+    HistoryProjectionOverflowError,
+    HistoryProjectionTarget,
+    project_history,
+)
 from dlightrag.engine.answer.memory import reserved_auto_recall_text
 from dlightrag.engine.answer.mode import ModeResource
 from dlightrag.engine.answer.router import AnswerModeRouter
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
-from dlightrag.engine.rag.retrieval import RetrievalOptions
+from dlightrag.engine.rag.retrieval.models import (
+    RetrievalOptions,
+)
 from dlightrag.engine.rag.retrieval.planner import RetrievalPlanner
+from tests.support.callers import ANONYMOUS as _ANON
 from tests.unit.conftest import answer_image_policy
 from tests.unit.test_answer_executor import _executor
 from tests.unit.test_answer_service import _Capabilities, _request, _service, _Store
@@ -245,6 +252,20 @@ class _DistinctProfileCapabilities(_Capabilities):
         return models, None
 
 
+#: Fast holds the whole dynamic reserve with no history at all, and the reserve is now a
+#: 60,000-token floor. A 64,000-token window leaves a hard input limit of 56,000 and is
+#: refused admission; these profiles afford it, as every shipped one does.
+_FAST_EXTRACT = ModelProfile(context_window_tokens=200_000, max_output_tokens=16_000)
+_FAST_QUERY = ModelProfile(context_window_tokens=200_000, max_output_tokens=16_000)
+
+
+class _AffordableFastCapabilities(_DistinctProfileCapabilities):
+    """The distinct-profile fixture with an extract and query call that can hold the reserve."""
+
+    def current_profiles(self) -> dict[ChatModelSelector, ModelProfile]:
+        return _profiles(extract=_FAST_EXTRACT, query=_FAST_QUERY)
+
+
 async def test_acceptance_and_execution_measure_the_fast_requests_actually_sent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -264,7 +285,7 @@ async def test_acceptance_and_execution_measure_the_fast_requests_actually_sent(
 
     monkeypatch.setattr(AnswerHistoryBudget, "fast_targets", recording_fast_targets)
     planning = _Planning()
-    capabilities = _DistinctProfileCapabilities()
+    capabilities = _AffordableFastCapabilities()
     store = _Store()
 
     async def memory_on(**_kwargs: Any) -> tuple[bool, int]:
@@ -276,7 +297,7 @@ async def test_acceptance_and_execution_measure_the_fast_requests_actually_sent(
         capabilities=capabilities,
         memory_capability=memory_on,
     )
-    await service.create(request=_request(mode="fast"), owner_id="owner-1")
+    await service.create(request=_request(mode="fast"), owner_id="owner-1", caller=_ANON)
     prepared = store.created[0]["prepared_input"]
     accepted = AnswerRunInput.from_prepared_input(prepared)
 
@@ -358,3 +379,43 @@ async def test_acceptance_and_execution_measure_the_fast_requests_actually_sent(
         assert generation.measure_input(_HISTORY, summary) == estimate_messages_tokens(
             answer_sent[0]
         )
+
+
+def _no_input(messages: list[dict[str, Any]], projected_summary: str = "") -> int:
+    """A target that measures no history, for tests about the acceptance limit alone."""
+    del messages, projected_summary
+    return 0
+
+
+def test_fast_refuses_a_profile_that_cannot_hold_the_dynamic_reserve() -> None:
+    """Fast keeps its full reserve with no history, so the reserve's floor decides admission.
+
+    A 64,000-token window leaves a 48,000-token hard input limit against the 40,000-token
+    reserve this profile keeps — every profile keeps at least the flat charge it had before the
+    reserve became a floor — so the Fast envelope is negative and an explicit Fast request is
+    refused rather than served with a shrunk reserve. A caller resolves that by asking for
+    Research or choosing a larger model; the same window's Research trigger keeps 8,000 tokens
+    of history, which is why Research still serves it.
+    """
+    small = ModelProfile(context_window_tokens=64_000, max_output_tokens=16_000)
+    target = HistoryProjectionTarget(
+        FAST_PLANNER,
+        small,
+        _no_input,
+        proactive_compaction=True,
+        require_full_dynamic_reserve=True,
+    )
+
+    assert CONTEXT_POLICY.hard_input_limit(small) == 48_000
+    assert CONTEXT_POLICY.dynamic_context_reserve(small) == 40_000
+    assert target.acceptance_limit(CONTEXT_POLICY) == -12_000
+    with pytest.raises(HistoryProjectionOverflowError, match="acceptance limit is -12000"):
+        project_history([], targets=(target,))
+
+    research = HistoryProjectionTarget(
+        RESEARCH_PLANNER,
+        small,
+        _no_input,
+        proactive_compaction=True,
+    )
+    assert research.acceptance_limit(CONTEXT_POLICY) == 8_000

@@ -13,10 +13,13 @@
  *  on no element stays the owner's to handle with its outside-click
  *  dismissal: WebKit does not focus a pressed button, so a press on the
  *  menu's own button reports none. Pickers that are not menus reuse the same
- *  roving step through rovingFocusKeydown().
+ *  roving step through rovingFocusKeydown(), which leaves the keys of an IME
+ *  composition to the composition.
  *
  *  Slotted items stay Light DOM; the host is the menu chrome and keyboard.
  */
+
+import {isImeKey} from './ime.ts';
 
 const template = document.createElement('template');
 template.innerHTML = `
@@ -56,14 +59,16 @@ function typeaheadIndex(event: KeyboardEvent, items: readonly HTMLElement[], cur
   const letter = typed.toLocaleLowerCase();
   for (let step = 1; step <= items.length; step += 1) {
     const index = (current + step + items.length) % items.length;
-    if (itemLabel(items[index]!).startsWith(letter)) return index;
+    const item = items[index];
+    if (item !== undefined && itemLabel(item).startsWith(letter)) return index;
   }
   return null;
 }
 
 /** Apply the roving step for one key; true when the key moved focus. */
 export function rovingFocusKeydown(event: KeyboardEvent, items: readonly HTMLElement[]): boolean {
-  if (items.length === 0) return false;
+  // The arrows that pick a candidate are the composition's: they must not carry focus out of a field.
+  if (items.length === 0 || isImeKey(event)) return false;
   const current = items.indexOf(document.activeElement as HTMLElement);
   const inField = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
   // A field keeps its own caret keys; only the arrows leave it for the items.

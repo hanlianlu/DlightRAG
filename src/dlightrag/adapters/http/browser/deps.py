@@ -4,16 +4,18 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from fastapi import Cookie, HTTPException, Request
+from starlette.requests import HTTPConnection
 
 from dlightrag.adapters.http.application import get_application
-from dlightrag.application.access import (
-    AccessDeniedError,
+from dlightrag.application.access.control import AccessDeniedError
+from dlightrag.application.access.workspaces import (
     AccessGate,
     WorkspaceRecord,
 )
 
 if TYPE_CHECKING:
-    from dlightrag.application.web_conversations import WebConversationService
+    from dlightrag.application.live_browser.service import LiveBrowserService
+    from dlightrag.application.web_conversations.service import WebConversationService
 
 
 def get_workspace(
@@ -25,7 +27,8 @@ def get_workspace(
     The cookie is browser state, not a request: one that names no canonical
     workspace falls back to the deployment's rather than failing every route.
     """
-    from dlightrag.application.corpus_admin import WorkspaceNameError, workspace_id_for_name
+    from dlightrag.application.corpus_admin.errors import WorkspaceNameError
+    from dlightrag.application.corpus_admin.service import workspace_id_for_name
 
     if dlightrag_workspace:
         try:
@@ -38,6 +41,16 @@ def get_workspace(
 def get_web_conversation_service(request: Request) -> WebConversationService:
     """Return the typed Web service through the Application lifetime guard."""
     return get_application(request).web_conversations
+
+
+def get_live_browser_service(connection: HTTPConnection) -> LiveBrowserService:
+    """Return the typed live browser use case through the Application lifetime guard.
+
+    It is present wherever the Web surface is, whether or not the deployment composes an
+    Agent Browser: with none, opening a session is refused as ``not_configured``. The
+    connection is the request or the socket, because the live preview is served over both.
+    """
+    return get_application(connection).live_browser
 
 
 def get_web_access_gate(request: Request) -> AccessGate:
