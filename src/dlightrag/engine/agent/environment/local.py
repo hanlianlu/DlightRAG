@@ -346,10 +346,15 @@ class LocalExecutionEnvironment:
                 if self._confinement is None
                 else [*self._confinement.launch_prefix(), *argv]
             )
+            # The caller's env is explicit and secret-free; the confinement adds only the names
+            # of the shared data it granted, so a grant and its variable are one declaration.
+            child_env = dict(env)
+            if self._confinement is not None:
+                child_env.update(self._confinement.environment)
             process = await asyncio.create_subprocess_exec(
                 *command,
                 cwd=str(cwd or self._root),
-                env=dict(env),
+                env=child_env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 start_new_session=True,

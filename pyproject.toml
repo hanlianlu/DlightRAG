@@ -2,7 +2,7 @@
 
 [project]
 name = "dlightrag"
-version = "3.0.0"
+version = "3.0.1"
 description = "An agent that runs long, reads deep, and remembers — frontier RAG and durable memory, with the harness that keeps both running"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -11,8 +11,8 @@ license-files = ["LICENSE", "NOTICE"]
 maintainers = [{ name = "HanlianLyu" }, { name = "hllyu" }]
 dependencies = [
     # Standalone workspace packages
-    "dlightrag-memory==3.0.0",
-    "dlightrag-observability==3.0.0",
+    "dlightrag-memory==3.0.1",
+    "dlightrag-observability==3.0.1",
     # Built-in model providers (batteries included)
     "openai>=3.31.0",
     "anthropic>=1.13.0",

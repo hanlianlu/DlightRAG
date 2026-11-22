@@ -754,7 +754,7 @@ wheels = [
 
 [[package]]
 name = "dlightrag"
-version = "3.0.0"
+version = "3.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "aiobotocore" },
@@ -902,7 +902,7 @@ dev = [
 
 [[package]]
 name = "dlightrag-memory"
-version = "3.0.0"
+version = "3.0.1"
 source = { editable = "packages/memory" }
 dependencies = [
     { name = "asyncpg" },
@@ -919,12 +919,12 @@ requires-dist = [
 
 [[package]]
 name = "dlightrag-mineru"
-version = "3.0.0"
+version = "3.0.1"
 source = { editable = "packages/mineru" }
 
 [[package]]
 name = "dlightrag-observability"
-version = "3.0.0"
+version = "3.0.1"
 source = { editable = "packages/observability" }
 dependencies = [
     { name = "opentelemetry-exporter-otlp-proto-http" },

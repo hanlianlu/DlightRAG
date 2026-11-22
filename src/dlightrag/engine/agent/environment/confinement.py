@@ -56,6 +56,8 @@ _ACCESS_WORKSPACE = _FS_BY_ABI[0][1]
 _ACCESS_RUNTIME = _FS_EXECUTE | _FS_READ_FILE | _FS_READ_DIR
 #: Devices: an existing device may be written, none may be created.
 _ACCESS_DEVICES = _FS_WRITE_FILE | _FS_READ_FILE | _FS_READ_DIR | _FS_IOCTL_DEV
+#: A data layer: listed and read, never changed and never executed.
+_ACCESS_DATA = _FS_READ_FILE | _FS_READ_DIR
 
 _RUNTIME_DIRECTORIES = ("/usr", "/lib", "/lib64", "/bin", "/sbin", "/etc", "/proc")
 _DEVICES = Path("/dev")
@@ -85,11 +87,16 @@ class DeclaredLayer:
 
     A capability declares what it reads where it is composed, in code, so the set
     of visible paths is reviewable beside the capability that asked for it rather
-    than configurable per deployment (ADR 0024). A layer is read-only.
+    than configurable per deployment (ADR 0024). A layer is read-only. A Skill root also
+    runs the assets it serves, so a layer may be executed unless it says it is data;
+    ``environment`` names the layer to the capability's own scripts, set on every command
+    beside the grant so the two come from one declaration and cannot drift apart.
     """
 
     path: Path
     capability: str
+    executable: bool = True
+    environment: tuple[tuple[str, str], ...] = ()
 
     def resolved(self) -> Path:
         return self.path.expanduser().resolve()
@@ -170,11 +177,19 @@ class ConfinementPolicy:
         grants.extend((root, _ACCESS_RUNTIME) for root in self.runtime_roots())
         if _DEVICES.is_dir():
             grants.append((_DEVICES, _ACCESS_DEVICES))
-        grants.extend((layer.resolved(), _ACCESS_RUNTIME) for layer in self.for_owner(owner_id))
+        layers = self.for_owner(owner_id)
+        grants.extend(
+            (layer.resolved(), _ACCESS_RUNTIME if layer.executable else _ACCESS_DATA)
+            for layer in layers
+        )
         merged: dict[Path, int] = {}
         for path, access in grants:
             merged[path] = merged.get(path, 0) | access
-        return AgentspaceConfinement(workspace=workspace, rules=tuple(merged.items()))
+        return AgentspaceConfinement(
+            workspace=workspace,
+            rules=tuple(merged.items()),
+            environment=tuple(pair for layer in layers for pair in layer.environment),
+        )
 
     def for_owner(self, owner_id: str | None) -> tuple[DeclaredLayer, ...]:
         """Return the layers this Run's owner adds to the process-wide ones."""
@@ -194,6 +209,9 @@ class AgentspaceConfinement:
 
     workspace: Path
     rules: tuple[tuple[Path, int], ...]
+    #: Variables every command receives beside the explicit child environment: the names of
+    #: the layers this Run was granted (``DeclaredLayer.environment``).
+    environment: tuple[tuple[str, str], ...] = ()
 
     def launch_prefix(self) -> list[str]:
         """Return the argv prefix that applies these grants and then execs."""

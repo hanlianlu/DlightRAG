@@ -4,11 +4,12 @@
 
 Two explicit modes, never auto-detected:
 
-    docker  docker compose down -v on both DlightRAG volumes, then start only
-            PostgreSQL and verify the empty extension-only database.
+    docker  docker compose down, then delete the volumes in _COMPOSE_VOLUMES by name
+            (the ones in _KEPT_COMPOSE_VOLUMES stay), start only PostgreSQL and verify
+            the empty extension-only database.
     native  replace the dedicated development database's ``public`` schema,
             recreate the required extensions, and clear only the children of
-            the verified working-directory root.
+            the verified working-directory root, except the paths it keeps.
 
 Usage:
     uv run scripts/reset_development.py --mode docker
@@ -65,6 +66,9 @@ _REQUIRED_EXTENSIONS = ("vector", "pg_textsearch", "pg_jieba", "pg_trgm")
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
 _SYSTEM_SCHEMAS = ("pg_catalog", "information_schema", "pg_toast")
 _COMPOSE_VOLUMES = ("pg18_data", "dlightrag_data", "dlightrag_agent_workspaces")
+# The volumes the reset keeps, each with the reason. `compose down -v` deletes every volume Compose
+# labelled, kept ones included, so the reset runs `down` and deletes _COMPOSE_VOLUMES by name.
+_KEPT_COMPOSE_VOLUMES: dict[str, str] = {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -365,16 +369,24 @@ def _docker(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _resolved_volume_names(project: str) -> list[str] | str:
-    """Real Docker names of _COMPOSE_VOLUMES as Compose resolves them, or an error message."""
+def _resolved_volume_names(project: str) -> tuple[list[str], dict[str, str]] | str:
+    """Docker names Compose resolves for the volumes to delete and, with the reason, the kept ones.
+
+    An error message instead when Compose does not resolve every one of them.
+    """
     config = _compose("config", "--format", "json", project=project)
     if config.returncode != 0:
         return f"docker compose config failed: {config.stderr.strip() or config.stdout.strip()}"
     try:
         volumes = json.loads(config.stdout)["volumes"]
-        return [str(volumes[key]["name"]) for key in _COMPOSE_VOLUMES]
+        deleted = [str(volumes[key]["name"]) for key in _COMPOSE_VOLUMES]
+        kept = {str(volumes[key]["name"]): why for key, why in _KEPT_COMPOSE_VOLUMES.items()}
     except ValueError, KeyError, TypeError:
-        return f"docker compose config does not resolve every volume in {_COMPOSE_VOLUMES}"
+        return (
+            "docker compose config does not resolve every volume in "
+            f"{(*_COMPOSE_VOLUMES, *_KEPT_COMPOSE_VOLUMES)}"
+        )
+    return deleted, kept
 
 
 def _remove_leftover_volumes(names: list[str], report: ResetReport) -> bool:
@@ -405,27 +417,31 @@ def run_docker_reset(
     *,
     compose_project: str | None = None,
 ) -> None:
-    """Delete all DlightRAG volumes, start PostgreSQL, and verify exact emptiness."""
+    """Delete the volumes of _COMPOSE_VOLUMES, start PostgreSQL, and verify exact emptiness."""
     project = compose_project or _DEFAULT_COMPOSE_PROJECT
     report.record("compose", f"project {project}, file {_COMPOSE_FILE}")
-    names = _resolved_volume_names(project)
-    if isinstance(names, str):
-        report.fail("compose-config", names)
+    resolved = _resolved_volume_names(project)
+    if isinstance(resolved, str):
+        report.fail("compose-config", resolved)
         return
-    down = _compose("down", "-v", project=project)
+    names, kept = resolved
+    # No -v: it would delete the kept volumes too (see _KEPT_COMPOSE_VOLUMES).
+    down = _compose("down", project=project)
     if down.returncode != 0:
         report.fail(
             "compose-down",
-            f"docker compose down -v failed: {down.stderr.strip() or down.stdout.strip()}",
+            f"docker compose down failed: {down.stderr.strip() or down.stdout.strip()}",
         )
         return
-    # Compose skips a volume without its own labels and still exits 0, so remove it by name.
+    # Each volume goes by name, whether or not Compose labelled it.
     if not _remove_leftover_volumes(names, report):
         return
     report.record(
         "compose-down",
         f"deleted volumes {', '.join(names)}; every service stopped",
     )
+    for name, why in kept.items():
+        report.record("compose-keep", f"kept volume {name}: {why}")
 
     up = _compose("up", "-d", "postgres", project=project)
     if up.returncode != 0:
@@ -649,16 +665,20 @@ async def _native_pg_work(
         await conn.close()
 
 
-def clear_working_dir_children(working_dir: Path, report: ResetReport) -> None:
-    """Delete only the children of the verified working-directory root."""
-    if not working_dir.exists():
-        working_dir.mkdir(parents=True, exist_ok=True)
-        report.record("working-dir", f"recreated empty root {working_dir}")
-        return
-    if not working_dir.is_dir():
-        report.fail("working-dir", f"root is not a directory: {working_dir}")
-        return
-    for child in sorted(working_dir.iterdir()):
+def _holds_kept(path: Path, kept: dict[Path, str]) -> bool:
+    """Whether a resolved path is a kept path or a directory that holds one."""
+    return any(path == keep or keep.is_relative_to(path) for keep in kept)
+
+
+def _clear_children(directory: Path, kept: dict[Path, str], report: ResetReport) -> None:
+    for child in sorted(directory.iterdir()):
+        resolved = child.resolve()
+        if resolved in kept:
+            report.record("working-dir", f"kept {child}: {kept[resolved]}")
+            continue
+        if child.is_dir() and not child.is_symlink() and _holds_kept(resolved, kept):
+            _clear_children(child, kept, report)
+            continue
         try:
             if child.is_dir() and not child.is_symlink():
                 shutil.rmtree(child)
@@ -669,19 +689,40 @@ def clear_working_dir_children(working_dir: Path, report: ResetReport) -> None:
             report.fail("working-dir", f"cannot remove {child}: {exc}")
 
 
-def clear_runtime_dirs(working_dir: Path, workspace_root: Path | None, report: ResetReport) -> None:
-    """Clear the working directory and the optional Agent Workspace root."""
-    clear_working_dir_children(working_dir, report)
-    for violation in verify_working_dir_empty(working_dir):
+def clear_working_dir_children(
+    working_dir: Path,
+    report: ResetReport,
+    kept: dict[Path, str] | None = None,
+) -> None:
+    """Delete only the children of the verified working-directory root, except the kept paths."""
+    if not working_dir.exists():
+        working_dir.mkdir(parents=True, exist_ok=True)
+        report.record("working-dir", f"recreated empty root {working_dir}")
+        return
+    if not working_dir.is_dir():
+        report.fail("working-dir", f"root is not a directory: {working_dir}")
+        return
+    _clear_children(working_dir, kept or {}, report)
+
+
+def clear_runtime_dirs(
+    working_dir: Path,
+    workspace_root: Path | None,
+    report: ResetReport,
+    kept: dict[Path, str] | None = None,
+) -> None:
+    """Clear the working directory (but for the kept paths) and the optional Agent Workspace root."""
+    clear_working_dir_children(working_dir, report, kept)
+    for violation in verify_working_dir_empty(working_dir, kept):
         report.fail("verify-working-dir", violation)
     if workspace_root is not None:
         clear_working_dir_children(workspace_root, report)
 
 
-def verify_working_dir_empty(working_dir: Path) -> list[str]:
+def verify_working_dir_empty(working_dir: Path, kept: dict[Path, str] | None = None) -> list[str]:
     violations: list[str] = []
     if working_dir.exists():
-        children = list(working_dir.iterdir())
+        children = [c for c in working_dir.iterdir() if not _holds_kept(c.resolve(), kept or {})]
         if children:
             violations.append(f"working directory not empty: {[c.name for c in children]}")
     else:
@@ -702,6 +743,7 @@ def preview(
     workspace_root: Path | None,
     repo_root: Path,
     compose_project: str,
+    kept_paths: dict[Path, str],
 ) -> None:
     print("Development reset preview")
     print(f"  mode:                 {mode}")
@@ -709,6 +751,8 @@ def preview(
         print(f"  compose project:      {compose_project}")
         print(f"  compose file:         {_REPO_ROOT / _COMPOSE_FILE}")
         print(f"  volumes to delete:    {', '.join(_COMPOSE_VOLUMES)}")
+        for key, why in _KEPT_COMPOSE_VOLUMES.items():
+            print(f"  volume kept:          {key} ({why})")
         print("  post-reset services:  postgres only (healthy, extensions, empty schema)")
     else:
         print(f"  database:             {target.identity()}")
@@ -719,8 +763,10 @@ def preview(
         )
     print(f"  working-dir root:     {working_dir}")
     print(f"  Agent Workspace root: {workspace_root or '(disabled)'}")
+    for path, why in kept_paths.items():
+        print(f"  path kept:            {path} ({why})")
     if working_dir.is_dir():
-        children = list(working_dir.iterdir())
+        children = [c for c in working_dir.iterdir() if not _holds_kept(c.resolve(), kept_paths)]
         print(f"  working-dir children: {len(children)}")
         for child in sorted(children):
             print(f"    - {child}")
@@ -732,7 +778,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="reset_development.py",
         description=(
             "Reset the complete DlightRAG development environment. Two explicit modes: "
-            "docker (delete both Compose volumes, start only PostgreSQL) or native "
+            "docker (delete the Compose volumes it owns, start only PostgreSQL) or native "
             "(replace the dedicated database's public schema and empty the working "
             "directory). There is no partial reset scope; workspace reset is the "
             "separate scripts/reset_workspace.py product command."
@@ -806,6 +852,7 @@ async def main(argv: list[str] | None = None) -> int:
         target = resolve_postgres_target(env, config)
         working_dir = _working_dir_root(repo_root, env, config)
         workspace_root = _workspace_root(repo_root, env, config)
+        kept_paths: dict[Path, str] = {}
     except (OSError, TypeError, ValueError, YAMLError) as exc:
         report.fail("configuration", str(exc))
         _print_report(report, verbose=True)
@@ -819,6 +866,7 @@ async def main(argv: list[str] | None = None) -> int:
         workspace_root=workspace_root,
         repo_root=repo_root,
         compose_project=compose_project,
+        kept_paths=kept_paths,
     )
 
     violations = validate_runtime_roots(working_dir, workspace_root, repo_root)
@@ -866,7 +914,7 @@ async def main(argv: list[str] | None = None) -> int:
         )
         # Independent cleanup steps continue past earlier failures so one
         # failure never hides the rest; every failure is reported.
-        clear_runtime_dirs(working_dir, workspace_root, report)
+        clear_runtime_dirs(working_dir, workspace_root, report, kept_paths)
         _print_report(report, verbose=args.verbose)
         print("Development reset complete." if report.ok else "Development reset FAILED.")
         return 0 if report.ok else 1
@@ -885,7 +933,7 @@ async def main(argv: list[str] | None = None) -> int:
     # Every invocation also clears the pre-validated host runtime roots so no
     # half-reset environment can survive.
     if not report.failures:
-        clear_runtime_dirs(working_dir, workspace_root, report)
+        clear_runtime_dirs(working_dir, workspace_root, report, kept_paths)
     _print_report(report, verbose=args.verbose)
     print("Development reset complete." if report.ok else "Development reset FAILED.")
     return 0 if report.ok else 1

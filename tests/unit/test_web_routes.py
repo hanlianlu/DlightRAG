@@ -245,15 +245,16 @@ async def test_web_lifespan_initializes_one_app_scoped_conversation_service(
     application = application_double(test_config)
     conversation_service = application.web_conversations
     app = create_app()
-    monkeypatch.setattr(
-        api_server,
-        "create_application",
-        AsyncMock(return_value=application),
-    )
+    create_application = AsyncMock(return_value=application)
+    monkeypatch.setattr(api_server, "create_application", create_application)
 
     async with app.router.lifespan_context(app):
         assert app.state.application.web_conversations is conversation_service
 
+    # The API process is the one that serves the Web: it keeps the conversation retention and the
+    # writer-only upkeep, which the MCP process (composed without it) leaves off.
+    assert create_application.await_args is not None
+    assert create_application.await_args.kwargs["web_enabled"] is True
     conversation_service.aclose.assert_not_awaited()
     application.aclose.assert_awaited_once_with()
 

@@ -38,7 +38,8 @@ exposed through REST, Web, or MCP.
 uv run scripts/reset_development.py --mode docker --dry-run
 uv run scripts/reset_development.py --mode native --dry-run
 
-# Docker: remove app volumes, start only empty PostgreSQL, verify extensions.
+# Docker: remove the database, working-directory and Agentspace volumes, start only
+# empty PostgreSQL, verify extensions.
 uv run scripts/reset_development.py --mode docker
 # or
 make dev-reset
@@ -52,6 +53,13 @@ prompt, never target validation. Native mode refuses non-loopback hosts unless
 `--allow-remote-reset` and other sessions unless `--force-disconnect`. Docker
 reset leaves API/MCP/readers/writers stopped; start one writer separately so it
 creates baseline schema.
+
+The Docker reset deletes three volumes by name (`pg18_data`, `dlightrag_data`,
+`dlightrag_agent_workspaces`) and keeps every other volume of the Compose project,
+`dlightrag_owner_skills` among them. It does not run `docker compose down -v`, which
+deletes every volume of the project, the kept ones included; do not run that yourself on
+a deployment whose volumes you want to keep.
+
 
 Rebuilding the PostgreSQL image does not change an existing data volume:
 `postgres/init.sql` creates the extensions only in a new one. After a rebuild

@@ -88,6 +88,45 @@ def test_the_workspace_is_the_only_writable_grant(tmp_path: Path) -> None:
         assert grants[Path("/dev")] & _CREATE_RIGHTS == 0
 
 
+def test_a_data_layer_is_read_only_never_executable_and_names_itself(tmp_path: Path) -> None:
+    """A layer may be data: listed and read, no execute, with the variable that names it.
+
+    A Skill root still executes what it serves, so the default is unchanged; a data layer gets
+    exactly read file and read directory, and its variable comes from the same declaration. It is
+    refused inside a forbidden tree like every layer (ADR 0024).
+    """
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    skills = tmp_path / "skills"
+    data = tmp_path / "data"
+    working = tmp_path / "working"
+    for directory in (skills, data, working):
+        directory.mkdir()
+
+    confinement = ConfinementPolicy(
+        forbidden=(working,),
+        declared=(
+            DeclaredLayer(path=skills, capability="skills"),
+            DeclaredLayer(
+                path=data,
+                capability="data",
+                executable=False,
+                environment=(("DATA_DIR", str(data)),),
+            ),
+        ),
+    ).for_agentspace(workspace)
+    grants = dict(confinement.rules)
+
+    assert grants[data] == 0x4 | 0x8  # read file, read directory; nothing else
+    assert grants[skills] & 0x1  # a Skill layer still executes what it serves
+    assert confinement.environment == (("DATA_DIR", str(data)),)
+    with pytest.raises(ValueError, match="overlaps"):
+        ConfinementPolicy(
+            forbidden=(working,),
+            declared=(DeclaredLayer(path=working / "data", capability="data", executable=False),),
+        )
+
+
 def test_a_grant_never_names_a_right_the_kernel_cannot_restrict() -> None:
     """A grant must stay inside the rights the running ABI knows, or the kernel refuses."""
     assert _supported_rights(1) == 0x1FFF
@@ -128,20 +167,24 @@ class _MarkerConfinement(AgentspaceConfinement):
 @pytest.mark.asyncio
 async def test_every_command_goes_through_the_confinement_prefix(tmp_path: Path) -> None:
     environment = LocalExecutionEnvironment(
-        tmp_path, confinement=_MarkerConfinement(workspace=tmp_path, rules=())
+        tmp_path,
+        confinement=_MarkerConfinement(
+            workspace=tmp_path, rules=(), environment=(("DATA_DIR", "/the/layer"),)
+        ),
     )
     home, tmp = environment.prepare_process_directories()
     output = _Output()
 
     completed = await environment.run(
-        [sys.executable, "-c", "print('payload')"],
+        [sys.executable, "-c", "import os; print('payload', os.environ['DATA_DIR'])"],
         env=build_child_environment(home=home, tmp=tmp),
         on_output=output.feed,
     )
 
     assert completed.returncode == 0
     assert "CONFINED" in output.text
-    assert "payload" in output.text
+    # A granted layer's name rides with the command, beside the secret-free child environment.
+    assert "payload /the/layer" in output.text
 
 
 @pytest.mark.asyncio
@@ -270,6 +313,12 @@ def test_the_composition_root_refuses_the_corpus_and_the_project_tree(
             )
 
 
+def _owner_layers(policy: ConfinementPolicy, owner: str, config: Any) -> set[Path]:
+    "The layers an owner's Runs may read, less the shared data store: it is declared, not a skills root."
+    layers = {layer.resolved() for layer in policy.for_owner(owner)}
+    return layers
+
+
 def test_the_policy_declares_the_roots_skills_are_loaded_from(test_config: Any) -> None:
     """The capability declares what it reads, beside the capability (ADR 0024).
 
@@ -283,7 +332,7 @@ def test_the_policy_declares_the_roots_skills_are_loaded_from(test_config: Any) 
     from dlightrag.engine.agent.skills import builtin_skills_root, owner_skill_root
 
     policy = agent_confinement_policy(test_config)
-    alice = {layer.resolved() for layer in policy.for_owner("alice")}
+    alice = _owner_layers(policy, "alice", test_config)
 
     assert alice == {
         agent_skills_root(test_config),
@@ -304,8 +353,8 @@ def test_one_owners_skills_are_not_another_owners(test_config: Any) -> None:
     from dlightrag.engine.agent.skills import owner_skill_root
 
     policy = agent_confinement_policy(test_config)
-    alice = {layer.resolved() for layer in policy.for_owner("alice")}
-    bob = {layer.resolved() for layer in policy.for_owner("bob")}
+    alice = _owner_layers(policy, "alice", test_config)
+    bob = _owner_layers(policy, "bob", test_config)
 
     assert alice & bob == {agent_skills_root(test_config)}
     assert owner_skills_root(test_config) not in alice | bob

@@ -186,6 +186,38 @@ class TestWorkingDirectory:
         assert report.failures
         assert _reset.verify_working_dir_empty(root) != []
 
+    def test_a_kept_path_survives_the_clear_and_the_verification(self, tmp_path: Path) -> None:
+        root = tmp_path / "storage"
+        (root / "store" / "raw").mkdir(parents=True)
+        (root / "store" / "raw" / "prices").write_text("data")
+        (root / "corpus").mkdir()
+        (root / "stray").write_text("x")
+        kept = {(root / "store").resolve(): "market data"}
+
+        report = _reset.ResetReport(mode="native")
+        _reset.clear_runtime_dirs(root, None, report, kept)
+
+        assert report.ok
+        assert [child.name for child in root.iterdir()] == ["store"]
+        assert (root / "store" / "raw" / "prices").read_text() == "data"
+        assert ("working-dir", f"kept {root / 'store'}: market data") in report.steps
+
+    def test_a_kept_path_below_a_child_keeps_the_way_to_it(self, tmp_path: Path) -> None:
+        root = tmp_path / "storage"
+        (root / "deep" / "store").mkdir(parents=True)
+        (root / "deep" / "store" / "file").write_text("data")
+        (root / "deep" / "other").mkdir()
+        (root / "other").mkdir()
+        kept = {(root / "deep" / "store").resolve(): "market data"}
+
+        report = _reset.ResetReport(mode="native")
+        _reset.clear_runtime_dirs(root, None, report, kept)
+
+        assert report.ok
+        assert [child.name for child in root.iterdir()] == ["deep"]
+        assert [child.name for child in (root / "deep").iterdir()] == ["store"]
+        assert (root / "deep" / "store" / "file").read_text() == "data"
+
     def test_missing_root_is_recreated(self, tmp_path: Path) -> None:
         root = tmp_path / "new-storage"
         report = _reset.ResetReport(mode="native")
@@ -302,13 +334,16 @@ class TestSettingsResolution:
 _CONFIG_JSON = json.dumps(
     {
         "volumes": {
-            "pg18_data": {"name": "dlightrag_pg18_data"},
-            "dlightrag_data": {"name": "dlightrag_dlightrag_data"},
-            "dlightrag_agent_workspaces": {"name": "dlightrag_dlightrag_agent_workspaces"},
-            "dlightrag_owner_skills": {"name": "dlightrag_dlightrag_owner_skills"},
+            key: {"name": f"dlightrag_{key}"}
+            for key in (
+                *_reset._COMPOSE_VOLUMES,
+                *_reset._KEPT_COMPOSE_VOLUMES,
+                "dlightrag_owner_skills",
+            )
         }
     }
 )
+_KEPT = [f"dlightrag_{key}" for key in _reset._KEPT_COMPOSE_VOLUMES]
 _RESOLVED = [
     "dlightrag_pg18_data",
     "dlightrag_dlightrag_data",
@@ -384,7 +419,7 @@ class TestDockerMode:
         )
 
         assert report.ok
-        assert any("down -v" in call for call in calls)
+        assert "down" in calls  # `down -v` would delete a kept volume too
         assert any("up -d postgres" in call for call in calls)
         assert any("verify-extensions" in step for step, _ in report.steps)
         assert any("verify-no-app-schema" in step for step, _ in report.steps)
@@ -491,13 +526,15 @@ class TestDockerMode:
         assert any("dlightrag-api" in failure for failure in report.failures)
 
     def test_skipped_volume_is_removed_explicitly(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # `down -v` exits 0 but skips the unlabeled pg18 volume; the owner skills volume is
-        # outside _COMPOSE_VOLUMES and must never be touched.
+        # The unlabeled pg18 volume goes by name; the owner skills volume and the kept volumes
+        # are outside _COMPOSE_VOLUMES and must never be touched.
         fake_docker, docker_calls = _volume_docker(
-            existing={"dlightrag_pg18_data", "dlightrag_dlightrag_owner_skills"}
+            existing={"dlightrag_pg18_data", "dlightrag_dlightrag_owner_skills", *_KEPT}
         )
+        compose_calls: list[tuple[str, ...]] = []
 
         def fake_compose(*args: str, **_kwargs):
+            compose_calls.append(args)
             if args[:1] == ("config",):
                 return Mock(returncode=0, stdout=_CONFIG_JSON, stderr="")
             return Mock(returncode=0, stdout="", stderr="")
@@ -517,10 +554,13 @@ class TestDockerMode:
         removed = [args[2] for args in docker_calls if args[1] == "rm"]
         assert removed == ["dlightrag_pg18_data"]
         assert not any("owner_skills" in args[2] for args in docker_calls)
+        assert not any(args[2] in _KEPT for args in docker_calls)
+        assert ("down",) in compose_calls  # no `-v`: Compose would delete the kept volumes
         assert (
             "compose-down",
             f"deleted volumes {', '.join(_RESOLVED)}; every service stopped",
         ) in (report.steps)
+        assert [step for step, _ in report.steps].count("compose-keep") == len(_KEPT)
 
     def test_failed_volume_removal_fails_the_step(self, monkeypatch: pytest.MonkeyPatch) -> None:
         fake_docker, _calls = _volume_docker(
@@ -578,10 +618,13 @@ class TestDockerMode:
             workspace_root=tmp_path / "agent-workspaces",
             repo_root=tmp_path,
             compose_project="custom-project",
+            kept_paths={tmp_path / "storage" / "store": "market data"},
         )
         output = capsys.readouterr().out
         assert "custom-project" in output
         assert "dlightrag_agent_workspaces" in output
+        assert all(f"volume kept:          {key}" in output for key in _reset._KEPT_COMPOSE_VOLUMES)
+        assert f"path kept:            {tmp_path / 'storage' / 'store'} (market data)" in output
 
 
 class TestSeparationFromWorkspaceReset:

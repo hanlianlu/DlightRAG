@@ -33,7 +33,7 @@
         "packages/memory/src",
         "packages/mineru/src",
         "packages/observability/src",
-        "chart-render"
+        "chart-render",
       ]
     }
   ]

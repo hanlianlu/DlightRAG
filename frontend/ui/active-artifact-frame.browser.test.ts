@@ -6,11 +6,11 @@ import type {DlActiveArtifactFrame} from './active-artifact-frame.ts';
 
 afterEach(() => { document.body.replaceChildren(); });
 
-/** Resolves when the page next receives exactly this message, which a frame posts to say it got that far. */
+/** Resolves when the page next receives exactly this message from a sandboxed (opaque-origin) frame. */
 function messageFromFrame(text: string): Promise<void> {
   return new Promise((resolve) => {
     const receive = (event: MessageEvent): void => {
-      if (event.data !== text) return;
+      if (event.origin !== 'null' || event.data !== text) return;
       window.removeEventListener('message', receive);
       resolve();
     };

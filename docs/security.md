@@ -533,7 +533,8 @@ Execution modes:
 - `disabled`: no local execution tools;
 - `trust`: rooted file tools, and every Agent process runs under a kernel-enforced
   allow-list — the Agentspace plus the runtime the toolchain needs and the
-  layers capabilities declare. The corpus tree, the deployment's configuration, the
+  layers capabilities declare, which are read-only (executable only where the capability
+  runs what it serves). The corpus tree, the deployment's configuration, the
   project tree, and other Runs' Agentspaces stay outside that view
   ([ADR 0024](adr/0024-the-agent-sees-only-its-workspace.md)). Bash keeps the service
   user's network authority, which is the deployment's to enforce with a network

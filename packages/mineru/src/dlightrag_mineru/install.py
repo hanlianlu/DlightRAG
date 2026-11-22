@@ -234,14 +234,17 @@ def materialize(environment: Path) -> Path:
     )
 
     launcher = directory / LAUNCHER_NAME
-    launcher.chmod(launcher.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    launcher.chmod(stat.S_IRWXU)
     return launcher
 
 
 def _write_atomically(destination: Path, text: str) -> None:
-    """Replace a placed file in one step, so a running service never execs a half file."""
+    """Replace a placed file in one step, so a running service never execs a half file.
+
+    Only the owner reads it: the service is a ``--user`` unit of the user who installed it.
+    """
     temporary = destination.with_name(f".{destination.name}.tmp")
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             handle.write(text)
