@@ -406,7 +406,7 @@ async def test_downloads_are_admitted_with_the_call_that_made_them() -> None:
 
         linked_note = re.search(
             r"Downloaded data\.csv \(text/csv, 8 bytes\) as (res-\w+) \(browser_download\); "
-            r"read\(resource_id='\1'\) reads it\.",
+            r"read_resource\(resource_id='\1'\) reads it\.",
             linked.text_content,
         )
         assert linked_note is not None
@@ -786,5 +786,5 @@ async def test_a_browser_that_disconnects_while_a_page_settles_is_reported_and_l
 
 async def read(reader: ResourceReader, resource_id: str) -> str:
     request = ResourceReadRequest(resource_id=resource_id, url=None, focus=None, cursor=None)
-    result = await reader(request, recording_tool_runtime([], tool_name="read"))
+    result = await reader(request, recording_tool_runtime([], tool_name="read_resource"))
     return result.text_content

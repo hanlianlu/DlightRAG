@@ -352,7 +352,7 @@ async def test_captures_and_downloads_settle_with_their_call_and_restore_without
         for resource_id, original in ((download_id, "read-download"), (capture_id, "read-capture")):
             again = await read(
                 ResourceReadRequest(resource_id=resource_id, url=None, focus=None, cursor=None),
-                tool_runtime(tool_name="read"),
+                tool_runtime(tool_name="read_resource"),
             )
             # The model saw the read under the citation label its evidence was given.
             assert again.text_content in model.results[original]
