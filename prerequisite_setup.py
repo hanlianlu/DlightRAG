@@ -744,18 +744,19 @@ def _ask_required(ask: Callable[[], str]) -> str:
             return value
 
 
-def _ask_extra_web_keys(prompter: Prompter, label: str) -> list[str]:
-    """The interchangeable keys beside a provider's first one; blank means none.
+def _ask_web_keys(prompter: Prompter, label: str) -> str:
+    """One provider's interchangeable keys as a comma-separated run; at least one is required.
 
-    A deployment with one account answers nothing and writes nothing, exactly as before.
-    A deployment with several accounts writes them as one comma-separated pool, which the
-    provider rotates over before the ordered chain falls through to the next provider.
+    The pool is what the provider rotates over; the ordered chain falls through to the next
+    provider only once every key in it has refused.
     """
-    raw = prompter.password(
-        f"More {label} API keys to rotate over, comma-separated (optional) · "
-        f"更多 {label} 密钥用于轮换（逗号分隔，可留空）"
-    )
-    return [key.strip() for key in raw.replace("\n", ",").split(",") if key.strip()]
+    while True:
+        raw = prompter.password(
+            f"{label} API keys, comma-separated (required) · {label} API 密钥（逗号分隔，必填）"
+        )
+        keys = [key.strip() for key in raw.replace("\n", ",").split(",") if key.strip()]
+        if keys:
+            return ",".join(keys)
 
 
 def _ask_model(
@@ -987,7 +988,7 @@ def run_web_research_step(
                 WEB_TAVILY.lower() if extract_first == WEB_EXA else WEB_EXA.lower(),
             ]
 
-    deepseek_env = "DLIGHTRAG_ANSWER__WEB_SOURCES__DEEPSEEK__API_KEY"
+    deepseek_env = "DLIGHTRAG_ANSWER__WEB_SOURCES__DEEPSEEK__API_KEYS"
     if choice != WEB_DISABLE and prompter.confirm(
         "Add DeepSeek as the last Web search/extract fallback? · "
         "加入 DeepSeek 作为网络搜索/提取的最后一层？",
@@ -998,32 +999,13 @@ def run_web_research_step(
         extract_order.append("deepseek")
 
     env_values: dict[str, str] = {}
-    exa_env = "DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEY"
-    exa_extra_env = "DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEYS"
-    tavily_env = "DLIGHTRAG_ANSWER__WEB_SOURCES__TAVILY__API_KEY"
-    tavily_extra_env = "DLIGHTRAG_ANSWER__WEB_SOURCES__TAVILY__API_KEYS"
-    deepseek_extra_env = "DLIGHTRAG_ANSWER__WEB_SOURCES__DEEPSEEK__API_KEYS"
-    remove = [
-        "DLIGHTRAG_ANSWER__WEB_SEARCH__API_KEY",
-        exa_env,
-        exa_extra_env,
-        tavily_env,
-        tavily_extra_env,
-        deepseek_env,
-        deepseek_extra_env,
-    ]
-    if "exa" in providers:
-        env_values[exa_env] = _ask_required(lambda: prompter.password("Exa API key (required)"))
-        extra = _ask_extra_web_keys(prompter, "Exa")
-        if extra:
-            env_values[exa_extra_env] = ",".join(extra)
-    if "tavily" in providers:
-        env_values[tavily_env] = _ask_required(
-            lambda: prompter.password("Tavily API key (required)")
-        )
-        extra = _ask_extra_web_keys(prompter, "Tavily")
-        if extra:
-            env_values[tavily_extra_env] = ",".join(extra)
+    exa_env = "DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEYS"
+    tavily_env = "DLIGHTRAG_ANSWER__WEB_SOURCES__TAVILY__API_KEYS"
+    web_env = {"exa": exa_env, "tavily": tavily_env, "deepseek": deepseek_env}
+    remove = [*web_env.values()]
+    for provider in ("exa", "tavily"):
+        if provider in providers:
+            env_values[web_env[provider]] = _ask_web_keys(prompter, provider.capitalize())
     if "deepseek" in providers:
         model_key = _deepseek_model_key()
         if model_key is not None and prompter.confirm(
@@ -1031,12 +1013,7 @@ def run_web_research_step(
         ):
             env_values[deepseek_env] = model_key
         else:
-            env_values[deepseek_env] = _ask_required(
-                lambda: prompter.password("DeepSeek API key (required)")
-            )
-            extra = _ask_extra_web_keys(prompter, "DeepSeek")
-            if extra:
-                env_values[deepseek_extra_env] = ",".join(extra)
+            env_values[deepseek_env] = _ask_web_keys(prompter, "DeepSeek")
     env_existed = ENV_PATH.exists()
     config_existed = CONFIG_PATH.exists()
     env_backup = backup_file(ENV_PATH) if env_existed else None
@@ -1054,9 +1031,6 @@ def run_web_research_step(
             web_sources={
                 "search_providers": search_order,
                 "extract_providers": extract_order,
-                "exa": {"api_key": None},
-                "tavily": {"api_key": None},
-                "deepseek": {"api_key": None},
             },
         )
         validate_config()
@@ -1298,9 +1272,9 @@ def read_config_summary(config_path: Path, env_path: Path) -> dict:
             "LLM": bool(default_settings.api_key),
             "Embedding": bool(embedding.api_key),
             "Rerank": bool(rerank.api_key),
-            "Exa": bool(config.answer.web_sources.exa.all_api_keys()),
-            "Tavily": bool(config.answer.web_sources.tavily.all_api_keys()),
-            "DeepSeek": bool(config.answer.web_sources.deepseek.all_api_keys()),
+            "Exa": bool(config.answer.web_sources.exa.api_keys),
+            "Tavily": bool(config.answer.web_sources.tavily.api_keys),
+            "DeepSeek": bool(config.answer.web_sources.deepseek.api_keys),
         },
     }
 

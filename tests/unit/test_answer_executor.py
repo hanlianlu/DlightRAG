@@ -1132,9 +1132,9 @@ async def test_a_run_tries_hosted_providers_and_its_browser_in_the_configured_or
 
     answer = AnswerSectionSettings(
         web_sources=WebSourcesConfig(
-            exa=WebSourceProviderConfig(api_key="exa-key"),
-            tavily=WebSourceProviderConfig(api_key="tavily-key"),
-            deepseek=WebSourceProviderConfig(api_key="deepseek-key"),
+            exa=WebSourceProviderConfig(api_keys=("exa-key",)),
+            tavily=WebSourceProviderConfig(api_keys=("tavily-key",)),
+            deepseek=WebSourceProviderConfig(api_keys=("deepseek-key",)),
             extract_providers=extract_providers,  # pyright: ignore[reportArgumentType]
         ),
         agent=AgentExecutionConfig(

@@ -1,16 +1,15 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """One provider, several interchangeable credentials.
 
-A provider adapter is written for one API key. This wrapper gives the same provider
-name a pool of them: Search and Extract each rotate over the pool, and the ordered
-provider chain falls through to the next provider only once every credential this
-operation could try has refused. That keeps one source's quota multiplication inside
-the source, where the chain's own contract — first provider that answers supplies the
-whole result — needs no change.
+A provider adapter is written for one API key. This wrapper gives the same provider name a
+pool of them: Search and Extract each rotate over the pool, and the ordered provider chain
+falls through to the next provider only once every credential this operation could try has
+refused. That keeps one source's quota multiplication inside the source, where the chain's
+contract — first provider that answers supplies the whole result — needs no change.
 
-The wrapper is separate from the adapters on purpose: it knows the provider-neutral
-contract and the two failure classes, never a provider's request shape, so another
-provider joins by passing its adapter factory and its secrets.
+The wrapper is separate from the adapters on purpose: it knows the provider-neutral contract
+and the two failure classes, never a provider's request shape, so another provider joins by
+passing its adapter factory and its secrets.
 """
 
 from __future__ import annotations
@@ -40,8 +39,6 @@ logger = logging.getLogger(__name__)
 #: credential stays eligible and only the rotation moves on.
 _CREDENTIAL_COOLING_REASONS = frozenset({"unauthorized", "payment_required", "rate_limited"})
 
-#: What one provider's adapter offers. The pool builds one per credential, so closing the
-#: wrapper closes them all.
 ResultT = TypeVar("ResultT", WebSearchResult, WebExtractResult)
 
 
@@ -57,9 +54,9 @@ class RotatingWebSource:
     """A Web source served by a pool of interchangeable API keys.
 
     ``name`` is the provider name the chain and the acquisition metadata already use; the
-    credential that answered is an operator fact that rides the log line, never the
-    model's text. Search and Extract rotate independently because a provider out of
-    search credit may still serve an extraction, as the chain already assumes.
+    credential that answered is an operator fact that rides the log line, never the model's
+    text. Search and Extract rotate independently because a provider out of search credit
+    may still serve an extraction, as the chain already assumes.
     """
 
     def __init__(
@@ -78,8 +75,8 @@ class RotatingWebSource:
             cooldown_seconds=cooldown_seconds,
             clock=clock,
         )
-        # Both pools are built from the same secrets and numbers, so one index names the
-        # same key in each and one map of clients serves both operations.
+        # Both pools are built from the same secrets, so one index names the same key in
+        # each and one map of clients serves both operations.
         self._adapters = {
             credential.index: build(credential.secret)
             for credential in self._search_pool.credentials
@@ -122,21 +119,20 @@ class RotatingWebSource:
         """Ask the pool's credentials in rotation order and hand back the first answer.
 
         When every credential is cooling the pool yields one probe, so the provider's
-        recovery is noticed without waiting for a timer nobody reads; a failed probe ends
-        the walk, because nothing else this operation can try is eligible. Each failed
-        attempt is logged once, with the credential's position — never its secret — so an
-        operator can tell a dead key from a dead provider.
+        recovery is noticed without waiting for a timer nobody reads. Each failed attempt is
+        logged once, with the credential's position — never its secret — so an operator can
+        tell a dead key from a dead provider.
         """
         failures: list[WebSourceUnavailable] = []
-        for lease in pool.attempts():
-            adapter = self._adapters[lease.credential.index]
+        for credential in pool.attempts():
+            adapter = self._adapters[credential.index]
             try:
                 result = await attempt(adapter)
             except asyncio.CancelledError:
                 raise
             except WebSourceUnavailable as exc:
                 failures.append(exc)
-                pool.release(lease.credential, cooling=exc.reason in _CREDENTIAL_COOLING_REASONS)
+                pool.release(credential, cooling=exc.reason in _CREDENTIAL_COOLING_REASONS)
                 logger.warning(
                     "Web %s credential unavailable",
                     operation,
@@ -145,14 +141,13 @@ class RotatingWebSource:
                         "operation": operation,
                         "reason": exc.reason,
                         "status": exc.status,
-                        "credential": self._label(lease.credential),
-                        "probe": lease.probe,
+                        "credential": self._label(credential),
                     },
                 )
                 continue
             except Exception as exc:
                 failures.append(WebSourceUnavailable(self.name, operation, "error"))
-                pool.release(lease.credential, cooling=False)
+                pool.release(credential, cooling=False)
                 logger.warning(
                     "Web %s credential failed",
                     operation,
@@ -161,12 +156,11 @@ class RotatingWebSource:
                         "provider": self.name,
                         "operation": operation,
                         "reason": "error",
-                        "credential": self._label(lease.credential),
-                        "probe": lease.probe,
+                        "credential": self._label(credential),
                     },
                 )
                 continue
-            pool.release(lease.credential, cooling=False)
+            pool.release(credential, cooling=False)
             return result
         raise _exhausted(self.name, operation, failures)
 
@@ -179,16 +173,13 @@ def _exhausted(
 ) -> WebSourceUnavailable:
     """The one bounded summary the chain receives for a provider whose keys all refused.
 
-    One failure speaks for itself, so a single-key provider keeps the adapter's own
-    reason. When every credential of a multi-key pool refused on credentials, credit, or
-    rate, ``exhausted`` is the condition to park the provider on; a pool that also saw a
-    failure about the call keeps the mixed reasons, because another credential may still
-    answer next time and the chain should not leave the whole provider alone for a minute.
+    Every credential out on credentials, credit, or rate is ``exhausted`` — the condition to
+    park the provider on. A pool that also saw a failure about the call keeps the mixed
+    reasons, because another credential may still answer next time and the chain should not
+    leave the whole provider alone.
     """
     if not failures:
         return WebSourceUnavailable(name, operation, "not_configured")
-    if len(failures) == 1:
-        return WebSourceUnavailable(name, operation, failures[0].reason, status=failures[0].status)
     reasons = list(dict.fromkeys(failure.reason for failure in failures))
     if all(reason in _CREDENTIAL_COOLING_REASONS for reason in reasons):
         return WebSourceUnavailable(name, operation, "exhausted")

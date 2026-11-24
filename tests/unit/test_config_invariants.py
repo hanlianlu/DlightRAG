@@ -384,8 +384,8 @@ def test_incomplete_secret_only_role_error_never_echoes_key(
 
 def test_web_source_orders_derive_from_available_credentials() -> None:
     config = WebSourcesConfig(
-        exa=WebSourceProviderConfig(api_key="exa-key"),
-        tavily=WebSourceProviderConfig(api_key="tavily-key"),
+        exa=WebSourceProviderConfig(api_keys=("exa-key",)),
+        tavily=WebSourceProviderConfig(api_keys=("tavily-key",)),
     )
 
     assert config.search_order() == ("exa", "tavily")
@@ -394,23 +394,23 @@ def test_web_source_orders_derive_from_available_credentials() -> None:
 
 def test_web_source_orders_put_deepseek_last_whatever_order_the_keys_were_given_in() -> None:
     config = WebSourcesConfig(
-        deepseek=WebSourceProviderConfig(api_key="deepseek-key"),
-        tavily=WebSourceProviderConfig(api_key="tavily-key"),
-        exa=WebSourceProviderConfig(api_key="exa-key"),
+        deepseek=WebSourceProviderConfig(api_keys=("deepseek-key",)),
+        tavily=WebSourceProviderConfig(api_keys=("tavily-key",)),
+        exa=WebSourceProviderConfig(api_keys=("exa-key",)),
     )
 
     assert config.configured_providers() == ("exa", "tavily", "deepseek")
     assert config.search_order() == ("exa", "tavily", "deepseek")
     assert config.extract_order() == ("exa", "tavily", "deepseek")
     assert WebSourcesConfig(
-        deepseek=WebSourceProviderConfig(api_key="deepseek-key")
+        deepseek=WebSourceProviderConfig(api_keys=("deepseek-key",))
     ).search_order() == ("deepseek",)
 
 
 def test_web_source_orders_may_name_deepseek_anywhere_and_the_browser_beside_it() -> None:
     config = WebSourcesConfig(
-        exa=WebSourceProviderConfig(api_key="exa-key"),
-        deepseek=WebSourceProviderConfig(api_key="deepseek-key"),
+        exa=WebSourceProviderConfig(api_keys=("exa-key",)),
+        deepseek=WebSourceProviderConfig(api_keys=("deepseek-key",)),
         search_providers=("deepseek", "exa"),
         extract_providers=("deepseek", "browser", "exa"),
     )
@@ -421,18 +421,18 @@ def test_web_source_orders_may_name_deepseek_anywhere_and_the_browser_beside_it(
 
 @pytest.mark.parametrize("field", ["search_providers", "extract_providers"])
 def test_web_source_order_naming_deepseek_without_its_key_is_refused(field: str) -> None:
-    with pytest.raises(ValidationError, match="lack api_key: deepseek"):
+    with pytest.raises(ValidationError, match="lack API keys: deepseek"):
         WebSourcesConfig(
-            exa=WebSourceProviderConfig(api_key="exa-key"),
+            exa=WebSourceProviderConfig(api_keys=("exa-key",)),
             **{field: ("exa", "deepseek")},  # pyright: ignore[reportArgumentType]
         )
 
 
 def test_the_extract_chain_puts_a_configured_browser_after_deepseek() -> None:
     web_sources = WebSourcesConfig(
-        exa=WebSourceProviderConfig(api_key="exa-key"),
-        tavily=WebSourceProviderConfig(api_key="tavily-key"),
-        deepseek=WebSourceProviderConfig(api_key="deepseek-key"),
+        exa=WebSourceProviderConfig(api_keys=("exa-key",)),
+        tavily=WebSourceProviderConfig(api_keys=("tavily-key",)),
+        deepseek=WebSourceProviderConfig(api_keys=("deepseek-key",)),
     )
     browser = AgentBrowserConfig(
         endpoints=("ws://agent-browser-1:3000/",),
@@ -454,20 +454,20 @@ def test_the_deepseek_web_key_comes_from_its_environment_variable(
     monkeypatch.chdir(tmp_path)
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "DLIGHTRAG_ANSWER__WEB_SOURCES__DEEPSEEK__API_KEY=deepseek-key\n", encoding="utf-8"
+        "DLIGHTRAG_ANSWER__WEB_SOURCES__DEEPSEEK__API_KEYS=deepseek-key\n", encoding="utf-8"
     )
 
     config = load_config(env_file)
 
-    assert config.answer.web_sources.deepseek.api_key == "deepseek-key"
+    assert config.answer.web_sources.deepseek.api_keys == ("deepseek-key",)
     assert config.answer.web_sources.search_order() == ("deepseek",)
     assert "deepseek-key" not in repr(config)
 
 
 def test_web_source_orders_are_independent_and_empty_disables_operation() -> None:
     config = WebSourcesConfig(
-        exa=WebSourceProviderConfig(api_key="exa-key"),
-        tavily=WebSourceProviderConfig(api_key="tavily-key"),
+        exa=WebSourceProviderConfig(api_keys=("exa-key",)),
+        tavily=WebSourceProviderConfig(api_keys=("tavily-key",)),
         search_providers=("tavily", "exa"),
         extract_providers=(),
     )
@@ -477,73 +477,76 @@ def test_web_source_orders_are_independent_and_empty_disables_operation() -> Non
 
 
 def test_web_source_order_rejects_provider_without_credential() -> None:
-    with pytest.raises(ValidationError, match="lack api_key"):
+    with pytest.raises(ValidationError, match="lack API keys"):
         WebSourcesConfig(search_providers=("tavily",))
 
 
 def test_web_source_order_rejects_duplicate_provider() -> None:
     with pytest.raises(ValidationError, match="contain duplicates"):
         WebSourcesConfig(
-            exa=WebSourceProviderConfig(api_key="exa-key"),
+            exa=WebSourceProviderConfig(api_keys=("exa-key",)),
             search_providers=("exa", "exa"),
         )
 
 
-def test_a_providers_extra_keys_join_one_rotation_pool() -> None:
-    """One key is the historical single-key setup; extra keys multiply it, never replace it."""
-    single = WebSourcesConfig(exa=WebSourceProviderConfig(api_key="exa-one"))
-    pair = WebSourcesConfig(
-        exa=WebSourceProviderConfig(api_key="exa-one", api_keys=("exa-two", "exa-one"))
+def test_a_providers_keys_are_one_rotation_pool() -> None:
+    config = WebSourcesConfig(
+        exa=WebSourceProviderConfig(api_keys=("exa-two", "exa-one", "exa-two")),
+        tavily=WebSourceProviderConfig(api_keys=("tavily-one",)),
     )
-    extras_only = WebSourcesConfig(exa=WebSourceProviderConfig(api_keys=("exa-one", "exa-two")))
 
-    assert single.exa.all_api_keys() == ("exa-one",)
-    assert pair.exa.all_api_keys() == ("exa-one", "exa-two"), "duplicates collapse, order holds"
-    assert extras_only.exa.all_api_keys() == ("exa-one", "exa-two")
-    # A key may arrive only in the plural setting and still derive the same order.
-    assert extras_only.search_order() == ("exa",)
-    assert extras_only.extract_order() == ("exa",)
+    assert config.exa.api_keys == ("exa-two", "exa-one"), "duplicates collapse, order holds"
+    assert config.tavily.api_keys == ("tavily-one",)
+    assert config.search_order() == ("exa", "tavily")
+    assert config.extract_order() == ("exa", "tavily")
 
 
-def test_an_empty_key_in_the_plural_setting_is_an_unset_one() -> None:
+def test_blank_key_entries_are_unset_and_trimmed() -> None:
     assert WebSourceProviderConfig(api_keys=("  ", "\n")).api_keys == ()
     assert WebSourceProviderConfig(api_keys="").api_keys == ()  # pyright: ignore[reportArgumentType]
     assert WebSourceProviderConfig(api_keys=None).api_keys == ()  # pyright: ignore[reportArgumentType]
-    assert WebSourceProviderConfig(api_keys=(" exa-one ", "exa-two", "exa-one")).all_api_keys() == (
+    assert WebSourceProviderConfig(
+        api_keys=" exa-one , exa-two ,exa-one"  # pyright: ignore[reportArgumentType]
+    ).api_keys == (
         "exa-one",
         "exa-two",
     )
 
 
+def test_the_removed_single_key_setting_is_refused() -> None:
+    """The plural setting is the only credential field; the old one fails loudly."""
+    with pytest.raises(ValidationError, match="api_key"):
+        WebSourceProviderConfig(api_key="exa-key")  # pyright: ignore[reportCallIssue,reportArgumentType]
+
+
 @pytest.mark.parametrize(
     "value",
     [
-        pytest.param('["unterminated', id="malformed-json"),
+        pytest.param('["unterminated', id="json-array-is-refused"),
         pytest.param(1, id="not-a-list"),
         pytest.param(("key", 1), id="non-string-entry"),
     ],
 )
-def test_the_plural_key_setting_refuses_a_shape_it_cannot_read(value: object) -> None:
+def test_the_key_setting_refuses_a_shape_it_cannot_read(value: object) -> None:
     with pytest.raises(ValidationError):
         WebSourceProviderConfig(api_keys=value)  # pyright: ignore[reportArgumentType]
 
 
-def test_the_web_key_pool_comes_from_the_environment_as_a_list_or_a_run(
+def test_the_web_key_pool_comes_from_the_environment_as_a_run(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEY=exa-one\n"
-        'DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEYS=\'["exa-two", "exa-three"]\'\n'
+        "DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEYS=exa-one,exa-two, exa-three\n"
         "DLIGHTRAG_ANSWER__WEB_SOURCES__TAVILY__API_KEYS=tavily-one,tavily-two\n",
         encoding="utf-8",
     )
 
     config = load_config(env_file)
 
-    assert config.answer.web_sources.exa.all_api_keys() == ("exa-one", "exa-two", "exa-three")
-    assert config.answer.web_sources.tavily.all_api_keys() == ("tavily-one", "tavily-two")
+    assert config.answer.web_sources.exa.api_keys == ("exa-one", "exa-two", "exa-three")
+    assert config.answer.web_sources.tavily.api_keys == ("tavily-one", "tavily-two")
     assert config.answer.web_sources.search_order() == ("exa", "tavily")
     assert "exa-two" not in repr(config) and "tavily-one" not in repr(config)
 
@@ -613,9 +616,9 @@ def test_nested_secret_settings_never_render_in_repr() -> None:
         ),
         AccessSectionSettings(api_token=_SECRET, jwt_verification_key=_SECRET),
         ObservabilitySettings(otlp_headers={"authorization": _SECRET}, browser_api_key=_SECRET),
-        WebSourceProviderConfig(api_key=_SECRET),
         WebSourceProviderConfig(api_keys=(_SECRET,)),
-        WebSourcesConfig(exa=WebSourceProviderConfig(api_key=_SECRET)),
+        WebSourceProviderConfig(api_keys=(_SECRET,)),
+        WebSourcesConfig(exa=WebSourceProviderConfig(api_keys=(_SECRET,))),
         WebSourcesConfig(tavily=WebSourceProviderConfig(api_keys=(_SECRET,))),
         AgentMailboxConfig(
             bucket="agent-mail",
@@ -630,7 +633,7 @@ def test_nested_secret_settings_never_render_in_repr() -> None:
             tavily_api_keys=(_SECRET,),
             deepseek_api_keys=(_SECRET,),
         ),
-        WebSourcesConfig(deepseek=WebSourceProviderConfig(api_key=_SECRET)),
+        WebSourcesConfig(deepseek=WebSourceProviderConfig(api_keys=(_SECRET,))),
         AuthenticationSettings(api_token=_SECRET, jwt_verification_key=_SECRET),
     ]
     for item in rendered:

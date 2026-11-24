@@ -100,19 +100,15 @@ async def test_the_pool_raises_exhausted_once_every_key_has_refused() -> None:
     assert (first.search_calls, second.search_calls) == (2, 1)
 
 
-async def test_a_single_key_pool_keeps_the_adapters_own_reason() -> None:
-    """One key is the deployment that always existed; its failures read exactly as before."""
+async def test_a_pool_of_one_reads_exhausted_when_its_key_is_out() -> None:
+    """One key is a pool of one: the provider is out, and the chain parks it."""
     first = _KeyedStub("only", search=_refused("payment_required", status=402))
     source = _source({"only": first}, secrets=("only",))
 
     with pytest.raises(WebSourceUnavailable) as refused:
         await source.search(WebSearchRequest("q"))
 
-    assert (refused.value.provider, refused.value.reason, refused.value.status) == (
-        "exa",
-        "payment_required",
-        402,
-    )
+    assert (refused.value.provider, refused.value.reason) == ("exa", "exhausted")
 
 
 async def test_a_mixed_pool_reports_the_reasons_instead_of_hiding_them() -> None:

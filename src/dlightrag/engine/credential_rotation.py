@@ -1,17 +1,15 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Rotation over interchangeable credentials for one provider and operation.
 
-A provider that accepts several API keys can multiply its quota and spread a per-key
-rate limit across them. This module owns only the availability policy: which credential
-to ask next, which ones said "not now", and when one is worth probing again. The caller
-runs its own operation and reports the outcome, so the policy is reusable by any provider
-whose credentials are interchangeable and whose failures split the same two ways — a
-failure about this call, which the next call may not repeat, and a failure about the
-credential, which it will.
+A provider that accepts several API keys can multiply its quota and spread a per-key rate
+limit. This module owns only that availability policy: which credential to ask next, which
+ones said "not now", and when one is worth probing again. The caller runs the operation and
+reports the outcome, so the policy is reusable by any provider whose credentials are
+interchangeable and whose failures split the same two ways — a failure about this call,
+which the next call may not repeat, and a failure about the credential, which it will.
 
-State is per (provider, operation) pool rather than global, because one leg's credit
-says nothing about the other's: a provider out of search credit may still serve an
-extraction, exactly as the ordered provider chain treats the two operations.
+State is per (provider, operation) pool, because one leg's credit says nothing about the
+other's: a provider out of search credit may still serve an extraction.
 """
 
 from __future__ import annotations
@@ -21,50 +19,31 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 
 #: How long a credential that said it is out of reach is left alone. Long enough that a
-#: burst does not pay a dead credential's round trip on every call, short enough that a
-#: top-up or a lifted rate limit is picked up within a minute of it happening.
+#: burst does not pay a dead credential's round trip, short enough that a top-up or a lifted
+#: rate limit is picked up within a minute of it happening.
 DEFAULT_COOLDOWN_SECONDS = 60.0
 
 
 @dataclass(frozen=True, slots=True)
 class Credential:
-    """One interchangeable credential.
-
-    ``index`` is its 1-based position in the pool: the only part of it a log line or a
-    diagnostic may carry. ``secret`` never renders, and never reaches a log record.
-    """
+    """One interchangeable credential; ``index`` is its 1-based place, never its secret."""
 
     index: int
     secret: str = field(repr=False)
 
 
-@dataclass(frozen=True, slots=True)
-class CredentialLease:
-    """One credential a caller should try, and whether trying it tests a recovery.
-
-    A probe is the single attempt that goes out when every credential is cooling: it is
-    what notices a top-up or a lifted rate limit that happened a second after a burst,
-    rather than waiting for a timer nobody reads. A caller stops after a failed probe.
-    """
-
-    credential: Credential
-    probe: bool = False
-
-
 class CredentialPool:
     """Rotate over one provider's interchangeable credentials for one operation.
 
-    A call walks :meth:`attempts` and reports each outcome with :meth:`release`, which
-    is what keeps the pool's memory of a credential current: ``cooling=True`` means a
-    credential-level failure (refused, out of credit, over a rate limit) and parks that
-    credential for ``cooldown_seconds``; ``cooling=False`` means the credential answered
-    or failed about this call, and clears any cooldown it carried.
+    A call walks :meth:`attempts` and reports each outcome with :meth:`release`.
+    ``cooling=True`` means a credential-level failure (refused, out of credit, over a rate
+    limit) and parks that credential for ``cooldown_seconds``; ``cooling=False`` means the
+    credential answered or failed about this call, and clears any cooldown it carried.
 
-    Rotation asks the credential leased longest ago first, so load spreads across the
-    pool instead of draining the first key before touching the second — which is also
-    what keeps a per-key rate limit from greeting every call. When every credential is
-    cooling, :meth:`attempts` yields exactly one probe, the credential whose cooldown
-    ends first; the chain's own order settles a tie.
+    Rotation asks the credential leased longest ago first, so load spreads across the pool
+    instead of draining the first key — which is also what keeps a per-key rate limit from
+    greeting every call. When every credential is cooling, :meth:`attempts` yields exactly
+    one probe: the credential whose cooldown ends first.
     """
 
     def __init__(
@@ -79,7 +58,6 @@ class CredentialPool:
         self._clock = clock or time.monotonic
         #: The rotation order, least recently leased first.
         self._order = list(self._credentials)
-        #: ``index -> the monotonic time the credential may be asked again``.
         self._cooling_until: dict[int, float] = {}
 
     @property
@@ -90,14 +68,12 @@ class CredentialPool:
     def __len__(self) -> int:
         return len(self._credentials)
 
-    def attempts(self) -> Iterator[CredentialLease]:
+    def attempts(self) -> Iterator[Credential]:
         """Yield the credentials this call should try, in order, and nothing when empty.
 
-        The candidates are settled when iteration starts: a credential that another
-        concurrent call cools mid-walk is still tried here rather than skipped, because
-        it was eligible when this call began and its answer is the only evidence that
-        would clear it. A credential that failed a credential-level check during this
-        same walk is not retried, because ``attempts`` yields each one once.
+        The candidates are settled when iteration starts: a credential another concurrent
+        call cools mid-walk is still tried here, because it was eligible when this call
+        began. Each is yielded once, so a failed credential is never retried in the walk.
         """
         now = self._clock()
         ready = [
@@ -108,27 +84,19 @@ class CredentialPool:
         if ready:
             for credential in ready:
                 self._lease(credential)
-                yield CredentialLease(credential)
+                yield credential
             return
-        if not self._credentials:
-            return
-        probe = min(
-            self._order,
-            key=lambda credential: self._cooling_until[credential.index],
-        )
-        self._lease(probe)
-        yield CredentialLease(probe, probe=True)
+        if self._credentials:
+            probe = min(self._order, key=lambda item: self._cooling_until[item.index])
+            self._lease(probe)
+            yield probe
 
     def release(self, credential: Credential, *, cooling: bool) -> None:
         """Report one attempt's outcome.
 
-        A probe that fails again stays out for a fresh window, measured from the answer
-        that refused it rather than from the burst that first parked it. An answer, or a
-        failure about this call, clears the cooldown: the credential is eligible again,
-        and the rotation order already put it behind the credentials this call skipped.
+        A probe that fails again stays out for a fresh window, measured from the answer that
+        refused it. An answer, or a failure about this call, clears the cooldown.
         """
-        if credential not in self._credentials:
-            raise ValueError("Credential does not belong to this pool")
         if cooling:
             self._cooling_until[credential.index] = self._clock() + self._cooldown_seconds
         else:
@@ -140,10 +108,10 @@ class CredentialPool:
 
 
 def _unique_credentials(secrets: Sequence[str]) -> tuple[Credential, ...]:
-    """The configured secrets, deduplicated, numbered for a log line and never rendered.
+    """The configured secrets, deduplicated and numbered for a log line and never rendered.
 
-    A blank secret is a configuration error rather than a credential that can never
-    answer: a pool that silently carried one would spend a call on it first.
+    A blank secret is a configuration error rather than a credential that can never answer:
+    a pool that silently carried one would spend a call on it first.
     """
     unique: list[str] = []
     for secret in secrets:
@@ -158,6 +126,5 @@ def _unique_credentials(secrets: Sequence[str]) -> tuple[Credential, ...]:
 __all__ = [
     "DEFAULT_COOLDOWN_SECONDS",
     "Credential",
-    "CredentialLease",
     "CredentialPool",
 ]

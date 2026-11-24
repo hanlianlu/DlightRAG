@@ -137,9 +137,9 @@ def answer_model_runtime_settings(config: DlightragConfig) -> AnswerModelRuntime
     return AnswerModelRuntimeSettings(
         model_roles=config.models.chat,
         web_sources=WebSourceRuntimeSettings(
-            exa_api_keys=web.exa.all_api_keys(),
-            tavily_api_keys=web.tavily.all_api_keys(),
-            deepseek_api_keys=web.deepseek.all_api_keys(),
+            exa_api_keys=web.exa.api_keys,
+            tavily_api_keys=web.tavily.api_keys,
+            deepseek_api_keys=web.deepseek.api_keys,
             search_providers=web.search_order(),
             extract_providers=config.answer.extract_chain(),
         ),

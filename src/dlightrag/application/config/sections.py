@@ -791,55 +791,29 @@ class WebConversationsConfig(BaseModel):
 
 
 class WebSourceProviderConfig(BaseModel):
-    """Credentials for one first-class Web source provider.
+    """The interchangeable API keys of one first-class Web source provider.
 
-    ``api_key`` is the deployment's one key and what every single-key setup has always
-    set. ``api_keys`` adds interchangeable keys beside it: the provider rotates over the
-    combined pool, so a second account multiplies the quota instead of sitting idle. A
-    blank entry is an unset one, duplicates collapse, and order is the order to rotate in.
-    Both fields are secrets; both stay in ``.env`` (ADR 0006), and neither renders.
+    Order is rotation order, a blank entry is unset, duplicates collapse, and one key is a
+    pool of one. The keys are secrets: they stay in ``.env`` (ADR 0006) and never render.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
-    api_key: str | None = Field(default=None, repr=False)
     api_keys: Annotated[tuple[str, ...], NoDecode] = Field(default=(), repr=False)
-
-    @field_validator("api_key", mode="before")
-    @classmethod
-    def _normalize_api_key(cls, value: Any) -> Any:
-        if isinstance(value, str):
-            stripped = value.strip()
-            return stripped or None
-        return value
 
     @field_validator("api_keys", mode="before")
     @classmethod
     def _normalize_api_keys(cls, value: Any) -> tuple[str, ...]:
-        """Accept a JSON array, a comma/newline-separated list, or a single key.
-
-        The environment can carry only text, so a list-shaped setting has to say how its
-        text becomes one. A comma-separated value is the shortest thing an operator writes
-        by hand; a JSON array is what the settings pipeline itself decodes, and a lone key
-        is a pool of one.
-        """
+        """Accept the environment's comma-separated run, or a sequence from YAML."""
         if value is None:
             return ()
         if isinstance(value, str):
             text = value.strip()
-            if not text:
-                return ()
             if text.startswith("["):
-                try:
-                    value = json.loads(text)
-                except json.JSONDecodeError as exc:
-                    raise ValueError(
-                        "api_keys must be a JSON array, a comma-separated list, or one key"
-                    ) from exc
-            else:
-                value = text.replace("\n", ",").split(",")
+                raise ValueError("api_keys is a comma-separated run, not a JSON array")
+            value = text.replace("\n", ",").split(",")
         if not isinstance(value, list | tuple):
-            raise ValueError("api_keys must be a list of keys")
+            raise ValueError("api_keys must be a comma-separated list of keys")
         normalized: list[str] = []
         for item in value:
             if not isinstance(item, str):
@@ -848,14 +822,6 @@ class WebSourceProviderConfig(BaseModel):
             if key and key not in normalized:
                 normalized.append(key)
         return tuple(normalized)
-
-    def all_api_keys(self) -> tuple[str, ...]:
-        """The rotation pool: ``api_key`` first, then the interchangeable keys."""
-        pool: list[str] = []
-        for key in ((self.api_key,) if self.api_key else ()) + self.api_keys:
-            if key not in pool:
-                pool.append(key)
-        return tuple(pool)
 
 
 class WebSourcesConfig(BaseModel):
@@ -866,8 +832,8 @@ class WebSourcesConfig(BaseModel):
     The Extract chain may also name ``browser``, the Agent Browser (ADR 0032), which
     is a configured deployment capability rather than a keyed provider.
 
-    A provider's chain position is the source; several interchangeable keys behind one
-    source rotate inside it, and the chain moves on only when all of them are out.
+    A provider's chain position is the source; its interchangeable keys rotate inside it,
+    and the chain moves on only when all of them are out.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
@@ -891,9 +857,9 @@ class WebSourcesConfig(BaseModel):
         return tuple(
             name
             for name, configured in (
-                ("exa", self.exa.all_api_keys()),
-                ("tavily", self.tavily.all_api_keys()),
-                ("deepseek", self.deepseek.all_api_keys()),
+                ("exa", self.exa.api_keys),
+                ("tavily", self.tavily.api_keys),
+                ("deepseek", self.deepseek.api_keys),
             )
             if configured
         )  # type: ignore[return-value]
@@ -915,9 +881,9 @@ class WebSourcesConfig(BaseModel):
     @model_validator(mode="after")
     def _orders_have_credentials(self) -> WebSourcesConfig:
         keys = {
-            "exa": self.exa.all_api_keys(),
-            "tavily": self.tavily.all_api_keys(),
-            "deepseek": self.deepseek.all_api_keys(),
+            "exa": self.exa.api_keys,
+            "tavily": self.tavily.api_keys,
+            "deepseek": self.deepseek.api_keys,
         }
         for operation, order in (
             ("search", self.search_order()),
@@ -927,7 +893,7 @@ class WebSourcesConfig(BaseModel):
             # section's to check, since the pool is configured beside it.
             missing = [name for name in order if name != "browser" and not keys[name]]
             if missing:
-                raise ValueError(f"Web {operation} provider(s) lack api_key: {', '.join(missing)}")
+                raise ValueError(f"Web {operation} provider(s) lack API keys: {', '.join(missing)}")
         return self
 
 
