@@ -193,14 +193,12 @@ def test_the_agent_browser_is_part_of_the_plan_a_run_is_pinned_to() -> None:
     ]
 
     assert plans[0].digest != plans[1].digest
-    read = {tool.name: tool for tool in browsing}["read"]
+    read = {tool.name: tool for tool in browsing}["read_resource"]
     assert "rendered" in read.definition.parameters["properties"]
     assert "rendered=true" in read.description
     # A Host with no Agent Browser, like a Fast Run, is offered nothing to ask for.
-    assert (
-        "rendered"
-        not in {tool.name: tool for tool in plain}["read"].definition.parameters["properties"]
-    )
+    plain_read = {tool.name: tool for tool in plain}["read_resource"]
+    assert "rendered" not in plain_read.definition.parameters["properties"]
 
 
 @pytest.mark.parametrize("child", [False, True])
@@ -250,6 +248,7 @@ def test_only_tools_that_change_nothing_outside_their_run_are_read_only(tmp_path
         "search_knowledge_base",
         "search_web",
         "read",
+        "read_resource",
         "view",
         "ls",
         "grep",
@@ -308,7 +307,7 @@ def test_materialize_states_what_copies_and_that_the_copy_is_not_the_source() ->
     description = declared["materialize"].description
     assert "Agent Browser downloads and captures" in description
     assert "an earlier turn's Resources and Artifacts all copy" in description
-    assert "cite what read returns from it, never the copy" in description
+    assert "cite what read_resource returns from it, never the copy" in description
     assert "Agent Browser" not in materialize_declaration().description
 
 
@@ -320,17 +319,19 @@ def test_a_workspace_with_no_resource_reading_has_nothing_to_copy() -> None:
     assert "materialize" not in declared
 
 
-def test_read_states_what_a_url_and_an_earlier_artifact_return() -> None:
+def test_read_resource_states_what_a_url_and_an_earlier_artifact_return() -> None:
     publishing = {
         tool.name: tool
         for tool in research_tool_declarations(
             resource_read=True, environment=True, artifact_publication=True
         )
     }
-    read = publishing["read"].description
+    read = publishing["read_resource"].description
 
-    assert "A url read returns the page's full content" in read
-    assert "takes no offset or limit" in read
+    assert "registers the page as a Resource" in read
+    assert "no line offset or limit" in read
+    # The workspace read is a separate Tool and says where a Resource is read instead.
+    assert "read_resource for a url or resource_id" in publishing["read"].description
     assert (
         "An Artifact an earlier Run published is reopened by its resource_id, the "
         f"`{PUBLISHED_ARTIFACT_HANDLE_PREFIX}…` id in its `artifact:` link." in read
@@ -339,7 +340,7 @@ def test_read_states_what_a_url_and_an_earlier_artifact_return() -> None:
     without_publication = {
         tool.name: tool for tool in research_tool_declarations(resource_read=True)
     }
-    assert "reopened by its resource_id" not in without_publication["read"].description
+    assert "reopened by its resource_id" not in without_publication["read_resource"].description
 
 
 def test_skill_declarations_need_no_owner_or_catalogue(tmp_path: Path, monkeypatch) -> None:
@@ -398,3 +399,26 @@ async def test_connection_acceptance_returns_only_the_stored_declaration() -> No
     with pytest.raises(ValueError):
         declaration.input_model.model_validate({"query": 3})
     assert mcp.mock_calls == []
+
+
+def test_a_child_narrowed_to_read_keeps_what_read_could_do_before_the_split() -> None:
+    """ADR 0100: a list naming ``read`` keeps ``read_resource`` too, never more and never less.
+
+    Before the split ``read`` also read Resources, including the spill any Tool's long output
+    continues through; a parent's ``tools=["bash", "read"]`` must not lose that.
+    """
+    kept = {
+        tool.name
+        for tool in research_tool_declarations(
+            resource_read=True, environment=True, child=True, tool_names=("bash", "read")
+        )
+    }
+    assert {"bash", "read", "read_resource"} <= kept
+
+    without_read = {
+        tool.name
+        for tool in research_tool_declarations(
+            resource_read=True, environment=True, child=True, tool_names=("bash",)
+        )
+    }
+    assert "read_resource" not in without_read

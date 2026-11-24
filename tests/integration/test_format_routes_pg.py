@@ -48,7 +48,7 @@ async def test_format_route_host_settlement_and_recovery(pg, monkeypatch, kind):
             if calls == 1:
                 return AssistantTurn(
                     text="",
-                    tool_calls=(ToolCall("read", "read", {"resource_id": resource}),),
+                    tool_calls=(ToolCall("read", "read_resource", {"resource_id": resource}),),
                     stop_reason="tool_use",
                 )
             view_count = 3 if kind == "xlsx" else 1

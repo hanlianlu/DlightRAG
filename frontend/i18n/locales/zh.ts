@@ -296,6 +296,7 @@ export const templates: Record<
   'chatFeature.tool.search_knowledge_base': '正在检索知识库',
   'chatFeature.tool.search_web': '正在网络搜索',
   'chatFeature.tool.read': '正在读取文档',
+  'chatFeature.tool.read_resource': '正在读取文档',
   'chatFeature.tool.browser': '正在使用浏览器',
   'chatFeature.tool.write': '正在写入文件',
   'chatFeature.tool.materialize': '正在将资源复制到工作区',

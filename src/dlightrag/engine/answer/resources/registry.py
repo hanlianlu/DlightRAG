@@ -944,7 +944,7 @@ class ResourceRegistry:
             if cursor is not None and not continues_rendered:
                 raise ResourceCursorError(
                     "this cursor continues the direct representation; "
-                    "call read without rendered=true"
+                    "call read_resource without rendered=true"
                 )
             if resource.url is None:
                 raise RenderedReadTargetError(resource_id)
@@ -1739,7 +1739,7 @@ class ResourceRegistry:
                 else _VISUAL_CURSOR_KIND,
             )
             notes.append(
-                f"Visuals {start + 1}-{end} of {len(view.handles)}; more: read(resource_id={resource.resource_id!r}, cursor={cursor!r})."
+                f"Visuals {start + 1}-{end} of {len(view.handles)}; more: read_resource(resource_id={resource.resource_id!r}, cursor={cursor!r})."
             )
         return tuple(selected), " ".join(notes) or None
 

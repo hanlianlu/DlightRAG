@@ -71,12 +71,12 @@ def test_shared_cursor_codec_rejects_malformed_or_tampered_tokens(damage):
     [
         ("photo.JPG", None, None, "image; view"),
         ("download", "image/png", None, "image; view"),
-        ("report.PDF", None, "pdf", "PDF; read text or view physical pages"),
+        ("report.PDF", None, "pdf", "PDF; read_resource for text or view physical pages"),
         (
             "download",
             "application/pdf; charset=binary",
             "pdf",
-            "PDF; read text or view physical pages",
+            "PDF; read_resource for text or view physical pages",
         ),
         (
             "download",

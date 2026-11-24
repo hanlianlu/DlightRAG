@@ -31,6 +31,7 @@ from dlightrag.engine.agent.tools.files import (
     GrepArgs,
     LsArgs,
     ReadArgs,
+    ReadResourceArgs,
     ViewArgs,
     WriteArgs,
     bash_tool,
@@ -39,6 +40,7 @@ from dlightrag.engine.agent.tools.files import (
     grep_tool,
     ls_tool,
     preview_or_spill,
+    read_resource_tool,
     read_tool,
     view_tool,
     write_tool,
@@ -661,7 +663,7 @@ async def test_path_tool_order_and_hardened_contract_versions(tmp_path: Path) ->
     ]
     versions = {tool.name: tool.contract_version for tool in tools}
     assert versions == {
-        "read": 3,
+        "read": 5,
         "view": 2,
         "bash": 3,
         "edit": 4,
@@ -727,9 +729,9 @@ async def test_every_path_tool_reports_its_subject_before_it_works(tmp_path: Pat
     async def resource_reader(_request: object, _runtime: ToolRuntime) -> ToolResult:
         return ToolResult.text("resource body")
 
-    await read_tool(env, scheduler, resource_reader=resource_reader).execute(
-        ReadArgs(url=""),
-        recording_tool_runtime(named_nothing, tool_name="read"),
+    await read_resource_tool(scheduler, resource_reader=resource_reader).execute(
+        ReadResourceArgs(url=""),
+        recording_tool_runtime(named_nothing, tool_name="read_resource"),
     )
 
     assert named_nothing == []
@@ -864,7 +866,10 @@ async def test_bash_final_control_framing_stays_within_result_bounds(
     assert result.is_error is True
     assert len(result.text_content.encode("utf-8")) <= TOOL_RESULT_MAX_BYTES
     assert len(result.text_content.splitlines()) <= 2000
-    assert "Full output: read(resource_id='spill_bash_bounds', cursor=...)" in result.text_content
+    assert (
+        "Full output: read_resource(resource_id='spill_bash_bounds', cursor=...)"
+        in result.text_content
+    )
     assert "workspace is latched" in result.text_content
     assert result.effects.committed_outputs
     assert stages and stages[0].data.startswith(b"line\nline\n")

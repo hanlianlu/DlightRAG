@@ -82,6 +82,7 @@ stale. Statuses are quoted from each ADR's own `## Status` section.
 | [0076](0076-the-agentspaces-language-layer-says-agentspace.md) | the Agentspace's language layer says Agentspace, and only the protocol keeps workspace | Accepted 2026-10-25; implemented in this change. |
 | [0077](0077-goal-mode-continues-automatically-and-pause-stops-the-running-round.md) | Goal mode continues automatically, and pause stops the running round | Accepted 2026-10-25. |
 | [0085](0085-the-run-panel-is-an-overview-and-steps-belong-to-the-agent-page.md) | the Inspector's Run panel is an overview, and steps belong to the agent page | Implemented on 2026-10-30 in answer to the owner's direction: the Run timeline and the Agent timeline both listed steps… |
+| [0100](0100-read-reads-the-workspace-and-read-resource-reads-a-resource.md) | `read` reads the workspace, and `read_resource` reads a Resource | Accepted on 2026-11-24. |
 
 New ADRs take the next number and a kebab-case filename
 (`0055-the-thing-is-decided.md`), and open with `# ADR 0055 — the thing is decided`

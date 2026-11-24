@@ -28,6 +28,7 @@ from dlightrag.engine.agent.tools.contracts import (
 )
 from dlightrag.engine.agent.tools.files import (
     ImagePreparer,
+    ResourceReader,
     ResourceViewer,
     SpillWriter,
     bash_declaration,
@@ -44,6 +45,8 @@ from dlightrag.engine.agent.tools.files import (
     materialize_tool,
     preview_or_spill,
     read_declaration,
+    read_resource_declaration,
+    read_resource_tool,
     read_tool,
     spill_continuation,
     view_declaration,
@@ -131,8 +134,8 @@ _WORKSPACE_FACT = (
 #: shell and the listing tool say only that a copy is the way in, so this is the one list.
 _MATERIALIZE_FACT = (
     "Uploads, fetched pages and files, Agent Browser downloads and captures, and an earlier "
-    "turn's Resources and Artifacts all copy. The Resource stays the source: cite what read "
-    "returns from it, never the copy."
+    "turn's Resources and Artifacts all copy. The Resource stays the source: cite what "
+    "read_resource returns from it, never the copy."
 )
 
 #: A later Run of the Session adopts a published Artifact by the handle its link carries.
@@ -148,7 +151,7 @@ def _stating[T: ToolDeclaration](tool: T, fact: str) -> T:
 
 
 def _reading[T: ToolDeclaration](read: T, *, earlier_artifacts: bool) -> T:
-    """Only a resource-reading ``read`` in a Run that publishes can reopen an Artifact."""
+    """Only ``read_resource`` in a Run that publishes can reopen an Artifact."""
     return _stating(read, _EARLIER_ARTIFACT_FACT) if earlier_artifacts else read
 
 
@@ -216,7 +219,7 @@ def research_tool_declarations(
     if resource_read:
         declarations.append(
             _reading(
-                read_declaration(public_url=True, rendered=agent_browser),
+                read_resource_declaration(rendered=agent_browser),
                 earlier_artifacts=artifact_publication,
             )
         )
@@ -234,8 +237,7 @@ def research_tool_declarations(
         # demand; they are pinned declarations like every other tool.
         declarations.extend(mcp_resource_declarations())
     if environment:
-        if not resource_read:
-            declarations.append(read_declaration(public_url=False))
+        declarations.append(read_declaration())
         declarations.extend(
             (
                 _stating(bash_declaration(), _WORKSPACE_FACT),
@@ -275,6 +277,10 @@ def research_tool_declarations(
             # A caller's list narrows what the Run composed; it never fails the spawn. A
             # name this Run does not offer is not there to keep, and one a Child may
             # never hold is dropped by the table below.
+            if "read" in selected_names:
+                # Before ADR 0100 ``read`` also read Resources, including the spill any Tool's
+                # long output continues through, so a list naming it keeps that capability.
+                selected_names = tuple(dict.fromkeys((*selected_names, "read_resource")))
             selected_names = tuple(name for name in selected_names if name in registry)
             if child and "ask_parent" in registry:
                 selected_names = tuple(dict.fromkeys((*selected_names, "ask_parent")))
@@ -361,16 +367,15 @@ def compose_research_tools(
             # so the failure it reads says so.
             browser_available=browser is not None,
         ),
-        "read": lambda: _ledger_backed(
+        "read": lambda: read_tool(environment, access, spill=spill),
+        "read_resource": lambda: _ledger_backed(
             _reading(
-                read_tool(
-                    environment,
+                read_resource_tool(
                     access,
-                    resource_reader=resource_reader,
-                    spill=spill,
+                    resource_reader=cast(ResourceReader, resource_reader),
                     rendered=browser is not None,
                 ),
-                earlier_artifacts=resource_reader is not None and artifacts_root is not None,
+                earlier_artifacts=artifacts_root is not None,
             ),
             evidence,
         ),
@@ -519,9 +524,16 @@ def _ledger_backed(tool: AgentTool, evidence: EvidenceLedger) -> AgentTool:
     return replace(tool, execute=execute)
 
 
+#: The label an evidence row carries for the Tool that read it. ``read_resource`` keeps the
+#: ``read`` label it had before the split (ADR 0100), so a row an earlier round recorded and the
+#: same text read again now share one identity instead of entering the ledger twice.
+_EVIDENCE_LABELS = {"read_resource": "read"}
+
+
 def _resource_rows(tool_name: str, result: ToolResult) -> list[dict[str, Any]]:
     if not result.effects.evidence_sources or not result.text_content.strip():
         return []
+    tool_name = _EVIDENCE_LABELS.get(tool_name, tool_name)
     source = result.effects.evidence_sources[0]
     resource_id = source.resource_id
     source_type = source.source_type

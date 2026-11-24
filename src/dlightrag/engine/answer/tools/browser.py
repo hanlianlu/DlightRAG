@@ -629,7 +629,7 @@ UPLOAD_TOO_BIG = "upload sends at most {limit} MiB in one call."
 UPLOAD_NOT_FILE = "upload needs regular workspace files: {path} is not one."
 DOWNLOADED = (
     "Downloaded {filename} ({mime}, {size:,} bytes) as {resource_id} (browser_download); "
-    "read(resource_id='{resource_id}') reads it."
+    "read_resource(resource_id='{resource_id}') reads it."
 )
 DIALOG = 'The page showed a {kind} dialog: "{message}" ({answer}).'
 DIALOG_DEFAULT = 'Its default text is "{default}"; accepting takes that as the answer.'

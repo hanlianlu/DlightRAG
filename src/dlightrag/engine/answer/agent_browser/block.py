@@ -112,9 +112,11 @@ def refused_on_navigation(status: int | None, html: bytes) -> Block | None:
 def _signals(html: bytes) -> list[str]:
     """The text of each element a marker counts in, tags removed and whitespace collapsed."""
     decoded = html.decode("utf-8", errors="replace")
+    # Each pattern carries exactly one named group; read the match by its own group, since
+    # indexing a match by the other pattern's group raises ``IndexError: no such group``.
     return [
-        _plain(match["signal"] or match["widget"] or "")
-        for pattern in (_VERDICT, _WIDGET)
+        _plain(match[group] or "")
+        for pattern, group in ((_VERDICT, "signal"), (_WIDGET, "widget"))
         for match in pattern.finditer(decoded)
     ]
 

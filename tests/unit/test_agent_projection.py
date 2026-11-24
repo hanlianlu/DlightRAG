@@ -88,7 +88,7 @@ class TestCompactionSummary:
             goal="Keep the decision.",
             decisions="Decided to keep the spill handles.",
             durable_handles=[
-                '[spill] spill_read_ab12 (4096 bytes) — re-read with read(resource_id="spill_read_ab12")'
+                '[spill] spill_read_ab12 (4096 bytes) — re-read with read_resource(resource_id="spill_read_ab12")'
             ],
             run_notes=[
                 "[note] notes/plan.md (1240 bytes) — re-read with read(path='notes/plan.md') before a step that needs a value this summary does not state"
@@ -104,7 +104,7 @@ class TestCompactionSummary:
         assert "Session notes" not in rendered
         # The record itself is untouched: the same summary still renders its calls.
         with_calls = render_compaction_summary(summary)
-        assert "re-read with read(resource_id=" in with_calls
+        assert "re-read with read_resource(resource_id=" in with_calls
         assert "re-read with read(path=" in with_calls
 
     def test_render_states_session_notes_as_paths_to_read_again(self) -> None:
@@ -135,7 +135,7 @@ class TestCompactionSummary:
                 "[note] notes/plan.md (1240 bytes) — re-read with read(path='notes/plan.md')"
             ],
             durable_handles=[
-                '[spill] spill_read_ab12 (4096 bytes) — re-read with read(resource_id="spill_read_ab12")'
+                '[spill] spill_read_ab12 (4096 bytes) — re-read with read_resource(resource_id="spill_read_ab12")'
             ],
         ).canonical_json()
 

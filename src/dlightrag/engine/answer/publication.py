@@ -508,13 +508,13 @@ def artifact_closure(
 def artifact_read_call(relative_path: str) -> str:
     """Return the agent call that reaches one published Artifact again.
 
-    Every product is read by ``read(resource_id=…)``. One whose type has no conversion
+    Every product is read by ``read_resource(resource_id=…)``. One whose type has no conversion
     route is decoded from the adopted bytes; one whose type routes to a converter reads
     the conversion view publication stored with it, because the adopting Run never
     converts what it adopts. A product whose view publication could not build refuses
     that read, as any convertible document without a view does.
     """
-    return f"read(resource_id={artifact_resource_id(relative_path)!r})"
+    return f"read_resource(resource_id={artifact_resource_id(relative_path)!r})"
 
 
 def validate_publication(

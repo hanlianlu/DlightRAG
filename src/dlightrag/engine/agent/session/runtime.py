@@ -1177,7 +1177,7 @@ class AgentSessionRuntime[HostDeltaT]:
         meta: OperationMeta,
         assistant_entry: AssistantMessageEntry,
         assistant: AssistantTurn,
-        repeated: frozenset[str] = frozenset(),
+        repeated: Mapping[str, str] | None = None,
     ) -> tuple[ToolBatchPlan, tuple[ToolArguments, ...]]:
         import json
 
@@ -1234,10 +1234,15 @@ class AgentSessionRuntime[HostDeltaT]:
                     contract_version = pinned_tool.contract_version
                     schema = pinned_tool.input_schema_digest
                     effective = sha256(canonical_input.encode("utf-8")).hexdigest()
-                    if call.id in repeated:
+                    if repeated and call.id in repeated:
                         disposition = "repeated_call"
                         synthetic = (
                             f'Tool "{call.name}" was not executed: the identical call already '
+                            "failed in the previous two turns, and re-issuing it unchanged fails "
+                            "the same way. Change the arguments, use another source or Tool, or "
+                            "answer without it."
+                            if repeated[call.id] == "failed"
+                            else f'Tool "{call.name}" was not executed: the identical call already '
                             "returned in the previous two turns. Use that result or change the "
                             "command/query; repeating it cannot add evidence."
                         )
@@ -1464,7 +1469,7 @@ class AgentSessionRuntime[HostDeltaT]:
                     tool_name=item.tool_name,
                     call_id=item.call_id,
                     outcome="failed",
-                    text=f'Tool "{item.tool_name}" failed: {exc}',
+                    text=_tool_failure_text(item.tool_name, exc),
                 ),
                 host_delta=None,
             )
@@ -2198,6 +2203,37 @@ def _digest(value: Any) -> str:
     return sha256(canonical_json(value).encode("utf-8")).hexdigest()
 
 
+#: Exceptions no Tool raises to tell the model something: each is a defect in the platform's own
+#: code (a bad index, key, type or attribute, a broken invariant). Their text describes the code,
+#: not the call, so the model is told what such a failure means instead of reading it.
+_PLATFORM_DEFECTS: tuple[type[BaseException], ...] = (
+    LookupError,
+    TypeError,
+    AttributeError,
+    NameError,
+    AssertionError,
+    ArithmeticError,
+    RecursionError,
+)
+
+
+def _tool_failure_text(tool_name: str, exc: Exception) -> str:
+    """What the model reads for a Tool that raised.
+
+    A failure a Tool raises on purpose (a refused page, a bad path, an HTTP status) keeps its
+    words, which name what to change. A platform defect does not: ``read`` once handed the model
+    only ``no such group`` from an ``IndexError`` in the block detector, which it could not act on,
+    so it re-issued the identical call for two hours.
+    """
+    if isinstance(exc, _PLATFORM_DEFECTS):
+        return (
+            f'Tool "{tool_name}" failed with an internal error in the platform '
+            f"({type(exc).__name__}); it was not caused by your arguments, and re-issuing the "
+            "same call fails the same way. Use another source or Tool, or continue without it."
+        )
+    return f'Tool "{tool_name}" failed: {exc}'
+
+
 _LOOP_GUARD_TOOLS = frozenset({"search_web", "bash"})
 _LOOP_GUARD_TURNS = 2
 #: How many repeated calls in a row, of any digest, the guard may refuse before the Run is stopped
@@ -2208,35 +2244,57 @@ _LOOP_GUARD_TURNS = 2
 _LOOP_GUARD_BLOCK_LIMIT = 3
 
 
-def _repeated_search_calls(view: OperationView, assistant: AssistantTurn) -> frozenset[str]:
-    """Tool-call ids that repeat an identical guarded call from the previous two turns.
+#: Outcomes that make an identical retry of *any* Tool a refused duplicate: the call failed (or was
+#: itself a refused duplicate of one), so re-issuing it unchanged fails the same way.
+_LOOP_GUARD_FAILED_OUTCOMES = frozenset({"failed", "repeated_call"})
+
+
+def _repeated_search_calls(view: OperationView, assistant: AssistantTurn) -> dict[str, str]:
+    """Tool-call ids that repeat an identical guarded call from the previous two turns, each with
+    why it is refused: ``"returned"`` or ``"failed"``.
 
     A model that retries the same search or shell command can burn a Run on one call; the guard
     turns a repeated identical call into a synthetic Tool result so the next turn has to change
     strategy (and `_repeated_call_trip` stops the Run when the model does not). Shell commands are
     included because the observed CAT run repeated one heredoc 227 times and another 124 times.
+
+    Any other Tool is guarded only once its identical call *failed*: a re-read of a file after an
+    edit is work, but a failing call re-issued unchanged is not. An extract child re-issued the same
+    two failing ``read`` calls for 265 turns over two hours before this covered every Tool.
     """
     graph = view.context.snapshot.graph
     if graph is None:
-        return frozenset()
-    previous = [item for item in graph.ancestry() if isinstance(item, AssistantMessageEntry)]
+        return {}
+    ancestry = list(graph.ancestry())
+    previous = [item for item in ancestry if isinstance(item, AssistantMessageEntry)]
     prior = previous[-_LOOP_GUARD_TURNS:]
     if not prior:
-        return frozenset()
-    seen = {
-        (call.name, canonical_json(call.arguments))
-        for entry in prior
-        for call in entry.tool_calls
-        if call.name in _LOOP_GUARD_TOOLS
+        return {}
+    outcomes = {
+        item.result.call_id: item.result.outcome
+        for item in ancestry
+        if isinstance(item, ToolResultMessageEntry)
     }
-    return frozenset(
-        call.id
-        for call in assistant.tool_calls
-        if call.name in _LOOP_GUARD_TOOLS and (call.name, canonical_json(call.arguments)) in seen
-    )
+    returned: set[tuple[str, str]] = set()
+    failed: set[tuple[str, str]] = set()
+    for entry in prior:
+        for call in entry.tool_calls:
+            key = (call.name, canonical_json(call.arguments))
+            if outcomes.get(call.id) in _LOOP_GUARD_FAILED_OUTCOMES:
+                failed.add(key)
+            elif call.name in _LOOP_GUARD_TOOLS:
+                returned.add(key)
+    repeated: dict[str, str] = {}
+    for call in assistant.tool_calls:
+        key = (call.name, canonical_json(call.arguments))
+        if key in failed:
+            repeated[call.id] = "failed"
+        elif key in returned:
+            repeated[call.id] = "returned"
+    return repeated
 
 
-def _repeated_call_trip(view: OperationView, repeated: frozenset[str]) -> str:
+def _repeated_call_trip(view: OperationView, repeated: Mapping[str, str]) -> str:
     """The failure detail when the model's calls have been refused too often in a row, else "".
 
     Counts the unbroken run of `repeated_call` refusals at the end of the branch, whichever calls

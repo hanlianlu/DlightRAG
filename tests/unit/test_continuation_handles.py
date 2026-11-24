@@ -46,7 +46,7 @@ def test_spill_handle_spells_out_the_call_the_next_turn_must_make() -> None:
 
     assert handle == (
         "[spill] spill_web_search_ab12 (924133 bytes) — "
-        're-read with read(resource_id="spill_web_search_ab12")'
+        're-read with read_resource(resource_id="spill_web_search_ab12")'
     )
     assert "cursor=0" not in handle
 
@@ -194,7 +194,7 @@ def test_a_published_artifact_renders_the_handle_a_later_turn_reads_it_with() ->
     handle = published_artifact_handle(record)
 
     assert handle.startswith("[artifact] reports/analysis.md (1234 bytes)")
-    assert f"read(resource_id={artifact_resource_id('reports/analysis.md')!r})" in handle
+    assert f"read_resource(resource_id={artifact_resource_id('reports/analysis.md')!r})" in handle
     assert "editing it again" in handle
 
 
@@ -209,7 +209,9 @@ def test_every_product_is_taught_the_read_call() -> None:
     from dlightrag.engine.runtime.agentspace import RunArtifactRecord
 
     for path in ("reports/analysis.md", "reports/data.csv", "reports/model.xlsx"):
-        assert artifact_read_call(path) == f"read(resource_id={artifact_resource_id(path)!r})"
+        assert (
+            artifact_read_call(path) == f"read_resource(resource_id={artifact_resource_id(path)!r})"
+        )
 
     record = RunArtifactRecord(
         relative_path="reports/report.pdf",
@@ -220,7 +222,7 @@ def test_every_product_is_taught_the_read_call() -> None:
     )
     handle = published_artifact_handle(record)
 
-    assert f"read(resource_id={artifact_resource_id('reports/report.pdf')!r})" in handle
+    assert f"read_resource(resource_id={artifact_resource_id('reports/report.pdf')!r})" in handle
     assert "view(resource_id=" not in handle
 
 

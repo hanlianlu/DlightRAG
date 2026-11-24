@@ -18,7 +18,7 @@ from dlightrag.engine.agent.tools.contracts import (
     ResourceAttachmentBytes,
     ToolResult,
 )
-from dlightrag.engine.agent.tools.files import read_tool, view_tool
+from dlightrag.engine.agent.tools.files import read_resource_tool, view_tool
 from dlightrag.engine.answer.execution.executor import AnswerExecutor
 from dlightrag.engine.answer.execution.lineage import RetainedResourceLoader
 from dlightrag.engine.answer.resources.converters import ExtractedVisual
@@ -179,8 +179,7 @@ def _loader(
 def _tools(registry: ResourceRegistry, lineage: RetainedResourceLoader):
     access = AccessScheduler()
     return (
-        read_tool(
-            None,
+        read_resource_tool(
             access,
             resource_reader=make_resource_reader(registry, 1000, lineage=lineage),
         ),

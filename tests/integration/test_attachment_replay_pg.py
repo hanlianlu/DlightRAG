@@ -750,7 +750,7 @@ async def test_unified_docx_host_settlement_restores_exact_text_assets_and_curso
             if calls == 1:
                 return AssistantTurn(
                     text="",
-                    tool_calls=(ToolCall("read", "read", {"resource_id": resource_id}),),
+                    tool_calls=(ToolCall("read", "read_resource", {"resource_id": resource_id}),),
                     stop_reason="tool_use",
                 )
             if calls in {2, 3}:

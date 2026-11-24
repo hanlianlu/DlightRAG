@@ -424,17 +424,18 @@ def _resource_manifest_context(manifest: tuple[ResourceManifestEntry, ...]) -> s
         if resource_role(filename=filename, mime_type=entry.declared_mime) == "image":
             kind = "image; view"
         elif format_name == "pdf":
-            kind = "PDF; read text or view physical pages"
+            kind = "PDF; read_resource for text or view physical pages"
         elif format_name in {"docx", "pptx", "xlsx"}:
             kind = f"{format_name.upper()}; read extracted text and embedded-image inventory"
         else:
             kind = mime or "resource; type verified on acquisition"
         lines.append(f"- [resource: {entry.resource_id}] {filename} ({kind})")
     lines.append(
-        "Use these opaque resource ids with read for text or view for pixels. A cursor "
-        "printed by an earlier turn is historical; call read or view on the resource again "
-        "for a current one. A resource id printed by an earlier turn may still resolve "
-        "here; only if read or view refuses it must that document be attached again."
+        "Use these opaque resource ids with read_resource for text or view for pixels. A "
+        "cursor printed by an earlier turn is historical; call read_resource or view on the "
+        "resource again for a current one. A resource id printed by an earlier turn may still "
+        "resolve here; only if read_resource or view refuses it must that document be "
+        "attached again."
     )
     return "\n".join(lines)
 

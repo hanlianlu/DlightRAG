@@ -105,7 +105,7 @@ def spill_handle(spill: CommittedSpillRecord) -> str:
     """
     return (
         f"[spill] {spill.resource_id} ({spill.size_bytes} bytes) — "
-        f're-read with read(resource_id="{spill.resource_id}")'
+        f're-read with read_resource(resource_id="{spill.resource_id}")'
     )
 
 

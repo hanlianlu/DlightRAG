@@ -1435,7 +1435,7 @@ def _read_committed_spill(
         )
     next_start = start + len(page)
     continuation = (
-        f"read(resource_id={resource_id!r}, cursor={str(next_start)!r})"
+        f"read_resource(resource_id={resource_id!r}, cursor={str(next_start)!r})"
         if next_start < len(lines)
         else ""
     )

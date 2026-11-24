@@ -23,9 +23,11 @@ from dlightrag.engine.agent.tools.contracts import (
     ToolResult,
 )
 from dlightrag.engine.agent.tools.files import (
-    RenderedReadArgs,
+    RenderedReadResourceArgs,
     ViewArgs,
     read_declaration,
+    read_resource_declaration,
+    read_resource_tool,
     read_tool,
     view_tool,
 )
@@ -141,7 +143,9 @@ async def test_workspace_read_image_is_text_and_view_rejects_escape_and_document
     (tmp_path / "a.png").write_bytes(png())
     (tmp_path / "doc.pdf").write_bytes(pdf_bytes())
     async with ResourceRegistry() as registry:
-        read, view = tools(registry, environment=LocalExecutionEnvironment(tmp_path))
+        environment = LocalExecutionEnvironment(tmp_path)
+        _, view = tools(registry, environment=environment)
+        read = read_tool(environment, AccessScheduler())
         assert not tool_content_attachments((await call(read, path="a.png")).parts)
         assert tool_content_attachments((await call(view, path="a.png")).parts)
         assert (await call(view, path="../escape.png")).is_error
@@ -188,7 +192,7 @@ async def test_pdf_overview_actual_coverage_aggregate_budget_and_signed_recovery
         tampered = await call(view, resource_id=resource, cursor=cursor + "x")
         assert tampered.is_error is True
         assert (
-            "call read or view on the resource again for a current continuation"
+            "call read_resource or view on the resource again for a current continuation"
             in tampered.text_content
         )
 
@@ -200,7 +204,7 @@ async def test_duplicate_occurrences_membership_inventory_and_snapshot_reuse(mon
         other = registry.register(ResourceInput(filename="b.docx", content=docx_images(1)))
         read, view = tools(registry)
         result = await call(read, resource_id=resource)
-        assert "more: read(" in result.text_content
+        assert "more: read_resource(" in result.text_content
         assets = [
             a for a in result.effects.attached_resources if a.resource_kind == "conversion_asset"
         ]
@@ -210,7 +214,9 @@ async def test_duplicate_occurrences_membership_inventory_and_snapshot_reuse(mon
         foreign = await call(view, resource_id=other, locator=assets[0].resource_id)
         assert foreign.is_error is True
         assert "unknown visual handle" in foreign.text_content
-        cursor = result.text_content.split("more: read(")[1].split("cursor='")[1].split("'")[0]
+        cursor = (
+            result.text_content.split("more: read_resource(")[1].split("cursor='")[1].split("'")[0]
+        )
         page = await call(read, resource_id=resource, cursor=cursor)
         assert "Visual inventory" in page.text_content
         stored = {a.resource_id: a.content for a in result.effects.attached_resources}
@@ -435,58 +441,47 @@ _APP = "https://spa.example.com/app.html"
 _APP_PAGE = "<html><body><h1>Quotes</h1><p>Albert Einstein</p><p>J.K. Rowling</p></body></html>"
 
 
-def test_rendered_is_offered_only_with_an_agent_browser_and_only_for_urls() -> None:
-    plain = read_declaration(public_url=True)
-    offered = read_declaration(public_url=True, rendered=True)
+def test_rendered_is_offered_only_with_an_agent_browser() -> None:
+    plain = read_resource_declaration()
+    offered = read_resource_declaration(rendered=True)
 
     assert "rendered" not in plain.definition.parameters["properties"]
     assert "rendered" in offered.definition.parameters["properties"]
     assert "rendered=true" in offered.description and "rendered=true" not in plain.description
-    # A host that cannot read a URL has no rendering of one to offer.
-    assert read_declaration(public_url=False, rendered=True) == read_declaration(public_url=False)
 
 
-def test_read_says_paging_belongs_to_a_workspace_path() -> None:
-    url_read = read_declaration(public_url=True)
-    offered = read_declaration(public_url=True, rendered=True)
-    properties = url_read.definition.parameters["properties"]
+def test_read_and_read_resource_each_take_only_their_own_targets_arguments() -> None:
+    """ADR 0100: one Tool per kind of target, so no argument depends on which target is named.
 
-    for declaration in (url_read, offered):
-        assert "takes no offset or limit" in declaration.description
-    assert "not accepted with url or resource_id" in properties["limit"]["description"]
-    assert "not accepted with url or resource_id" in properties["offset"]["description"]
+    Before the split one ``read`` took a path, a url or a resource_id, and models passed a
+    path's ``limit`` to a url read 17 times in the live store, each an ``invalid_arguments``.
+    """
+    path_properties = set(read_declaration().definition.parameters["properties"])
+    resource_properties = set(
+        read_resource_declaration(rendered=True).definition.parameters["properties"]
+    )
 
-    path_only = read_declaration(public_url=False)
-    path_properties = path_only.definition.parameters["properties"]
-    assert "not accepted with resource_id" in path_properties["limit"]["description"]
-    assert "not accepted with resource_id" in path_properties["offset"]["description"]
-
-
-def test_a_non_path_read_refuses_path_paging_with_the_retry_that_works() -> None:
-    for declaration, arguments in (
-        (read_declaration(public_url=True), {"url": _APP, "limit": 300}),
-        (read_declaration(public_url=True), {"url": _APP, "offset": 2}),
-        (read_declaration(public_url=True, rendered=True), {"url": _APP, "limit": 300}),
-        (read_declaration(public_url=False), {"resource_id": "res-1", "limit": 20}),
-    ):
-        with pytest.raises(ValidationError, match="takes neither"):
-            declaration.input_model.model_validate(arguments)
+    assert path_properties == {"path", "offset", "limit", "cursor"}
+    assert resource_properties == {"resource_id", "url", "http", "focus", "cursor", "rendered"}
+    assert "read_resource" in read_declaration().description
+    assert "Use read for workspace files" in read_resource_declaration().description
 
 
 @pytest.mark.parametrize(
     ("arguments", "complaint"),
     [
-        ({"path": "notes.txt", "rendered": True}, "only for url or resource_id"),
+        ({"path": "notes.txt"}, "Extra inputs"),
+        ({"url": _APP, "limit": 300}, "Extra inputs"),
         ({"url": _APP, "rendered": True, "http": {"accept": "text/html"}}, "direct acquisition"),
         ({"url": _APP, "rendered": True, "cursor": "r.x"}, "returned resource_id"),
         ({"rendered": True}, "exactly one of"),
     ],
 )
-def test_a_rendered_read_of_anything_but_a_url_or_a_web_resource_is_a_validation_error(
+def test_a_read_resource_call_outside_its_contract_is_a_validation_error(
     arguments, complaint
 ) -> None:
     with pytest.raises(ValidationError, match=complaint):
-        RenderedReadArgs.model_validate(arguments)
+        RenderedReadResourceArgs.model_validate(arguments)
 
 
 async def test_a_rendered_read_settles_its_rendering_its_view_and_where_it_came_from(
@@ -605,8 +600,7 @@ async def test_a_text_longer_than_one_result_is_read_to_the_end_in_pages_the_run
         resource = registry.register(
             ResourceInput(filename="long.txt", content=text.encode(), declared_mime="text/plain")
         )
-        read = read_tool(
-            None,
+        read = read_resource_tool(
             AccessScheduler(),
             resource_reader=make_resource_reader(
                 registry, CONTEXT_POLICY.read_window_tokens(profile)

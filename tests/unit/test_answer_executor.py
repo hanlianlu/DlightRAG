@@ -579,7 +579,7 @@ def test_a_deployment_offers_a_rendered_read_exactly_when_it_configures_an_agent
         declarations = executor.research_tool_declarations(
             web_search=False, memory=False, agent_may_register=True, model_guidance="", injected=()
         )
-        return {tool.name: tool for tool in declarations}["read"].definition.parameters[
+        return {tool.name: tool for tool in declarations}["read_resource"].definition.parameters[
             "properties"
         ]
 

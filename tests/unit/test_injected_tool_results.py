@@ -95,13 +95,13 @@ async def test_injected_tool_small_result_unchanged_and_large_spilled_readable(t
     receipt = result.effects.committed_outputs[0]
     assert receipt.resource_id in result.protected_text
     assert (tmp_path / "spill" / (receipt.resource_id + ".txt")).read_text() == full
-    read = tools["read"]
+    read = tools["read_resource"]
     page = await read.execute(
         read.input_model.model_validate({"resource_id": receipt.resource_id}), runtime
     )
     assert not page.is_error and "payload line" in page.text_content
     _, other_tools, _ = prepared_tools(tmp_path / "other-owner-run", ToolResult.text("other"))
-    other_read = other_tools["read"]
+    other_read = other_tools["read_resource"]
     missing = await other_read.execute(
         other_read.input_model.model_validate({"resource_id": receipt.resource_id}), runtime
     )

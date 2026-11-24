@@ -184,7 +184,9 @@ async def test_url_terminal_source_and_conversion_settle_together(
                     text="",
                     tool_calls=(
                         ToolCall(
-                            "read", "read", {"resource_id": resource} if resource else {"url": url}
+                            "read",
+                            "read_resource",
+                            {"resource_id": resource} if resource else {"url": url},
                         ),
                     ),
                     stop_reason="tool_use",
@@ -264,7 +266,7 @@ async def test_a_web_pdf_viewed_and_read_in_one_group_resumes_as_it_was_read(pg,
                     text="",
                     tool_calls=(
                         ToolCall("view-1", "view", {"url": url}),
-                        ToolCall("read-1", "read", {"url": url}),
+                        ToolCall("read-1", "read_resource", {"url": url}),
                     ),
                     stop_reason="tool_use",
                 )
@@ -359,7 +361,7 @@ async def test_a_rendered_read_settles_and_a_resumed_run_reads_it_without_a_brow
                 return AssistantTurn(
                     text="",
                     tool_calls=(
-                        ToolCall("read-1", "read", {"url": _QUOTES_URL, "rendered": True}),
+                        ToolCall("read-1", "read_resource", {"url": _QUOTES_URL, "rendered": True}),
                     ),
                     stop_reason="tool_use",
                 )
@@ -440,7 +442,7 @@ async def test_a_shell_read_through_the_chain_settles_its_bytes_and_rendering_to
             if len(seen) == 1:
                 return AssistantTurn(
                     text="",
-                    tool_calls=(ToolCall("read-1", "read", {"url": _QUOTES_URL}),),
+                    tool_calls=(ToolCall("read-1", "read_resource", {"url": _QUOTES_URL}),),
                     stop_reason="tool_use",
                 )
             return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
@@ -1183,7 +1185,7 @@ async def test_cancelled_child_url_terminal_settles_source_for_parent_and_recove
                     raise AssertionError("cancelled conversion did not latch its terminal")
                 return AssistantTurn(
                     text="",
-                    tool_calls=(ToolCall("parent-read", "read", {"url": url}),),
+                    tool_calls=(ToolCall("parent-read", "read_resource", {"url": url}),),
                     stop_reason="tool_use",
                 )
             assert "safety_refused" in str(kwargs["messages"])
@@ -1196,7 +1198,7 @@ async def test_cancelled_child_url_terminal_settles_source_for_parent_and_recove
                 raise AssertionError("cancelled child must not reach another model turn")
             return AssistantTurn(
                 text="",
-                tool_calls=(ToolCall("child-read", "read", {"url": url}),),
+                tool_calls=(ToolCall("child-read", "read_resource", {"url": url}),),
                 stop_reason="tool_use",
             )
 

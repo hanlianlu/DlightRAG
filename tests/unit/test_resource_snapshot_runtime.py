@@ -90,7 +90,7 @@ async def test_host_settlement_restores_conversion_and_derivative_without_repars
             if turn == 1:
                 return AssistantTurn(
                     text="",
-                    tool_calls=(ToolCall("read", "read", {"resource_id": resource_id}),),
+                    tool_calls=(ToolCall("read", "read_resource", {"resource_id": resource_id}),),
                     stop_reason="tool_use",
                 )
             if turn == 2:

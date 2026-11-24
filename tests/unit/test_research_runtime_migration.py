@@ -1421,7 +1421,7 @@ async def test_research_runtime_effects_convert_one_resource_tool_to_host_delta(
     turns = [
         AssistantTurn(
             text="",
-            tool_calls=(ToolCall("read-1", "read", {"resource_id": "attachment-1"}),),
+            tool_calls=(ToolCall("read-1", "read_resource", {"resource_id": "attachment-1"}),),
             stop_reason="tool_use",
         ),
         AssistantTurn(text="done", tool_calls=(), stop_reason="stop"),
@@ -1535,8 +1535,8 @@ async def test_research_reads_run_at_once_yet_cite_and_settle_in_source_order() 
         AssistantTurn(
             text="",
             tool_calls=(
-                ToolCall("read-1", "read", {"resource_id": "first"}),
-                ToolCall("read-2", "read", {"resource_id": "second"}),
+                ToolCall("read-1", "read_resource", {"resource_id": "first"}),
+                ToolCall("read-2", "read_resource", {"resource_id": "second"}),
             ),
             stop_reason="tool_use",
         ),

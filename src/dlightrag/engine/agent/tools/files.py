@@ -116,117 +116,69 @@ class HttpReadOptions(BaseModel):
         return self
 
 
-class ReadWithoutUrlArgs(BaseModel):
-    """Read contract for Hosts that do not provide public-URL admission."""
+class ReadArgs(BaseModel):
+    """``read``: one workspace path. A Resource is ``read_resource``'s, so no argument here
+    depends on which kind of target the call names."""
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    path: str | None = Field(
-        default=None,
-        max_length=_PATH_MAX_CHARS,
-        description="Workspace-relative path to read.",
-    )
-    resource_id: str | None = Field(default=None, description="Opaque durable resource id.")
+    path: str = Field(max_length=_PATH_MAX_CHARS, description="Workspace-relative path to read.")
     offset: int | None = Field(
         default=None,
         ge=1,
-        description="1-based line offset in a workspace path; not accepted with resource_id.",
+        description="1-based line offset in a file.",
     )
     limit: int | None = Field(
         default=None,
         ge=1,
         le=100_000,
-        description=(
-            "Maximum lines to return from a workspace path; not accepted with resource_id."
-        ),
-    )
-    focus: str | None = Field(
-        default=None,
-        min_length=1,
-        description="Optional relevance focus for a durable resource.",
+        description="Maximum lines (file) or entries (directory) to return.",
     )
     cursor: str | None = Field(
         default=None,
         max_length=_CURSOR_MAX_CHARS,
-        description="Continuation cursor.",
+        description="Continuation cursor a directory page printed.",
     )
 
     @model_validator(mode="after")
-    def _exactly_one_target(self) -> ReadWithoutUrlArgs:
-        if (self.path is None) == (self.resource_id is None):
-            raise ValueError("read requires exactly one of path or resource_id")
-        if self.path is not None and self.focus is not None:
-            raise ValueError("read focus is available only for resources")
-        if self.path is not None and self.cursor is not None and self.offset is not None:
+    def _one_continuation(self) -> ReadArgs:
+        if self.cursor is not None and self.offset is not None:
             raise ValueError("read path cursor and offset are mutually exclusive")
-        if self.path is None and (self.offset is not None or self.limit is not None):
-            raise ValueError(
-                "read offset and limit apply only to a workspace path; a resource_id read "
-                "takes neither"
-            )
         return self
 
 
-class ReadArgs(BaseModel):
+class ReadResourceArgs(BaseModel):
+    """``read_resource``: one Resource, named by its resource_id or by a public url."""
+
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    path: str | None = Field(
-        default=None,
-        max_length=_PATH_MAX_CHARS,
-        description="Workspace-relative path to read.",
-    )
     resource_id: str | None = Field(default=None, description="Opaque durable resource id.")
     url: str | None = Field(default=None, description="Anonymous public HTTP(S) URL to read.")
     http: HttpReadOptions | None = None
-    offset: int | None = Field(
-        default=None,
-        ge=1,
-        description=(
-            "1-based line offset in a workspace path; not accepted with url or resource_id."
-        ),
-    )
-    limit: int | None = Field(
-        default=None,
-        ge=1,
-        le=100_000,
-        description=(
-            "Maximum lines to return from a workspace path; not accepted with url or resource_id."
-        ),
-    )
     focus: str | None = Field(
         default=None,
         min_length=1,
-        description="Optional relevance focus for a durable resource.",
+        description="Optional relevance focus within the Resource.",
     )
     cursor: str | None = Field(
         default=None,
         max_length=_CURSOR_MAX_CHARS,
-        description="Continuation cursor.",
+        description="Continuation cursor a page of this resource_id printed.",
     )
 
     @model_validator(mode="after")
-    def _exactly_one_target(self) -> ReadArgs:
-        targets = sum(value is not None for value in (self.path, self.resource_id, self.url))
-        if targets != 1:
-            raise ValueError("read requires exactly one of path, resource_id, or url")
-        if self.path is not None and self.focus is not None:
-            raise ValueError("read focus is available only for resources")
-        if self.path is not None and self.cursor is not None and self.offset is not None:
-            raise ValueError("read path cursor and offset are mutually exclusive")
-        if self.path is None and (self.offset is not None or self.limit is not None):
-            raise ValueError(
-                "read offset and limit apply only to a workspace path; a url or resource_id "
-                "read takes neither (a url read continues by its returned resource_id and cursor)"
-            )
+    def _exactly_one_target(self) -> ReadResourceArgs:
+        if (self.resource_id is None) == (self.url is None):
+            raise ValueError("read_resource requires exactly one of resource_id or url")
         if self.url is not None and self.cursor is not None:
             raise ValueError("continue a URL read with its returned resource_id")
         if self.url is None and self.http is not None:
-            raise ValueError("read http options are available only for url")
+            raise ValueError("read_resource http options are available only for url")
         return self
 
 
-class RenderedReadArgs(ReadArgs):
-    """``read`` for a Host with an Agent Browser: a page can also be read as it renders."""
+class RenderedReadResourceArgs(ReadResourceArgs):
+    """``read_resource`` for a Host with an Agent Browser: a page can also be read as it renders."""
 
     rendered: bool = Field(
         default=False,
@@ -237,11 +189,11 @@ class RenderedReadArgs(ReadArgs):
     )
 
     @model_validator(mode="after")
-    def _rendered_targets(self) -> RenderedReadArgs:
-        if self.rendered and self.path is not None:
-            raise ValueError("read rendered=true is available only for url or resource_id")
+    def _rendered_targets(self) -> RenderedReadResourceArgs:
         if self.rendered and self.http is not None:
-            raise ValueError("read http options apply to direct acquisition, not rendered=true")
+            raise ValueError(
+                "read_resource http options apply to direct acquisition, not rendered=true"
+            )
         return self
 
 
@@ -392,7 +344,7 @@ class BashArgs(BaseModel):
 
 def spill_continuation(resource_id: str) -> str:
     """The line that tells the model where the rest of an oversized output is kept."""
-    return f"Full output: read(resource_id={resource_id!r}, cursor=...)"
+    return f"Full output: read_resource(resource_id={resource_id!r}, cursor=...)"
 
 
 async def preview_or_spill(
@@ -425,34 +377,44 @@ _RENDERED_READ_GUIDANCE = (
 )
 
 
-def read_declaration(*, public_url: bool, rendered: bool = False) -> ToolDeclaration:
-    """``rendered`` offers the Agent Browser's rendering, and only where a URL can be read."""
-    url_enabled = public_url
-    rendered = public_url and rendered
+def read_declaration() -> ToolDeclaration:
+    """``read``: a workspace path, the one target it has (ADR 0100)."""
+    return ToolDeclaration(
+        name="read",
+        description=(
+            "Read bounded text from one workspace path (use view for image pixels, and "
+            "read_resource for a url or resource_id). A file pages by line offset and limit; a "
+            "directory by the opaque cursor its page prints. Follow the printed continuation "
+            "instead of re-reading the whole file."
+        ),
+        input_model=ReadArgs,
+        replay_policy="replayable",
+        read_only=True,
+        contract_version=5,
+    )
+
+
+def read_resource_declaration(*, rendered: bool = False) -> ToolDeclaration:
+    """``read_resource``: a Resource by resource_id, or a public url that registers one.
+
+    ``rendered`` offers the Agent Browser's rendering (ADR 0032).
+    """
     description = (
-        "Read bounded text only (use view for image pixels). Exactly one target: a workspace path, a durable resource_id registered in this run, or an "
-        "anonymous public HTTP(S) url. A url read returns the page's full content in "
-        "bounded windows and takes no offset or limit. File pages carry an offset; "
-        "directory and resource pages carry opaque cursors. Follow the printed "
-        "continuation (for a url, its resource_id and cursor) instead of re-reading the "
-        "whole target."
-        if url_enabled
-        else "Read one workspace path or Host-provided durable resource_id registered in this "
-        "run. Files page by offset and directories and resources by opaque cursor. Follow "
-        "the printed continuation."
+        "Read bounded text of one Resource: a resource_id registered in this run (a search "
+        "hit, an upload, a spilled tool output, a published product) or an anonymous public "
+        "HTTP(S) url, which registers the page as a Resource. Text comes in bounded windows "
+        "with no line offset or limit: continue with the resource_id and cursor the page "
+        "prints, and use focus to ask for the part that matters. Use read for workspace files."
     )
     if rendered:
         description = f"{description} {_RENDERED_READ_GUIDANCE}"
-    input_model: type[BaseModel] = (
-        RenderedReadArgs if rendered else ReadArgs if url_enabled else ReadWithoutUrlArgs
-    )
     return ToolDeclaration(
-        name="read",
+        name="read_resource",
         description=description,
-        input_model=input_model,
+        input_model=RenderedReadResourceArgs if rendered else ReadResourceArgs,
         replay_policy="replayable",
         read_only=True,
-        contract_version=4 if url_enabled else 3,
+        contract_version=1,
     )
 
 
@@ -460,40 +422,13 @@ def read_tool(
     environment: ExecutionEnvironment | None,
     scheduler: AccessScheduler,
     *,
-    resource_reader: ResourceReader | None = None,
     spill: SpillWriter | None = None,
-    rendered: bool = False,
 ) -> AgentTool:
-    """Build ``read`` with whichever branches the host actually has."""
+    """Build ``read`` over the Run's workspace."""
 
     async def execute(args: BaseModel, runtime: ToolRuntime) -> ToolResult:
-        args = cast(ReadArgs | ReadWithoutUrlArgs, args)
-        url = args.url if isinstance(args, ReadArgs) else None
-        if args.resource_id is not None or url is not None:
-            if resource_reader is None:
-                return ToolResult.text("resource read is not available", is_error=True)
-            target = args.resource_id or url or "resource"
-            subject = args.resource_id or url
-            if subject:
-                await runtime.emit_update(ToolResult.text("", subject=subject))
-            options = (
-                args.http or HttpReadOptions() if isinstance(args, ReadArgs) else HttpReadOptions()
-            )
-            async with scheduler.hold(PathAccess(path=target, kind="read")):
-                return await resource_reader(
-                    ResourceReadRequest(
-                        resource_id=args.resource_id,
-                        url=url,
-                        focus=args.focus,
-                        cursor=args.cursor,
-                        user_agent=options.user_agent,
-                        accept=options.accept,
-                        accept_language=options.accept_language,
-                        rendered=isinstance(args, RenderedReadArgs) and args.rendered,
-                    ),
-                    runtime,
-                )
-        if environment is None or args.path is None:
+        args = cast(ReadArgs, args)
+        if environment is None:
             return ToolResult.text("path read requires an execution environment", is_error=True)
         if blocked := agentspace_integrity_refusal(environment):
             return blocked
@@ -565,7 +500,40 @@ def read_tool(
                 },
             )
 
-    return read_declaration(public_url=resource_reader is not None, rendered=rendered).bind(execute)
+    return read_declaration().bind(execute)
+
+
+def read_resource_tool(
+    scheduler: AccessScheduler,
+    *,
+    resource_reader: ResourceReader,
+    rendered: bool = False,
+) -> AgentTool:
+    """Build ``read_resource`` over the Run's resource registry."""
+
+    async def execute(args: BaseModel, runtime: ToolRuntime) -> ToolResult:
+        args = cast(ReadResourceArgs, args)
+        subject = args.resource_id or args.url
+        if subject:
+            # An empty target names nothing, so the row stays verb-only.
+            await runtime.emit_update(ToolResult.text("", subject=subject))
+        options = args.http or HttpReadOptions()
+        async with scheduler.hold(PathAccess(path=subject or "resource", kind="read")):
+            return await resource_reader(
+                ResourceReadRequest(
+                    resource_id=args.resource_id,
+                    url=args.url,
+                    focus=args.focus,
+                    cursor=args.cursor,
+                    user_agent=options.user_agent,
+                    accept=options.accept,
+                    accept_language=options.accept_language,
+                    rendered=isinstance(args, RenderedReadResourceArgs) and args.rendered,
+                ),
+                runtime,
+            )
+
+    return read_resource_declaration(rendered=rendered).bind(execute)
 
 
 class ViewArgs(BaseModel):
@@ -584,7 +552,7 @@ class ViewArgs(BaseModel):
         default=None,
         min_length=1,
         max_length=256,
-        description="1-based physical PDF page number or embedded-image handle from read.",
+        description="1-based physical PDF page number or embedded-image handle from read_resource.",
     )
     cursor: str | None = Field(default=None, min_length=1, max_length=_CURSOR_MAX_CHARS)
 
@@ -730,7 +698,7 @@ class MaterializeArgs(BaseModel):
     resource_id: str = Field(
         min_length=1,
         max_length=256,
-        description="The resource_id to copy, as read and view take it.",
+        description="The resource_id to copy, as read_resource and view take it.",
     )
     path: str = Field(
         min_length=1,
@@ -743,7 +711,7 @@ def materialize_declaration() -> ToolDeclaration:
     return ToolDeclaration(
         name="materialize",
         description="Copy the bytes one resource_id of this run holds into a workspace file, byte "
-        "for byte, when a process needs the file itself rather than read's text. It replaces the "
+        "for byte, when a process needs the file itself rather than read_resource's text. It replaces the "
         "whole file at path; the success line reports the media type and byte size. It never "
         "fetches or renders: a resource that holds no bytes yet is refused with the call to make "
         "first.",
@@ -1943,7 +1911,8 @@ __all__ = [
     "MaterializeArgs",
     "PreparedImageAttachment",
     "ReadArgs",
-    "RenderedReadArgs",
+    "ReadResourceArgs",
+    "RenderedReadResourceArgs",
     "ResourceReadRequest",
     "OutputStageFactory",
     "PATH_MAX_CHARS",
@@ -1958,6 +1927,7 @@ __all__ = [
     "ls_tool",
     "materialize_tool",
     "preview_or_spill",
+    "read_resource_tool",
     "read_tool",
     "replace_agentspace_file",
     "spill_continuation",

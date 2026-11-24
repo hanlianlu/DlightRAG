@@ -2275,7 +2275,7 @@ async def test_a_research_run_leases_its_browser_on_first_need_and_returns_it_at
         run_lease.update(row)
         return AssistantTurn(
             text="",
-            tool_calls=(ToolCall("read-1", "read", {"url": url, "rendered": True}),),
+            tool_calls=(ToolCall("read-1", "read_resource", {"url": url, "rendered": True}),),
             stop_reason="tool_use",
         )
 

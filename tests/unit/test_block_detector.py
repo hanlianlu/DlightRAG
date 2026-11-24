@@ -120,6 +120,29 @@ def test_the_failure_carries_the_evidence_the_verdict_used() -> None:
     assert "refused for being automated" in failure.public_message
 
 
+@pytest.mark.parametrize(
+    "html",
+    [
+        # Cloudflare's real interstitial marks its widget with ``id="challenge-…"``: the
+        # page that refused stockanalysis.com reads with a 403 crashed the detector.
+        pytest.param(
+            b"<html><head><title>Just a moment...</title></head><body>"
+            b'<div id="challenge-running">Checking your browser</div></body></html>',
+            id="cloudflare-challenge-widget",
+        ),
+        # An empty title is a verdict element with no text.
+        pytest.param(
+            b"<html><head><title></title></head><body><p>Forbidden</p></body></html>",
+            id="empty-title",
+        ),
+    ],
+)
+def test_a_4xx_page_with_a_widget_or_an_empty_verdict_is_read_not_crashed(html: bytes) -> None:
+    # Each element pattern names its own group; reading one pattern's match by the other's
+    # group raised ``IndexError: no such group`` on every 4xx read of such a page.
+    refused_on_navigation(403, html)
+
+
 def test_a_page_with_no_status_is_read_but_not_called_a_refusal() -> None:
     # A navigation the browser saw no response for has no refusal to name.
     assert refused_on_navigation(None, WHALEGUARD) is None

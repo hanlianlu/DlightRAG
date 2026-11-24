@@ -96,8 +96,8 @@ def _placement(resource_id: str, label: str) -> str:
 def _stale_cursor_refusal(exc: ResourceCursorError) -> str:
     """Cursors are this Run's own view state, never a durable handle."""
     return (
-        f"{exc}. A cursor continues this Run's own view of a Resource; call read or view "
-        "on the resource again for a current continuation."
+        f"{exc}. A cursor continues this Run's own view of a Resource; call read_resource or "
+        "view on the resource again for a current continuation."
     )
 
 

@@ -58,7 +58,9 @@ async def test_child_continuation_terminal_usage_is_operation_local(
                 text="",
                 tool_calls=(
                     ToolCall(
-                        id="read-current", name="read", arguments={"resource_id": "generated"}
+                        id="read-current",
+                        name="read_resource",
+                        arguments={"resource_id": "generated"},
                     ),
                 ),
                 stop_reason="tool_use",
@@ -306,7 +308,12 @@ async def test_concurrent_child_tool_cannot_overwrite_parent_dispatch_context():
     )
     await reached.wait()
     await child_effects.execute_tool(
-        cc, _batch("read"), {"resource_id": "generated"}, AttemptId.new(), AsyncMock(), AsyncMock()
+        cc,
+        _batch("read_resource"),
+        {"resource_id": "generated"},
+        AttemptId.new(),
+        AsyncMock(),
+        AsyncMock(),
     )
     release.set()
     await task

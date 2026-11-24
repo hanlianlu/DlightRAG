@@ -548,7 +548,7 @@ async def test_a_huge_snapshot_is_kept_in_the_workspace_and_its_head_shown(
         assert "browser snapshot exceeded 51200 UTF-8 bytes or 2000 lines" in shown.text_content
         assert "item 00000 of the long list" in shown.text_content
         assert "item 02999" not in shown.text_content
-        assert shown.protected_text.startswith("Full output: read(resource_id='spill_")
+        assert shown.protected_text.startswith("Full output: read_resource(resource_id='spill_")
         assert shown.text_content.endswith(shown.protected_text)
         (receipt,) = shown.effects.committed_outputs
         assert receipt.resource_id in shown.protected_text

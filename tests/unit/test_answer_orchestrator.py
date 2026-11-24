@@ -343,7 +343,9 @@ def test_a_child_can_read_rendered_exactly_when_its_run_has_a_browser() -> None:
                 messages=[],
             ),
         )
-        return {tool.name: tool for tool in child.tools}["read"].definition.parameters["properties"]
+        return {tool.name: tool for tool in child.tools}["read_resource"].definition.parameters[
+            "properties"
+        ]
 
     assert "rendered" in read_properties(browser=True)
     assert "rendered" not in read_properties(browser=False)
@@ -798,7 +800,7 @@ async def test_compaction_handles_put_the_runs_spills_before_its_evidence(tmp_pa
     handles = await orchestrator._continuation_handles(run)
 
     assert handles == [
-        '[spill] spill_read_ab12 (4096 bytes) — re-read with read(resource_id="spill_read_ab12")',
+        '[spill] spill_read_ab12 (4096 bytes) — re-read with read_resource(resource_id="spill_read_ab12")',
         "[1] report.pdf",
     ]
     # The bounded share is the read's own limit too, not only the compose slice's.
@@ -900,7 +902,7 @@ async def test_compaction_carries_the_spill_handles_into_the_projection(tmp_path
     )
 
     assert captured["durable_handles"] == [
-        '[spill] spill_grep_7f21 (4096 bytes) — re-read with read(resource_id="spill_grep_7f21")'
+        '[spill] spill_grep_7f21 (4096 bytes) — re-read with read_resource(resource_id="spill_grep_7f21")'
     ]
     assert captured["run_notes"] == [
         "[note] notes/plan.md (1240 bytes) — re-read with read(path='notes/plan.md') before a step that needs a value this summary does not state"
@@ -1022,7 +1024,7 @@ async def test_the_summary_names_the_products_the_run_attached(tmp_path: Path) -
     artifacts = [handle for handle in handles if handle.startswith("[artifact]")]
     (handle,) = artifacts
     assert handle.startswith("[artifact] reports/analysis.md (1234 bytes)")
-    assert "read(resource_id='artifact-" in handle
+    assert "read_resource(resource_id='artifact-" in handle
 
 
 def _one_passage_ledger() -> EvidenceLedger:

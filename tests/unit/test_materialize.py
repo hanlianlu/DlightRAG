@@ -217,7 +217,7 @@ async def test_it_never_fetches_or_renders(tmp_path: Path, web: list[httpx.Reque
         unread = await copy(tool, link)
 
         assert unread.is_error is True
-        assert f"read(resource_id={link!r})" in unread.text_content
+        assert f"read_resource(resource_id={link!r})" in unread.text_content
         assert unread.effects == ToolEffects()
 
         # A Rendered Read gives the page a rendering and no bytes of its own.

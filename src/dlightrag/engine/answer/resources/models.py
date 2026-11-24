@@ -55,7 +55,7 @@ class NoAdmittedBytesError(ResourceRegistryError):
             )
         else:
             message = (
-                f"{resource_id} holds no admitted bytes yet; read(resource_id={resource_id!r}) "
+                f"{resource_id} holds no admitted bytes yet; read_resource(resource_id={resource_id!r}) "
                 "acquires them, then materialize copies them"
             )
         super().__init__(message)

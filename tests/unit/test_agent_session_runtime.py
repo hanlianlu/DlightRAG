@@ -132,6 +132,8 @@ class _Effects:
     compaction_required: bool = False
     tool_duration_ms: int | None = None
     tool_details: dict[str, Any] | None = None
+    tool_outcome: str = "succeeded"
+    tool_raises: Exception | None = None
 
     def __post_init__(self) -> None:
         self.provider_attempts: list[AttemptId] = []
@@ -195,11 +197,13 @@ class _Effects:
         self.executed_sources.append(item.source_index)
         if self.crash_tool:
             raise __import__("asyncio").CancelledError
+        if self.tool_raises is not None:
+            raise self.tool_raises
         return ToolEffectResult(
             result=ToolResultEntry.text(
                 tool_name=item.tool_name,
                 call_id=item.call_id,
-                outcome="succeeded",
+                outcome=self.tool_outcome,  # type: ignore[arg-type]
                 text=f"result:{arguments['value']}",
                 details=self.tool_details,
             ),
@@ -3144,3 +3148,108 @@ async def test_a_call_that_executes_in_a_refused_turn_resets_the_count() -> None
         + [_assistant(last), _assistant(text="done")]
     )
     assert isinstance(final.state, OperationCompleted)
+
+
+@pytest.mark.asyncio
+async def test_an_identical_call_that_failed_is_refused_whatever_the_tool() -> None:
+    """A Tool outside the shell/search guard that fails the same way every turn must not loop.
+
+    Observed live: an extract child re-issued the same two failing ``read`` calls 265 turns in a
+    row for over two hours (each failed with ``no such group``), because only ``bash`` and
+    ``search_web`` were guarded and nothing else bounded the repetition.
+    """
+    tool = AgentTool(name="read", description="read", input_model=_Args, execute=_tool)
+    pair = [
+        _assistant(
+            ToolCall(f"a-{turn}", "read", {"value": "https://example.com/a"}),
+            ToolCall(f"b-{turn}", "read", {"value": "https://example.com/b"}),
+        )
+        for turn in range(20)
+    ]
+    effects = _Effects([*pair, _assistant(text="done")], tool_outcome="failed")
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
+    runtime = _runtime(store, effects, tool)
+    session_id = SessionId.new()
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="repeated-failure",
+        content="question",
+        plan=_plan(tool),
+    )
+    final = await runtime.drive(session_id=session_id, operation_id=accepted.operation_id)
+
+    assert isinstance(final.state, OperationFailed)
+    assert final.state.kind == "repeated_call_loop"
+    # The first failure of each call executed; every identical retry after it was refused.
+    assert len(effects.tool_attempts) == 2
+    entries = (await store.load(session_id)).entries
+    refused = [
+        e.result
+        for e in entries
+        if isinstance(e, ToolResultMessageEntry) and e.result.outcome == "repeated_call"
+    ]
+    assert refused and "failed" in tool_content_text(refused[0].parts)
+
+
+@pytest.mark.asyncio
+async def test_a_read_that_succeeded_may_be_repeated() -> None:
+    """Only a failure is guarded outside shell/search: re-reading a file after an edit is work."""
+    tool = AgentTool(name="read", description="read", input_model=_Args, execute=_tool)
+    turns = [_assistant(ToolCall(f"r-{i}", "read", {"value": "notes.md"})) for i in range(3)]
+    effects = _Effects([*turns, _assistant(text="done")])
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
+    runtime = _runtime(store, effects, tool)
+    session_id = SessionId.new()
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="repeated-read",
+        content="question",
+        plan=_plan(tool),
+    )
+    final = await runtime.drive(session_id=session_id, operation_id=accepted.operation_id)
+    assert isinstance(final.state, OperationCompleted)
+    assert len(effects.tool_attempts) == 3
+
+
+async def _drive_one_raising_call(exc: Exception) -> str:
+    tool = AgentTool(name="read", description="read", input_model=_Args, execute=_tool)
+    effects = _Effects(
+        [
+            _assistant(ToolCall("r", "read", {"value": "https://example.com"})),
+            _assistant(text="ok"),
+        ],
+        tool_raises=exc,
+    )
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
+    runtime = _runtime(store, effects, tool)
+    session_id = SessionId.new()
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="raising-tool",
+        content="question",
+        plan=_plan(tool),
+    )
+    await runtime.drive(session_id=session_id, operation_id=accepted.operation_id)
+    entries = (await store.load(session_id)).entries
+    (result,) = [e.result for e in entries if isinstance(e, ToolResultMessageEntry)]
+    assert result.outcome == "failed"
+    return tool_content_text(result.parts)
+
+
+@pytest.mark.asyncio
+async def test_a_platform_defect_in_a_tool_is_named_as_one_not_passed_through() -> None:
+    """Observed live: ``read`` hit an ``IndexError`` in the block detector and the model read only
+    ``Tool "read" failed: no such group``: nothing it could act on, so it re-issued the call."""
+    text = await _drive_one_raising_call(IndexError("no such group"))
+    assert "no such group" not in text
+    assert "internal error" in text
+    assert "not caused by your arguments" in text
+
+
+@pytest.mark.asyncio
+async def test_a_tool_failure_meant_for_the_model_keeps_its_words() -> None:
+    text = await _drive_one_raising_call(ValueError("the page answered 404 Not Found"))
+    assert "the page answered 404 Not Found" in text

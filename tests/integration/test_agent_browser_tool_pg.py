@@ -291,9 +291,9 @@ async def test_captures_and_downloads_settle_with_their_call_and_restore_without
         lambda last: ToolCall(
             "download", "browser", {"action": "click", "ref": ref_of(last, "Download CSV")}
         ),
-        lambda last: ToolCall("read-download", "read", {"resource_id": handle_in(last)}),
+        lambda last: ToolCall("read-download", "read_resource", {"resource_id": handle_in(last)}),
         call("capture", "capture"),
-        lambda last: ToolCall("read-capture", "read", {"resource_id": handle_in(last)}),
+        lambda last: ToolCall("read-capture", "read_resource", {"resource_id": handle_in(last)}),
         lambda _last: "done",
     )
     async with world(pg) as web:

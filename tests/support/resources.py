@@ -20,7 +20,11 @@ from dlightrag.engine.agent.tools.contracts import (
     AgentTool,
     ToolResult,
 )
-from dlightrag.engine.agent.tools.files import PreparedImageAttachment, read_tool, view_tool
+from dlightrag.engine.agent.tools.files import (
+    PreparedImageAttachment,
+    read_resource_tool,
+    view_tool,
+)
 from dlightrag.engine.ai.media import decode_image_base64
 from dlightrag.engine.answer.tools.resources import make_resource_reader, make_resource_viewer
 from tests.support.tool_helpers import tool_runtime
@@ -70,8 +74,7 @@ def tools(
 ) -> tuple[AgentTool, AgentTool]:
     access = AccessScheduler()
     return (
-        read_tool(
-            environment,
+        read_resource_tool(
             access,
             resource_reader=make_resource_reader(registry, 1000),
             rendered=rendered,

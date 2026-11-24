@@ -24,7 +24,7 @@ from dlightrag.engine.agent.tools.contracts import (
 from dlightrag.engine.agent.tools.files import (
     PreparedImageAttachment,
     materialize_tool,
-    read_tool,
+    read_resource_tool,
     view_tool,
 )
 from dlightrag.engine.ai.media import decode_image_base64
@@ -123,8 +123,7 @@ class Loader(Recorder):
 def tools(registry, *, lineage):
     access = AccessScheduler()
     return (
-        read_tool(
-            None,
+        read_resource_tool(
             access,
             resource_reader=make_resource_reader(registry, 1000, lineage=lineage),
         ),
@@ -751,7 +750,7 @@ async def test_an_adoption_is_durable_before_its_retried_call_fails(monkeypatch)
         refused = await call(view, resource_id=EARLIER_HANDLE, cursor="overview.not-a-cursor")
 
         assert refused.is_error is True
-        assert "call read or view on the resource again" in refused.text_content
+        assert "call read_resource or view on the resource again" in refused.text_content
         assert refused.effects.attached_resources == ()
         (recorded,) = lineage.recorded
         later = await call(read, resource_id=EARLIER_HANDLE)
