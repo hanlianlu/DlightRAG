@@ -341,7 +341,7 @@ async def test_a_later_run_logs_in_with_the_account_a_parent_registered(
         await later.call(action="login", email_ref=form["email"], password_refs=[form["password"]])
         await later.call(action="click", ref=form["button"])
 
-        fields = posted(later.proxy, "/session")
+        fields = await posted(later.proxy, "/session")
         assert fields["email"] == [alias]
         assert_sent(fields, password, "password")
     after = await row_of(pool, "owner", SITE)

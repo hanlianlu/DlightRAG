@@ -12,6 +12,7 @@ test counts where it appears and asserts the count, so a failure reports a numbe
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -341,9 +342,26 @@ def posts(proxy: WebProxy, path: str) -> list[dict[str, list[str]]]:
     ]
 
 
-def posted(proxy: WebProxy, path: str) -> dict[str, list[str]]:
+#: How long a test waits for a form POST to reach the proxy. A click returns once the page settles,
+#: which on a loaded CI runner can be before the browser's POST arrives: reading at once flaked.
+POST_WAIT_SECONDS = 5.0
+
+
+async def posts_arrived(proxy: WebProxy, path: str, count: int) -> list[dict[str, list[str]]]:
+    """The form fields of the POSTs to ``path`` once ``count`` have arrived, or what arrived by the
+    deadline, so the caller's unpacking names the shortfall."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + POST_WAIT_SECONDS
+    while True:
+        found = posts(proxy, path)
+        if len(found) >= count or loop.time() >= deadline:
+            return found
+        await asyncio.sleep(0.05)
+
+
+async def posted(proxy: WebProxy, path: str) -> dict[str, list[str]]:
     """The form fields of the one POST the browser sent to ``path``."""
-    (fields,) = posts(proxy, path)
+    (fields,) = await posts_arrived(proxy, path, 1)
     return fields
 
 
@@ -454,7 +472,7 @@ async def test_register_fills_a_generated_password_and_never_shows_it(
         await web.call(action="click", ref=form["button"])
 
         # The site received the password in both fields, and the model never did.
-        fields = posted(web.proxy, "/join")
+        fields = await posted(web.proxy, "/join")
         assert_sent(fields, password, "password", "confirm")
         assert (fields["email"], fields["handle"]) == ([email], [HANDLE])
 
@@ -485,7 +503,7 @@ async def test_registering_again_fills_a_new_password_and_the_address_the_accoun
         assert renewed != before
         await web.call(action="click", ref=form["button"])
         # The address was filled by DlightRAG, since the account already had one.
-        fields = posted(web.proxy, "/join")
+        fields = await posted(web.proxy, "/join")
         assert_sent(fields, renewed, "password", "confirm")
         assert fields["email"] == [EMAIL]
 
@@ -673,7 +691,7 @@ async def test_asking_for_the_length_the_site_allows_registers(
 
         assert not registered.is_error, registered.text_content
         await web.call(action="click", ref=form["button"])
-        sent = [len(value) for value in posted(web.proxy, "/join")["password"]]
+        sent = [len(value) for value in (await posted(web.proxy, "/join"))["password"]]
         assert (sent, size(web.stored_password())) == ([limit], limit)
 
 
@@ -924,7 +942,7 @@ async def test_login_fills_the_stored_account_in_a_fresh_session(tmp_path: Path)
         ) in text
         assert shows_mask(text, "Password", form["password"])
         await later.call(action="click", ref=form["button"])
-        fields = posted(later.proxy, "/session")
+        fields = await posted(later.proxy, "/session")
         assert fields["email"] == [EMAIL]
         assert_sent(fields, password, "password")
 
@@ -1020,7 +1038,7 @@ async def test_a_childs_registration_is_run_scoped(tmp_path: Path) -> None:
         await web.call("child-a", child=True, action="click", ref=form["button"])
         # The site's copy of the Child's password is the only one a test can learn, and from here
         # on no call may show it either.
-        (join,) = posts(web.proxy, "/join")
+        (join,) = await posts_arrived(web.proxy, "/join", 1)
         web.watch(SecretStr(join["password"][0]))
 
         # Its login fills its own account, and another Child's falls back to the owner's.
@@ -1042,7 +1060,7 @@ async def test_a_childs_registration_is_run_scoped(tmp_path: Path) -> None:
         # records its use, which adds the Child no authority.
         assert last_used == [[False], [True]]
 
-        own, fallback = posts(web.proxy, "/session")
+        own, fallback = await posts_arrived(web.proxy, "/session", 2)
         assert own["email"] == [alias]
         # Its own password is the one it registered with, and not the owner's.
         reused = (
@@ -1082,7 +1100,7 @@ async def test_a_run_that_may_not_register_logs_in_with_what_its_owner_has_and_c
 
         assert not filled.is_error, filled.text_content
         await later.call(action="click", ref=form["button"])
-        assert_sent(posted(later.proxy, "/session"), password, "password")
+        assert_sent(await posted(later.proxy, "/session"), password, "password")
         # Nothing was registered, and a Child of the Run has no more of the action than it.
         assert [row.email for row in later.rows] == [EMAIL]
         with pytest.raises(ValidationError, match="Input should be"):
@@ -1306,7 +1324,7 @@ async def test_an_account_whose_key_is_lost_recovers_through_its_reset_mail(
             # No password was filled, so Settings do not show the account as signed in to.
             assert [row.last_used_at for row in await store.summaries(owner_id=OWNER)] == [None]
             await web.call(action="click", ref=forgot["button"])
-            assert posted(web.proxy, "/sent")["email"] == [alias]
+            assert (await posted(web.proxy, "/sent"))["email"] == [alias]
             bucket.objects[f"mail/{alias}/reset.eml"] = delivered(
                 0, mail(f"Reset your password at {link}", subject="Password reset")
             )
