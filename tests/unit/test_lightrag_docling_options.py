@@ -20,7 +20,6 @@ def _client(
 
     apply_docling_request_options(code_formula_preset=preset)
     client: Any = DoclingRawClient.__new__(DoclingRawClient)
-    # Read by LightRAG 1.5.8's request builder; ignored by 1.5.7's.
     client.pipeline = "standard"
     client.vlm_preset = None
     client.do_ocr = True

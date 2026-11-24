@@ -106,8 +106,11 @@ class _Writer:
 
 
 @pytest.fixture(scope="module")
-async def writer() -> AsyncIterator[_Writer]:
+async def writer(tmp_path_factory: pytest.TempPathFactory) -> AsyncIterator[_Writer]:
     """One writer attach over a scratch database this module creates and drops."""
+    # Its own working dir per run: LightRAG anchors the working dir to the configuration
+    # container it first meets, and every run meets a fresh database.
+    working_dir = tmp_path_factory.mktemp("rr_it_workdir")
     await skip_without_postgres()
     from dlightrag.adapters.postgres.core._pool import pg_pool
     from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
@@ -120,7 +123,7 @@ async def writer() -> AsyncIterator[_Writer]:
     database = f"dlightrag_rebuild_restore_{uuid.uuid4().hex[:12]}"
     await _create_database(database)
     config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
-        deployment={"workspace": _WORKSPACE, "working_dir": "/tmp/rr_it_workdir"},
+        deployment={"workspace": _WORKSPACE, "working_dir": str(working_dir)},
         storage={
             "postgres": {
                 "host": str(PG_CONN_KWARGS["host"]),

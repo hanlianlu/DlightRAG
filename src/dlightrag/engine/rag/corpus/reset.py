@@ -11,11 +11,12 @@
 """
 
 import asyncio
-import importlib
 import logging
 import shutil
 from pathlib import Path
 from typing import Any
+
+from lightrag.config_store import delete_workspace_configuration
 
 from dlightrag.engine.ai.telemetry import safe_log_text
 from dlightrag.engine.rag.corpus.ingestion.paths import RUN_STAGES_DIR_NAME
@@ -67,9 +68,9 @@ async def areset(
     if lr is not None:
         drop_failed = False
         for attr in vars(lr):
-            # LightRAG 1.5.8's configuration container is one shared by every
-            # workspace of the deployment (its identity row included): dropping it
-            # would erase them all and refuse every later start.
+            # LightRAG's configuration container is one shared by every workspace of
+            # the deployment (its identity row included): dropping it would erase them
+            # all and refuse every later start.
             if attr == _CONFIGURATION_STORAGE_ATTR:
                 continue
             storage = getattr(lr, attr, None)
@@ -96,12 +97,9 @@ async def areset(
                 logger.warning("areset Phase 1 failed for %s: %s", attr, exc)
         # Configuration goes last and only after every drop succeeded: data gone with
         # its records kept is recoverable, records gone with data kept is not.
-        configuration = getattr(lr, _CONFIGURATION_STORAGE_ATTR, None)
-        if configuration is not None and not drop_failed:
+        if not drop_failed:
             try:
-                # By name: the module exists only where the attribute above does.
-                config_store = importlib.import_module("lightrag.config_store")
-                await config_store.delete_workspace_configuration(configuration, lr.workspace)
+                await delete_workspace_configuration(lr.configuration_storage, lr.workspace)
             except Exception as exc:
                 errors.append(f"Phase 1 (configuration): {exc}")
                 logger.warning("areset Phase 1 failed for the workspace configuration: %s", exc)

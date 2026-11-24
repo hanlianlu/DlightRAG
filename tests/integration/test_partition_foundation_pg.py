@@ -138,8 +138,11 @@ def _embedding_func() -> Any:
 
 
 @pytest.fixture(scope="module")
-async def writer_corpus() -> AsyncIterator[WriterCorpus]:
+async def writer_corpus(tmp_path_factory: pytest.TempPathFactory) -> AsyncIterator[WriterCorpus]:
     """One fresh writer attach over the dedicated test database."""
+    # Its own working dir per run: LightRAG anchors the working dir to the configuration
+    # container it first meets, and every run meets a fresh database.
+    working_dir = tmp_path_factory.mktemp("pf_it_workdir")
     from dlightrag.adapters.postgres.core._pool import pg_pool
     from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
     from dlightrag.application.config.loading import set_config
@@ -153,7 +156,7 @@ async def writer_corpus() -> AsyncIterator[WriterCorpus]:
     from dlightrag.engine.rag.workspace.ports import CorpusRuntimeModels
 
     cfg = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
-        deployment={"workspace": _WORKSPACE_A, "working_dir": "/tmp/pf_it_workdir"},
+        deployment={"workspace": _WORKSPACE_A, "working_dir": str(working_dir)},
         storage={
             "postgres": {
                 "host": str(_DEFAULT_KWARGS["host"]),

@@ -5,7 +5,7 @@ import re
 from collections.abc import Iterable
 
 _CANONICAL_WORKSPACE_RE = re.compile(r"[a-z_][a-z0-9_]{0,63}")
-# LightRAG 1.5.8 files every workspace's configuration under this fixed partition of
+# LightRAG files every workspace's configuration under this fixed partition of
 # its configuration table, so a workspace of that name would share it. The other names
 # LightRAG reserves start with ``$``, which the canonical pattern never matches.
 _RESERVED_WORKSPACE_IDS = frozenset({"_lightrag_config"})

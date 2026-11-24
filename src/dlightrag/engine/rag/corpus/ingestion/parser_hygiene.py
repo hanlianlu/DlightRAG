@@ -3,17 +3,11 @@
 
 DlightRAG delegates document parsing to LightRAG. This module does not create a
 second MinerU ingestion path; it narrows LightRAG's MinerU IR builder at the
-``_normalize_content_list`` boundary for two gaps current upstream leaves:
+``_normalize_content_list`` boundary for two gaps current upstream leaves.
+(LightRAG maps MinerU ``chart`` blocks to a drawing itself, caption and footnote
+included.)
 
-1. Drawing aliases — MinerU emits figure blocks (notably ``chart``) that are
-   structurally identical to ``image`` (an ``img_path`` plus ``<type>_caption``
-   / ``<type>_footnote``) but under type names the IR builder does not map to a
-   drawing. Upstream serializes them through the text fallback, and because
-   their ``content`` is empty the image *and* its caption are dropped. We alias
-   them to ``image`` so they flow through the existing IRDrawing / VLM sidecar
-   path and stay retrievable.
-
-1b. Media with an image but no payload — MinerU also misclassifies whole image
+1. Media with an image but no payload — MinerU also misclassifies whole image
    pages as ``table`` (and emits empty ``equation`` items). Upstream decides
    "does this table have content?" from whether the HTML *string* is non-blank,
    so ``<table><tr><td></td><td></td></tr></table>`` counts as content and lands
@@ -42,13 +36,6 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _TAG_RE = re.compile(r"<[^>]*>")
-
-# MinerU figure types that carry an image but that LightRAG's IR builder does
-# not map to IRDrawing (it maps only ``image`` / ``picture`` / ``drawing``).
-# They share the ``image`` shape — an ``img_path`` plus ``<type>_caption`` /
-# ``<type>_footnote`` — so aliasing them to ``image`` is loss-free. Extend this
-# set if MinerU introduces further figure-like types (e.g. ``figure``).
-MINERU_DRAWING_ALIAS_TYPES = frozenset({"chart"})
 
 # Content-bearing types that can carry a rendered ``img_path``. When such an
 # item's payload is empty (no visible cell text, no LaTeX), the image is the
@@ -83,17 +70,6 @@ _PATCH_ATTR = "_dlightrag_normalizes_mineru_content_list"
 # ---------------------------------------------------------------------------
 # Pure content_list transforms
 # ---------------------------------------------------------------------------
-
-
-def normalize_mineru_drawing_aliases(content_list: list[Any]) -> list[Any]:
-    """Rewrite figure-like items (``chart`` …) to ``image`` items.
-
-    The IR builder routes ``image`` through IRDrawing; alias types would
-    otherwise fall through to the text fallback and, with empty ``content``, be
-    dropped entirely. Caption / footnote fields are renamed to the ``image_*``
-    names the drawing builder reads so the figure's caption survives.
-    """
-    return [_alias_drawing_item(item) if _is_drawing_alias(item) else item for item in content_list]
 
 
 def normalize_mineru_payloadless_media(content_list: list[Any]) -> list[Any]:
@@ -134,7 +110,6 @@ def apply_mineru_content_list_hygiene() -> bool:
         return False
 
     transforms: tuple[Callable[[list[Any]], list[Any]], ...] = (
-        normalize_mineru_drawing_aliases,
         normalize_mineru_payloadless_media,
         filter_mineru_auxiliary_blocks,
     )
@@ -158,14 +133,6 @@ def apply_mineru_content_list_hygiene() -> bool:
         ", ".join(transform.__name__ for transform in transforms),
     )
     return True
-
-
-def _is_drawing_alias(item: Any) -> bool:
-    return isinstance(item, dict) and _block_type(item) in MINERU_DRAWING_ALIAS_TYPES
-
-
-def _alias_drawing_item(item: dict[str, Any]) -> dict[str, Any]:
-    return _alias_to_image(item, _block_type(item))
 
 
 def _alias_to_image(item: dict[str, Any], source_type: str) -> dict[str, Any]:
@@ -240,10 +207,8 @@ def _block_type(item: dict[str, Any]) -> str:
 
 __all__ = [
     "MINERU_AUXILIARY_BLOCK_TYPES",
-    "MINERU_DRAWING_ALIAS_TYPES",
     "MINERU_PAYLOADLESS_MEDIA_TYPES",
     "apply_mineru_content_list_hygiene",
     "filter_mineru_auxiliary_blocks",
-    "normalize_mineru_drawing_aliases",
     "normalize_mineru_payloadless_media",
 ]

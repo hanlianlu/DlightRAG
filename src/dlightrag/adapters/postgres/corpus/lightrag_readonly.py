@@ -102,7 +102,7 @@ class ReadOnlyPostgreSQLDB(PostgreSQLDB):
         """Create a read-only asyncpg pool without LightRAG bootstrap DDL.
 
         ``reconnect`` is LightRAG's ``_ensure_pool`` asking for a lost pool back
-        (1.5.8+). It makes one attempt, as upstream does, so concurrent requests
+        It makes one attempt, as upstream does, so concurrent requests
         during an outage do not each wait out the whole retry budget.
         """
         attempts = 1 if reconnect else max(1, int(self.connection_retry_attempts))

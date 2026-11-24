@@ -754,7 +754,7 @@ wheels = [
 
 [[package]]
 name = "dlightrag"
-version = "3.0.2"
+version = "3.0.3"
 source = { editable = "." }
 dependencies = [
     { name = "aiobotocore" },
@@ -852,7 +852,7 @@ requires-dist = [
     { name = "json-repair", specifier = ">=0.63.4" },
     { name = "jsonschema", specifier = ">=4.26.0" },
     { name = "langchain-text-splitters" },
-    { name = "lightrag-hku", specifier = ">=1.5.7" },
+    { name = "lightrag-hku", specifier = ">=1.5.8" },
     { name = "lingua-language-detector", specifier = ">=2.2.0" },
     { name = "linkify-it-py", specifier = ">=2.2.0" },
     { name = "magika", specifier = ">=0.6.2" },
@@ -902,7 +902,7 @@ dev = [
 
 [[package]]
 name = "dlightrag-memory"
-version = "3.0.2"
+version = "3.0.3"
 source = { editable = "packages/memory" }
 dependencies = [
     { name = "asyncpg" },
@@ -919,12 +919,12 @@ requires-dist = [
 
 [[package]]
 name = "dlightrag-mineru"
-version = "3.0.2"
+version = "3.0.3"
 source = { editable = "packages/mineru" }
 
 [[package]]
 name = "dlightrag-observability"
-version = "3.0.2"
+version = "3.0.3"
 source = { editable = "packages/observability" }
 dependencies = [
     { name = "opentelemetry-exporter-otlp-proto-http" },
@@ -1693,7 +1693,7 @@ wheels = [
 
 [[package]]
 name = "lightrag-hku"
-version = "1.5.7"
+version = "1.5.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -1716,9 +1716,9 @@ dependencies = [
     { name = "tiktoken" },
     { name = "xlsxwriter" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/cc/dd/6bba8d88a07a50a6569de6eb1fc059d57dfdaafdfe9355ea767aab007978/lightrag_hku-1.5.7.tar.gz", hash = "sha256:4d2cbb3f983b2bec209f4f154845869fc9e5800a7a2a9bb7005ba7610f4fbe0a", size = 4921093, upload-time = "2026-09-02T07:24:50.999Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b3/8f/abe48b71676adb54ec9488658839f85b44801a9d835cc4f4305c0ff244ea/lightrag_hku-1.5.8.tar.gz", hash = "sha256:4189ab2d082bfe8c340efbee7f377097004642140ead09c676cdd539e6642490", size = 5589558, upload-time = "2026-11-23T22:47:13.925Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f3/29/44c9df718091da249c9d06967452f0f06560c58d0fdee26e57e6ac8dd25a/lightrag_hku-1.5.7-py3-none-any.whl", hash = "sha256:895b81d94ca447afc6290c0e049d339f6caed46fbf29e4324f6db987046c6fcb", size = 5039835, upload-time = "2026-09-02T07:24:48.959Z" },
+    { url = "https://files.pythonhosted.org/packages/76/35/be80e35cdf37fc2ca22be02b612d112e552f893839c99c6680027c78ee22/lightrag_hku-1.5.8-py3-none-any.whl", hash = "sha256:26f48b681ec1e4fd1b9e1f220f528ebe841da0744422dfdd1351ca3f4a450b72", size = 5743825, upload-time = "2026-11-23T22:47:11.923Z" },
 ]
 
 [[package]]

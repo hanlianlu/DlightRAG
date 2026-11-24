@@ -74,7 +74,7 @@ ORDER BY tablename
 _HAS_WORKSPACE_COLUMN = """SELECT 1 FROM information_schema.columns
 WHERE table_schema = 'public' AND table_name = $1 AND column_name = 'workspace'
 """
-# LightRAG 1.5.8's configuration container. Its ``workspace`` column holds one fixed
+# LightRAG's configuration container. Its ``workspace`` column holds one fixed
 # partition constant for every row, so the workspace a row describes (a baseline) is
 # the one in its payload; the container's identity and server rows name none.
 _CONFIGURATION_TABLE = "lightrag_config"

@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """A workspace reset or delete leaves LightRAG's shared configuration container usable.
 
-LightRAG 1.5.8 keeps every workspace's embedding baselines, and the container's own identity,
+LightRAG keeps every workspace's embedding baselines, and the container's own identity,
 in one table shared by the whole deployment. Dropping that storage with the workspace's others
 erased them all and made every later start refuse. These run the real reset against real
 LightRAG storages on a scratch database.
@@ -11,13 +11,11 @@ import hashlib
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
 import asyncpg
 import pytest
-from packaging.version import Version
 
 from tests.support.pg import (
     PG_CONN_KWARGS,
@@ -28,10 +26,6 @@ from tests.support.pg import (
 
 pytestmark = [
     pytest.mark.integration,
-    pytest.mark.skipif(
-        Version(version("lightrag-hku")) < Version("1.5.8rc1"),
-        reason="LightRAG before 1.5.8 has no shared configuration container",
-    ),
     # The storages create asyncpg pools bound to the loop they were born on.
     pytest.mark.asyncio(loop_scope="module"),
 ]

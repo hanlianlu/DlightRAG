@@ -21,7 +21,7 @@ columns and over any key of the `custom_metadata` JSONB column.
 ## Required Version
 
 Startup requires PostgreSQL 18 or newer and checks the LightRAG API surface that
-DlightRAG uses; the dependency floor is `lightrag-hku>=1.5.7`. DlightRAG carries
+DlightRAG uses; the dependency floor is `lightrag-hku>=1.5.8`. DlightRAG carries
 no patches against LightRAG's PostgreSQL layer. Workspaces should not mix
 embedding models or dimensions after indexing; changing `models.embedding.dim`
 requires clearing/rebuilding vectors.

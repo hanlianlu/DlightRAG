@@ -57,9 +57,9 @@ def apply_docling_request_options(*, code_formula_preset: str | None = None) -> 
     @wraps(original)
     def patched_build_multipart_data(self: Any) -> dict[str, Any]:
         data = original(self)
-        # LightRAG 1.5.8's VLM pipeline sends no OCR or enrichment fields, and older
-        # servers reject a request that carries more; it infers no heading hierarchy.
-        if getattr(self, "pipeline", None) == "vlm":
+        # The VLM pipeline sends no OCR or enrichment fields and infers no heading
+        # hierarchy, so it takes neither option.
+        if self.pipeline == "vlm":
             return data
         if code_formula_preset and self.do_formula_enrichment:
             data.setdefault("code_formula_preset", code_formula_preset)

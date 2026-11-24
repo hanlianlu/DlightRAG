@@ -802,10 +802,9 @@ _TRACKED_PIPELINE_ACTIVE_STATUSES = {
     "processing",
     "preprocessed",
 }
-# Statuses upstream will not advance further. ``deleting`` (LightRAG 1.5.8) is a
-# deletion that stopped partway and is never ingestion work: waiting on it never
-# ends, so the cohort retry settles it instead, and replaying it re-issues the
-# deletion. Compared as a string because LightRAG 1.5.7's DocStatus lacks it.
+# Statuses upstream will not advance further. ``deleting`` is a deletion that stopped
+# partway and is never ingestion work: waiting on it never ends, so the cohort retry
+# settles it instead, and replaying it re-issues the deletion.
 _TRACKED_PIPELINE_SETTLED_STATUSES = {"processed", "failed", "deleting"}
 
 

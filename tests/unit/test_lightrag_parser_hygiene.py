@@ -10,7 +10,6 @@ import pytest
 from dlightrag.engine.rag.corpus.ingestion.parser_hygiene import (
     apply_mineru_content_list_hygiene,
     filter_mineru_auxiliary_blocks,
-    normalize_mineru_drawing_aliases,
 )
 
 
@@ -100,76 +99,40 @@ def test_mineru_ir_builder_patch_drops_auxiliary_page_furniture(tmp_path: Path) 
 
 
 # ---------------------------------------------------------------------------
-# Drawing-alias normalization (MinerU ``chart`` → ``image``)
+# What upstream owns now, and what it still leaves to this patch
 # ---------------------------------------------------------------------------
 
 
-def test_normalize_drawing_aliases_remaps_chart_to_image() -> None:
-    content_list = [
-        {
-            "type": "chart",
-            "img_path": "images/fig1.jpg",
-            "content": "",
-            "chart_caption": ["Figure 1. Foreign Reserves"],
-            "chart_footnote": ["Note: annual series."],
-            "bbox": [1, 2, 3, 4],
-            "page_idx": 0,
-        },
-        {"type": "text", "text": "Body"},
-    ]
-
-    chart, text = normalize_mineru_drawing_aliases(content_list)
-
-    assert chart["type"] == "image"
-    assert chart["img_path"] == "images/fig1.jpg"
-    assert chart["image_caption"] == ["Figure 1. Foreign Reserves"]
-    assert chart["image_footnote"] == ["Note: annual series."]
-    assert "chart_caption" not in chart
-    assert "chart_footnote" not in chart
-    assert chart["bbox"] == [1, 2, 3, 4]
-    assert chart["page_idx"] == 0
-    assert text == {"type": "text", "text": "Body"}
-
-
-def test_normalize_drawing_aliases_does_not_clobber_existing_image_fields() -> None:
-    content_list = [
-        {
-            "type": "chart",
-            "img_path": "images/fig.jpg",
-            "image_caption": ["kept"],
-            "chart_caption": ["ignored"],
-        }
-    ]
-
-    (item,) = normalize_mineru_drawing_aliases(content_list)
-
-    assert item["type"] == "image"
-    assert item["image_caption"] == ["kept"]
-    assert "chart_caption" not in item
-
-
-def test_normalize_drawing_aliases_leaves_non_alias_items_unchanged() -> None:
-    content_list = [
-        {"type": "image", "img_path": "a.jpg"},
-        {"type": "table", "table_body": "<table></table>"},
-        {"type": "equation", "text": "$x$"},
-        {"type": "text", "text": "hi"},
-    ]
-
-    assert normalize_mineru_drawing_aliases(content_list) == content_list
-
-
-def test_upstream_still_drops_charts_and_keeps_page_furniture(tmp_path: Path) -> None:
-    """Drift alarm: drop the matching transform once this starts failing."""
+def test_upstream_routes_a_mineru_chart_to_a_drawing_with_its_caption(tmp_path: Path) -> None:
+    """LightRAG 1.5.8 maps ``chart`` to a drawing itself, caption and footnote included, so the
+    chart alias this boundary carried before is gone. If this fails, upstream regressed: restore
+    the alias (``chart`` -> ``image`` with ``chart_caption`` renamed ``image_caption``)."""
     builder_cls, upstream = _unpatched_normalize_content_list()
+    (tmp_path / "images").mkdir()
+    (tmp_path / "images" / "fig1.jpg").write_bytes(b"\xff\xd8\xff")
 
-    chart_doc = upstream(
+    doc = upstream(
         builder_cls(),
-        [{"type": "chart", "img_path": "images/fig1.jpg", "chart_caption": ["Figure 1"]}],
+        [
+            {
+                "type": "chart",
+                "img_path": "images/fig1.jpg",
+                "chart_caption": ["Figure 1 revenue"],
+                "chart_footnote": ["Source: annual report"],
+            }
+        ],
         tmp_path,
         document_name="sample.pdf",
     )
-    assert "{{IMG:" not in "\n".join(block.content_template for block in chart_doc.blocks)
+
+    assert "{{IMG:" in "\n".join(block.content_template for block in doc.blocks)
+    rendered = repr(doc)
+    assert "Figure 1 revenue" in rendered and "Source: annual report" in rendered
+
+
+def test_upstream_still_keeps_page_furniture(tmp_path: Path) -> None:
+    """Drift alarm: drop ``filter_mineru_auxiliary_blocks`` once upstream drops headers itself."""
+    builder_cls, upstream = _unpatched_normalize_content_list()
 
     furniture_doc = upstream(
         builder_cls(),

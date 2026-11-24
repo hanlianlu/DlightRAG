@@ -16,12 +16,7 @@ _PRE_COMMIT = _ROOT / ".pre-commit-config.yaml"
 _PG_TESTS = "Run deterministic durable PostgreSQL integration tests"
 
 #: The one place a PostgreSQL suite is kept out of CI, with the reason it cannot run there.
-_PG_SUITES_OUTSIDE_CI = {
-    "tests/integration/test_workspace_reset_configuration_pg.py": (
-        "it exercises LightRAG 1.5.8's configuration storage and skips on the pinned 1.5.7; "
-        "it joins the CI suite with the 1.5.8 upgrade"
-    ),
-}
+_PG_SUITES_OUTSIDE_CI: dict[str, str] = {}
 
 
 def _job(name: str) -> dict[str, Any]:
