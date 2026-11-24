@@ -19,6 +19,7 @@ import type {AgentEffortOffer} from '../lib/agent-effort.ts';
 import {EMPTY_AGENT_EFFORT_OFFER} from '../lib/agent-effort.ts';
 import type {AttachmentPolicy} from '../lib/attachment-policy.ts';
 import {raise} from '../lib/dom.ts';
+import {goalWasWritten} from '../lib/goal-activity.ts';
 import {findWebCommand, type CommandInvocation} from '../lib/web-commands.ts';
 import {LatestRequest} from '../lib/latest-request.ts';
 import {LightElement, StoreController} from '../lib/lit-host.ts';
@@ -529,6 +530,9 @@ export class DlChatFeature extends LightElement {
     if (live !== this.#conversationLive) {
       this.#conversationLive = live;
       this.requestUpdate();
+      // A goal round this page did not start increments the bar's round counter before its own
+      // turn settles here; the bar reads the Goal when such a Run becomes live.
+      if (live && !this.#runController.active) this.#goalBar()?.refresh();
     }
     if (!live) {
       this.#attachRequested = false;
@@ -913,6 +917,10 @@ export class DlChatFeature extends LightElement {
   }
 
   #handleRunBatch(turnId: string, events: readonly AnswerRunEvent[]): void {
+    // A Goal the Agent created or moved mid-Run is durable when its Tool settles, so the bar
+    // reads it now instead of waiting for the turn to end: a reader watching the Run sees the
+    // goal appear without a reload.
+    if (goalWasWritten(events)) this.#goalBar()?.refresh();
     const turnIndex = this.turns.findIndex((candidate) => candidate.id === turnId);
     const turn = this.turns[turnIndex];
     for (const event of events) {

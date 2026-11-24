@@ -1286,6 +1286,93 @@ it('re-reads the conversation when the goal bar reports a resume', async () => {
   expect(refreshed).to.equal(1);
 });
 
+it('shows the goal the Agent creates mid-run without a reload', async () => {
+  const conversationId = 'conversation-goal-midrun';
+  const runId = 'run-goal-midrun';
+  const goal = {
+    conversation_id: conversationId,
+    goal_id: 'goal-midrun',
+    revision: 1,
+    objective: 'finish the sealed model',
+    phase: 'active',
+    max_rounds: 8,
+    rounds_started: 1,
+    blocked_reason: null,
+  };
+  let written = false;
+  let goalReads = 0;
+  const encoder = new TextEncoder();
+  const chunks = [
+    'id: 1\nevent: tool_start\ndata: {"tool_name":"create_goal","call_id":"c-goal"}\n\n',
+    'id: 2\nevent: tool_end\n'
+    + 'data: {"tool_name":"create_goal","call_id":"c-goal","outcome":"succeeded"}\n\n',
+  ];
+  let nextChunk = 0;
+  let releaseEvents!: (response: Response) => void;
+  const eventsResponse = new Promise<Response>((resolve) => { releaseEvents = resolve; });
+  window.fetch = ((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith(`/conversations/${conversationId}/goal`)) {
+      goalReads += 1;
+      return Promise.resolve(Response.json(written ? goal : null));
+    }
+    if (url.endsWith('/events')) return eventsResponse;
+    return Promise.resolve(new Response('{}', {status: 503}));
+  }) as typeof fetch;
+  conversationStore.adoptCreatedConversation({
+    conversationId,
+    title: 'Mid-run goal',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    forkedFromConversationId: null,
+    forkedFromTitle: null,
+  });
+  const feature = document.createElement('dl-chat-feature') as DlChatFeature;
+  feature.view = {
+    kind: 'ready',
+    conversationId,
+    lineage: null,
+    history: [{
+      ...storedTurn(),
+      answerRunId: runId,
+      turnId: 'turn-goal-midrun',
+      status: 'running',
+      presentation: null,
+    }],
+  };
+  document.body.appendChild(feature);
+
+  const barText = (): string => feature.querySelector('dl-goal-bar')?.textContent ?? '';
+  await waitFor(() => goalReads >= 1);
+  await settle(feature);
+  expect(barText()).to.not.contain('Ongoing goal', 'no Goal before the Tool settles');
+  const readsBefore = goalReads;
+
+  // The Run is still going: the bar must show the Goal from the settled Tool alone.
+  const events = new ReadableStream<Uint8Array>({
+    pull(controller): void | Promise<void> {
+      if (nextChunk >= chunks.length) return new Promise<void>(() => {});
+      const chunk = chunks[nextChunk]!;
+      if (chunk.includes('tool_end')) written = true;
+      controller.enqueue(encoder.encode(chunk));
+      nextChunk += 1;
+    },
+  });
+  releaseEvents(new Response(events, {
+    status: 200,
+    headers: {'Content-Type': 'text/event-stream'},
+  }));
+
+  await waitFor(() => barText().includes('Ongoing goal'));
+
+  expect(goalReads).to.be.greaterThan(readsBefore, 'the bar re-read the Goal at the Tool settle');
+  expect(['pending', 'streaming']).to.include(
+    feature.turns[0]?.state,
+    'the Run has not settled: the Goal appeared mid-Run',
+  );
+  feature.detachRun();
+});
+
 it('Chat Feature drops stale terminal ranges while preserving a pending optimistic turn', async () => {
   const oldHistory = Array.from({length: 40}, (_, index) => ({
     ...storedTurn(),

@@ -8,8 +8,9 @@
  * progress), resume a paused or blocked goal, edit its objective, or clear it. `/goal` in the
  * composer is the same surface without the bar.
  *
- * The bar owns its read: it asks again whenever the conversation changes, after a command, and when a
- * turn settles, so a goal the Agent created while this tab watched appears without a reload.
+ * The bar owns its read: it asks again whenever the conversation changes, after a command, when a
+ * goal-writing Tool settles (the Agent creating or moving the goal mid-Run), and when a turn
+ * settles, so a goal the Agent created while this tab watched appears without a reload.
  *
  * Visually it is a card in the composer's column, not a toolbar across the window: the same width and
  * left edge as the box the reader types in, the status in a pill, the objective as the card's one large
