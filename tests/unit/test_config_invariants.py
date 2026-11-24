@@ -489,6 +489,65 @@ def test_web_source_order_rejects_duplicate_provider() -> None:
         )
 
 
+def test_a_providers_extra_keys_join_one_rotation_pool() -> None:
+    """One key is the historical single-key setup; extra keys multiply it, never replace it."""
+    single = WebSourcesConfig(exa=WebSourceProviderConfig(api_key="exa-one"))
+    pair = WebSourcesConfig(
+        exa=WebSourceProviderConfig(api_key="exa-one", api_keys=("exa-two", "exa-one"))
+    )
+    extras_only = WebSourcesConfig(exa=WebSourceProviderConfig(api_keys=("exa-one", "exa-two")))
+
+    assert single.exa.all_api_keys() == ("exa-one",)
+    assert pair.exa.all_api_keys() == ("exa-one", "exa-two"), "duplicates collapse, order holds"
+    assert extras_only.exa.all_api_keys() == ("exa-one", "exa-two")
+    # A key may arrive only in the plural setting and still derive the same order.
+    assert extras_only.search_order() == ("exa",)
+    assert extras_only.extract_order() == ("exa",)
+
+
+def test_an_empty_key_in_the_plural_setting_is_an_unset_one() -> None:
+    assert WebSourceProviderConfig(api_keys=("  ", "\n")).api_keys == ()
+    assert WebSourceProviderConfig(api_keys="").api_keys == ()  # pyright: ignore[reportArgumentType]
+    assert WebSourceProviderConfig(api_keys=None).api_keys == ()  # pyright: ignore[reportArgumentType]
+    assert WebSourceProviderConfig(api_keys=(" exa-one ", "exa-two", "exa-one")).all_api_keys() == (
+        "exa-one",
+        "exa-two",
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param('["unterminated', id="malformed-json"),
+        pytest.param(1, id="not-a-list"),
+        pytest.param(("key", 1), id="non-string-entry"),
+    ],
+)
+def test_the_plural_key_setting_refuses_a_shape_it_cannot_read(value: object) -> None:
+    with pytest.raises(ValidationError):
+        WebSourceProviderConfig(api_keys=value)  # pyright: ignore[reportArgumentType]
+
+
+def test_the_web_key_pool_comes_from_the_environment_as_a_list_or_a_run(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEY=exa-one\n"
+        'DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEYS=\'["exa-two", "exa-three"]\'\n'
+        "DLIGHTRAG_ANSWER__WEB_SOURCES__TAVILY__API_KEYS=tavily-one,tavily-two\n",
+        encoding="utf-8",
+    )
+
+    config = load_config(env_file)
+
+    assert config.answer.web_sources.exa.all_api_keys() == ("exa-one", "exa-two", "exa-three")
+    assert config.answer.web_sources.tavily.all_api_keys() == ("tavily-one", "tavily-two")
+    assert config.answer.web_sources.search_order() == ("exa", "tavily")
+    assert "exa-two" not in repr(config) and "tavily-one" not in repr(config)
+
+
 def test_config_composes_canonical_models_without_snapshot_copy() -> None:
     from dlightrag.application.settings.projections import rag_settings
 
@@ -555,7 +614,9 @@ def test_nested_secret_settings_never_render_in_repr() -> None:
         AccessSectionSettings(api_token=_SECRET, jwt_verification_key=_SECRET),
         ObservabilitySettings(otlp_headers={"authorization": _SECRET}, browser_api_key=_SECRET),
         WebSourceProviderConfig(api_key=_SECRET),
+        WebSourceProviderConfig(api_keys=(_SECRET,)),
         WebSourcesConfig(exa=WebSourceProviderConfig(api_key=_SECRET)),
+        WebSourcesConfig(tavily=WebSourceProviderConfig(api_keys=(_SECRET,))),
         AgentMailboxConfig(
             bucket="agent-mail",
             alias_domain="mail.example",
@@ -565,7 +626,9 @@ def test_nested_secret_settings_never_render_in_repr() -> None:
         MinerUSidecarSettings(api_token=_SECRET),
         SourceSettings(blob_connection_string=_SECRET),
         WebSourceRuntimeSettings(
-            exa_api_key=_SECRET, tavily_api_key=_SECRET, deepseek_api_key=_SECRET
+            exa_api_keys=(_SECRET,),
+            tavily_api_keys=(_SECRET,),
+            deepseek_api_keys=(_SECRET,),
         ),
         WebSourcesConfig(deepseek=WebSourceProviderConfig(api_key=_SECRET)),
         AuthenticationSettings(api_token=_SECRET, jwt_verification_key=_SECRET),

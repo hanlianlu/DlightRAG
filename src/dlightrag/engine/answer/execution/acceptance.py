@@ -127,6 +127,8 @@ def research_history_input_measure(
             connection_tools=any(is_connection_tool(tool.name) for tool in tools),
             connection_surface=connection_surface,
             mcp_resources=any(tool.name in RESOURCE_TOOL_NAMES for tool in tools),
+            # The same habit the run's own request carries (the pool of live Web search).
+            web_search=any(tool.name == "search_web" for tool in tools),
         )
         return (
             context.measure_control_input(

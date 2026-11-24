@@ -17,6 +17,7 @@ from dlightrag.engine.answer.model_runtime import (
     AnswerModelRuntimeSettings,
     WebSourceRuntimeSettings,
 )
+from dlightrag.engine.answer.web_sources.rotation import RotatingWebSource
 
 
 def _policy(profile: ModelProfile) -> AnswerImagePolicy:
@@ -43,7 +44,7 @@ def _runtime(
         ),
         web_sources=web_sources
         or WebSourceRuntimeSettings(
-            exa_api_key="exa-test",
+            exa_api_keys=("exa-test",),
             search_providers=("exa",),
             extract_providers=("exa",),
         ),
@@ -120,7 +121,7 @@ async def test_close_is_idempotent_and_prevents_recreation() -> None:
 
 def test_the_browser_in_the_extract_chain_is_bound_per_run_and_builds_no_hosted_provider() -> None:
     chain = WebSourceRuntimeSettings(
-        exa_api_key="exa-test", search_providers=("exa",), extract_providers=("exa", "browser")
+        exa_api_keys=("exa-test",), search_providers=("exa",), extract_providers=("exa", "browser")
     )
     only_browser = WebSourceRuntimeSettings(extract_providers=("browser",))
 
@@ -130,9 +131,9 @@ def test_the_browser_in_the_extract_chain_is_bound_per_run_and_builds_no_hosted_
 
 async def test_every_configured_provider_joins_the_chains_in_their_configured_order() -> None:
     settings = WebSourceRuntimeSettings(
-        exa_api_key="exa-test",
-        tavily_api_key="tavily-test",
-        deepseek_api_key="deepseek-test",
+        exa_api_keys=("exa-test",),
+        tavily_api_keys=("tavily-test",),
+        deepseek_api_keys=("deepseek-test",),
         search_providers=("exa", "tavily", "deepseek"),
         extract_providers=("exa", "tavily", "deepseek", "browser"),
     )
@@ -155,10 +156,37 @@ async def test_every_configured_provider_joins_the_chains_in_their_configured_or
     await runtime.aclose()
 
 
+async def test_every_key_of_a_provider_joins_one_rotation_pool() -> None:
+    """A second account multiplies a source's quota; the chain still has one Exa entry."""
+    settings = WebSourceRuntimeSettings(
+        exa_api_keys=("exa-one", "exa-two"),
+        tavily_api_keys=("tavily-one", "tavily-two", "tavily-three"),
+        search_providers=("exa", "tavily"),
+        extract_providers=("exa",),
+    )
+    runtime = _runtime(web_sources=settings)
+
+    service = runtime.web_sources()
+
+    assert service is not None
+    exa, tavily = service._search_providers
+    assert isinstance(exa, RotatingWebSource) and isinstance(tavily, RotatingWebSource)
+    assert [item.secret for item in exa._search_pool.credentials] == ["exa-one", "exa-two"]
+    assert [item.secret for item in tavily._search_pool.credentials] == [
+        "tavily-one",
+        "tavily-two",
+        "tavily-three",
+    ]
+    # One wrapper serves both operations of a provider, so its clients close once.
+    assert service._extract_providers == (exa,)
+    assert "exa-one" not in repr(settings) and "tavily-one" not in repr(settings)
+    await runtime.aclose()
+
+
 async def test_deepseek_alone_is_a_complete_web_source() -> None:
     runtime = _runtime(
         web_sources=WebSourceRuntimeSettings(
-            deepseek_api_key="deepseek-test",
+            deepseek_api_keys=("deepseek-test",),
             search_providers=("deepseek",),
             extract_providers=("deepseek",),
         )

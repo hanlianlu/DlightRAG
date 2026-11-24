@@ -16,6 +16,7 @@ from dlightrag.engine.answer.prompts.agent import (
     _MCP_RESOURCE_GUIDANCE,
     _PROFILE_MEMORY_GUIDANCE,
     _RUN_NOTE_GUIDANCE,
+    _WEB_SEARCH_GUIDANCE,
     agent_control_prompt,
 )
 from dlightrag.engine.answer.prompts.answer import (
@@ -34,6 +35,7 @@ _CAPABILITY_SECTIONS = {
     "run_notes": _RUN_NOTE_GUIDANCE,
     "profile_memory_write": _PROFILE_MEMORY_GUIDANCE,
     "goal_tools": _GOAL_GUIDANCE,
+    "web_search": _WEB_SEARCH_GUIDANCE,
 }
 
 
@@ -76,3 +78,13 @@ def test_the_goal_guidance_names_each_goal_tool_and_the_live_round_limits() -> N
         assert declaration.name in _GOAL_GUIDANCE
     assert str(BLOCKED_AFTER_ROUNDS) in _GOAL_GUIDANCE
     assert str(DEFAULT_MAX_ROUNDS) in _GOAL_GUIDANCE
+
+
+def test_a_run_with_live_web_search_is_told_to_search_before_answering() -> None:
+    """The model that can search the living web is the one told not to answer from memory."""
+    prompt = agent_control_prompt(web_search=True)
+
+    assert "`search_web`" in _WEB_SEARCH_GUIDANCE
+    assert "training cutoff" in _WEB_SEARCH_GUIDANCE
+    assert _WEB_SEARCH_GUIDANCE in prompt
+    assert "`search_web`" not in agent_control_prompt()

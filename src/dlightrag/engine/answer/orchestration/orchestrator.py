@@ -912,6 +912,7 @@ class AnswerOrchestrator:
                 goal_tools=self._goal_host is not None,
                 connection_surface=self._connection_surface,
                 mcp_resources=any(tool.name in RESOURCE_TOOL_NAMES for tool in tools),
+                web_search=any(tool.name == "search_web" for tool in tools),
                 session_notes=self._session_notes,
             ),
             tools=tools,
@@ -1050,6 +1051,7 @@ class AnswerOrchestrator:
                     else ()
                 ),
                 mcp_resources=any(tool.name in RESOURCE_TOOL_NAMES for tool in tools),
+                web_search=any(tool.name == "search_web" for tool in tools),
                 instructions=child_instructions(child_session_id),
             ),
             tools=tools,

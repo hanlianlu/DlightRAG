@@ -28,7 +28,8 @@ _HIGHLIGHT_MAX_CHARACTERS = 4000
 _MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 _TIMEOUT_SECONDS = 15.0
 _EFFORT_TYPE: dict[WebEffort, str] = {
-    "fast": "fast",
+    # Exa's documented low-latency, low-cost preset; `auto` is its general default.
+    "fast": "lite",
     "balanced": "auto",
 }
 _STATUS_REASONS = {401: "unauthorized", 402: "payment_required", 429: "rate_limited"}

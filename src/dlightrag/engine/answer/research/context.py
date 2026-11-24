@@ -64,6 +64,7 @@ class ContextAssembler:
         run_notes: bool = False,
         connection_tools: bool = False,
         goal_tools: bool = False,
+        web_search: bool = False,
         session_notes: Sequence[SessionNoteRecord] = (),
         instructions: str = "",
         connection_surface: Sequence[ConnectionSurface] = (),
@@ -90,6 +91,7 @@ class ContextAssembler:
         self._contributions = contributions
         self._profile_memory_write = profile_memory_write
         self._goal_tools = goal_tools
+        self._web_search = web_search
         self._artifact_publication = artifact_publication
         self._run_notes = run_notes
         self._connection_tools = connection_tools
@@ -254,6 +256,7 @@ class ContextAssembler:
             connection_tools=self._connection_tools,
             mcp_resources=self._mcp_resources,
             goal_tools=self._goal_tools,
+            web_search=self._web_search,
         )
         contributions = [
             ContextContribution(

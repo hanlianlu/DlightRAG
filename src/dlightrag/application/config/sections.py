@@ -791,11 +791,19 @@ class WebConversationsConfig(BaseModel):
 
 
 class WebSourceProviderConfig(BaseModel):
-    """Credential for one first-class Web source provider."""
+    """Credentials for one first-class Web source provider.
+
+    ``api_key`` is the deployment's one key and what every single-key setup has always
+    set. ``api_keys`` adds interchangeable keys beside it: the provider rotates over the
+    combined pool, so a second account multiplies the quota instead of sitting idle. A
+    blank entry is an unset one, duplicates collapse, and order is the order to rotate in.
+    Both fields are secrets; both stay in ``.env`` (ADR 0006), and neither renders.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
     api_key: str | None = Field(default=None, repr=False)
+    api_keys: Annotated[tuple[str, ...], NoDecode] = Field(default=(), repr=False)
 
     @field_validator("api_key", mode="before")
     @classmethod
@@ -805,6 +813,50 @@ class WebSourceProviderConfig(BaseModel):
             return stripped or None
         return value
 
+    @field_validator("api_keys", mode="before")
+    @classmethod
+    def _normalize_api_keys(cls, value: Any) -> tuple[str, ...]:
+        """Accept a JSON array, a comma/newline-separated list, or a single key.
+
+        The environment can carry only text, so a list-shaped setting has to say how its
+        text becomes one. A comma-separated value is the shortest thing an operator writes
+        by hand; a JSON array is what the settings pipeline itself decodes, and a lone key
+        is a pool of one.
+        """
+        if value is None:
+            return ()
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return ()
+            if text.startswith("["):
+                try:
+                    value = json.loads(text)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        "api_keys must be a JSON array, a comma-separated list, or one key"
+                    ) from exc
+            else:
+                value = text.replace("\n", ",").split(",")
+        if not isinstance(value, list | tuple):
+            raise ValueError("api_keys must be a list of keys")
+        normalized: list[str] = []
+        for item in value:
+            if not isinstance(item, str):
+                raise ValueError("api_keys entries must be strings")
+            key = item.strip()
+            if key and key not in normalized:
+                normalized.append(key)
+        return tuple(normalized)
+
+    def all_api_keys(self) -> tuple[str, ...]:
+        """The rotation pool: ``api_key`` first, then the interchangeable keys."""
+        pool: list[str] = []
+        for key in ((self.api_key,) if self.api_key else ()) + self.api_keys:
+            if key not in pool:
+                pool.append(key)
+        return tuple(pool)
+
 
 class WebSourcesConfig(BaseModel):
     """Independent ordered Search and Extract provider chains.
@@ -813,6 +865,9 @@ class WebSourcesConfig(BaseModel):
     explicit empty tuple disables that operation while retaining credentials.
     The Extract chain may also name ``browser``, the Agent Browser (ADR 0032), which
     is a configured deployment capability rather than a keyed provider.
+
+    A provider's chain position is the source; several interchangeable keys behind one
+    source rotate inside it, and the chain moves on only when all of them are out.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
@@ -836,9 +891,9 @@ class WebSourcesConfig(BaseModel):
         return tuple(
             name
             for name, configured in (
-                ("exa", self.exa.api_key),
-                ("tavily", self.tavily.api_key),
-                ("deepseek", self.deepseek.api_key),
+                ("exa", self.exa.all_api_keys()),
+                ("tavily", self.tavily.all_api_keys()),
+                ("deepseek", self.deepseek.all_api_keys()),
             )
             if configured
         )  # type: ignore[return-value]
@@ -860,9 +915,9 @@ class WebSourcesConfig(BaseModel):
     @model_validator(mode="after")
     def _orders_have_credentials(self) -> WebSourcesConfig:
         keys = {
-            "exa": self.exa.api_key,
-            "tavily": self.tavily.api_key,
-            "deepseek": self.deepseek.api_key,
+            "exa": self.exa.all_api_keys(),
+            "tavily": self.tavily.all_api_keys(),
+            "deepseek": self.deepseek.all_api_keys(),
         }
         for operation, order in (
             ("search", self.search_order()),

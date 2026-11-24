@@ -36,6 +36,7 @@ from dlightrag.engine.answer.web_sources.contracts import (
 )
 from dlightrag.engine.answer.web_sources.deepseek import DeepSeekWebSource, _search_query
 from dlightrag.engine.answer.web_sources.exa import ExaWebSource
+from dlightrag.engine.answer.web_sources.rotation import RotatingWebSource
 from dlightrag.engine.answer.web_sources.service import WebSourceService
 from dlightrag.engine.answer.web_sources.tavily import TavilyWebSource
 from dlightrag.engine.rag.retrieval.results import RetrievalResult
@@ -355,7 +356,7 @@ async def test_exa_maps_all_search_controls_and_passages(serve) -> None:
     assert result.cost_dollars == 0.007
 
 
-@pytest.mark.parametrize(("effort", "expected"), [("fast", "fast"), ("balanced", "auto")])
+@pytest.mark.parametrize(("effort", "expected"), [("fast", "lite"), ("balanced", "auto")])
 async def test_exa_search_never_asks_for_a_research_tier(serve, effort, expected) -> None:
     requests: list[dict] = []
 
@@ -1382,9 +1383,80 @@ async def test_deepseek_is_left_alone_for_credit_but_not_for_a_per_second_limit(
     await service.aclose()
 
 
+async def test_a_provider_answers_with_its_second_key_without_the_chain_moving_on() -> None:
+    """Two keys are one chain entry: Tavily is not asked while an Exa key can answer."""
+    first = _StubProvider(
+        "exa",
+        search=WebSourceUnavailable("exa", "search", "payment_required", status=402),
+        extract=WebExtractResult("https://a.example", "text", provider="exa"),
+    )
+    second = _StubProvider(
+        "exa",
+        search=WebSearchResult(
+            (WebSearchHit("https://a.example", "A", "fact", acquisition="exa_search"),),
+            provider="exa",
+        ),
+        extract=WebExtractResult("https://a.example", "text", provider="exa"),
+    )
+    tavily = _StubProvider(
+        "tavily",
+        search=WebSearchResult(
+            (WebSearchHit("https://a.example", "A", "fact", acquisition="tavily_search"),),
+            provider="tavily",
+        ),
+        extract=WebExtractResult("https://a.example", "text", provider="tavily"),
+    )
+    keys = {"one": first, "two": second}
+    rotating = RotatingWebSource(name="exa", secrets=("one", "two"), build=lambda key: keys[key])
+    service = WebSourceService(search_providers=(rotating, tavily))
+
+    result = await service.search(WebSearchRequest("q"))
+
+    assert (result.provider, result.degradation) == ("exa", None)
+    assert (first.search_calls, second.search_calls, tavily.search_calls) == (1, 1, 0)
+
+
+async def test_the_chain_falls_through_only_after_every_key_of_a_provider_is_out() -> None:
+    """All of Exa's keys out is one provider fallback; a burst pays one probe, not one per call."""
+    now = [100.0]
+    first = _StubProvider(
+        "exa",
+        search=WebSourceUnavailable("exa", "search", "payment_required", status=402),
+        extract=WebExtractResult("https://a.example", "text", provider="exa"),
+    )
+    second = _StubProvider(
+        "exa",
+        search=WebSourceUnavailable("exa", "search", "unauthorized", status=401),
+        extract=WebExtractResult("https://a.example", "text", provider="exa"),
+    )
+    tavily = _StubProvider(
+        "tavily",
+        search=WebSearchResult(
+            (WebSearchHit("https://a.example", "A", "fact", acquisition="tavily_search"),),
+            provider="tavily",
+        ),
+        extract=WebExtractResult("https://a.example", "text", provider="tavily"),
+    )
+    keys = {"one": first, "two": second}
+    rotating = RotatingWebSource(
+        name="exa",
+        secrets=("one", "two"),
+        build=lambda key: keys[key],
+        clock=lambda: now[0],
+    )
+    service = WebSourceService(search_providers=(rotating, tavily), clock=lambda: now[0])
+
+    first_answer = await service.search(WebSearchRequest("q"))
+    second_answer = await service.search(WebSearchRequest("q"))
+
+    assert first_answer.provider == second_answer.provider == "tavily"
+    assert first_answer.degradation == "Provider fallback: exa (exhausted); used tavily."
+    assert second_answer.degradation == "Provider fallback: exa (cooling); used tavily."
+    assert (first.search_calls, second.search_calls) == (1, 1), "one probe, not one per call"
+
+
 def test_the_search_tool_asks_for_a_short_query_of_key_terms() -> None:
     query = web_search_declaration().definition.parameters["properties"]["query"]
-
     assert "short search query of key terms" in query["description"]
     assert "under about 100 characters" in query["description"]
     assert "one angle per call" in query["description"].lower()

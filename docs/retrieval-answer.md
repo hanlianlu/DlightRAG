@@ -506,6 +506,9 @@ domains whichever way the query carried them. Failover occurs only for provider
 failures, never to seek a subjectively better result; malformed individual
 results are dropped and reported. An empty Search result stops the Search
 chain, while an Extract that yields no usable text counts as a provider failure.
+A provider configured with several interchangeable keys rotates over them inside its
+one chain position, so the next provider is asked only after every key of this one has
+refused ([Public Web Sources](configuration.md#public-web-sources)).
 A provider that refused on credentials, credit, or rate is left alone for a minute
 and the chain reports it as cooling, so a burst does not pay a dead provider's round
 trip on every call; when every provider of an operation is cooling, one probe goes

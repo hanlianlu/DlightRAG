@@ -1716,7 +1716,9 @@ def test_web_setup_writes_independent_provider_orders(wiz, tmp_path, monkeypatch
             wiz.WEB_EXA,
             False,
             "exa-key",
+            "",
             "tavily-key",
+            "",
         ]
     )
 
@@ -1754,7 +1756,7 @@ def test_web_setup_rolls_back_config_and_env_when_validation_fails(
 
     with pytest.raises(ValueError, match="invalid"):
         wiz.run_web_research_step(
-            _ScriptedPrompter([wiz.WEB_EXA, False, "exa-key"]),
+            _ScriptedPrompter([wiz.WEB_EXA, False, "exa-key", ""]),
             optional=False,
         )
 
@@ -1812,7 +1814,7 @@ def test_web_setup_adds_deepseek_last_with_the_model_key_reused(wiz, tmp_path, m
         ),
     )
     prompter = _ScriptedPrompter(
-        [wiz.WEB_BOTH, wiz.WEB_COMMON_EXA, True, "exa-key", "tavily-key", True]
+        [wiz.WEB_BOTH, wiz.WEB_COMMON_EXA, True, "exa-key", "", "tavily-key", "", True]
     )
 
     assert wiz.run_web_research_step(prompter, optional=False)
@@ -1841,7 +1843,7 @@ def test_web_setup_asks_for_a_deepseek_key_when_no_model_key_is_reusable(
             "DLIGHTRAG_MODELS__CHAT__ROLES__EXTRACT__API_KEY=\n"
         ),
     )
-    prompter = _ScriptedPrompter([wiz.WEB_TAVILY, True, "tavily-key", "ds-typed-key"])
+    prompter = _ScriptedPrompter([wiz.WEB_TAVILY, True, "tavily-key", "", "ds-typed-key", ""])
 
     assert wiz.run_web_research_step(prompter, optional=False)
 
@@ -1861,7 +1863,7 @@ def test_web_setup_asks_for_a_deepseek_key_when_the_model_key_is_not_reused(
         config=_DEEPSEEK_MODELS_CONFIG,
         env="DLIGHTRAG_MODELS__CHAT__ROLES__QUERY__API_KEY=sk-deepseek-model\n",
     )
-    prompter = _ScriptedPrompter([wiz.WEB_EXA, True, "exa-key", False, "ds-web-key"])
+    prompter = _ScriptedPrompter([wiz.WEB_EXA, True, "exa-key", "", False, "ds-web-key", ""])
 
     assert wiz.run_web_research_step(prompter, optional=False)
 
@@ -1880,12 +1882,44 @@ def test_web_setup_without_deepseek_removes_a_stale_deepseek_key(
     )
 
     assert wiz.run_web_research_step(
-        _ScriptedPrompter([wiz.WEB_EXA, False, "exa-key"]), optional=False
+        _ScriptedPrompter([wiz.WEB_EXA, False, "exa-key", ""]), optional=False
     )
 
     data = wiz._yaml().load(config_path)["answer"]["web_sources"]
     assert data["search_providers"] == ["exa"]
     assert _DEEPSEEK_WEB_KEY not in env_path.read_text(encoding="utf-8")
+
+
+def test_web_setup_writes_extra_keys_as_one_rotation_pool(wiz, tmp_path, monkeypatch) -> None:
+    config_path, env_path = _web_setup_files(
+        wiz,
+        tmp_path,
+        monkeypatch,
+        env="DLIGHTRAG_ANSWER__WEB_SOURCES__TAVILY__API_KEYS=stale-pool\n",
+    )
+    prompter = _ScriptedPrompter([wiz.WEB_EXA, False, "exa-key", "exa-two, exa-three"])
+
+    assert wiz.run_web_research_step(prompter, optional=False)
+
+    env_text = env_path.read_text(encoding="utf-8")
+    assert "DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEY=exa-key" in env_text
+    assert "DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEYS=exa-two,exa-three" in env_text
+    assert "TAVILY__API_KEYS" not in env_text, "a provider not chosen leaves no stale pool"
+
+
+def test_web_setup_writes_no_plural_key_when_none_is_given(wiz, tmp_path, monkeypatch) -> None:
+    _config_path, env_path = _web_setup_files(
+        wiz,
+        tmp_path,
+        monkeypatch,
+        env="DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEYS=old-pool\n",
+    )
+
+    assert wiz.run_web_research_step(
+        _ScriptedPrompter([wiz.WEB_EXA, False, "exa-key", ""]), optional=False
+    )
+
+    assert "EXA__API_KEYS" not in env_path.read_text(encoding="utf-8")
 
 
 def test_disabling_web_research_does_not_offer_deepseek(wiz, tmp_path, monkeypatch) -> None:
@@ -1916,7 +1950,7 @@ def test_web_setup_with_deepseek_rolls_back_when_validation_fails(
 
     with pytest.raises(ValueError, match="invalid"):
         wiz.run_web_research_step(
-            _ScriptedPrompter([wiz.WEB_EXA, True, "exa-key", "ds-key"]), optional=False
+            _ScriptedPrompter([wiz.WEB_EXA, True, "exa-key", "", "ds-key", ""]), optional=False
         )
 
     assert config_path.read_bytes() == config_before
@@ -1938,6 +1972,21 @@ def test_the_summary_reports_the_deepseek_web_key_without_its_value(wiz, tmp_pat
         "extract": ["deepseek"],
     }
     assert "ds-secret" not in repr(summary)
+
+
+def test_the_summary_counts_a_plural_key_pool_as_configured(wiz, tmp_path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("answer: {}\n", encoding="utf-8")
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEYS=exa-one,exa-two\n", encoding="utf-8"
+    )
+
+    summary = wiz.read_config_summary(config_path, env_path)
+
+    assert summary["keys_set"]["Exa"] is True
+    assert summary["web_research"]["search"] == ["exa"]
+    assert "exa-one" not in repr(summary)
 
 
 def test_change_parser_only(wiz, monkeypatch):

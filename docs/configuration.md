@@ -1213,10 +1213,13 @@ answer:
   web_sources:
     exa:
       api_key: null     # DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEY
+      api_keys: []      # DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEYS
     tavily:
       api_key: null     # DLIGHTRAG_ANSWER__WEB_SOURCES__TAVILY__API_KEY
+      api_keys: []      # DLIGHTRAG_ANSWER__WEB_SOURCES__TAVILY__API_KEYS
     deepseek:
       api_key: null     # DLIGHTRAG_ANSWER__WEB_SOURCES__DEEPSEEK__API_KEY
+      api_keys: []      # DLIGHTRAG_ANSWER__WEB_SOURCES__DEEPSEEK__API_KEYS
     search_providers: null
     extract_providers: null
 ```
@@ -1231,16 +1234,33 @@ Exa, Tavily, both with one shared order, or independent Search/Extract orders, a
 then offers DeepSeek as the last fallback of both chains, offering to reuse the key of
 a chat model that runs on `api.deepseek.com`.
 A chain is walked in order and the first provider that answers supplies the whole
-result, so the fallback is availability and never a blend of two rankings. A provider
-that answers `401`, `402`, or `429` is left alone for a minute — per operation, so
-Exa's search credit says nothing about its `contents` calls — and the chain reports it
-as cooling; when every provider of an operation is cooling, one probe goes out to the
-one that recovers first, so a top-up is noticed without a restart. DeepSeek's `429` is a
-per-second limit, so its adapter waits a second and asks once more; if that is also
-refused, the call fails as `throttled` and the chain moves on without cooling DeepSeek.
-A timeout, an unreachable host, or one malformed body is about the call, not the
-provider, and cools nothing. Every failed attempt is logged once with `provider`, `operation`, `reason`,
-and `status` beside the message.
+result, so the fallback is availability and never a blend of two rankings.
+
+A provider may hold several interchangeable keys. `api_key` is its first key and the
+setting every single-key deployment already has; `api_keys` adds the rest. The keys are
+secrets and stay in `.env` ([ADR 0006](adr/0006-configuration-ownership-and-deployment-bindings.md)),
+as a comma-separated run or a JSON array — a blank entry is unset, duplicates collapse,
+and `api_key` comes first. The provider rotates over the combined pool on every call,
+asking the key leased longest ago first, so a second account multiplies a provider's
+quota and spreads a per-key rate limit instead of sitting idle. Search and Extract rotate
+independently, as their chains are independent. A key that answers `401`, `402`, or `429`
+is left alone for a minute, while a timeout, an unreachable host, or one malformed body
+is about the call and leaves the key eligible; when every key of an operation is cooling,
+one probe goes out to the key that recovers first. The ordered chain falls through to the
+next provider only once every key of this provider has refused: that is reported as
+`exhausted`, and the whole provider is then left alone for a minute like a single-key
+provider that answered `401`, `402`, or `429`. A single key therefore behaves exactly as
+before. Every failed attempt is logged once with the provider, operation, reason, status,
+and the credential's position — `exa#2` — never its secret; a rotation that another key
+answers is transparent to the model, while a chain fallback still names the provider and
+its normalized reason.
+
+At the chain level a provider that is out of reach is reported as cooling, per operation,
+so Exa's search credit says nothing about its `contents` calls; when every provider of an
+operation is cooling, one probe goes out to the one that recovers first, so a top-up is
+noticed without a restart. DeepSeek's `429` is a per-second limit, so its adapter waits a
+second and asks once more; if that is also refused, the call fails as `throttled` and the
+chain moves on without cooling DeepSeek.
 
 `extract_providers` may also name `browser`, the [Agent Browser](#agent-browser),
 which holds no key. A configured Agent Browser always joins the automatic Extract

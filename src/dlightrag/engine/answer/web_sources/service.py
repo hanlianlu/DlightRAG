@@ -28,11 +28,14 @@ logger = logging.getLogger(__name__)
 _COOLDOWN_SECONDS = 60.0
 
 #: The reasons that mean "not now" rather than "not this once": a provider that refused on
-#: credentials, credit, or rate has nothing to say to the next call either. A timeout, an
-#: unreachable host, or one malformed body is about the call, and the next one may well answer.
-#: ``throttled`` is absent on purpose: it is a per-second limit the adapter has already waited out
-#: once, so the next call may well pass, and a minute's silence would cost more than it saves.
-_COOLING_REASONS = frozenset({"unauthorized", "payment_required", "rate_limited"})
+#: credentials, credit, or rate has nothing to say to the next call either. ``exhausted``
+#: is the same condition one level up: every interchangeable key of the provider refused
+#: that way, so the provider is out of reach even though each key names its own reason on
+#: the operator's log. A timeout, an unreachable host, or one malformed body is about the
+#: call, and the next one may well answer. ``throttled`` is absent on purpose: it is a
+#: per-second limit the adapter has already waited out once, so the next call may well
+#: pass, and a minute's silence would cost more than it saves.
+_COOLING_REASONS = frozenset({"unauthorized", "payment_required", "rate_limited", "exhausted"})
 
 
 class WebSourceService:
