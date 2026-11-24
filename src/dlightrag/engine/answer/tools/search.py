@@ -288,6 +288,10 @@ def _web_search_facts(result: WebSearchResult) -> dict[str, Any]:
     return facts
 
 
+#: How many consecutive open-web searches may add nothing before the result says so.
+_BARREN_SEARCH_STREAK = 4
+
+
 async def _search_open_web(
     search: WebSearch,
     request: WebSearchRequest,
@@ -320,6 +324,18 @@ async def _search_open_web(
     await evidence.aflush_images()
     trace["web_search_cost_dollars"] += result.cost_dollars
     content = f"Open web added {delta.new_chunks} new passages."
+    # A run that keeps searching and keeps finding nothing new is circling, whatever the wording of
+    # each query: a live extract child ran one query family 29 times for ten minutes, its context
+    # past half a million tokens. The streak is stated, never enforced: the model decides what to do.
+    streak = 0 if delta.new_chunks else int(trace.get("web_search_barren_streak", 0)) + 1
+    trace["web_search_barren_streak"] = streak
+    if streak >= _BARREN_SEARCH_STREAK:
+        content += (
+            f" The last {streak} searches added nothing new: the sources this query family can reach "
+            "are already in the evidence. Read what is held (read_resource on a resource already "
+            "found), search a different source, or report what is established and name what was "
+            "not found; rephrasing the same query will not find more."
+        )
     if delta.dropped_rows:
         content += f" Dropped {delta.dropped_rows} unusable evidence item(s)."
     if result.dropped_results:
