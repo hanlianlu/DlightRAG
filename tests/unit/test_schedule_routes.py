@@ -401,7 +401,7 @@ async def test_a_preview_names_the_next_five_slots_in_utc_and_on_the_zones_clock
     assert len(slots) == 5
     instants = [datetime.fromisoformat(slot["at"]) for slot in slots]
     assert instants == sorted(instants) and len(set(instants)) == 5
-    assert instants[0] > datetime.now(UTC)
+    assert instants[0] > NOW
     for slot, instant in zip(slots, instants, strict=True):
         local = datetime.fromisoformat(slot["local"])
         assert local == instant

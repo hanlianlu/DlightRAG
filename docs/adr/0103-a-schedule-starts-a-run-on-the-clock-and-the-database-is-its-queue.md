@@ -93,7 +93,9 @@ The spend rules are therefore part of the decision, not an afterthought.
    than judging the rules again; a `pending` Fire
    that could not be started while its slot was still within its grace becomes `missed`, so a
    retry never starts stale work. Any number of
-   processes may run the look; none of them is a leader.
+   processes may run the look; none of them is a leader. Time is the database's: every "now" the
+   look and the Schedule service decide by is read from the database, not from the process, so
+   replicas whose clocks differ still agree on what is due.
 
    Only a process that hosts Web conversations runs it — the MCP-only service sets
    `DLIGHTRAG_DEPLOYMENT__SCHEDULES=false`, as it does for goal recovery — because a fire becomes a

@@ -29,7 +29,7 @@ class Clock:
     def __init__(self, now: datetime) -> None:
         self.now = now
 
-    def __call__(self) -> datetime:
+    async def __call__(self) -> datetime:
         return self.now
 
     def advance(self, **span: float) -> None:
@@ -51,6 +51,9 @@ class FakeScheduleStore:
         self.held: dict[str, _Held] = {}
         #: What the Runs of any Schedule's Fires are said to have spent; the real store reads it.
         self.spent = 0
+
+    async def now(self) -> datetime:
+        return self.clock.now
 
     @property
     def fires(self) -> list[Fire]:

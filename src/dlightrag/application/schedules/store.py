@@ -37,6 +37,14 @@ class Claim:
 class ScheduleStore(Protocol):
     """Schedules and their Fires. Every owner-facing method is scoped to one owner."""
 
+    async def now(self) -> datetime:
+        """The instant the store's clock reads, as an aware UTC time.
+
+        Every decision the Schedules make by time reads this one clock, so processes whose own
+        clocks differ still agree on what is due.
+        """
+        ...
+
     async def create(self, schedule: Schedule, *, max_active: int) -> Schedule:
         """Store a new active Schedule; raises ``ScheduleLimitError`` at ``max_active``."""
         ...

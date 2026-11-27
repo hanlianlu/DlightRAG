@@ -589,6 +589,34 @@ async def test_a_pending_fire_too_old_to_be_worth_starting_is_missed(world: Worl
 # -- Run now --------------------------------------------------------------------------------
 
 
+async def test_without_a_clock_of_its_own_the_look_and_the_service_read_the_stores(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    far = datetime(2031, 3, 1, 9, 0, 20, tzinfo=UTC)  # nowhere near the clock of this machine
+    store = FakeScheduleStore(Clock(far))
+    claim_due = AsyncMock(wraps=store.claim_due)
+    monkeypatch.setattr(store, "claim_due", claim_due)
+    firer = ScheduleFirer(
+        store=store,
+        turns=world.turns,
+        runs=world.runs,
+        goals=world.goals,
+        access=AllowAllAccessControl(),
+        settings=SETTINGS,
+    )
+    service = ScheduleService(store=store, firer=firer, settings=SETTINGS)
+
+    await firer.look()
+    created = await service.create(
+        USER, name="Hourly", prompt="Look.", workspaces=["alpha"], zone="UTC", cron="0 * * * *"
+    )
+
+    (claim,) = claim_due.await_args_list
+    assert claim.args[0] == far
+    assert created.created_at == far
+    assert created.next_fire_at == datetime(2031, 3, 1, 10, 0, tzinfo=UTC)
+
+
 async def test_a_manual_fire_goes_through_the_same_rules_as_a_clock_fire(world: World) -> None:
     schedule = await world.schedule()
     service = ScheduleService(

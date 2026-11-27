@@ -311,7 +311,8 @@ Every process that hosts Web conversations and has `deployment.schedules` on loo
    after now, which is why a slot is taken once in any number of processes. Slots that passed
    while nothing was looking are one `missed` Fire; only the latest slot may still run, and only
    within half its interval (at most six hours; an hour for a single time). The Schedule's Fires
-   beyond `schedules.fires_kept` are trimmed in the same transaction.
+   beyond `schedules.fires_kept` are trimmed in the same transaction. `now` is the database's
+   clock, not the process's, so replicas whose clocks differ agree on what is due.
 
 Then each pending Fire is decided, and the first rule that holds ends it:
 

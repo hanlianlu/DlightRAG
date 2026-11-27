@@ -76,7 +76,8 @@ async def create_schedule(request: Request, body: ScheduleInput) -> dict[str, An
 @router.post("/preview")
 async def preview_cadence(request: Request, body: CadenceInput) -> dict[str, Any]:
     """The next slots of a cadence, or the 422 saving it would meet; nothing is stored."""
-    return preview_payload(get_application(request).config.schedules, body)
+    application = get_application(request)
+    return preview_payload(application.config.schedules, body, await application.schedules.now())
 
 
 @router.get("/{schedule_id}")

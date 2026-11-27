@@ -10,7 +10,7 @@ collapsed, how long a late slot is still worth running, and when failures stop a
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -44,6 +44,10 @@ PROMPT_MAX_CHARS = 20_000
 
 type ScheduleMode = Literal["research", "fast"]
 SCHEDULE_MODES: tuple[ScheduleMode, ...] = ("research", "fast")
+
+#: What reads "now" for a Schedule. It is asynchronous because the one clock every process shares
+#: is the database's (``ScheduleStore.now``), so replicas whose own clocks differ agree on what is due.
+type Clock = Callable[[], Awaitable[datetime]]
 
 
 class ScheduleState(StrEnum):
@@ -436,6 +440,7 @@ __all__ = [
     "RUN_OUTCOMES",
     "SCHEDULE_MODES",
     "STREAK_STATES",
+    "Clock",
     "DuePlan",
     "Fire",
     "FireDraft",

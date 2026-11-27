@@ -38,7 +38,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
@@ -57,6 +56,7 @@ from dlightrag.application.runs import (
     SessionWorkBusyError,
 )
 from dlightrag.application.schedules.model import (
+    Clock,
     Fire,
     FireState,
     Schedule,
@@ -170,10 +170,6 @@ def _goal_id(schedule: Schedule, fire: Fire) -> str:
     return f"goal-{uuid.uuid5(uuid.NAMESPACE_URL, f'{_NAMESPACE}-goal:{key}')}"
 
 
-def _now() -> datetime:
-    return datetime.now(UTC)
-
-
 class ScheduleFirer:
     """Start the Runs of due Schedules and record how each Fire went."""
 
@@ -186,7 +182,7 @@ class ScheduleFirer:
         goals: SessionGoals,
         access: AccessControl,
         settings: SchedulesSettings,
-        clock: Callable[[], datetime] = _now,
+        clock: Clock | None = None,
     ) -> None:
         self._store = store
         self._turns = turns
@@ -194,14 +190,14 @@ class ScheduleFirer:
         self._goals = goals
         self._access = access
         self._settings = settings
-        self._clock = clock
+        self._clock = store.now if clock is None else clock
         self._tasks: set[asyncio.Task[None]] = set()
 
     # -- the look ----------------------------------------------------------------------------
 
     async def look(self) -> None:
         """One pass: retry unstarted Fires, settle lost ones, then claim and start what is due."""
-        now = self._clock()
+        now = await self._clock()
         for sweep in (self._retry_pending, self._settle_lost):
             try:
                 await sweep(now)
@@ -310,15 +306,14 @@ class ScheduleFirer:
         """
         fire = due.fire
         key = fire_key(due.schedule.schedule_id, fire.slot)
+        now = await self._clock()
         if retried:
             existing = await self._turns.replay_scheduled_turn(
                 caller=due.schedule.principal, idempotency_key=key
             )
             if existing is not None:
                 return await self._started(fire, existing)
-            if self._clock() - fire.slot > retry_window(
-                due.schedule.cadence, fire.slot, manual=fire.manual
-            ):
+            if now - fire.slot > retry_window(due.schedule.cadence, fire.slot, manual=fire.manual):
                 return await self._expire(due)
         schedule, stopped = await self._reread(due)
         if schedule is None:
@@ -331,7 +326,7 @@ class ScheduleFirer:
                 fire, "the identity this Schedule runs as no longer belongs to its owner"
             )
         max_age = timedelta(days=self._settings.principal_max_age_days)
-        if principal.auth_mode == "jwt" and self._clock() - schedule.principal_stamped_at > max_age:
+        if principal.auth_mode == "jwt" and now - schedule.principal_stamped_at > max_age:
             return await self._refuse(
                 fire,
                 f"the sign-in this Schedule acts under was last confirmed more than "
@@ -356,7 +351,7 @@ class ScheduleFirer:
         if stopped is not None:
             return await self._cancel(fire, stopped)
         spent = await self._store.spent_tokens(
-            schedule.owner_id, schedule.schedule_id, since=self._clock() - _SPEND_WINDOW
+            schedule.owner_id, schedule.schedule_id, since=now - _SPEND_WINDOW
         )
         if spent >= schedule.max_tokens_per_day:
             return await self._refuse(

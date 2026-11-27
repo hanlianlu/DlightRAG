@@ -10,9 +10,9 @@ read access again at every fire, so what was readable when the Schedule was writ
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 from dlightrag.application.access.principal import UserContext, owner_id_from_user
 from dlightrag.application.config.sections import SchedulesSettings
@@ -20,6 +20,7 @@ from dlightrag.application.schedules.cadence import Cadence
 from dlightrag.application.schedules.errors import ScheduleStateError
 from dlightrag.application.schedules.firing import ScheduleFirer
 from dlightrag.application.schedules.model import (
+    Clock,
     Fire,
     Schedule,
     ScheduleState,
@@ -31,10 +32,6 @@ FIRES_PAGE_DEFAULT = 50
 FIRES_PAGE_MAX = 200
 
 
-def _now() -> datetime:
-    return datetime.now(UTC)
-
-
 class ScheduleService:
     """Create, edit, pause, resume, run and delete one owner's Schedules, and read their Fires."""
 
@@ -44,12 +41,12 @@ class ScheduleService:
         store: ScheduleStore,
         firer: ScheduleFirer,
         settings: SchedulesSettings,
-        clock: Callable[[], datetime] = _now,
+        clock: Clock | None = None,
     ) -> None:
         self._store = store
         self._firer = firer
         self._settings = settings
-        self._clock = clock
+        self._clock = store.now if clock is None else clock
 
     async def create(
         self,
@@ -74,7 +71,7 @@ class ScheduleService:
         Refused when the cadence is invalid or recurs closer than the minimum interval, and when
         the owner already holds the most active Schedules the deployment allows.
         """
-        now = self._clock()
+        now = await self._clock()
         cadence = Cadence.create(
             zone_name=zone, cron=cron, at=at, now=now, min_interval=self._min_interval
         )
@@ -96,6 +93,10 @@ class ScheduleService:
             goal_max_rounds=goal_max_rounds,
         )
         return await self._store.create(schedule, max_active=self._settings.max_active_per_owner)
+
+    async def now(self) -> datetime:
+        """The instant Schedules are decided by: the database's, the same for every process."""
+        return await self._clock()
 
     async def get(self, user: UserContext, schedule_id: str) -> Schedule | None:
         return await self._store.get(owner_id_from_user(user), schedule_id)
@@ -131,7 +132,7 @@ class ScheduleService:
             return None
         if current.state is ScheduleState.COMPLETED:
             raise ScheduleStateError("a completed Schedule cannot be edited; create a new one")
-        now = self._clock()
+        now = await self._clock()
         cadence = None
         if cron is not None or at is not None:
             cadence = Cadence.create(
@@ -216,7 +217,7 @@ class ScheduleService:
             return None
         if await self._store.has_open_fire(owner_id, schedule_id):
             raise ScheduleStateError("this Schedule already has a fire starting or working")
-        now = self._clock()
+        now = await self._clock()
         due = await self._store.insert_manual_fire(
             schedule, now, fires_kept=self._settings.fires_kept
         )

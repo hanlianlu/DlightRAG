@@ -290,6 +290,10 @@ DELETE FROM dlightrag_schedules WHERE owner_id = $1 AND schedule_id = $2::uuid
 RETURNING schedule_id
 """
 
+#: The one clock the Schedules read: the database's, as it is when asked rather than when the
+#: transaction began, so every process that looks agrees on what is due.
+_NOW = "SELECT clock_timestamp()"
+
 _CLAIM_DUE = """
 SELECT * FROM dlightrag_schedules
 WHERE state = 'active' AND next_fire_at <= $1
@@ -564,6 +568,12 @@ class PGScheduleStore(PostgresOperationRunner):
 
     def __init__(self, *, pool: ConnectionPool | None = None) -> None:
         super().__init__(pool=pool)
+
+    async def now(self) -> datetime:
+        async def operation(conn: Any) -> datetime:
+            return await conn.fetchval(_NOW)
+
+        return await self._run(operation)
 
     async def create(self, schedule: Schedule, *, max_active: int) -> Schedule:
         async def operation(conn: Any) -> Schedule:

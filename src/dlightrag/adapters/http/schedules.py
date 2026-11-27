@@ -8,7 +8,7 @@ way on both. Times are UTC ISO 8601 with a ``Z``; ``zone`` is the IANA zone the 
 the cadence in.
 """
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
@@ -136,13 +136,15 @@ def fire_payload(fire: Fire) -> dict[str, Any]:
     }
 
 
-def preview_payload(settings: SchedulesSettings, body: CadenceInput) -> dict[str, Any]:
-    """The next ``PREVIEW_SLOTS`` slots of a cadence, in UTC and on the zone's own clock.
+def preview_payload(
+    settings: SchedulesSettings, body: CadenceInput, now: datetime
+) -> dict[str, Any]:
+    """The next ``PREVIEW_SLOTS`` slots of a cadence after ``now``, in UTC and on the zone's own clock.
 
-    The cadence is held to every rule saving it would be, so a refusal here is the one the owner
-    would meet there; nothing is stored.
+    ``now`` is the Schedules' clock (``ScheduleService.now``), so a preview names the slots that
+    saving it now would. The cadence is held to every rule saving it would be, so a refusal here
+    is the one the owner would meet there; nothing is stored.
     """
-    now = datetime.now(UTC)
     cadence = Cadence.create(
         zone_name=body.zone,
         cron=body.cron,

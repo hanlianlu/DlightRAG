@@ -120,6 +120,18 @@ async def test_a_schedule_round_trips_with_the_identity_it_acts_as(store: PGSche
     assert await store.list(owner_id_from_user(OTHER)) == ()
 
 
+async def test_the_stores_now_is_the_databases_clock_in_utc(
+    pool: Any, store: PGScheduleStore
+) -> None:
+    async with pool.acquire() as conn:
+        database_now = await conn.fetchval("SELECT now()")
+
+    stored = await store.now()
+
+    assert stored.utcoffset() == timedelta(0)
+    assert abs(stored - database_now) < timedelta(seconds=5)
+
+
 async def test_two_processes_claiming_at_once_write_one_fire_for_a_slot(
     store: PGScheduleStore, pool: Any
 ) -> None:
