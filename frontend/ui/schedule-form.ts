@@ -346,7 +346,7 @@ export class DlScheduleForm extends LightElement {
       </label>`;
   }
 
-  /** The controls the chosen frequency needs, on the same line as the choice. */
+  /** The controls the chosen frequency needs, for the line under the choice; nothing when it needs none. */
   #frequencyControls(draft: Draft): TemplateResult | typeof nothing {
     const cadence = draft.cadence;
     const word = (text: string): TemplateResult => html`<span class=${styles.word}>${text}</span>`;
@@ -374,6 +374,7 @@ export class DlScheduleForm extends LightElement {
         return html`
           <input class="dl-input ${styles.date}" data-field="date" type="date" required .value=${live(cadence.date)}
             aria-label=${msg('Date', {id: 'scheduleForm.dateLabel'})}
+            @click=${openPicker}
             @input=${(event: Event) => { this.#setCadence({date: (event.currentTarget as HTMLInputElement).value}); }}>
           ${word(msg('at', {id: 'scheduleForm.at'}))}${time}`;
       case 'custom':
@@ -381,20 +382,31 @@ export class DlScheduleForm extends LightElement {
     }
   }
 
-  #toggleDay(day: number): void {
+  #toggleDay(day: number, box: HTMLInputElement): void {
     const chosen = this.draft?.cadence.days ?? [];
     const days = chosen.includes(day) ? chosen.filter((other) => other !== day) : [...chosen, day];
     // A Schedule that runs on no day is no Schedule: the last day stays chosen.
     if (days.length > 0) this.#setCadence({days});
+    else box.checked = true;
+  }
+
+  #frequencies(draft: Draft): TemplateResult {
+    return html`
+      <div class="dl-chips" role="radiogroup" aria-label=${msg('How often', {id: 'scheduleForm.frequencyLabel'})} data-field="frequency">
+        ${FREQUENCIES.map((frequency) => html`
+          <label class="dl-chip"><input type="radio" name="schedule-frequency" value=${frequency}
+            .checked=${live(draft.cadence.frequency === frequency)}
+            @change=${() => { this.#setCadence({frequency}); }}>${frequencyLabel(frequency)}</label>`)}
+      </div>`;
   }
 
   #days(draft: Draft): TemplateResult {
     const locale = getLocale();
     return html`
-      <div class=${styles.chips} role="group" aria-label=${msg('Days of the week', {id: 'scheduleForm.daysLabel'})}>
+      <div class="dl-chips" role="group" aria-label=${msg('Days of the week', {id: 'scheduleForm.daysLabel'})}>
         ${WEEK.map((day) => html`
-          <button type="button" class=${styles.chip} data-day=${day} aria-pressed=${String(draft.cadence.days.includes(day))}
-            @click=${() => { this.#toggleDay(day); }}>${weekdayShort(day, locale)}</button>`)}
+          <label class="dl-chip"><input type="checkbox" data-day=${day} .checked=${draft.cadence.days.includes(day)}
+            @change=${(event: Event) => { this.#toggleDay(day, event.currentTarget as HTMLInputElement); }}>${weekdayShort(day, locale)}</label>`)}
       </div>`;
   }
 
@@ -461,6 +473,28 @@ export class DlScheduleForm extends LightElement {
       </fieldset>`;
   }
 
+  /** One choice among a few as radio rows, in the form's own rhythm; `data-field` names the group. */
+  #choice<Value extends string>(
+    name: string,
+    caption: string,
+    options: ReadonlyArray<readonly [Value, string]>,
+    current: Value,
+    chosen: (value: Value) => void,
+    {disabled = false, hint}: {disabled?: boolean; hint?: string} = {},
+  ): TemplateResult {
+    return html`
+      <fieldset class=${styles.group} data-field=${name} aria-describedby=${hint ? `schedule-${name}-hint` : nothing}>
+        <legend class=${styles.caption}>${caption}</legend>
+        ${options.map(([value, label]) => html`
+          <label class="dl-dialog-checkbox ${styles.choice}">
+            <input type="radio" name=${`schedule-${name}`} value=${value} .checked=${live(current === value)} ?disabled=${disabled}
+              @change=${() => { chosen(value); }}>
+            <span>${label}</span>
+          </label>`)}
+        ${hint ? html`<span id=${`schedule-${name}-hint`} class=${styles.hint}>${hint}</span>` : nothing}
+      </fieldset>`;
+  }
+
   #advanced(draft: Draft): TemplateResult {
     const creating = draft.id === null;
     return html`
@@ -471,18 +505,17 @@ export class DlScheduleForm extends LightElement {
         <div id="schedule-advanced" class=${styles.advancedBody} ?hidden=${!draft.advanced}>
           ${draft.advanced ? html`
             <div class=${styles.pair}>
-              ${this.#field(msg('Mode', {id: 'schedules.mode'}), html`
-                <select class="dl-input ${styles.wide}" data-field="mode" .value=${live(draft.mode)} ?disabled=${draft.goal}
-                  @change=${(event: Event) => { this.#set({mode: (event.currentTarget as HTMLSelectElement).value as ScheduleMode}); }}>
-                  <option value="research">${msg('Research', {id: 'schedules.modeResearch'})}</option>
-                  <option value="fast">${msg('Fast', {id: 'schedules.modeFast'})}</option>
-                </select>`, draft.goal ? msg('A goal runs in Research.', {id: 'schedules.goalResearch'}) : undefined)}
-              ${creating ? this.#field(msg('Each run goes to', {id: 'schedules.target'}), html`
-                <select class="dl-input ${styles.wide}" data-field="target" .value=${live(draft.target)}
-                  @change=${(event: Event) => { this.#set({target: (event.currentTarget as HTMLSelectElement).value as ScheduleTarget}); }}>
-                  <option value="new_conversation">${msg('A new conversation each time', {id: 'schedules.targetNew'})}</option>
-                  <option value="same_conversation">${msg('One ongoing conversation', {id: 'schedules.targetSame'})}</option>
-                </select>`) : nothing}
+              ${this.#choice('mode', msg('Mode', {id: 'schedules.mode'}), [
+                ['research', msg('Research', {id: 'schedules.modeResearch'})],
+                ['fast', msg('Fast', {id: 'schedules.modeFast'})],
+              ], draft.mode, (mode: ScheduleMode) => { this.#set({mode}); }, {
+                disabled: draft.goal,
+                hint: draft.goal ? msg('A goal runs in Research.', {id: 'schedules.goalResearch'}) : undefined,
+              })}
+              ${creating ? this.#choice('target', msg('Each run goes to', {id: 'schedules.target'}), [
+                ['new_conversation', msg('A new conversation each time', {id: 'schedules.targetNew'})],
+                ['same_conversation', msg('One ongoing conversation', {id: 'schedules.targetSame'})],
+              ], draft.target, (target: ScheduleTarget) => { this.#set({target}); }) : nothing}
             </div>
             ${this.#field(msg('Daily limit', {id: 'schedules.ceiling'}), html`
               <span class=${styles.line}>
@@ -510,6 +543,7 @@ export class DlScheduleForm extends LightElement {
 
   #form(draft: Draft): TemplateResult {
     const creating = draft.id === null;
+    const controls = this.#frequencyControls(draft);
     return html`
       <form class=${styles.frame} novalidate data-form @submit=${this.#submit}>
         <h2 id="schedule-form-title" class=${styles.title}>${
@@ -528,16 +562,9 @@ export class DlScheduleForm extends LightElement {
           )}
           <fieldset class=${styles.when}>
             <legend class=${styles.caption}>${msg('When', {id: 'scheduleForm.when'})}</legend>
-            <div class=${styles.line}>
-              <select class="dl-input ${styles.frequency}" data-field="frequency"
-                aria-label=${msg('How often', {id: 'scheduleForm.frequencyLabel'})}
-                @change=${(event: Event) => { this.#setCadence({frequency: (event.currentTarget as HTMLSelectElement).value as Frequency}); }}>
-                ${FREQUENCIES.map((frequency) => html`
-                  <option value=${frequency} ?selected=${frequency === draft.cadence.frequency}>${frequencyLabel(frequency)}</option>`)}
-              </select>
-              ${this.#frequencyControls(draft)}
-            </div>
+            ${this.#frequencies(draft)}
             ${draft.cadence.frequency === 'weekly' ? this.#days(draft) : nothing}
+            ${controls === nothing ? nothing : html`<div class=${styles.line}>${controls}</div>`}
             ${draft.cadence.frequency === 'custom' ? html`
               <label class=${styles.field}>
                 <input class="dl-input ${styles.wide} ${styles.mono}" data-field="cron" autocomplete="off" spellcheck="false"
@@ -564,6 +591,15 @@ export class DlScheduleForm extends LightElement {
       <dialog class="confirm-dialog ${styles.dialog}" aria-labelledby="schedule-form-title">
         ${this.draft ? this.#form(this.draft) : nothing}
       </dialog>`;
+  }
+}
+
+/** The date field draws no picker mark of its own, so pressing it opens the browser's calendar. */
+function openPicker(event: Event): void {
+  try {
+    (event.currentTarget as HTMLInputElement).showPicker();
+  } catch {
+    // A browser without showPicker, or one that refuses it here, still takes the date typed.
   }
 }
 

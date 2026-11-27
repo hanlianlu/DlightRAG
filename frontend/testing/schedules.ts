@@ -123,9 +123,19 @@ export function asked(api: Wire, method: string, path: string): Wire['requests']
 }
 
 /** Type into a field the way a reader does: its value, then the event the page listens to. */
-export function type(element: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement, value: string): void {
+export function type(element: HTMLInputElement | HTMLTextAreaElement, value: string): void {
   element.value = value;
-  element.dispatchEvent(new Event(element instanceof HTMLSelectElement ? 'change' : 'input', {bubbles: true}));
+  element.dispatchEvent(new Event('input', {bubbles: true}));
+}
+
+/** Choose one radio of a group by its value, as a click does; the page listens to the change it makes. */
+export function choose(group: ParentNode, value: string): void {
+  group.querySelector<HTMLInputElement>(`input[type="radio"][value="${value}"]`)!.click();
+}
+
+/** The value of the radio a group has chosen. */
+export function chosen(group: ParentNode): string | undefined {
+  return group.querySelector<HTMLInputElement>('input[type="radio"]:checked')?.value;
 }
 
 /** A control of the open Schedule form, by its `data-field`. */

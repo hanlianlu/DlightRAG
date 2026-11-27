@@ -72,7 +72,6 @@
   }
 
   .wide,
-  .frequency,
   .number,
   .time,
   .date,
@@ -86,10 +85,6 @@
     width: 100%;
   }
 
-  .frequency {
-    width: 9rem;
-  }
-
   .number {
     appearance: textfield;
     width: 5.5rem;
@@ -100,6 +95,13 @@
   .number::-webkit-outer-spin-button {
     appearance: none;
     margin: 0;
+  }
+
+  /* The picker marks are the browser's own drawing, not the design system's: a time is typed, and
+   * pressing a date opens its calendar. */
+  .time::-webkit-calendar-picker-indicator,
+  .date::-webkit-calendar-picker-indicator {
+    display: none;
   }
 
   .time {
@@ -134,7 +136,7 @@
     padding: 0;
   }
 
-  /* The choice and the controls it needs share one line, and one height: they wrap together on a narrow one. */
+  /* The controls a frequency needs share one line, and one height: they wrap together on a narrow one. */
   .line {
     align-items: center;
     display: flex;
@@ -145,41 +147,6 @@
   .word {
     color: var(--color-text-muted);
     font-size: var(--font-size-detail);
-  }
-
-  .chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-inline);
-  }
-
-  .chip {
-    background: transparent;
-    border: 1px solid var(--color-border-strong);
-    border-radius: var(--radius-pill);
-    color: var(--color-text-secondary);
-    cursor: pointer;
-    font: inherit;
-    font-size: var(--font-size-caption);
-    min-block-size: var(--size-target-min);
-    padding-inline: var(--space-component);
-    transition: background var(--duration-control), border-color var(--duration-control), color var(--duration-control);
-  }
-
-  .chip:hover {
-    background: var(--color-bg-hover);
-    color: var(--color-text-primary);
-  }
-
-  .chip[aria-pressed='true'] {
-    background: var(--color-action-bg-subtle);
-    border-color: var(--color-action-border);
-    color: var(--color-accent-text);
-  }
-
-  .chip:focus-visible {
-    outline: 2px solid var(--color-control-ring);
-    outline-offset: 2px;
   }
 
   /* One line that reads the choice back: its words, its zone, and what the server says of it. */

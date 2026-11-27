@@ -6,15 +6,16 @@ import {expect} from '@esm-bundle/chai';
 import {setViewport} from '@web/test-runner-commands';
 import {waitFor} from '../testing/dom.ts';
 import {
+  choose,
   field,
   formOpen,
   mountSidebar,
   rowsShown,
   serving,
-  type,
   useWorkspaces,
   wireSchedule,
 } from '../testing/schedules.ts';
+import dialogStyles from '../styles/schedule-dialogs.module.css';
 import styles from '../styles/schedule-section.module.css';
 
 const originalFetch = window.fetch;
@@ -62,7 +63,7 @@ it('draws a Schedule as dense as a conversation row, with its words kept inside 
   expect(actions.right).to.be.at.most(rows[0]!.getBoundingClientRect().right + 1);
 });
 
-it('lays the frequency and the controls it needs on one line, every control at the one control height', async () => {
+it('lays the frequency as a row of chips, and the controls it needs on a line under it at the one control height', async () => {
   await setViewport({width: 1400, height: 900});
   serving({'POST /web/api/schedules/preview': () => Response.json({zone: 'UTC', slots: []})}, []);
   const {sidebar, handles} = await mountSidebar();
@@ -72,19 +73,29 @@ it('lays the frequency and the controls it needs on one line, every control at t
   add.click();
   const dialog = await formOpen(sidebar);
   const plain = field(dialog, 'name').getBoundingClientRect().height;
+  const chips = field<HTMLElement>(dialog, 'frequency');
 
   expect(dialog.getBoundingClientRect().width, 'a dialog of about 560px').to.be.closeTo(560, 1);
+  const row = [...chips.querySelectorAll<HTMLElement>('.dl-chip')].map((chip) => chip.getBoundingClientRect());
+  expect(row, 'one chip for each frequency').to.have.length(7);
+  expect(row.every((box) => Math.abs(box.top - row[0]!.top) < 0.5), 'the chips share one row').to.equal(true);
   for (const frequency of ['once', 'hourly', 'daily', 'weekdays', 'weekly', 'monthly']) {
-    type(field<HTMLSelectElement>(dialog, 'frequency'), frequency);
+    choose(chips, frequency);
     await dialog.closest('dl-schedule-form')!.updateComplete;
-    const line = dialog.querySelector('select[data-field="frequency"]')!.parentElement!;
-    const controls = [...line.querySelectorAll<HTMLElement>('select, input')].map((control) => control.getBoundingClientRect());
-    expect(controls.length, frequency).to.be.greaterThan(1);
+    // Weekly's days come between the frequency and its time, so the line reads Weekly, Mon, at 09:00.
+    const line = frequency === 'weekly' ? chips.nextElementSibling!.nextElementSibling! : chips.nextElementSibling!;
+    expect(line.className, `${frequency}: its controls stand on a line of their own`).to.equal(dialogStyles.line);
+    const controls = [...line.querySelectorAll<HTMLElement>('input')].map((control) => control.getBoundingClientRect());
+    expect(controls.length, frequency).to.be.greaterThan(0);
     for (const box of controls) {
       expect(box.height, `${frequency}: one control height`).to.be.closeTo(plain, 0.5);
       expect(box.top, `${frequency}: one line`).to.be.closeTo(controls[0]!.top, 0.5);
+      expect(box.top, `${frequency}: under the chips`).to.be.at.least(chips.getBoundingClientRect().bottom - 0.5);
     }
   }
+  choose(chips, 'custom');
+  await dialog.closest('dl-schedule-form')!.updateComplete;
+  expect(dialog.querySelector(`.${dialogStyles.line}`), 'a frequency with no controls leaves no empty line').to.equal(null);
 });
 
 it('fits a phone: the dialog stays inside the screen, its footer within reach, and nothing scrolls sideways', async () => {
@@ -96,7 +107,7 @@ it('fits a phone: the dialog stays inside the screen, its footer within reach, a
   await waitFor(() => !add.disabled);
   add.click();
   const dialog = await formOpen(sidebar);
-  type(field<HTMLSelectElement>(dialog, 'frequency'), 'monthly');
+  choose(field<HTMLElement>(dialog, 'frequency'), 'monthly');
   dialog.querySelector<HTMLButtonElement>('[data-advanced]')!.click();
   await waitFor(() => field(dialog, 'ceiling') !== null);
 

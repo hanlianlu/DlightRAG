@@ -5,6 +5,8 @@ import {browserZone} from '../lib/zoned-time.ts';
 import {waitFor} from '../testing/dom.ts';
 import {
   asked,
+  choose,
+  chosen,
   field,
   formOpen,
   mountSidebar,
@@ -81,13 +83,15 @@ it('asks a name, a prompt and when, with everything else defaulted, and creates 
 
   expect(dialog.querySelector('h2')!.textContent).to.equal('New schedule');
   expect(document.activeElement).to.equal(field(dialog, 'name'));
-  expect(field<HTMLSelectElement>(dialog, 'frequency').value).to.equal('daily');
+  expect(chosen(field<HTMLElement>(dialog, 'frequency'))).to.equal('daily');
   expect(field(dialog, 'time').value).to.equal('09:00');
   expect(field<HTMLTextAreaElement>(dialog, 'prompt').getAttribute('placeholder')).to.equal('What should the agent do each time?');
   expect(field<HTMLTextAreaElement>(dialog, 'prompt').rows).to.equal(5);
-  expect([...field<HTMLSelectElement>(dialog, 'frequency').options].map((option) => option.textContent!.trim())).to.deep.equal([
+  expect([...field<HTMLElement>(dialog, 'frequency').querySelectorAll('label')].map((chip) => chip.textContent!.trim())).to.deep.equal([
     'Once', 'Hourly', 'Daily', 'Weekdays', 'Weekly', 'Monthly', 'Custom',
   ]);
+  // The design system's chips and radio rows carry every choice: the form has no native select.
+  expect(dialog.querySelector('select')).to.equal(null);
   // Advanced is closed, and the zone is a word that opens its input.
   expect(dialog.querySelector('[data-advanced]')!.getAttribute('aria-expanded')).to.equal('false');
   expect(dialog.querySelector('[data-zone-toggle]')!.textContent).to.equal(browserZone());
@@ -121,24 +125,24 @@ it('asks a name, a prompt and when, with everything else defaulted, and creates 
 it('compiles each frequency to the cron it means, and asks the server what that reads as', async () => {
   const api = forming();
   const {dialog} = await newForm();
-  const frequency = field<HTMLSelectElement>(dialog, 'frequency');
+  const frequency = field<HTMLElement>(dialog, 'frequency');
   const zone = browserZone();
 
-  type(frequency, 'hourly');
+  choose(frequency, 'hourly');
   await waitFor(() => field(dialog, 'minute') !== null);
   type(field(dialog, 'minute'), '45');
   await previewed(api, {zone, cron: '45 * * * *'});
 
-  type(frequency, 'weekdays');
+  choose(frequency, 'weekdays');
   await waitFor(() => field(dialog, 'time') !== null);
   type(field(dialog, 'time'), '07:30');
   await previewed(api, {zone, cron: '30 7 * * 1-5'});
 
-  type(frequency, 'weekly');
+  choose(frequency, 'weekly');
   await waitFor(() => dialog.querySelector('[data-day]') !== null);
-  const chips = [...dialog.querySelectorAll<HTMLButtonElement>('[data-day]')];
-  expect(chips.map((chip) => chip.textContent!.trim())).to.deep.equal(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']);
-  expect(chips.map((chip) => chip.getAttribute('aria-pressed'))).to.deep.equal(['true', 'false', 'false', 'false', 'false', 'false', 'false']);
+  const chips = [...dialog.querySelectorAll<HTMLInputElement>('[data-day]')];
+  expect(chips.map((chip) => chip.parentElement!.textContent!.trim())).to.deep.equal(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']);
+  expect(chips.map((chip) => chip.checked)).to.deep.equal([true, false, false, false, false, false, false]);
   chips[3]!.click();
   await previewed(api, {zone, cron: '30 7 * * 1,4'});
   chips[6]!.click();
@@ -149,21 +153,21 @@ it('compiles each frequency to the cron it means, and asks the server what that 
   // Sunday is the last day left, so it stays.
   chips[6]!.click();
   await dialog.closest('dl-schedule-form')!.updateComplete;
-  expect(chips[6]!.getAttribute('aria-pressed')).to.equal('true');
+  expect(chips[6]!.checked).to.equal(true);
 
-  type(frequency, 'monthly');
+  choose(frequency, 'monthly');
   await waitFor(() => field(dialog, 'day') !== null);
   type(field(dialog, 'day'), '15');
   await previewed(api, {zone, cron: '30 7 15 * *'});
 
-  type(frequency, 'custom');
+  choose(frequency, 'custom');
   await waitFor(() => field(dialog, 'cron') !== null);
   expect(field(dialog, 'time')).to.equal(null);
   type(field(dialog, 'cron'), '0 6 * * 1');
   await previewed(api, {zone, cron: '0 6 * * 1'});
   expect(dialog.textContent).to.contain('Five fields: minute, hour, day of month, month, day of week.');
 
-  type(frequency, 'once');
+  choose(frequency, 'once');
   await waitFor(() => field(dialog, 'date') !== null);
   dialog.querySelector<HTMLButtonElement>('[data-zone-toggle]')!.click();
   await waitFor(() => field(dialog, 'zone') !== null);
@@ -183,19 +187,21 @@ it('keeps mode, workspaces, where each run goes, goal and ceiling under Advanced
   advanced.click();
   await waitFor(() => field(dialog, 'ceiling') !== null);
   expect(advanced.getAttribute('aria-expanded')).to.equal('true');
-  expect(field<HTMLSelectElement>(dialog, 'mode').value).to.equal('research');
+  expect(chosen(field<HTMLElement>(dialog, 'mode'))).to.equal('research');
   expect(field(dialog, 'ceiling').value).to.equal('1.5');
-  expect(field<HTMLSelectElement>(dialog, 'target').value).to.equal('new_conversation');
+  expect(chosen(field<HTMLElement>(dialog, 'target'))).to.equal('new_conversation');
+  expect(dialog.querySelector('select')).to.equal(null);
   const boxes = [...dialog.querySelectorAll<HTMLInputElement>('[data-workspace]')];
   expect(boxes.map((box) => [box.dataset.workspace, box.checked])).to.deep.equal([['alpha', true], ['beta', false]]);
 
   boxes[1]!.click();
-  type(field<HTMLSelectElement>(dialog, 'mode'), 'fast');
-  type(field<HTMLSelectElement>(dialog, 'target'), 'same_conversation');
+  choose(field<HTMLElement>(dialog, 'mode'), 'fast');
+  choose(field<HTMLElement>(dialog, 'target'), 'same_conversation');
   field(dialog, 'goal').click();
   await waitFor(() => field(dialog, 'rounds') !== null);
-  const mode = field<HTMLSelectElement>(dialog, 'mode');
-  expect([mode.value, mode.disabled]).to.deep.equal(['research', true]);
+  const mode = field<HTMLElement>(dialog, 'mode');
+  expect([chosen(mode), [...mode.querySelectorAll('input')].every((radio) => radio.disabled)]).to.deep.equal(['research', true]);
+  expect(mode.textContent).to.contain('A goal runs in Research.');
   expect(field(dialog, 'rounds').value).to.equal('16');
   expect(dialog.textContent).to.contain('Goal objective');
   type(field(dialog, 'rounds'), '5');
@@ -244,7 +250,7 @@ it('says what is missing without asking the server, and opens Advanced when what
   submit(dialog);
   await waitFor(() => problem(dialog) === 'Write what the schedule should ask.');
   type(field<HTMLTextAreaElement>(dialog, 'prompt'), 'Look.');
-  type(field<HTMLSelectElement>(dialog, 'frequency'), 'custom');
+  choose(field<HTMLElement>(dialog, 'frequency'), 'custom');
   await waitFor(() => field(dialog, 'cron') !== null);
   submit(dialog);
   await waitFor(() => problem(dialog) === 'Say when it should run.');
@@ -269,7 +275,7 @@ it('shows the reason a cadence would be refused in the line that reads it back, 
   });
   const {dialog} = await newForm();
 
-  type(field<HTMLSelectElement>(dialog, 'frequency'), 'custom');
+  choose(field<HTMLElement>(dialog, 'frequency'), 'custom');
   await waitFor(() => field(dialog, 'cron') !== null);
   type(field(dialog, 'cron'), '*/5 * * * *');
   await waitFor(() => dialog.querySelector('[data-refused]')?.textContent === refusal.detail, 1000);
@@ -313,10 +319,10 @@ it('reads a stored cadence back into the frequency it is, shows the Schedule bei
   let dialog = await open();
   expect(dialog.querySelector('h2')!.textContent).to.equal('Edit schedule');
   expect(field(dialog, 'name').value).to.equal('Filing watch');
-  expect(field<HTMLSelectElement>(dialog, 'frequency').value).to.equal('weekly');
+  expect(chosen(field<HTMLElement>(dialog, 'frequency'))).to.equal('weekly');
   expect(field(dialog, 'time').value).to.equal('08:00');
-  expect([...dialog.querySelectorAll<HTMLButtonElement>('[data-day]')].map((chip) => chip.getAttribute('aria-pressed'))).to.deep.equal(
-    ['true', 'false', 'false', 'true', 'false', 'false', 'false'],
+  expect([...dialog.querySelectorAll<HTMLInputElement>('[data-day]')].map((chip) => chip.checked)).to.deep.equal(
+    [true, false, false, true, false, false, false],
   );
   expect(dialog.querySelector('[data-zone-toggle]')!.textContent).to.equal('Europe/Stockholm');
   expect(dialog.querySelector('button[type=submit]')!.textContent).to.equal('Save');
@@ -324,7 +330,7 @@ it('reads a stored cadence back into the frequency it is, shows the Schedule bei
   dialog.querySelector<HTMLButtonElement>('[data-advanced]')!.click();
   await waitFor(() => field(dialog, 'ceiling') !== null);
   expect(field(dialog, 'ceiling').value).to.equal('0.5');
-  expect(field<HTMLSelectElement>(dialog, 'mode').disabled).to.equal(true);
+  expect([...field<HTMLElement>(dialog, 'mode').querySelectorAll('input')].every((radio) => radio.disabled)).to.equal(true);
   expect(field(dialog, 'target')).to.equal(null);
   expect(field(dialog, 'goal')).to.equal(null);
 
@@ -335,7 +341,7 @@ it('reads a stored cadence back into the frequency it is, shows the Schedule bei
 
   dialog = await open();
   type(field(dialog, 'name'), 'Filing digest');
-  dialog.querySelector<HTMLButtonElement>('[data-day="3"]')!.click();
+  dialog.querySelector<HTMLInputElement>('[data-day="3"]')!.click();
   submit(dialog);
   await waitFor(() => sidebar.querySelector('[data-schedule-id]')!.textContent!.includes('Filing digest'));
 
@@ -356,13 +362,13 @@ it('reads a cron that is no preset as Custom, and a one-time Schedule as the dat
   };
 
   let dialog = await edit('schedule-often');
-  expect(field<HTMLSelectElement>(dialog, 'frequency').value).to.equal('custom');
+  expect(chosen(field<HTMLElement>(dialog, 'frequency'))).to.equal('custom');
   expect(field(dialog, 'cron').value).to.equal('0 */4 * * *');
   dialog.querySelector<HTMLButtonElement>('button[type=button]:not([data-advanced]):not([data-zone-toggle])')!.click();
   await closedAround(sidebar, 'schedule-often', dialog);
 
   dialog = await edit('schedule-launch');
-  expect(field<HTMLSelectElement>(dialog, 'frequency').value).to.equal('once');
+  expect(chosen(field<HTMLElement>(dialog, 'frequency'))).to.equal('once');
   expect(field(dialog, 'date').value).to.equal('2099-06-01');
   expect(field(dialog, 'time').value).to.equal('08:00');
   expect(dialog.querySelector('[data-zone-toggle]')!.textContent).to.equal('Asia/Tokyo');

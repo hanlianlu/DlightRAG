@@ -141,6 +141,17 @@ if (host) {
                 <input type="radio" name="ds-choice"> English
               </label>
             </div>
+            <div class="dl-chips" role="radiogroup" aria-label="Chip radio specimen">
+              <label class="dl-chip"><input type="radio" name="ds-chip" checked>Daily</label>
+              <label class="dl-chip"><input type="radio" name="ds-chip">Weekly</label>
+              <label class="dl-chip"><input type="radio" name="ds-chip">Monthly</label>
+              <label class="dl-chip"><input type="radio" name="ds-chip" disabled>Custom</label>
+            </div>
+            <div class="dl-chips" role="group" aria-label="Chip checkbox specimen">
+              <label class="dl-chip"><input type="checkbox" checked>Mon</label>
+              <label class="dl-chip"><input type="checkbox">Tue</label>
+              <label class="dl-chip"><input type="checkbox" checked>Wed</label>
+            </div>
           </div>
         </section>
         <section class="ds-viewport ds-viewport--1440" aria-label="1440 pixel specimen">

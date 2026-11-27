@@ -567,9 +567,7 @@ it('the Scheduled section, a Schedule\'s detail and the form that makes one have
   form.querySelector<HTMLButtonElement>('[data-advanced]')!.click();
   await waitFor(() => form.querySelector('[data-field="ceiling"]') !== null && form.querySelector('[data-next]') !== null);
   // Weekly shows the day chips, and Advanced shows every field.
-  const frequency = form.querySelector<HTMLSelectElement>('[data-field="frequency"]')!;
-  frequency.value = 'weekly';
-  frequency.dispatchEvent(new Event('change', {bubbles: true}));
+  form.querySelector<HTMLInputElement>('[data-field="frequency"] input[value="weekly"]')!.click();
   await waitFor(() => form.querySelector('[data-day]') !== null);
   expect(await seriousViolations(form)).to.deep.equal([]);
 });

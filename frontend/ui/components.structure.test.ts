@@ -2,7 +2,7 @@
 /** Structural lock on the shared control layer.
 
  * Every <dialog> must carry one of the primitive dialog classes, every
- * checkbox must live inside the .dl-dialog-checkbox primitive, and every menu
+ * checkbox must live inside the .dl-dialog-checkbox or .dl-chip primitive, and every menu
  * or popover opened from a trigger takes its placement from .dl-anchored. New
  * UI that bypasses primitives fails here instead of shipping UA styling.
  */
@@ -40,15 +40,15 @@ test('every dialog carries a primitive dialog class', () => {
   }
 });
 
-test('every checkbox lives inside the .dl-dialog-checkbox primitive', () => {
+test('every checkbox lives inside the .dl-dialog-checkbox or .dl-chip primitive', () => {
   for (const file of uiSourceFiles()) {
     const source = readFileSync(file, 'utf8');
-    // A checkbox is legal only when the nearest .dl-dialog-checkbox label opens after the last label closed.
+    // A checkbox is legal only when the nearest primitive label opens after the last label closed.
     for (const match of source.matchAll(/<input[^>]*type="checkbox"[^>]*>/g)) {
       const before = source.slice(0, match.index ?? 0);
       assert.ok(
-        before.lastIndexOf('dl-dialog-checkbox') > before.lastIndexOf('</label>'),
-        `${file}: checkbox must sit inside a .dl-dialog-checkbox label`,
+        Math.max(before.lastIndexOf('dl-dialog-checkbox'), before.lastIndexOf('<label class="dl-chip"')) > before.lastIndexOf('</label>'),
+        `${file}: checkbox must sit inside a .dl-dialog-checkbox or .dl-chip label`,
       );
     }
   }

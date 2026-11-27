@@ -263,6 +263,9 @@ shells, docked sidebars and panels, structural sections, and internal seams stay
 square at every viewport. This keeps Soft contained surfaces from rounding the
 application silhouette or opening dark corner wedges.
 
+A chip row (`.dl-chips` of `.dl-chip`) is the choice among a handful of short options laid out: radios for one
+choice, checkboxes for several. A native `<select>` is not used in the product.
+
 Inspector and Artifact Canvas use nested local `dl-split-layout` elements on
 wide screens. The design-system element owns axis layout, pointer and keyboard
 input, and separator ARIA; the app adapter owns open state, breakpoints,
@@ -494,22 +497,25 @@ verdict on an open error in both color modes.
 The owner's Schedules (ADR 0103) live in the conversation sidebar, not in Settings: a Scheduled section
 between "New chat" and the conversation list, so recurring work sits beside the conversations it writes.
 
-- **Section.** A header row (a clock, "Scheduled", the count, a disclosure mark, and a "New schedule"
-  icon button) toggles the rows open and closed. The choice is this browser's (`localStorage`); with none
-  stored the section is open once there is a Schedule, and with none the header stands alone with its
-  "+". The rows scroll inside the section past a few, so they never push the conversations out of the
-  column.
+- **Section.** A header row (a clock, "Scheduled", and the count) toggles the rows open and closed; with
+  no Schedule, clicking it opens New schedule instead. A "+" icon button ("New schedule") stands at its
+  end: on a pointer that hovers it shows while the header is hovered or holds focus, and on a touch screen
+  it always shows. The open choice is this browser's (`localStorage`); with none stored the section is
+  open once there is a Schedule, and with none the header stands alone. The rows scroll inside the
+  section past a few, so they never push the conversations out of the column.
 - **Row.** A Schedule is a conversation row (the global `.conversation-row` family, so its density,
-  tint and actions menu are theirs): its name, and a muted line with the cadence in words and either
-  "Next: {when}" on the Schedule's own clock or "Paused" with a pause mark. Run now, Pause or Resume, and
+  tint and actions menu are theirs): its name, and a muted line with the cadence in words, followed by
+  "· Paused" (with a small pause mark) or "· Done" when the Schedule is not active; when it runs next is
+  the detail's to say. Run now, Pause or Resume, and
   an actions menu (Edit, Delete) stand over the row's end on hover and focus, and the row's text gives
   them the room; on a touch screen a row opens its detail, which carries every action.
 - **Dialogs.** The form and the detail are the confirm dialog's face at 35rem: a title, a body that
   scrolls, and a footer that stays. They stand outside the sidebar's `<nav>`, as the conversation dialogs
-  do, so the drawer's focus trap never sees them. The form asks a name, a prompt and when (one frequency
-  choice with the few controls it needs on its line, all at the one control height), reads the choice
-  back in one line with its zone and the server's next slot or refusal, and holds Mode, Workspaces,
-  where each run goes, goal and ceiling under Advanced. The detail shows the cadence and zone, the next
+  do, so the drawer's focus trap never sees them. The form asks a name, a prompt and when (a row of
+  frequency chips, with the few controls the chosen one needs on the line below, all at the one control
+  height, and day chips under Weekly), reads the choice back in one line with its zone and the server's
+  next slot or refusal, and holds Mode, Workspaces, where each run goes, goal and ceiling under
+  Advanced; Mode and where each run goes are radio choices. The detail shows the cadence and zone, the next
   run or why it is paused, the prompt folded to four lines, the actions, and the recent runs with their
   state in a quiet tone and an Open that goes to that run's conversation.
 - **Conversations.** A conversation a Schedule wrote carries a small clock before its title, and the

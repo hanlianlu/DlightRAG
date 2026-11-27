@@ -308,6 +308,77 @@ a.dl-btn {
     }
 }
 
+/* === Chip === */
+
+/* Applied to a native `<label class="dl-chip">` around a radio (one choice among the row) or a checkbox
+ * (any of them), inside a `.dl-chips` row. The product owns the group's name, each value, and what a
+ * change does; the primitive owns the pill, the chosen look (`:has(input:checked)`), the hover, the focus
+ * ring, and hiding the native input, which stays in the tab order and the accessibility tree so the
+ * browser keeps the label's click and a radio group's arrow keys. */
+.dl-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-inline);
+}
+
+.dl-chip {
+    align-items: center;
+    background: transparent;
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-pill);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    display: inline-flex;
+    font-size: var(--font-size-caption);
+    min-block-size: var(--size-target-min);
+    padding-inline: var(--space-component);
+    position: relative;
+    transition:
+        background var(--duration-control),
+        border-color var(--duration-control),
+        color var(--duration-control);
+}
+
+.dl-chip > input:is([type='checkbox'], [type='radio']) {
+    border: 0;
+    clip-path: inset(50%);
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    padding: 0;
+    position: absolute;
+    white-space: nowrap;
+    width: 1px;
+}
+
+.dl-chip:has(input:checked) {
+    background: var(--color-action-bg-subtle);
+    border-color: var(--color-action-border);
+    color: var(--color-accent-text);
+}
+
+.dl-chip:has(input:focus-visible) {
+    outline: 2px solid var(--focus-ring-color);
+    outline-offset: 2px;
+}
+
+.dl-chip:has(input:disabled) {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+.dl-chip:hover:not(:has(input:checked, input:disabled)) {
+    background: var(--color-bg-hover);
+    color: var(--color-text-primary);
+}
+
+@media (forced-colors: active) {
+    .dl-chip:has(input:checked) {
+        background: Highlight;
+        border-color: Highlight;
+        color: HighlightText;
+    }
+}
 
 /* === Navigation item === */
 
@@ -470,6 +541,16 @@ a.dl-btn {
 label.dl-dialog-checkbox:has(input:focus-visible) {
     outline: 2px solid var(--color-control-ring);
     outline-offset: 2px;
+}
+
+/* A choice that cannot be made fades with its label, as every primitive control does. */
+label.dl-dialog-checkbox:has(input:disabled) {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+label.dl-dialog-checkbox input:disabled {
+    cursor: not-allowed;
 }
 
 /* A choice row inside a bordered card: the card owns the outer spacing and clips to its own

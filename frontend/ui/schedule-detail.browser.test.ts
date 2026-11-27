@@ -187,7 +187,7 @@ it('hands over to the edit form, and focus comes back to the row it was opened f
   const form = await formOpen(sidebar);
   expect(dialog.open).to.equal(false);
   expect(form.querySelector<HTMLInputElement>('[data-field="name"]')!.value).to.equal('Weekly review');
-  form.querySelector<HTMLButtonElement>('button[type=button]:not([data-advanced]):not([data-zone-toggle]):not([data-day])')!.click();
+  form.querySelector<HTMLButtonElement>('button[type=button]:not([data-advanced]):not([data-zone-toggle])')!.click();
 
   await waitFor(() => !form.open && document.activeElement === sidebar.querySelector('[data-schedule-id] button.conversation-select'));
 });
