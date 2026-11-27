@@ -278,6 +278,7 @@ jobs:
           tests/integration/test_web_answer_runs_pg.py
           tests/integration/test_web_run_activity_pg.py
           tests/integration/test_web_conversations_pg.py
+          tests/integration/test_schedules_pg.py
           tests/integration/test_connections_pg.py
           tests/integration/test_connections_web_pg.py
           tests/integration/test_connection_authorization_pg.py

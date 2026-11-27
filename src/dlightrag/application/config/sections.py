@@ -1044,6 +1044,11 @@ class DeploymentSettings(FrozenSettings):
     #: surface runs the startup scan, and the MCP service sets this false in Compose so two
     #: processes do not scan the same goals at once (ADR 0077).
     goal_recovery: bool = True
+    #: Whether this process looks for due Schedules and starts their Runs (ADR 0103). A fire
+    #: becomes a Web conversation turn, so only a process that hosts Web conversations runs it
+    #: even when this is true; any number of processes may, since the database fences each slot.
+    #: The MCP-only service sets this false in Compose, as it does for goal recovery.
+    schedules: bool = True
 
     @field_validator("workspace")
     @classmethod
@@ -1064,6 +1069,44 @@ class DeploymentSettings(FrozenSettings):
     @property
     def working_dir_path(self) -> Path:
         return Path(self.working_dir)
+
+
+class SchedulesSettings(FrozenSettings):
+    """The bounds a Schedule runs under (ADR 0103): spend guards, failure handling, and the look."""
+
+    min_interval_minutes: int = Field(
+        default=60,
+        ge=1,
+        description="The closest two slots of a recurrence may be; a spend guard, not a technical limit.",
+    )
+    max_active_per_owner: int = Field(
+        default=20, ge=1, description="Active Schedules one owner may hold."
+    )
+    default_max_tokens_per_day: int = Field(
+        default=2_000_000,
+        ge=1,
+        le=2**63 - 1,
+        description="The rolling 24-hour token ceiling a new Schedule starts with.",
+    )
+    principal_max_age_days: int = Field(
+        default=30,
+        ge=1,
+        description=(
+            "How long a signed-in Schedule's stored identity is trusted without its owner "
+            "creating, editing or resuming it again."
+        ),
+    )
+    failure_streak: int = Field(
+        default=3,
+        ge=1,
+        description="Consecutive failed or refused Fires that pause a Schedule.",
+    )
+    fires_kept: int = Field(
+        default=200, ge=1, description="Fires of one Schedule kept; older ones are trimmed."
+    )
+    look_interval_seconds: float = Field(
+        default=30.0, gt=0, description="How often a process looks for due Schedules."
+    )
 
 
 class PostgresSettings(FrozenSettings):
@@ -1339,7 +1382,7 @@ class ObservabilitySettings(FrozenSettings):
 
 
 class DlightragConfig(BaseSettings):
-    """The nine-section immutable DlightRAG configuration."""
+    """The ten-section immutable DlightRAG configuration."""
 
     model_config = SettingsConfigDict(
         env_prefix="DLIGHTRAG_",
@@ -1382,6 +1425,7 @@ class DlightragConfig(BaseSettings):
     corpus: CorpusSettings = Field(default_factory=CorpusSettings)
     answer: AnswerSectionSettings = Field(default_factory=AnswerSectionSettings)
     runtime: RuntimeConfig = RuntimeConfig()
+    schedules: SchedulesSettings = Field(default_factory=SchedulesSettings)
     access: AccessSectionSettings = Field(default_factory=AccessSectionSettings)
     interfaces: InterfacesSettings = Field(default_factory=InterfacesSettings)
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)

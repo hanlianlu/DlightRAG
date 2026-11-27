@@ -6,6 +6,7 @@ import {repeat} from 'lit/directives/repeat.js';
 import type {ConversationSummary} from '../api/conversations.ts';
 import {
   type DlMenu,
+  icon,
   isImeKey,
   menuButtonFocus,
   type MenuDismissDetail,
@@ -274,6 +275,18 @@ export class DlConversationList extends LightElement {
     </span>`;
   }
 
+  /** The clock before the title of a conversation a Schedule wrote; the Schedule is its tooltip and its name. */
+  #renderScheduleMark(conversation: ConversationSummary): TemplateResult | typeof nothing {
+    const schedule = conversation.schedule;
+    if (schedule === null) return nothing;
+    return html`<span
+      class="conversation-schedule-mark"
+      role="img"
+      title=${schedule.name}
+      aria-label=${msg(str`Scheduled: ${schedule.name}`, {id: 'conversationList.scheduledBy'})}
+    >${icon('clock', {size: 'xs'})}</span>`;
+  }
+
   #renderRow(conversation: ConversationSummary): TemplateResult {
     const conversationId = conversation.conversationId;
     const active = conversationId === this.handles.conversations.activeConversationId;
@@ -295,7 +308,7 @@ export class DlConversationList extends LightElement {
               aria-label=${conversation.title
                 ? nothing
                 : msg('Open untitled conversation', {id: 'conversationList.openUntitled'})}
-            >${conversation.title || msg('New chat', {id: 'conversationList.newChat'})}</button>
+            >${this.#renderScheduleMark(conversation)}${conversation.title || msg('New chat', {id: 'conversationList.newChat'})}</button>
           `}
           ${conversation.forkedFromTitle ? html`
             <span

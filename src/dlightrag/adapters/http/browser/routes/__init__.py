@@ -23,6 +23,7 @@ from .overview import router as overview_router
 from .privacy import router as privacy_router
 from .run_activity import router as run_activity_router
 from .runtime_policies import router as runtime_policies_router
+from .schedules import router as schedules_router
 from .skills import router as skills_router
 from .step_search import router as step_search_router
 from .video_playback import router as video_playback_router
@@ -43,6 +44,7 @@ api_router.include_router(images_router)
 api_router.include_router(live_browser_router)
 api_router.include_router(files_router)
 api_router.include_router(memory_router)
+api_router.include_router(schedules_router)
 api_router.include_router(connections_router)
 api_router.include_router(agent_accounts_router)
 api_router.include_router(privacy_router)

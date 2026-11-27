@@ -593,7 +593,19 @@ forked_from_conversation_id::text AS forked_from_conversation_id,
     SELECT parent.title FROM web_conversations parent
     WHERE parent.principal_id = web_conversations.principal_id
       AND parent.conversation_id = web_conversations.forked_from_conversation_id
-) AS forked_from_title
+) AS forked_from_title,
+(
+    -- The Schedule whose Fire wrote this conversation, as [schedule_id, name]: a conversation a
+    -- Schedule opens is one of that Schedule's Fires, and the owner's own Fires are all that are read.
+    SELECT ARRAY[schedule.schedule_id::text, schedule.name]
+    FROM dlightrag_schedule_fires AS fire
+    JOIN dlightrag_schedules AS schedule
+      ON schedule.owner_id = fire.owner_id AND schedule.schedule_id = fire.schedule_id
+    WHERE fire.owner_id = web_conversations.principal_id
+      AND fire.conversation_id = web_conversations.conversation_id
+    ORDER BY fire.slot DESC
+    LIMIT 1
+) AS schedule
 """
 
 _CREATE_CONVERSATION = f"""
@@ -1235,6 +1247,28 @@ class PGWebConversationStore(PostgresOperationRunner):
             return _row_dict(row)
 
         return await self._run_write(_operation)
+
+    async def ensure_conversation(self, principal_id: str, conversation_id: str) -> None:
+        """Make ``conversation_id`` exist, with its Session, and leave it alone if it does.
+
+        Session-owned state that exists before any Run (a goal) hangs from the Session row, so a
+        caller that starts such state in a conversation of its own makes the conversation first.
+        """
+
+        async def _operation(conn: Any) -> None:
+            async with conn.transaction():
+                await conn.fetchrow(
+                    _CREATE_CONVERSATION_IF_MISSING,
+                    principal_id,
+                    conversation_id,
+                    None,
+                    conversation_id,
+                    "main",
+                )
+                await self._ensure_session_for(conn, principal_id, conversation_id)
+
+        await self._ensure_initialized()
+        await self._run_write(_operation)
 
     async def _ensure_session_for(self, conn: Any, principal_id: str, session_id: str) -> None:
         await ensure_agent_session(

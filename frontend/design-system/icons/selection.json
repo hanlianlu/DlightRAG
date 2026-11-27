@@ -5,6 +5,7 @@
   "attach": {"source": "lucide", "name": "plus"},
   "check": {"source": "lucide", "name": "check"},
   "chevron-down": {"source": "lucide", "name": "chevron-down"},
+  "clock": {"source": "lucide", "name": "clock"},
   "close": {"source": "lucide", "name": "x"},
   "connections": {"source": "lucide", "name": "plug"},
   "conversations": {"source": "lucide", "name": "messages-square"},
@@ -40,5 +41,6 @@
   "thumbs-down": {"source": "lucide", "name": "thumbs-down"},
   "thumbs-down-filled": {"source": "dlightrag", "name": "thumbs-down-filled", "derivedFrom": "lucide/thumbs-down", "fill": "currentColor", "stroke": "none", "nodes": [["path", {"d": "M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z M17.6 12.7h1.8a1.3 1.3 0 0 0 1.3-1.3V4.6a1.3 1.3 0 0 0-1.3-1.3h-1.8Z", "fill-rule": "evenodd"}]]},
   "thumbs-up": {"source": "lucide", "name": "thumbs-up"},
-  "thumbs-up-filled": {"source": "dlightrag", "name": "thumbs-up-filled", "derivedFrom": "lucide/thumbs-up", "fill": "currentColor", "stroke": "none", "nodes": [["path", {"d": "M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z M6.4 11.3H4.6a1.3 1.3 0 0 0-1.3 1.3v6.8a1.3 1.3 0 0 0 1.3 1.3h1.8Z", "fill-rule": "evenodd"}]]}
+  "thumbs-up-filled": {"source": "dlightrag", "name": "thumbs-up-filled", "derivedFrom": "lucide/thumbs-up", "fill": "currentColor", "stroke": "none", "nodes": [["path", {"d": "M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z M6.4 11.3H4.6a1.3 1.3 0 0 0-1.3 1.3v6.8a1.3 1.3 0 0 0 1.3 1.3h1.8Z", "fill-rule": "evenodd"}]]},
+  "zap": {"source": "lucide", "name": "zap"}
 }

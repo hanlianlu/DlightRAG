@@ -56,6 +56,7 @@ from dlightrag.application.policies.service import (
 from dlightrag.application.privacy import Privacy
 from dlightrag.application.retrieval.service import RetrievalService
 from dlightrag.application.runs import RunService
+from dlightrag.application.schedules.service import ScheduleService
 from dlightrag.application.settings.projections import access_settings
 from dlightrag.application.skills import SkillProtection
 from dlightrag.application.web_conversations.service import WebConversationService
@@ -81,6 +82,7 @@ _ANNOTATED_TYPES: dict[str, Any] = {
         RetrievalService,
         RunService,
         RuntimePolicies,
+        ScheduleService,
         WebConversationService,
         AnswerGoalService,
     )

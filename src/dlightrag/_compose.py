@@ -259,6 +259,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.adapters.postgres.model_catalogue import PGModelCatalogueStore
     from dlightrag.adapters.postgres.runtime.run_blob_store import PGRunBlobStore
     from dlightrag.adapters.postgres.runtime.run_store import PGRunStore
+    from dlightrag.adapters.postgres.runtime.schedules import PGScheduleStore
     from dlightrag.adapters.postgres.web.web_conversations import PGWebConversationStore
     from dlightrag.application.access.control import (
         access_control_from_settings,
@@ -289,6 +290,8 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.application.retrieval.execution import RetrievalExecutor
     from dlightrag.application.retrieval.service import RetrievalService
     from dlightrag.application.runs import RunService
+    from dlightrag.application.schedules.firing import ScheduleFirer
+    from dlightrag.application.schedules.service import ScheduleService
     from dlightrag.application.settings.projections import (
         access_settings,
         agent_browser_settings,
@@ -863,6 +866,18 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     goal_rounds.bind_pending_delivery(queued_turns.deliver_pending_goal_round)
     coordinator.observe_settled(queued_turns.run_settled)
     cancelled_observers.append(queued_turns.run_cancelled)
+    # A Schedule's Fires hear of every settled Run too. It only records how a Fire went, never
+    # starts work, so it does not race the observer above; each process settles the Runs it ran.
+    schedule_store = PGScheduleStore()
+    schedule_firer = ScheduleFirer(
+        store=schedule_store,
+        turns=web_conversations,
+        runs=runs,
+        goals=goal_service,
+        access=access_control,
+        settings=config.schedules,
+    )
+    coordinator.observe_settled(schedule_firer.run_settled)
     MODEL_CATALOGUE.replace_startup(startup_catalogue)
 
     return _ApplicationComponents(
@@ -902,6 +917,10 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         # Active goals are taken up automatically at startup; ``deployment.goal_recovery`` decides
         # whether this process is the one that scans (the MCP service sets it false).
         recover_goal_rounds=goal_rounds.resume_after_restart,
+        schedules=ScheduleService(
+            store=schedule_store, firer=schedule_firer, settings=config.schedules
+        ),
+        look_schedules=schedule_firer.look,
         initialize_process=_initialize_process,
         close_agent_execution=answer_executor.aclose,
         close_process=_close_process,

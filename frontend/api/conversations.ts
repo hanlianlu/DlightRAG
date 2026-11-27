@@ -16,6 +16,7 @@ const conversationSummary = v.pipe(
     updated_at: v.string(),
     forked_from_conversation_id: v.optional(v.nullable(v.string())),
     forked_from_title: v.optional(v.nullable(v.string())),
+    schedule: v.optional(v.nullable(v.object({schedule_id: v.string(), name: v.string()}))),
   }),
   v.transform((w) => ({
     conversationId: w.conversation_id,
@@ -24,6 +25,8 @@ const conversationSummary = v.pipe(
     updatedAt: w.updated_at,
     forkedFromConversationId: w.forked_from_conversation_id ?? null,
     forkedFromTitle: w.forked_from_title ?? null,
+    /** The Schedule whose Fire wrote this conversation, or null for one a person started. */
+    schedule: w.schedule ? {scheduleId: w.schedule.schedule_id, name: w.schedule.name} : null,
   })),
 );
 export type ConversationSummary = v.InferOutput<typeof conversationSummary>;

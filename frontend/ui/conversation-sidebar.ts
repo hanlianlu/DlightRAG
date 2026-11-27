@@ -20,8 +20,12 @@ import type {
   ConversationRetryDetail,
   DlConversationList,
 } from './conversation-list.ts';
+import type {DlScheduleDialogs} from './schedule-dialogs.ts';
+import type {DlScheduleSection, ScheduleIntentDetail} from './schedule-section.ts';
 import {requestToast} from './toast-request.ts';
 import './conversation-list.ts';
+import './schedule-dialogs.ts';
+import './schedule-section.ts';
 import {type FocusRestorer, modalResult } from './modal.ts';
 import {webRouter} from './router.ts';
 import {readStored, writeStored} from '../lib/storage.ts';
@@ -230,6 +234,10 @@ export class DlConversationSidebar extends LightElement {
     return this.querySelector<DlConversationList>('dl-conversation-list');
   }
 
+  #schedules(): DlScheduleSection | null {
+    return this.querySelector<DlScheduleSection>('dl-schedule-section');
+  }
+
   #newButton(): HTMLButtonElement | null {
     return this.querySelector<HTMLButtonElement>('#new-conversation-btn');
   }
@@ -402,7 +410,7 @@ export class DlConversationSidebar extends LightElement {
   #documentKeydown = (event: KeyboardEvent): void => {
     // An Escape that cancels an IME composition belongs to the composition, not to the drawer.
     if (isImeKey(event) || event.key !== 'Escape' || this.#desktop.matches || !this.drawerOpen) return;
-    if (document.querySelector('dialog[open]') || this.#list()?.menuOpen) return;
+    if (document.querySelector('dialog[open]') || this.#list()?.menuOpen || this.#schedules()?.menuOpen) return;
     event.preventDefault();
     void this.close(true);
   };
@@ -456,6 +464,12 @@ export class DlConversationSidebar extends LightElement {
     void (event.detail.kind === 'reload' ? this.routes?.reload() : this.#requestNewConversation());
   };
 
+  /** What the reader asked of a Schedule is carried out by the dialogs, which stand outside the navigation. */
+  #scheduleIntent = (event: CustomEvent<ScheduleIntentDetail>): void => {
+    event.stopPropagation();
+    void this.querySelector<DlScheduleDialogs>('dl-schedule-dialogs')?.handle(event.detail);
+  };
+
   #requestSettings = (): void => {
     raise(this, 'dl-settings-request');
   };
@@ -496,6 +510,12 @@ export class DlConversationSidebar extends LightElement {
             ${icon('panel-collapse', {size: 'sm'})}
           </button>
         </div>
+        <dl-schedule-section
+          .handles=${this.handles}
+          .enabled=${this.enabled}
+          @dl-schedule-intent=${this.#scheduleIntent}
+        ></dl-schedule-section>
+        <p class="conversation-section-label">${msg('Recents', {id: 'conversationSidebar.recents'})}</p>
         <dl-conversation-list
           .handles=${this.handles}
           .busy=${this.#busy}
@@ -523,6 +543,11 @@ export class DlConversationSidebar extends LightElement {
 
   #conversationDialogs(): TemplateResult {
     return html`
+      <dl-schedule-dialogs
+        .handles=${this.handles}
+        .returnFocus=${() => { this.#schedules()?.focusHeader(); }}
+        @dl-conversation-select=${this.#selectConversation}
+      ></dl-schedule-dialogs>
       <dialog id="delete-conversation-dialog" class="confirm-dialog"
               aria-labelledby="delete-conversation-title"
               aria-describedby="delete-conversation-message">

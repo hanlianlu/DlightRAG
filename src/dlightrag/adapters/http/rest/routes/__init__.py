@@ -12,6 +12,7 @@ from .metadata import router as metadata_router
 from .model_catalogue import router as model_catalogue_router
 from .rag import router as rag_router
 from .runs import router as runs_router
+from .schedules import router as schedules_router
 from .status import router as status_router
 from .workspaces import router as workspaces_router
 
@@ -26,6 +27,7 @@ router.include_router(images_router)
 router.include_router(files_router)
 router.include_router(metadata_router)
 router.include_router(memory_router)
+router.include_router(schedules_router)
 router.include_router(model_catalogue_router)
 
 __all__ = ["router"]

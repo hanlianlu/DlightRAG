@@ -127,6 +127,7 @@ class AnswerGoalService:
         objective: str,
         max_rounds: int,
         goal_round: int | None = None,
+        goal_id: str | None = None,
     ) -> Goal:
         """Create the session's one goal on a direct human turn.
 
@@ -139,7 +140,7 @@ class AnswerGoalService:
                 GOAL_INVALID_TRANSITION,
                 "a goal is created on a direct human turn, not from a goal round",
             )
-        goal = Goal.create(objective, max_rounds=max_rounds)
+        goal = Goal.create(objective, max_rounds=max_rounds, goal_id=goal_id)
         current = await self._store.load(owner_id=owner_id, session_id=session_id)
         if current is not None:
             return await self._replace_completed(

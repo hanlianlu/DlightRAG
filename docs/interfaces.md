@@ -768,10 +768,11 @@ Route families cover:
   and unread from it, keeping unread in its own storage and watching only while a
   Run is live ([ADR 0069](adr/0069-the-web-reads-run-activity-from-the-runs-it-keeps.md));
 - Files/upload and same-origin `/corpus-runs/{run_id}`
-  status/events/cancel/resume, workspaces, images, Memory, the owner's Agent Accounts,
-  the owner's Conversation Contribution, the Agent Skills the viewer can load and the
-  owner's own, model catalogue, the [Runtime Policies](#runtime-policies), and
-  `/client-errors`, which logs one uncaught browser error.
+  status/events/cancel/resume, workspaces, images, Memory, the owner's [Schedules](#schedules),
+  the owner's Agent Accounts, the owner's Conversation Contribution, the Agent Skills the
+  viewer can load and the owner's own, model catalogue, the
+  [Runtime Policies](#runtime-policies), and `/client-errors`, which logs one uncaught browser
+  error.
 
 `/agent-accounts` is an owner's Agent Accounts in Settings. It is Web-only, like Connections:
 owner Settings state has no REST counterpart. `GET /web/api/agent-accounts` answers
@@ -1389,6 +1390,75 @@ under `none` and `simple` authentication, where every caller is the deployment's
 is the deployment's: how many Answers it may have in progress. It bounds Answers only, and not
 Retrieval or Corpus Mutations, and it is separate from the lane's
 [admission limit](run-runtime.md#admission-limits).
+
+## Schedules
+
+A Schedule is an owner's durable record that starts an Answer Run on the clock
+([ADR 0103](adr/0103-a-schedule-starts-a-run-on-the-clock-and-the-database-is-its-queue.md)). The
+owner creates, edits, pauses, resumes, runs and deletes it here; the Agent has no tool for any of
+these. Every route is owner-scoped: a Schedule that is not the caller's is as unknown as one that
+does not exist (404), and creating, editing or resuming one makes the caller the identity its
+fires act as from then on.
+
+| REST route | Contract |
+|---|---|
+| `GET /schedules` | `{schedules: [Schedule], default_max_tokens_per_day}`: the owner's Schedules, and the daily token ceiling a new one starts with. |
+| `POST /schedules` | Create an active Schedule; 201 with the Schedule. |
+| `GET /schedules/{schedule_id}` | One Schedule. |
+| `PATCH /schedules/{schedule_id}` | Change the parts named; 200 with the Schedule. |
+| `DELETE /schedules/{schedule_id}` | Delete the Schedule and its Fire history; 204. The conversations its Runs wrote stay. |
+| `POST /schedules/{schedule_id}/pause` | Stop it firing until the owner resumes it. Pausing a paused Schedule changes nothing. |
+| `POST /schedules/{schedule_id}/resume` | Let a paused Schedule fire again, as the caller. It replays no slot it slept through beyond the one late fire its grace window allows. |
+| `POST /schedules/{schedule_id}/run` | Fire once now, under every rule a clock fire meets. Answers the Fire this made, whose `state` says what became of it. |
+| `GET /schedules/{schedule_id}/fires` | `{fires: [Fire], next_cursor}`, newest slot first, with `limit` 1-200 (50 unless given) and the `next_cursor` of the page before. |
+| `POST /schedules/preview` | `{zone, slots: [{at, local}]}`: the next five slots of a cadence, `at` in UTC and `local` on the zone's own clock with its offset. Nothing is stored. |
+
+A Schedule reads `{schedule_id, name, prompt, mode, workspaces, target, conversation_id, zone,
+cron, at, max_tokens_per_day, goal_max_rounds, state, pause_reason, next_fire_at, created_at,
+updated_at}`. `mode` is `research` or `fast`; `target` is `new_conversation` or
+`same_conversation`, and `conversation_id` is the one conversation a `same_conversation`
+Schedule keeps once its first fire has opened it. The cadence is `cron`, five fields read on the
+wall clock of the IANA `zone`, or `at`, one UTC instant; the other is null. `state` is `active`,
+`paused` or `completed` (a single time that has fired); `pause_reason` says why the platform paused
+one, and is null when its owner did,
+and `next_fire_at` is null once nothing is left to fire. `goal_max_rounds` is null unless each
+fire starts a goal whose objective is the `prompt`. Every time is UTC ISO 8601 with a `Z`. A
+Schedule never shows the identity it acts as.
+
+`POST /schedules` takes `name`, `prompt`, `workspaces` (at least one), `zone`, and exactly one of
+`cron` or `at` (an instant that carries its offset); `mode` (default `research`), `target`
+(default `new_conversation`), `max_tokens_per_day` (default `default_max_tokens_per_day`) and
+`goal_max_rounds` are optional, and a goal Schedule runs in `research`. `PATCH` takes any of
+`name`, `prompt`, `mode`, `workspaces`, `zone`, `cron`, `at`, `max_tokens_per_day` and
+`goal_max_rounds`. Naming `cron` or `at` replaces the cadence and naming only `zone` moves its
+recurrence to the new zone; any change of cadence recomputes `next_fire_at` from now. Whether a
+Schedule starts a goal, and its `target`, are fixed when it is made, and a completed Schedule
+takes no edit. A field these routes do not name is refused.
+
+A Fire reads `{fire_id, schedule_id, slot, state, reason, run_id, conversation_id,
+missed_count, last_slot, manual, last_error, created_at, updated_at}`. `state` is `pending`, `started`, `succeeded`,
+`failed`, `cancelled`, `refused`, `skipped_busy`, `skipped_limit` or `missed`; `reason` says why
+a Fire that started nothing did not, or what a failed Run said; `run_id` and `conversation_id`
+name what a started Fire began; and a `missed` Fire stands for `missed_count` slots from `slot`
+to `last_slot`. `manual` marks a Fire the owner asked for with Run now; `last_error` is what
+stopped the latest attempt to start a Fire that is still `pending`. A Schedule keeps its latest
+`schedules.fires_kept` Fires (200 by default).
+
+The workspaces a caller names are authorized for `workspace.query` as they are for an Answer: a
+workspace the caller may not query is a 403 and nothing is stored, and access is read again at
+every fire. A refusal of what the owner must change (a cadence that does not parse, is closer than
+the minimum interval, or is not in the future; an unknown zone; a goal in `fast` mode; a field
+outside its bounds) is a 422; a change the Schedule's state does not allow (editing, pausing or
+resuming a completed one, or asking to run one while its previous Fire is still under way) and the per-owner
+cap on active Schedules (`schedules.max_active_per_owner`, counted when a Schedule is created or
+resumed) are a 409 with the reason. `POST /schedules/preview` holds a cadence to every rule saving
+it would, so its 422 is the refusal the owner would meet there.
+
+The Web adapter serves the same operations, answering the same shapes, under
+`/web/api/schedules` for the sidebar's Scheduled section: `GET`/`POST /web/api/schedules`,
+`GET`/`PATCH`/`DELETE /web/api/schedules/{schedule_id}`, `POST` `.../pause`, `.../resume` and
+`.../run`, `GET .../fires`, and `POST /web/api/schedules/preview`. Its writes carry the Web's
+double-submit token like every other owner write.
 
 ## Health And Errors
 

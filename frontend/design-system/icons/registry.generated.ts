@@ -168,6 +168,33 @@ export const ICON_REGISTRY = {
       ]
     ]
   },
+  "clock": {
+    source: "lucide",
+    sourceName: "clock",
+    derivedFrom: null,
+    viewBox: "0 0 24 24",
+    opticalScale: 1,
+    opticalX: 0,
+    opticalY: 0,
+    fill: "none",
+    stroke: "currentColor",
+    nodes: [
+      [
+        "circle",
+        {
+          "cx": "12",
+          "cy": "12",
+          "r": "10"
+        }
+      ],
+      [
+        "path",
+        {
+          "d": "M12 6v6l4 2"
+        }
+      ]
+    ]
+  },
   "close": {
     source: "lucide",
     sourceName: "x",
@@ -1206,6 +1233,25 @@ export const ICON_REGISTRY = {
         {
           "d": "M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z M6.4 11.3H4.6a1.3 1.3 0 0 0-1.3 1.3v6.8a1.3 1.3 0 0 0 1.3 1.3h1.8Z",
           "fill-rule": "evenodd"
+        }
+      ]
+    ]
+  },
+  "zap": {
+    source: "lucide",
+    sourceName: "zap",
+    derivedFrom: null,
+    viewBox: "0 0 24 24",
+    opticalScale: 1,
+    opticalX: 0,
+    opticalY: 0,
+    fill: "none",
+    stroke: "currentColor",
+    nodes: [
+      [
+        "path",
+        {
+          "d": "M15.914 4a1.5 1.5 0 00-2.474-1.561l-9 9A1.5 1.5 0 005.5 14h4.002a.5.5 0 01.471.666L8.086 20a1.5 1.5 0 002.475 1.56l9-9A1.5 1.5 0 0018.5 10h-3.997a.5.5 0 01-.472-.667z"
         }
       ]
     ]

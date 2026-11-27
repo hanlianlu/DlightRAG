@@ -3,8 +3,8 @@
 Every top-level Retrieval, Answer, and Corpus Mutation is one durable Run: one
 identity, lifecycle, event log, cancellation path, and terminal result, shared
 by REST, MCP, the Web, the Python Application, and evaluation. This document
-owns the Run lifecycle, lanes, admission limits, Corpus Mutation semantics,
-cancellation and repair, retention, and worker scaling.
+owns the Run lifecycle, lanes, admission limits, the Schedule look, Corpus Mutation
+semantics, cancellation and repair, retention, and worker scaling.
 [Domain Language](domain-language.md) defines the terms,
 [Interfaces](interfaces.md#run-lifecycle-and-answer-endpoints) the wire
 contracts, [Configuration](configuration.md#runruntime-lanes-and-retention) the
@@ -282,6 +282,85 @@ it reads the owner's active Runs and not the lane's or the owner's history. Unde
 DlightRAG has no aggregate byte quota or tenant quota, and no fairness between owners beyond
 that opt-in limit. Monitor PostgreSQL and blob growth, and rate-limit acceptance at ingress
 before either limit is reached ([Security](security.md#ingress-responsibilities)).
+
+## Schedules
+
+A Schedule starts an Answer Run at times its owner named, through the admission and
+conversation path a typed turn takes
+([ADR 0103](adr/0103-a-schedule-starts-a-run-on-the-clock-and-the-database-is-its-queue.md);
+[settings](configuration.md#schedules)). The database is the queue, so no process leads and no
+cron runs outside the product.
+
+Every process that hosts Web conversations and has `deployment.schedules` on looks about every
+`schedules.look_interval_seconds`, in this order:
+
+1. **Retry.** A Fire that was written but never started (the process died between the Fire and
+   the Run, or an attempt hit an error the rules do not name) is taken by one process after two
+   look intervals. It first asks whether its Run already exists under the Fire's idempotency key,
+   and if so records that, before any rule is asked and whatever the owner's access is now. Only
+   when there is none is the Fire judged and started, under the same key. A Fire still unstarted
+   once its slot is past the grace below is `missed`, with the last error that stopped it as its
+   reason, and a Fire missed after an error counts as a failure toward the streak.
+2. **Settle.** A Fire still `started` five minutes after it was last looked at, whose Run has in
+   fact ended, is settled from the Run. The settlement observer does this at once in the process
+   that ran the Run; the look covers an observer that never ran, and a Run still working is
+   looked at once per five minutes, so a few long Runs cannot keep the others out of a sweep.
+3. **Claim.** `SELECT ... WHERE state = 'active' AND next_fire_at <= now ... FOR UPDATE SKIP
+   LOCKED`, twenty Schedules at a time. In that one transaction each due Schedule's Fires are
+   written under a unique `(schedule_id, slot)` and its `next_fire_at` moves to the first slot
+   after now, which is why a slot is taken once in any number of processes. Slots that passed
+   while nothing was looking are one `missed` Fire; only the latest slot may still run, and only
+   within half its interval (at most six hours; an hour for a single time). The Schedule's Fires
+   beyond `schedules.fires_kept` are trimmed in the same transaction.
+
+Then each pending Fire is decided, and the first rule that holds ends it:
+
+| Rule | Fire ends | Schedule |
+|---|---|---|
+| The Schedule was paused or deleted after the Fire was written (a Fire the owner asked for is exempt) | `cancelled` | as it was |
+| The identity it acts as is no longer its owner, or, for a signed-in identity, was last confirmed more than `schedules.principal_max_age_days` ago (creating, editing or resuming the Schedule renews it), or the owner reads none of its workspaces (unreadable ones are dropped from the turn) | `refused` | paused with the reason |
+| The previous Fire's Run is still working, or the goal that Run started is still `active`, or an earlier Fire of the Schedule is still starting | `skipped_busy` | stays active |
+| The Runs of its Fires, their Children and their goal rounds used `max_tokens_per_day` in the last 24 hours | `refused` | paused with the reason |
+| A goal Schedule's conversation holds a goal that is `active` | `skipped_busy` | stays active |
+| A goal Schedule's conversation holds a goal that is `paused` or `blocked`, which waits for its owner | `refused` | stays active; the failure streak pauses it |
+| The target conversation already has a Run in flight | `skipped_busy` | stays active |
+| The owner's active-Run limit or the deployment's admission limit is reached | `skipped_limit` | stays active |
+| The turn is refused for something only its owner can change (the conversation is gone, the request is invalid) | `refused` | paused with the reason |
+| A dependency is briefly out, or the Connections changed while the turn was admitted | stays `pending` for the retry | stays active |
+| Otherwise the Run starts | `started` | |
+
+The Run's user message is one line naming the Schedule and the slot's local time, then the owner's
+prompt, and the turn is accepted as the Schedule's identity, so the Runtime Policies are read for
+it at the door like any turn's. A Fire's Run that fails ends `failed` with its error; nothing
+retries it. Three consecutive Fires that ended `failed` or `refused`, counted from the last time
+the Schedule was resumed, pause the Schedule; a success or a cancellation ends the count.
+
+Run now is a Fire of its own, flagged manual, whose slot is the moment it was asked for. It goes
+through the rules above as the owner who asked, on a paused or completed Schedule too, and it does
+not resume the Schedule or change what is waiting. It is refused while the Schedule has any Fire
+still starting or working, and a manual Fire is worth starting for at least five minutes.
+
+A single time is done only when its Fire started a Run. One whose Fire started nothing (refused,
+missed, skipped, cancelled) leaves the Schedule paused with that reason, with no time to wait for:
+the owner edits the time and resumes it.
+
+A **goal Schedule** (one with a round cap, `goal_max_rounds`) makes a Goal at each fire whose
+objective is its prompt, in a conversation made for the purpose when it has none, replacing a
+finished goal and never an unfinished one. The Fire's Run is that Goal's round 1: a
+`goal_round` Run admitted through the goal service like the `/goal` command's first round, with
+the same round prose under the harness line, so the goal driver settles it as any round (a
+failed round blocks the goal and a cancelled one pauses it; neither starts another). The Fire
+follows round 1 only: later rounds are the goal's, show in the conversation, and count toward
+the ceiling. The goal's id comes from the Fire's key, so a retried Fire finds its goal and
+admits no second round; a goal whose round 1 never started is cleared, so goal recovery does not
+start it outside the Schedule's rules.
+
+The ceiling is counted from what each Run states for itself: the Run Inspector's total, which
+includes its Children, and the goal rounds the Session ran after it. A provider that states no
+total is read as its prompt tokens, cache reads and writes included, plus its output tokens. A Run
+that failed or was cancelled states no total, so it is counted from the model calls it made, each
+stated by the assistant message that call wrote. It is checked before a Run starts and does not
+cut a running Run short.
 
 ## Corpus Mutations
 

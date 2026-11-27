@@ -649,6 +649,7 @@ it('shows cancel-aware reconnect state and preserves stopping when reconnecting'
     updatedAt: '2026-01-01T00:00:00Z',
     forkedFromConversationId: null,
     forkedFromTitle: null,
+    schedule: null,
   });
 
   const feature = document.createElement('dl-chat-feature') as DlChatFeature;
@@ -752,6 +753,7 @@ it('frame-batches 2,000 streamed tokens into bounded Chat and Message List updat
     updatedAt: '2026-01-01T00:00:00Z',
     forkedFromConversationId: null,
     forkedFromTitle: null,
+    schedule: null,
   });
 
   try {
@@ -858,6 +860,7 @@ it('shows the answer a live done frame carries when no refresh can supply it', a
     updatedAt: '2026-01-01T00:00:00Z',
     forkedFromConversationId: null,
     forkedFromTitle: null,
+    schedule: null,
   });
 
   const feature = document.createElement('dl-chat-feature') as DlChatFeature;
@@ -914,6 +917,7 @@ it('rolls the reasoning folds and the tool rows into one growing live process tr
     updatedAt: '2026-01-01T00:00:00Z',
     forkedFromConversationId: null,
     forkedFromTitle: null,
+    schedule: null,
   });
 
   const feature = document.createElement('dl-chat-feature') as DlChatFeature;
@@ -998,6 +1002,7 @@ it('keeps the first answer of a new conversation when the history refresh after 
     updatedAt: '2026-01-01T00:00:00Z',
     forkedFromConversationId: null,
     forkedFromTitle: null,
+    schedule: null,
   });
   feature.view = {
     kind: 'ready',
@@ -1079,6 +1084,7 @@ it('hands an open dock every batch of its Run\'s events, and its end', async () 
     updatedAt: '2026-01-01T00:00:00Z',
     forkedFromConversationId: null,
     forkedFromTitle: null,
+    schedule: null,
   });
 
   try {
@@ -1153,6 +1159,7 @@ it('announces the end of a run with children that its stored row reports', async
     updatedAt: '2026-01-01T00:00:00Z',
     forkedFromConversationId: null,
     forkedFromTitle: null,
+    schedule: null,
   });
 
   try {
@@ -1326,6 +1333,7 @@ it('shows the goal the Agent creates mid-run without a reload', async () => {
     updatedAt: '2026-01-01T00:00:00Z',
     forkedFromConversationId: null,
     forkedFromTitle: null,
+    schedule: null,
   });
   const feature = document.createElement('dl-chat-feature') as DlChatFeature;
   feature.view = {

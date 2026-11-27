@@ -14,6 +14,13 @@ from dlightrag.engine.answer.client_contracts import ClientContractModel
 from dlightrag.engine.answer.feedback import FeedbackValue
 
 
+class ConversationSchedule(ClientContractModel):
+    """The Schedule whose Fire wrote a conversation: the list marks it with the Schedule's name."""
+
+    schedule_id: str
+    name: str
+
+
 class ConversationSummary(ClientContractModel):
     conversation_id: str
     title: str | None = None
@@ -21,6 +28,7 @@ class ConversationSummary(ClientContractModel):
     updated_at: datetime.datetime
     forked_from_conversation_id: str | None = None
     forked_from_title: str | None = None
+    schedule: ConversationSchedule | None = None
 
 
 class ConversationPage(ClientContractModel):

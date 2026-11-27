@@ -19,6 +19,7 @@ import asyncio
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 import asyncpg
@@ -27,9 +28,13 @@ import pytest
 from dlightrag.adapters.postgres.runtime.run_store import (
     PGRunStore,
 )
+from dlightrag.adapters.postgres.runtime.schedules import PGScheduleStore
 from dlightrag.adapters.postgres.web.web_conversations import (
     PGWebConversationStore,
 )
+from dlightrag.application.access.principal import UserContext
+from dlightrag.application.schedules.cadence import Cadence, CronExpression
+from dlightrag.application.schedules.model import Schedule, Target
 from dlightrag.application.web_conversations.models import (
     STEERING_MESSAGES_PER_TURN,
     ConversationCursor,
@@ -79,6 +84,21 @@ _PG_CONN_KWARGS: dict[str, Any] = PG_CONN_KWARGS
 _OWNER = "principal-alpha"
 _OTHER_OWNER = "principal-beta"
 _MAX_TURNS = 100
+
+
+def _schedule(owner: str, principal: UserContext, name: str, now: datetime) -> Schedule:
+    return Schedule.create(
+        owner_id=owner,
+        principal=principal,
+        name=name,
+        prompt="Summarize.",
+        mode="research",
+        workspaces=["alpha"],
+        target=Target.NEW_CONVERSATION,
+        cadence=Cadence("UTC", CronExpression.parse("0 * * * *"), None),
+        max_tokens_per_day=1_000,
+        now=now,
+    )
 
 
 @pytest.fixture
@@ -1005,6 +1025,70 @@ async def test_keyset_traversal_has_standard_concurrent_touch_and_create_semanti
     assert not set(first_ids).intersection(second_ids)
     assert ids[-1] not in second_ids
     assert created not in second_ids
+
+
+async def test_a_conversation_a_schedule_wrote_names_that_schedule_in_the_owners_list(
+    store: PGWebConversationStore,
+    pool: Any,
+) -> None:
+    """One list read says which conversations a Schedule's Fires wrote, once each and for the owner only."""
+    scheduled, ongoing, plain, foreign = (str(uuid.uuid4()) for _ in range(4))
+    async with pool.acquire() as conn:
+        for owner, conversation_id in (
+            (_OWNER, scheduled),
+            (_OWNER, ongoing),
+            (_OWNER, plain),
+            (_OTHER_OWNER, foreign),
+        ):
+            await conn.execute(
+                "INSERT INTO web_conversations ("
+                "principal_id, conversation_id, agent_session_id, agent_lane_id"
+                ") VALUES ($1, $2::uuid, $2::uuid, 'main')",
+                owner,
+                conversation_id,
+            )
+    principal = UserContext(user_id="alpha", auth_mode="jwt", claims={"iss": "https://issuer"})
+    schedules = PGScheduleStore(pool=pool)
+    now = datetime(2026, 12, 7, 12, 0, tzinfo=UTC)
+    weekly = await schedules.create(
+        _schedule(_OWNER, principal, "Weekly review", now), max_active=20
+    )
+    digest = await schedules.create(_schedule(_OWNER, principal, "Digest", now), max_active=20)
+    async with pool.acquire() as conn:
+        # `ongoing` is the one conversation of a Schedule whose Fires all write it; `foreign` is
+        # another owner's conversation that one of this owner's Fires names, which marks nothing.
+        for schedule, conversation_id, slot_hour in (
+            (weekly, scheduled, 8),
+            (digest, ongoing, 8),
+            (digest, ongoing, 9),
+            (weekly, foreign, 10),
+        ):
+            await conn.execute(
+                "INSERT INTO dlightrag_schedule_fires ("
+                "owner_id, schedule_id, fire_id, slot, state, conversation_id, claimed_at"
+                ") VALUES ($1, $2::uuid, $3::uuid, $4, 'failed', $5::uuid, $4)",
+                _OWNER,
+                schedule.schedule_id,
+                str(uuid.uuid4()),
+                now.replace(hour=slot_hour),
+                conversation_id,
+            )
+
+    page = await store.list_conversations(_OWNER, page=ConversationPageRequest(limit=10))
+    foreign_page = await store.list_conversations(
+        _OTHER_OWNER, page=ConversationPageRequest(limit=10)
+    )
+    renamed = await store.rename_conversation(_OWNER, scheduled, title="Renamed")
+
+    assert {str(row["conversation_id"]): row["schedule"] for row in page.items} == {
+        scheduled: [weekly.schedule_id, "Weekly review"],
+        ongoing: [digest.schedule_id, "Digest"],
+        plain: None,
+    }
+    assert [row["schedule"] for row in foreign_page.items] == [None]
+    # A summary the server returns after a change names the Schedule as the list does.
+    assert renamed is not None
+    assert renamed["schedule"] == [weekly.schedule_id, "Weekly review"]
 
 
 async def test_a_snapshot_projects_each_turn_from_its_run(

@@ -130,7 +130,7 @@ describe('following the address', () => {
     // A change to the list is not a change to the view: the Chat's input is not set again for it.
     productionHandles().conversations.upsertSummary({
       conversationId: 'z', title: 'Z', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-03T00:00:00Z',
-      forkedFromConversationId: null, forkedFromTitle: null,
+      forkedFromConversationId: null, forkedFromTitle: null, schedule: null,
     });
     expect(routes.view).to.equal(ready);
 
@@ -152,7 +152,7 @@ describe('following the address', () => {
     // on show already. A new chat opened over that is a thing that happened, though it reads alike.
     conversations.adoptCreatedConversation({
       conversationId: 'made', title: 'Made', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
-      forkedFromConversationId: null, forkedFromTitle: null,
+      forkedFromConversationId: null, forkedFromTitle: null, schedule: null,
     });
     expect(chat.view, 'adopting a conversation publishes no view').to.equal(first);
     conversations.openNew();

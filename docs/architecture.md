@@ -299,16 +299,17 @@ lifecycle.
 Vite supplies the static entry, pre-paint theme, locale, and built assets.
 FastAPI serves page and static assets plus same-origin `/web/api/*` commands,
 queries, and SSE; there is no server-side template UI. In the main document,
-the `dl-app` Shell composes light-DOM Lit Features: chat, conversations,
-workspaces and files, the Inspector (Files, Sources, or one Run's Agent traces),
-the Artifact Canvas, and Settings (one dialog whose pages are elements of their
-own: Connections, Agent Accounts, Profile Memory, Skills, Conversation Sessions,
-and Language). Light DOM is composition; open Shadow DOM is reserved for
+the `dl-app` Shell composes light-DOM Lit Features: chat, conversations (with
+the Scheduled section above them, whose dialogs make, show and confirm a
+Schedule), workspaces and files, the Inspector (Files, Sources, or one Run's
+Agent traces), the Artifact Canvas, and Settings (one dialog whose pages are
+elements of their own: Connections, Agent Accounts, Profile Memory, Skills,
+Conversation Sessions, and Language). Light DOM is composition; open Shadow DOM is reserved for
 design-system primitives with no domain state
 ([ADR 0003](adr/0003-light-composition-shadow-primitives.md)).
 
 State is divided by lifetime: the History API owns active conversation routing,
-and focused stores own conversations, workspaces, attachments, ingest,
+and focused stores own conversations, workspaces, the owner's Schedules, attachments, ingest,
 answer-event cursors, the answers being submitted, the judgements this page has
 seen kept, the child pages each Run's dock has read, and what each answer's
 memory notice has read of the memory its Run left. `createAppHandles()`

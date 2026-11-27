@@ -24,8 +24,13 @@ from dlightrag.application.answer_runs.service import (
     AnswerService,
     RunResourceDescriptor,
 )
-from dlightrag.application.errors import ApplicationInputError
+from dlightrag.application.errors import ApplicationInputError, ApplicationNotFoundError
 from dlightrag.application.runs import RunView
+from dlightrag.application.schedules.model import (
+    ScheduledConversation,
+    ScheduledGoalRound,
+    ScheduledTurn,
+)
 from dlightrag.engine.ai.media import thumbnail_bytes
 from dlightrag.engine.answer.client_contracts import AnswerEffort
 from dlightrag.engine.answer.execution.connection_binding import RunConnectionBinding
@@ -71,6 +76,7 @@ from .models import (
     ConversationHistoryPageRequest,
     ConversationPage,
     ConversationPageRequest,
+    ConversationSchedule,
     ConversationSessionBusy,
     ConversationSummary,
     GoalRoundGuard,
@@ -1558,6 +1564,116 @@ class WebConversationService:
             return False
         return accepted is not None
 
+    async def ensure_scheduled_conversation(
+        self,
+        *,
+        caller: UserContext,
+        idempotency_key: str,
+        conversation_id: str | None,
+    ) -> ScheduledConversation:
+        """The conversation a goal fire goes into, made first when it has none.
+
+        A goal hangs from its Session, which a conversation has from creation, so a goal fire cannot
+        let the turn open the conversation. With no ``conversation_id`` this makes the one the key
+        decides (the id ``accept_scheduled_turn`` would derive), and a second call finds it. A
+        conversation that is gone raises ``ApplicationNotFoundError``.
+        """
+        owner_id = owner_id_from_user(caller)
+        if conversation_id is None:
+            conversation_id = _new_conversation_id(owner_id, idempotency_key)
+            await self._store.ensure_conversation(owner_id, conversation_id)
+        seed = await self._store.submission_seed(owner_id, conversation_id, attachment_limit=0)
+        if seed is None:
+            raise ApplicationNotFoundError("the conversation this Schedule keeps is gone")
+        return ScheduledConversation(conversation_id, seed.head.agent_session_id)
+
+    async def replay_scheduled_turn(
+        self, *, caller: UserContext, idempotency_key: str
+    ) -> ScheduledTurn | None:
+        """The turn already accepted under ``idempotency_key`` for ``caller``'s owner, if any.
+
+        A fire that was retried asks this before it asks any rule: a Run that exists is the fire's,
+        whatever the request that made it said and whatever the owner's access is now.
+        """
+        accepted = await self.submission(caller, idempotency_key)
+        if accepted is None:
+            return None
+        return ScheduledTurn(
+            run_id=accepted.run.run_id, conversation_id=accepted.conversation.conversation_id
+        )
+
+    async def accept_scheduled_turn(
+        self,
+        *,
+        caller: UserContext,
+        idempotency_key: str,
+        conversation_id: str | None,
+        query: str,
+        workspaces: Sequence[str],
+        mode: str,
+        title: str,
+        goal: ScheduledGoalRound | None = None,
+    ) -> ScheduledTurn:
+        """Start a Schedule's fire as a conversation turn, as ``caller``, with nobody typing it.
+
+        With no ``conversation_id`` the turn opens a new conversation, whose id is derived from
+        the key the way a first browser submission's is; with one, it is the next turn of that
+        conversation. ``caller`` is read for the Runtime Policies at the door, as a person's turn
+        is. A retry under the same key replays the Run it created. A conversation that is gone
+        raises ``ApplicationNotFoundError``; a Session already working raises
+        ``SessionWorkBusyError``, and the Run limits their own errors, all for the caller to map.
+
+        With ``goal`` the turn is that goal's round, as the Web ``/goal`` command's first round is:
+        a ``goal_round`` Run carrying the goal's identity, so the goal driver settles it as a round.
+        """
+        owner_id = owner_id_from_user(caller)
+        create_conversation = conversation_id is None
+        if conversation_id is None:
+            conversation_id = _new_conversation_id(owner_id, idempotency_key)
+            seed = SubmissionSeed(head=_empty_head(owner_id, conversation_id))
+        else:
+            existing = await self._store.submission_seed(
+                owner_id, conversation_id, attachment_limit=0
+            )
+            if existing is None:
+                raise ApplicationNotFoundError("the conversation this Schedule keeps is gone")
+            seed = existing
+        prepared = _prepare_submission(
+            query=query,
+            workspaces=workspaces,
+            seed=seed,
+            attachments=(),
+            mode=mode,
+            continuation_kind="scheduled" if goal is None else "goal_round",
+            goal_id=None if goal is None else goal.goal_id,
+            goal_revision=None if goal is None else goal.goal_revision,
+            goal_round=None if goal is None else goal.goal_round,
+        )
+        submission = await self._answers.accept(
+            request=prepared.request,
+            owner_id=owner_id,
+            caller=caller,
+            idempotency_key=idempotency_key,
+            idempotency_fingerprint=_web_answer_request_fingerprint(
+                conversation_id=conversation_id,
+                query=query,
+                workspaces=workspaces,
+                attachments=(),
+                mode=mode,
+            ),
+            acceptor=_WebAnswerAcceptor(
+                store=self._store,
+                conversation_id=conversation_id,
+                title_hint=title,
+                create_conversation=create_conversation,
+            ),
+        )
+        if submission is None:
+            raise ApplicationNotFoundError("the conversation this Schedule keeps is gone")
+        return ScheduledTurn(
+            run_id=submission.run.run_id, conversation_id=submission.conversation.conversation_id
+        )
+
     async def _goal_session(self, owner_id: str, conversation_id: str) -> str | None:
         seed = await self._store.submission_seed(owner_id, conversation_id, attachment_limit=0)
         return None if seed is None else seed.head.agent_session_id
@@ -1903,7 +2019,16 @@ def _conversation_summary(row: Mapping[str, Any]) -> ConversationSummary:
         forked_from_title=(
             str(row["forked_from_title"]) if row.get("forked_from_title") is not None else None
         ),
+        schedule=_conversation_schedule(row.get("schedule")),
     )
+
+
+def _conversation_schedule(value: Sequence[str] | None) -> ConversationSchedule | None:
+    """The Schedule a row names as ``[schedule_id, name]``, or None for a conversation no Fire wrote."""
+    if value is None:
+        return None
+    schedule_id, name = value
+    return ConversationSchedule(schedule_id=str(schedule_id), name=str(name))
 
 
 __all__ = ["WEB_COMMAND_NAMES", "WebAnswerSubmission", "WebAttachment", "WebConversationService"]

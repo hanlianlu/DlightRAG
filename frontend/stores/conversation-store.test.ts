@@ -18,6 +18,7 @@ function summary(id: string, updated = '2026-08-20T00:00:00Z'): ConversationSumm
     updatedAt: updated,
     forkedFromConversationId: null,
     forkedFromTitle: null,
+    schedule: null,
   };
 }
 
@@ -468,6 +469,23 @@ test('rename updates and reorders an already loaded summary', async () => {
   assert.equal(await store.rename('one', 'renamed'), 'ok');
   assert.deepEqual(store.conversations.map((item) => item.conversationId), ['one', 'two']);
   assert.equal(store.conversations[0]?.title, 'renamed');
+});
+
+test('opening a conversation keeps what its list row said of the Schedule that wrote it and where it was forked from', async () => {
+  const written = {...summary('one'), schedule: {scheduleId: 'schedule-1', name: 'Weekly review'}, forkedFromTitle: 'Parent'};
+  const store = new ConversationStore(api({
+    list: async () => page([written]),
+    // A history page names its conversation as a head, which knows neither.
+    history: async (id) => ({...history(id), conversation: {...summary(id, '2026-08-22T00:00:00Z'), title: 'Retitled'}}),
+  }));
+  await store.loadList();
+
+  await store.open('one');
+
+  const row = store.conversations[0];
+  assert.equal(row?.title, 'Retitled');
+  assert.deepEqual(row?.schedule, {scheduleId: 'schedule-1', name: 'Weekly review'});
+  assert.equal(row?.forkedFromTitle, 'Parent');
 });
 
 test('rename validation errors do not masquerade as missing conversations', async () => {

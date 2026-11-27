@@ -178,6 +178,14 @@ class SubmissionSeed:
 
 
 @dataclass(frozen=True, slots=True)
+class ConversationSchedule:
+    """The Schedule whose Fire opened a conversation, as the conversation list names it."""
+
+    schedule_id: str
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
 class ConversationSummary:
     """Application projection of one durable conversation row."""
 
@@ -187,6 +195,8 @@ class ConversationSummary:
     updated_at: datetime.datetime
     forked_from_conversation_id: str | None = None
     forked_from_title: str | None = None
+    #: Set when a Fire of one of the owner's Schedules wrote this conversation; null otherwise.
+    schedule: ConversationSchedule | None = None
 
 
 CONVERSATION_PAGE_DEFAULT_LIMIT = 50
@@ -604,6 +614,7 @@ class WebConversationStore(Protocol):
 
     async def prune_empty_conversations(self, *, batch_size: int = 500) -> int: ...
     async def create_conversation(self, principal_id: str) -> dict[str, Any]: ...
+    async def ensure_conversation(self, principal_id: str, conversation_id: str) -> None: ...
     async def list_conversations(
         self,
         principal_id: str,
@@ -776,6 +787,7 @@ __all__ = [
     "ConversationPage",
     "ConversationPageRequest",
     "ConversationQueueConflict",
+    "ConversationSchedule",
     "ConversationSessionBusy",
     "ConversationRowPage",
     "ConversationSummary",

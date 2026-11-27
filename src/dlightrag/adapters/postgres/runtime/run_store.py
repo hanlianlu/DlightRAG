@@ -90,6 +90,11 @@ from dlightrag.adapters.postgres.runtime.run_blob_store import (
     BlobSizeConflict,
     write_blob_content,
 )
+from dlightrag.adapters.postgres.runtime.schedules import (
+    SCHEDULE_INDEXES,
+    SCHEDULES_DDL,
+    SCHEDULES_SCHEMA_TABLES,
+)
 from dlightrag.application.answer_runs.child_roster import stamp
 from dlightrag.application.answer_runs.service import TranscriptScope
 from dlightrag.application.runs import RunToolCall
@@ -300,6 +305,7 @@ _ROUTING_SESSION_INDEX = IndexRequirement(
     "(owner_id, agent_session_id)",
 )
 _RUN_INDEXES = (
+    *SCHEDULE_INDEXES,
     _ROUTING_SESSION_INDEX,
     _SESSION_ENTRIES_RUN_INDEX,
     _RUNS_CLAIM_INDEX,
@@ -1158,6 +1164,8 @@ RUN_MIGRATIONS = (
             _CREATE_AGENT_CONTROLS,
             _CREATE_CHILD_OPERATIONS,
             _CREATE_CHILD_GUIDANCE,
+            # Before the indexes: three of them are on these tables.
+            *SCHEDULES_DDL,
             *_CREATE_INDEXES,
             _CREATE_CORPUS_MUTATION_WINDOWS,
             _CREATE_WORKSPACE_INVENTORY,
@@ -1182,6 +1190,7 @@ RUN_MIGRATIONS = (
 
 _RUN_TABLES = (
     ANSWER_GOALS_SCHEMA_TABLE,
+    *SCHEDULES_SCHEMA_TABLES,
     TableRequirement(
         name="dlightrag_answer_session_notes",
         columns=(

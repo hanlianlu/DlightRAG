@@ -1109,6 +1109,33 @@ async def test_application_page_uses_extra_row_proof_and_last_returned_item_curs
     )
 
 
+async def test_a_conversation_row_a_schedule_wrote_reaches_the_browser_with_the_schedule() -> None:
+    from dlightrag.adapters.http.browser.conversations import project_conversation_summary
+    from dlightrag.application.web_conversations.models import ConversationRowPage
+    from dlightrag.application.web_conversations.service import WebConversationService
+
+    now = datetime.datetime(2026, 7, 12, tzinfo=datetime.UTC)
+    row = {"conversation_id": _CID, "title": None, "created_at": now, "updated_at": now}
+    store = AsyncMock()
+    store.list_conversations.return_value = ConversationRowPage(
+        items=({**row, "schedule": ["schedule-1", "Weekly review"]}, {**row, "schedule": None}),
+        has_more=False,
+        fetched_rows=2,
+    )
+    service = WebConversationService(
+        store=store,
+        answers=FakeAnswers(),
+        max_attachments=6,
+        cursor_secret=b"unit-test-cursor-secret",
+    )
+
+    page = await service.list(None, page=ConversationPageRequest(limit=2))
+    scheduled, plain = (project_conversation_summary(item).model_dump() for item in page.items)
+
+    assert scheduled["schedule"] == {"schedule_id": "schedule-1", "name": "Weekly review"}
+    assert plain["schedule"] is None
+
+
 def test_cursor_codec_round_trips_and_rejects_tampered_or_foreign_tokens() -> None:
     secret = b"unit-test-cursor-secret"
     codec = ConversationCursorCodec(secret)
@@ -3626,6 +3653,136 @@ async def test_a_created_goal_starts_a_round_in_a_fresh_conversation() -> None:
     assert answers.accept.await_args_list[1].kwargs["idempotency_key"] == kwargs["idempotency_key"]
 
 
+def _scheduled_service(store: AsyncMock, answers: AsyncMock) -> Any:
+    from dlightrag.application.web_conversations.service import WebConversationService
+
+    return WebConversationService(
+        store=store,
+        answers=answers,
+        max_attachments=6,
+        cursor_secret=b"unit-test-cursor-secret",
+    )
+
+
+def _accepted_turn(conversation_id: str = _CID) -> Any:
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        run=SimpleNamespace(run_id="run-1"),
+        conversation=SimpleNamespace(conversation_id=conversation_id),
+    )
+
+
+async def test_a_scheduled_turn_opens_a_conversation_whose_id_the_key_decides() -> None:
+    """Nobody typed it: the turn is accepted as its caller, and a retry opens the same conversation."""
+    from dlightrag.application.access.principal import UserContext, owner_id_from_user
+    from dlightrag.application.web_conversations.service import _WebAnswerAcceptor
+
+    caller = UserContext(user_id="dave", auth_mode="jwt", claims={"iss": "https://issuer"})
+    store = AsyncMock()
+    answers = AsyncMock(spec=AnswerService)
+    answers.accept.return_value = _accepted_turn("conversation-from-the-store")
+    service = _scheduled_service(store, answers)
+    key = "0f0c3c9a-6d2e-5d4f-9a53-000000000001"
+
+    turn = await service.accept_scheduled_turn(
+        caller=caller,
+        idempotency_key=key,
+        conversation_id=None,
+        query='[Scheduled: "Review", 2026-12-07 08:00 UTC]\n\nSummarize.',
+        workspaces=("alpha",),
+        mode="fast",
+        title="Review",
+    )
+    await service.accept_scheduled_turn(
+        caller=caller,
+        idempotency_key=key,
+        conversation_id=None,
+        query="anything",
+        workspaces=("alpha",),
+        mode="fast",
+        title="Review",
+    )
+
+    assert (turn.run_id, turn.conversation_id) == ("run-1", "conversation-from-the-store")
+    store.submission_seed.assert_not_awaited()
+    first, second = answers.accept.await_args_list
+    request = first.kwargs["request"]
+    assert request.continuation_kind == "scheduled"
+    assert request.mode == "fast"
+    assert request.workspaces == ("alpha",)
+    assert request.query.startswith("[Scheduled:")
+    assert first.kwargs["caller"] == caller
+    assert first.kwargs["owner_id"] == owner_id_from_user(caller)
+    assert first.kwargs["idempotency_key"] == key
+    acceptor = first.kwargs["acceptor"]
+    assert isinstance(acceptor, _WebAnswerAcceptor)
+    assert acceptor.create_conversation is True
+    assert acceptor.title_hint == "Review"
+    assert acceptor.conversation_id == second.kwargs["acceptor"].conversation_id
+    assert request.parent_run_id is None
+
+
+async def test_a_scheduled_turn_is_the_next_turn_of_the_conversation_a_schedule_keeps() -> None:
+    from dlightrag.application.access.principal import UserContext
+    from dlightrag.application.web_conversations.service import _WebAnswerAcceptor
+
+    caller = UserContext(user_id="dave", auth_mode="none")
+    store = AsyncMock()
+    store.submission_seed.return_value = _submission_seed(parent_run_id="run-0")
+    answers = AsyncMock(spec=AnswerService)
+    answers.accept.return_value = _accepted_turn()
+    service = _scheduled_service(store, answers)
+
+    turn = await service.accept_scheduled_turn(
+        caller=caller,
+        idempotency_key="key",
+        conversation_id=_CID,
+        query="again",
+        workspaces=("alpha",),
+        mode="research",
+        title="Review",
+    )
+
+    assert turn.conversation_id == _CID
+    kwargs = answers.accept.await_args.kwargs
+    assert kwargs["request"].parent_run_id == "run-0"
+    assert kwargs["request"].agent_session_id == _CID
+    acceptor = kwargs["acceptor"]
+    assert isinstance(acceptor, _WebAnswerAcceptor)
+    assert (acceptor.create_conversation, acceptor.conversation_id) == (False, _CID)
+
+
+async def test_a_scheduled_turn_into_a_vanished_conversation_or_a_busy_session_is_refused() -> None:
+    from dlightrag.application.access.principal import UserContext
+    from dlightrag.application.errors import ApplicationNotFoundError
+    from dlightrag.engine.runtime.records import SessionWorkBusyError
+
+    caller = UserContext(user_id="dave", auth_mode="none")
+    store = AsyncMock()
+    answers = AsyncMock(spec=AnswerService)
+    service = _scheduled_service(store, answers)
+    call: dict[str, Any] = {
+        "caller": caller,
+        "idempotency_key": "key",
+        "conversation_id": _CID,
+        "query": "again",
+        "workspaces": ("alpha",),
+        "mode": "research",
+        "title": "Review",
+    }
+
+    store.submission_seed.return_value = None
+    with pytest.raises(ApplicationNotFoundError):
+        await service.accept_scheduled_turn(**call)
+    answers.accept.assert_not_awaited()
+
+    store.submission_seed.return_value = _submission_seed()
+    answers.accept.side_effect = SessionWorkBusyError("run-live")
+    with pytest.raises(SessionWorkBusyError):
+        await service.accept_scheduled_turn(**call)
+
+
 async def test_the_composer_selection_is_the_first_round_workspaces() -> None:
     from tests.support.goals import FakeGoalStore
 
@@ -3758,3 +3915,83 @@ async def test_a_goal_round_start_that_cannot_happen_is_a_false() -> None:
         goal_revision=2,
         goal_round=1,
     )
+
+
+async def test_a_goal_fire_makes_its_conversation_first_and_then_takes_the_round_as_a_goal_round() -> (
+    None
+):
+    """A goal hangs from a Session, so the conversation exists before the turn that is its round 1."""
+    from dlightrag.application.access.principal import UserContext, owner_id_from_user
+    from dlightrag.application.schedules.model import ScheduledGoalRound
+    from dlightrag.application.web_conversations.service import _new_conversation_id
+
+    caller = UserContext(user_id="dave", auth_mode="jwt", claims={"iss": "https://issuer"})
+    key = "0f0c3c9a-6d2e-5d4f-9a53-000000000002"
+    derived = _new_conversation_id(owner_id_from_user(caller), key)
+    store = AsyncMock()
+    store.submission_seed.return_value = _submission_seed(derived)
+    answers = AsyncMock(spec=AnswerService)
+    answers.accept.return_value = _accepted_turn(derived)
+    service = _scheduled_service(store, answers)
+
+    made = await service.ensure_scheduled_conversation(
+        caller=caller, idempotency_key=key, conversation_id=None
+    )
+    kept = await service.ensure_scheduled_conversation(
+        caller=caller, idempotency_key=key, conversation_id=derived
+    )
+    turn = await service.accept_scheduled_turn(
+        caller=caller,
+        idempotency_key=key,
+        conversation_id=made.conversation_id,
+        query='[Scheduled: "Review"]\n\n<goal_round>',
+        workspaces=("alpha",),
+        mode="research",
+        title="Review",
+        goal=ScheduledGoalRound("goal-1", 2, 1),
+    )
+
+    assert (made.conversation_id, made.session_id) == (derived, derived)
+    assert kept == made
+    store.ensure_conversation.assert_awaited_once_with(owner_id_from_user(caller), derived)
+    request = answers.accept.await_args.kwargs["request"]
+    assert request.continuation_kind == "goal_round"
+    assert (request.goal_id, request.goal_revision, request.goal_round) == ("goal-1", 2, 1)
+    assert request.mode == "research"
+    assert answers.accept.await_args.kwargs["acceptor"].create_conversation is False
+    assert turn.conversation_id == derived
+
+
+async def test_a_goal_fire_into_a_vanished_conversation_is_refused() -> None:
+    from dlightrag.application.access.principal import UserContext
+    from dlightrag.application.errors import ApplicationNotFoundError
+
+    store = AsyncMock()
+    store.submission_seed.return_value = None
+    service = _scheduled_service(store, AsyncMock(spec=AnswerService))
+
+    with pytest.raises(ApplicationNotFoundError):
+        await service.ensure_scheduled_conversation(
+            caller=UserContext(user_id="dave", auth_mode="none"),
+            idempotency_key="key",
+            conversation_id=_CID,
+        )
+
+
+async def test_a_scheduled_turn_already_accepted_under_its_key_is_found_as_the_fires_run() -> None:
+    from dlightrag.application.access.principal import UserContext
+
+    caller = UserContext(user_id="dave", auth_mode="jwt", claims={"iss": "https://issuer"})
+    key = "0f0c3c9a-6d2e-5d4f-9a53-000000000003"
+    service = _scheduled_service(AsyncMock(), AsyncMock(spec=AnswerService))
+    submission = AsyncMock(return_value=None)
+    service.submission = submission
+
+    assert await service.replay_scheduled_turn(caller=caller, idempotency_key=key) is None
+
+    submission.return_value = _accepted_turn("conversation-1")
+    found = await service.replay_scheduled_turn(caller=caller, idempotency_key=key)
+
+    assert found is not None
+    assert (found.run_id, found.conversation_id) == ("run-1", "conversation-1")
+    submission.assert_awaited_with(caller, key)

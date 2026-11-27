@@ -28,9 +28,9 @@ Schedule，按 slot 写入唯一的 **Fire**，并用由该 slot 构成的 idemp
 
 ## Status
 
-Accepted and implemented 2026-11-27: the domain, store, look, settlement, REST and Web routes, and
-the Settings page. This is a harness decision: it names no vertical domain and ships to DlightRAG
-with the rest of the runtime.
+Accepted and implemented 2026-11-27: the domain, store, look, settlement, REST and Web routes, and the
+Scheduled list. This is a harness decision: it names no vertical domain and ships to DlightRAG with the
+rest of the runtime.
 
 ## Context
 
@@ -96,7 +96,7 @@ The spend rules are therefore part of the decision, not an afterthought.
    processes may run the look; none of them is a leader.
 
    Only a process that hosts Web conversations runs it — the MCP-only service sets
-   `DLIGHTAGENT_DEPLOYMENT__SCHEDULES=false`, as it does for goal recovery — because a fire becomes a
+   `DLIGHTRAG_DEPLOYMENT__SCHEDULES=false`, as it does for goal recovery — because a fire becomes a
    conversation turn.
 4. **Missed slots collapse into at most one late fire.** When the look finds a Schedule whose
    `next_fire_at` is in the past by more than one slot (the deployment was down, the Schedule was
@@ -163,7 +163,7 @@ The spend rules are therefore part of the decision, not an afterthought.
     the Run panel and the trace can show which Schedule and which slot started a Run; a goal fire's
     first round keeps the goal-round continuation kind and is linked through its Fire the same way.
     The Session Memory Pass reads the turn like any other owner turn.
-12. **Owners manage Schedules; the Agent does not create them.** The Web settings and the REST API
+12. **Owners manage Schedules; the Agent does not create them.** The Web sidebar and the REST API
     create, edit, pause, resume, run now and delete a Schedule, and list its Fires. "Run now" is a
     manual Fire with its own slot — the request time — under every rule above; it is refused while
     the Schedule has a Fire pending or started, and it is allowed on a paused Schedule, because the

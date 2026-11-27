@@ -112,6 +112,7 @@ function summary(conversationId: string, title: string): ConversationSummary {
     updatedAt: '2026-01-02T00:00:00Z',
     forkedFromConversationId: null,
     forkedFromTitle: null,
+    schedule: null,
   };
 }
 

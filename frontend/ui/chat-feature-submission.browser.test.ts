@@ -162,6 +162,7 @@ function historyWire(
       updatedAt: '2026-01-01T00:00:00Z',
       forkedFromConversationId: null,
       forkedFromTitle: null,
+      schedule: null,
     }),
     turns: page.turns ?? [],
     commands: page.commands ?? [],
@@ -551,7 +552,7 @@ it('keeps the message in the box, and says so, while the conversation is still l
   };
   const summary = {
     conversationId: 'slow-conversation', title: 'Slow', createdAt: '2026-01-01T00:00:00Z',
-    updatedAt: '2026-01-01T00:00:00Z', forkedFromConversationId: null, forkedFromTitle: null,
+    updatedAt: '2026-01-01T00:00:00Z', forkedFromConversationId: null, forkedFromTitle: null, schedule: null,
   };
   const opening = conversationStore.open('slow-conversation');
   expect(conversationStore.viewState).to.equal('loading');
@@ -952,6 +953,7 @@ it('localizes a goal command receipt through lit-localize', async () => {
     updatedAt: '2026-01-01T00:00:00Z',
     forkedFromConversationId: null,
     forkedFromTitle: null,
+    schedule: null,
   });
   const feature = document.createElement('dl-chat-feature') as DlChatFeature;
   feature.view = {
@@ -1000,6 +1002,7 @@ it('draws a command the server kept even before the conversation history is read
     updatedAt: '2026-01-01T00:00:00Z',
     forkedFromConversationId: null,
     forkedFromTitle: null,
+    schedule: null,
   });
   const feature = document.createElement('dl-chat-feature') as DlChatFeature;
   feature.view = {
@@ -1046,6 +1049,7 @@ it('draws a command the server refused as a failed command, not as a model answe
     updatedAt: '2026-01-01T00:00:00Z',
     forkedFromConversationId: null,
     forkedFromTitle: null,
+    schedule: null,
   });
   const feature = document.createElement('dl-chat-feature') as DlChatFeature;
   feature.view = {
@@ -1221,6 +1225,7 @@ it('sends a failed turn\'s words again from the turn itself', async () => {
     updatedAt: '2026-01-01T00:00:00Z',
     forkedFromConversationId: null,
     forkedFromTitle: null,
+    schedule: null,
   });
   const feature = document.createElement('dl-chat-feature') as DlChatFeature;
   feature.view = {

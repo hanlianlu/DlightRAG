@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from dlightrag.application.privacy import Privacy
     from dlightrag.application.retrieval.service import RetrievalService
     from dlightrag.application.runs import RunService
+    from dlightrag.application.schedules.service import ScheduleService
     from dlightrag.application.web_conversations.service import WebConversationService
     from dlightrag.engine.answer.goal_service import AnswerGoalService
     from dlightrag.engine.dependencies import DependencyComponent
@@ -46,6 +47,7 @@ _LATE_COORDINATOR_START = "Run coordinator start after a late cancellation liste
 #: pass runs on this cadence, and CAS plus the pending-round row fence duplicate attempts.
 _GOAL_RECOVERY_INTERVAL_SECONDS = 60.0
 _GOAL_RECOVERY_TASK = "Goal recovery sweep"
+_SCHEDULE_LOOK_TASK = "Schedule look"
 
 
 def _noop_initialize_process(_config: DlightragConfig) -> None:
@@ -108,6 +110,11 @@ class _ApplicationComponents:
     #: Take up the active goals the database holds when this process starts (ADR 0077). Composed
     #: by :mod:`dlightrag._compose`; a components value built without one starts no round.
     recover_goal_rounds: Callable[[], Awaitable[None]] = _noop_close_process
+    #: One look for due Schedules (ADR 0103), repeated by the process that hosts Web conversations
+    #: while ``deployment.schedules`` is on; a components value built without one starts no look.
+    look_schedules: Callable[[], Awaitable[None]] = _noop_close_process
+    #: The owner-facing Schedule service; None only where none was composed.
+    schedules: ScheduleService | None = None
     close_session_memory_passes: Callable[[], Awaitable[None]] = _noop_close_process
     close_process: Callable[[], Awaitable[None]] = _noop_close_process
     #: The reader content gate, composed by :mod:`dlightrag._compose`. A components value
@@ -135,6 +142,7 @@ class Application:
         self._close_task: asyncio.Task[None] | None = None
         self._memory_janitor: asyncio.Task[None] | None = None
         self._goal_recovery_task: asyncio.Task[None] | None = None
+        self._schedule_look_task: asyncio.Task[None] | None = None
         self._late_coordinator_start: asyncio.Task[None] | None = None
 
     @property
@@ -244,6 +252,14 @@ class Application:
         """The Session goal service: the durable phase a round continues under."""
         return self._open().goals
 
+    @property
+    def schedules(self) -> ScheduleService:
+        """An owner's Schedules: the records of work the clock starts."""
+        service = self._open().schedules
+        if service is None:
+            raise RuntimeError("Schedules are unavailable")
+        return service
+
     def _open(self) -> _ApplicationComponents:
         if self._closed:
             raise ApplicationClosedError()
@@ -304,6 +320,7 @@ class Application:
             await self._initialize_web_conversations()
             await self._recover_goal_rounds()
             self._start_goal_recovery()
+            self._start_schedule_look()
             await self._start_memory_janitor()
             # Last, once the stores it reads are initialized: the sweep for Sessions whose pass a
             # restart or a failed model call lost. A store that is not ready only costs it a look.
@@ -519,6 +536,7 @@ class Application:
         await self._initialize_web_conversations()
         await self._recover_goal_rounds()
         self._start_goal_recovery()
+        self._start_schedule_look()
         self._components.health.mark_ready()
         logger.info("Run cancellation listener is ready; the Run coordinator started")
 
@@ -603,6 +621,46 @@ class Application:
     async def _stop_goal_recovery(self) -> None:
         task = self._goal_recovery_task
         self._goal_recovery_task = None
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            return
+
+    def _start_schedule_look(self) -> None:
+        """Start looking for due Schedules, where a fire can become a conversation turn.
+
+        Only a process that hosts Web conversations looks, and only while ``deployment.schedules``
+        is on and its runs are ready. Any number of processes may: the database fences each slot,
+        so the MCP-only service turns the setting off to spare itself the queries, not for safety.
+        """
+        if not self._config.deployment.schedules or not self._web_enabled:
+            return
+        if not self._runs_ready or self._closed:
+            return
+        if self._components.look_schedules is _noop_close_process:
+            return
+        if self._schedule_look_task is None:
+            self._schedule_look_task = asyncio.create_task(
+                self._schedule_look_forever(), name=_SCHEDULE_LOOK_TASK
+            )
+
+    async def _schedule_look_forever(self) -> None:
+        """Look on the configured cadence; a failed pass costs that pass, never the loop."""
+        while True:
+            try:
+                await self._components.look_schedules()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning("Schedule look failed", exc_info=True)
+            await asyncio.sleep(self._config.schedules.look_interval_seconds)
+
+    async def _stop_schedule_look(self) -> None:
+        task = self._schedule_look_task
+        self._schedule_look_task = None
         if task is None:
             return
         task.cancel()
@@ -696,6 +754,7 @@ class Application:
             ),
             ("memory janitor", self._stop_memory_janitor),
             ("goal recovery sweep", self._stop_goal_recovery),
+            ("schedule look", self._stop_schedule_look),
             ("Session Memory Passes", components.close_session_memory_passes),
             ("the late Run coordinator start", self._stop_late_coordinator_start),
             ("corpus admin promotion worker", components.corpora.aclose),

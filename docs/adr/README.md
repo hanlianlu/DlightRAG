@@ -84,7 +84,7 @@ stale. Statuses are quoted from each ADR's own `## Status` section.
 | [0085](0085-the-run-panel-is-an-overview-and-steps-belong-to-the-agent-page.md) | the Inspector's Run panel is an overview, and steps belong to the agent page | Implemented on 2026-10-30 in answer to the owner's direction: the Run timeline and the Agent timeline both listed steps… |
 | [0100](0100-read-reads-the-workspace-and-read-resource-reads-a-resource.md) | `read` reads the workspace, and `read_resource` reads a Resource | Accepted on 2026-11-24. |
 | [0102](0102-a-web-providers-keys-rotate-inside-its-chain-position.md) | a Web provider's keys rotate inside its chain position | Accepted on 2026-11-24. |
-| [0103](0103-a-schedule-starts-a-run-on-the-clock-and-the-database-is-its-queue.md) | A Schedule starts a Run on the clock, and the database is its queue | Accepted and implemented 2026-11-27: the domain, store, look, settlement, REST and Web routes, and the Settings page. |
+| [0103](0103-a-schedule-starts-a-run-on-the-clock-and-the-database-is-its-queue.md) | A Schedule starts a Run on the clock, and the database is its queue | Accepted and implemented 2026-11-27: the domain, store, look, settlement, REST and Web routes, and the Scheduled list. |
 
 New ADRs take the next number and a kebab-case filename
 (`0055-the-thing-is-decided.md`), and open with `# ADR 0055 — the thing is decided`

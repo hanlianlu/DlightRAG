@@ -218,7 +218,7 @@ export class ConversationStore extends Store {
       this.#history = {...recent, turns, commands, nextCursor};
       if (!hadHistory || replaceHistory) this.#olderMessages.reset(nextCursor);
       this.#activeConversationId = conversationId;
-      this.#upsert(recent.conversation);
+      this.#upsertHead(recent.conversation);
       this.#viewState = 'ready';
       this.#publishView();
       return 'ready';
@@ -260,7 +260,7 @@ export class ConversationStore extends Store {
         commands: this.#mergeCommands(this.#history.commands ?? [], older.commands ?? []),
         nextCursor: older.nextCursor,
       };
-      this.#upsert(older.conversation);
+      this.#upsertHead(older.conversation);
     });
   }
 
@@ -404,6 +404,19 @@ export class ConversationStore extends Store {
 
   #upsert(summary: ConversationSummary): void {
     this.#conversations = this.#merge(this.#conversations, [summary]);
+  }
+
+  /** A history page names its conversation by identity, title and times: it is a head, and says nothing of
+   *  what a list row also shows (where the conversation was forked from, and the Schedule that wrote it), so
+   *  what the list last read of those stays. */
+  #upsertHead(head: ConversationSummary): void {
+    const row = this.#conversations.find((conversation) => conversation.conversationId === head.conversationId);
+    this.#upsert(row === undefined ? head : {
+      ...head,
+      forkedFromConversationId: row.forkedFromConversationId,
+      forkedFromTitle: row.forkedFromTitle,
+      schedule: row.schedule,
+    });
   }
 
   #removeSummary(conversationId: string): void {

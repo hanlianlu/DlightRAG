@@ -34,6 +34,7 @@ it('keeps a busy conversation\'s Delete in reach but inert', async () => {
     updatedAt: '2026-01-01T00:00:00Z',
     forkedFromConversationId: null,
     forkedFromTitle: null,
+    schedule: null,
   });
   const list = document.createElement('dl-conversation-list') as DlConversationList;
   document.body.appendChild(list);
@@ -62,4 +63,32 @@ it('keeps a busy conversation\'s Delete in reach but inert', async () => {
   remove.click();
   await frame();
   expect(deletes).to.deep.equal(['menu-contract']);
+});
+
+it('marks a conversation a Schedule wrote with a clock before its title, named for that Schedule', async () => {
+  const summary = (id: string, schedule: {scheduleId: string; name: string} | null) => ({
+    conversationId: id,
+    title: `Conversation ${id}`,
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: id === 'scheduled' ? '2026-01-02T00:00:00Z' : '2026-01-01T00:00:00Z',
+    forkedFromConversationId: null,
+    forkedFromTitle: null,
+    schedule,
+  });
+  conversations.upsertSummary(summary('scheduled', {scheduleId: 'schedule-1', name: 'Weekly review'}));
+  conversations.upsertSummary(summary('typed', null));
+  const list = document.createElement('dl-conversation-list') as DlConversationList;
+  document.body.appendChild(list);
+  await list.updateComplete;
+
+  const marked = list.querySelector<HTMLElement>('[data-conversation-id="scheduled"] .conversation-select')!;
+  const mark = marked.querySelector<HTMLElement>('.conversation-schedule-mark')!;
+  expect(mark.title).to.equal('Weekly review');
+  expect(mark.getAttribute('role')).to.equal('img');
+  expect(mark.getAttribute('aria-label')).to.equal('Scheduled: Weekly review');
+  expect(mark.querySelector('.dl-icon')).not.to.equal(null);
+  // The clock stands before the title, inside the control that opens the conversation.
+  expect(marked.firstElementChild).to.equal(mark);
+  expect(marked.textContent!.trim()).to.equal('Conversation scheduled');
+  expect(list.querySelector('[data-conversation-id="typed"] .conversation-schedule-mark')).to.equal(null);
 });

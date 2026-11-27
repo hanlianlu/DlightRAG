@@ -179,6 +179,9 @@ services:
       # Goals continue automatically after a restart. Only the Web/API process runs the startup
       # recovery scan; this service must not duplicate it (CAS still fences any overlap).
       DLIGHTRAG_DEPLOYMENT__GOAL_RECOVERY: "false"
+      # A Schedule's fire becomes a Web conversation turn; this service hosts none, so it does not
+      # look for due Schedules (the Web/API process does).
+      DLIGHTRAG_DEPLOYMENT__SCHEDULES: "false"
     command: ["dlightrag-mcp"]
 
   # A second, corpus-read-only process over the same database. It serves every
@@ -200,6 +203,8 @@ services:
       DLIGHTRAG_DEPLOYMENT__SERVICE_ROLE: reader
       # One goal-recovery scanner per deployment: this process must not run a second scan.
       DLIGHTRAG_DEPLOYMENT__GOAL_RECOVERY: "false"
+      # One look for due Schedules per deployment: the Web/API process looks.
+      DLIGHTRAG_DEPLOYMENT__SCHEDULES: "false"
       DLIGHTRAG_INTERFACES__API__HOST: "0.0.0.0"
       FORWARDED_ALLOW_IPS: *local-proxies
     healthcheck: *ready-healthcheck

@@ -49,7 +49,7 @@ test('a bag holds every shared store, and no two bags share one', () => {
   const other = createAppHandles();
   for (const name of [
     'conversations', 'workspaces', 'ingest', 'attachments',
-    'answerEventCursors', 'submissions', 'judgements', 'traces', 'memoryNotices', 'runActivity',
+    'answerEventCursors', 'submissions', 'judgements', 'traces', 'memoryNotices', 'runActivity', 'schedules',
   ] as const) {
     assert.ok(one[name], `${name} is missing from the bag`);
     assert.notEqual(one[name], other[name], `${name} is shared between two bags`);

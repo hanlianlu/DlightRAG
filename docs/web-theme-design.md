@@ -489,6 +489,32 @@ holds the tones, the timing, and the focus a dismissal returns, and
 `ui/toast.layout.browser.test.ts` how the shipped stylesheets draw them, with axe's
 verdict on an open error in both color modes.
 
+## Scheduled
+
+The owner's Schedules (ADR 0103) live in the conversation sidebar, not in Settings: a Scheduled section
+between "New chat" and the conversation list, so recurring work sits beside the conversations it writes.
+
+- **Section.** A header row (a clock, "Scheduled", the count, a disclosure mark, and a "New schedule"
+  icon button) toggles the rows open and closed. The choice is this browser's (`localStorage`); with none
+  stored the section is open once there is a Schedule, and with none the header stands alone with its
+  "+". The rows scroll inside the section past a few, so they never push the conversations out of the
+  column.
+- **Row.** A Schedule is a conversation row (the global `.conversation-row` family, so its density,
+  tint and actions menu are theirs): its name, and a muted line with the cadence in words and either
+  "Next: {when}" on the Schedule's own clock or "Paused" with a pause mark. Run now, Pause or Resume, and
+  an actions menu (Edit, Delete) stand over the row's end on hover and focus, and the row's text gives
+  them the room; on a touch screen a row opens its detail, which carries every action.
+- **Dialogs.** The form and the detail are the confirm dialog's face at 35rem: a title, a body that
+  scrolls, and a footer that stays. They stand outside the sidebar's `<nav>`, as the conversation dialogs
+  do, so the drawer's focus trap never sees them. The form asks a name, a prompt and when (one frequency
+  choice with the few controls it needs on its line, all at the one control height), reads the choice
+  back in one line with its zone and the server's next slot or refusal, and holds Mode, Workspaces,
+  where each run goes, goal and ceiling under Advanced. The detail shows the cadence and zone, the next
+  run or why it is paused, the prompt folded to four lines, the actions, and the recent runs with their
+  state in a quiet tone and an Open that goes to that run's conversation.
+- **Conversations.** A conversation a Schedule wrote carries a small clock before its title, and the
+  Schedule's name as its tooltip and its accessible name.
+
 ## Settings
 
 Settings is one native modal, `<dialog id="settings-dialog">`, owned by `dl-settings-dialog`: a navigation

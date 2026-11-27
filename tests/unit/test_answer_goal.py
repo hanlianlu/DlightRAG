@@ -227,3 +227,10 @@ def test_a_blocking_condition_is_bounded_like_the_objective() -> None:
         GOAL_INVALID_BLOCK_REASON,
         lambda: goal.block(revision=goal.revision, reason="x" * (MAX_BLOCK_REASON_CHARS + 1)),
     )
+
+
+def test_a_goal_may_be_made_with_an_id_the_caller_chose() -> None:
+    chosen = Goal.create("finish the model", max_rounds=3, goal_id="goal-chosen")
+    assert chosen.id == "goal-chosen"
+    assert Goal.create("finish the model").id.startswith("goal-")
+    assert Goal.create("finish the model").id != Goal.create("finish the model").id

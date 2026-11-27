@@ -1293,3 +1293,31 @@ async def test_clear_goal_round_deletes_only_the_identity_it_read(store: Any) ->
         )
         is False
     )
+
+
+async def test_an_ensured_conversation_has_the_session_a_goal_hangs_from(
+    pool: Any, store: Any
+) -> None:
+    """A goal fire makes the conversation first, so its Session exists before any Run does."""
+    conversation_id = str(uuid.uuid4())
+
+    await store.ensure_conversation(_OWNER, conversation_id)
+    await store.ensure_conversation(_OWNER, conversation_id)
+
+    seed = await store.submission_seed(_OWNER, conversation_id, attachment_limit=0)
+    assert seed is not None
+    assert (seed.head.conversation_id, seed.head.agent_session_id) == (
+        conversation_id,
+        conversation_id,
+    )
+    goals = AnswerGoalService(store=PGAnswerGoalStore(pool=pool))
+    goal = await goals.create(
+        owner_id=_OWNER,
+        session_id=conversation_id,
+        run_id="",
+        objective="finish the review",
+        max_rounds=3,
+        goal_id="goal-chosen-by-its-fire",
+    )
+    assert goal.id == "goal-chosen-by-its-fire"
+    assert await store.submission_seed(_OTHER_OWNER, conversation_id, attachment_limit=0) is None

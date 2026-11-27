@@ -35,7 +35,7 @@
     display: flex;
     flex: 0 0 var(--conversation-top-row-height);
     gap: var(--space-tight);
-    padding: var(--space-tight) var(--space-related);
+    padding: var(--space-tight) var(--space-component);
 }
 
 :global(#new-conversation-btn) {
@@ -53,7 +53,10 @@
     gap: var(--space-tight);
     height: var(--size-button);
     min-height: var(--size-button);
-    padding: 0 var(--space-component);
+
+    /* Its icon stands on the column a conversation's title starts on (the list's inset, the row's, the
+     * control's), less the border every sidebar control keeps. */
+    padding: 0 calc(var(--sidebar-content-inset) - 1px);
     transition: background var(--duration-control), color var(--duration-control);
 }
 
@@ -150,6 +153,14 @@
     text-align: left;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+/* The clock before the title of a conversation a Schedule wrote. */
+:global(.conversation-schedule-mark) {
+    color: var(--color-text-subtle);
+    display: inline-flex;
+    margin-inline-end: var(--space-inline);
+    vertical-align: middle;
 }
 
 :global(.conversation-row-main) {
@@ -324,8 +335,20 @@
     gap: var(--space-tight);
     line-height: var(--line-height-control);
     padding: var(--space-component) var(--space-related) var(--space-related);
+    padding-inline-start: calc(var(--space-component) + var(--sidebar-content-inset));
     text-align: left;
     width: 100%;
+}
+
+/* The quiet label over the conversations, so the Scheduled row above reads as a row of its own and not
+ * as their heading. It starts on the titles' column. */
+:global(.conversation-section-label) {
+    color: var(--color-text-muted);
+    flex: 0 0 auto;
+    font-size: var(--font-size-caption);
+    font-weight: 500;
+    margin: 0;
+    padding: var(--space-related) calc(var(--space-component) + var(--sidebar-content-inset)) 0;
 }
 
 :global(#settings-btn:hover),

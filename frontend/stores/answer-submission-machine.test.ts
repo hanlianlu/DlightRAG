@@ -14,7 +14,7 @@ import {
 
 const accepted = {
   kind: 'accepted' as const,
-  conversation: {conversationId: 'c1', title: null, createdAt: '', updatedAt: '', forkedFromConversationId: null, forkedFromTitle: null},
+  conversation: {conversationId: 'c1', title: null, createdAt: '', updatedAt: '', forkedFromConversationId: null, forkedFromTitle: null, schedule: null},
   turn: {
     turnId: 't1', turnNumber: 1, answerRunId: 'run-1', submissionId: 'submission-1',
     status: 'queued' as const, cancelRequested: false, userText: 'Question', assistantText: '',

@@ -85,6 +85,7 @@ export function continuationDescriptor(conversationId: string): AcceptedAnswer {
       updatedAt: '2026-01-01T00:00:00Z',
     forkedFromConversationId: null,
     forkedFromTitle: null,
+    schedule: null,
     },
     turn: {
       ...storedTurn(),
@@ -106,6 +107,7 @@ export function conversationWire(conversation: ConversationSummary): Record<stri
     updated_at: conversation.updatedAt,
     forked_from_conversation_id: conversation.forkedFromConversationId,
     forked_from_title: conversation.forkedFromTitle,
+    schedule: conversation.schedule && {schedule_id: conversation.schedule.scheduleId, name: conversation.schedule.name},
   };
 }
 

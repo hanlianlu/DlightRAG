@@ -82,12 +82,22 @@ class Goal:
     blocked_reason: str | None = None
 
     @classmethod
-    def create(cls, objective: str, *, max_rounds: int = DEFAULT_MAX_ROUNDS) -> Self:
-        """A new goal at revision 1, active, with no round started."""
+    def create(
+        cls,
+        objective: str,
+        *,
+        max_rounds: int = DEFAULT_MAX_ROUNDS,
+        goal_id: str | None = None,
+    ) -> Self:
+        """A new goal at revision 1, active, with no round started.
+
+        ``goal_id`` is for a caller that must recognise its own goal again after a retry; the
+        default is a fresh random id.
+        """
         text = _objective(objective)
         cap = _round_cap(max_rounds)
         return cls(
-            id=f"goal-{uuid.uuid4()}",
+            id=goal_id or f"goal-{uuid.uuid4()}",
             revision=1,
             objective=text,
             phase=GoalPhase.ACTIVE,

@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Canonical nine-section configuration contracts."""
+"""Canonical ten-section configuration contracts."""
 
 import re
 from collections.abc import Callable
@@ -71,7 +71,7 @@ def test_nested_environment_loading(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_an_unknown_top_level_key_is_refused_from_every_source(
     source: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A top-level key outside the nine sections is refused whichever source brings it."""
+    """A top-level key outside the ten sections is refused whichever source brings it."""
     monkeypatch.chdir(tmp_path)
     load: Callable[[], object] = DlightragConfig
     match source:

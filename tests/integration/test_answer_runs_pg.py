@@ -487,6 +487,8 @@ class TestSchema:
             "dlightrag_corpus_mutation_windows",
             "dlightrag_runtime_policies",
             "dlightrag_privacy_settings",
+            "dlightrag_schedules",
+            "dlightrag_schedule_fires",
         }
 
     async def test_artifact_reference_constraint_uses_one_output_kind(self, store, pool) -> None:

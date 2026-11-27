@@ -41,6 +41,7 @@ const accepted: AcceptedAnswer = {
     updatedAt: '2026-01-01T00:00:00Z',
     forkedFromConversationId: null,
     forkedFromTitle: null,
+    schedule: null,
   },
   turn: {
     turnId: 'turn-1',

@@ -10,6 +10,16 @@ import {bootstrapResponse} from '../testing/app.ts';
 import {pressArea, seriousViolations} from '../testing/axe.ts';
 import {buttonNamed, waitFor} from '../testing/dom.ts';
 import {
+  detailOpen,
+  formOpen,
+  mountSidebar,
+  rowsShown,
+  serving as servingSchedules,
+  useWorkspaces,
+  wireFire,
+  wireSchedule,
+} from '../testing/schedules.ts';
+import {
   agentAccountsView,
   memoryPage,
   memorySettings,
@@ -517,6 +527,51 @@ it('conversation list has no serious axe violations with older conversations to 
     // controls a dialog only the full shell renders.
     expect(await seriousViolations(sidebar.querySelector('dl-conversation-list')!)).to.deep.equal([]);
   });
+});
+
+it('the Scheduled section, a Schedule\'s detail and the form that makes one have no serious axe violations', async () => {
+  servingSchedules({
+    'GET /web/api/schedules/schedule-weekly-review/fires': () => Response.json({fires: [
+      wireFire('f3', '2099-01-12T07:00:00.000000Z', 'succeeded', {conversation_id: 'conversation-3'}),
+      wireFire('f2', '2099-01-11T07:00:00.000000Z', 'skipped_busy', {reason: 'its previous run is still working'}),
+      wireFire('f1', '2099-01-10T07:00:00.000000Z', 'failed', {reason: 'the model refused'}),
+    ], next_cursor: '2099-01-10T07:00:00.000000Z'}),
+    'POST /web/api/schedules/preview': () => Response.json({zone: 'Europe/Stockholm', slots: [
+      {at: '2099-01-05T07:00:00.000000Z', local: '2099-01-05T08:00:00+01:00'},
+    ]}),
+  }, [
+    wireSchedule('Weekly review', {prompt: Array.from({length: 7}, (_, index) => `Line ${index + 1} of the prompt.`).join('\n')}),
+    wireSchedule('Filing watch', {state: 'paused', pause_reason: 'paused by its owner', next_fire_at: null}),
+  ]);
+  const app = document.createElement('div');
+  app.className = 'app';
+  document.body.append(app);
+  const {sidebar, handles} = await mountSidebar(app);
+  useWorkspaces(handles, ['alpha', 'beta'], ['alpha']);
+  // The shell slides the compact drawer in by classing the body.
+  document.body.classList.add('conversation-drawer-open');
+  const section = sidebar.querySelector('dl-schedule-section')!;
+  await rowsShown(sidebar, 2);
+  // A row's menu is open beside the rows.
+  section.querySelector<HTMLButtonElement>('[data-menu-button]')!.click();
+  await waitFor(() => section.querySelector('dl-menu') !== null);
+  expect(await seriousViolations(section)).to.deep.equal([]);
+  section.querySelector<HTMLButtonElement>('[data-menu-button]')!.click();
+
+  section.querySelector<HTMLButtonElement>('button.conversation-select')!.click();
+  const detail = await detailOpen(sidebar);
+  await waitFor(() => detail.querySelectorAll('[data-fire]').length === 3);
+  expect(await seriousViolations(detail)).to.deep.equal([]);
+  detail.querySelector<HTMLButtonElement>('[data-action="edit"]')!.click();
+  const form = await formOpen(sidebar);
+  form.querySelector<HTMLButtonElement>('[data-advanced]')!.click();
+  await waitFor(() => form.querySelector('[data-field="ceiling"]') !== null && form.querySelector('[data-next]') !== null);
+  // Weekly shows the day chips, and Advanced shows every field.
+  const frequency = form.querySelector<HTMLSelectElement>('[data-field="frequency"]')!;
+  frequency.value = 'weekly';
+  frequency.dispatchEvent(new Event('change', {bubbles: true}));
+  await waitFor(() => form.querySelector('[data-day]') !== null);
+  expect(await seriousViolations(form)).to.deep.equal([]);
 });
 
 it('workspace picker has no serious axe violations while open', async () => {

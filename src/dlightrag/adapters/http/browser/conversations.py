@@ -11,6 +11,7 @@ from dlightrag.adapters.http.browser.conversation_models import (
     ConversationCommand,
     ConversationGoalState,
     ConversationHistory,
+    ConversationSchedule,
     ConversationSummary,
     ConversationTurn,
     QueuedMessage,
@@ -140,6 +141,13 @@ def project_conversation_summary(
         updated_at=summary.updated_at,
         forked_from_conversation_id=summary.forked_from_conversation_id,
         forked_from_title=summary.forked_from_title,
+        schedule=(
+            ConversationSchedule(
+                schedule_id=summary.schedule.schedule_id, name=summary.schedule.name
+            )
+            if summary.schedule is not None
+            else None
+        ),
     )
 
 

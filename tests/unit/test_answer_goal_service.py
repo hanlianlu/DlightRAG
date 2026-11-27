@@ -695,3 +695,22 @@ async def test_a_harness_stop_for_an_unknown_goal_is_a_no_op() -> None:
     )
 
     assert await _stop(service, "stop_round_failed", unknown) is None
+
+
+async def test_a_goal_created_with_a_chosen_id_is_stored_under_it() -> None:
+    from tests.support.goals import FakeGoalStore
+
+    service = AnswerGoalService(store=FakeGoalStore())
+
+    created = await service.create(
+        owner_id="owner",
+        session_id="session",
+        run_id="",
+        objective="finish the model",
+        max_rounds=3,
+        goal_id="goal-chosen",
+    )
+
+    assert created.id == "goal-chosen"
+    stored = await service.get(owner_id="owner", session_id="session")
+    assert stored is not None and stored.id == "goal-chosen"

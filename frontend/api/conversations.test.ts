@@ -56,6 +56,28 @@ test('conversation pages use the bounded route and encode an opaque continuation
   ]);
 });
 
+test('a conversation a Schedule wrote names that Schedule, and any other names none', async () => {
+  const row = (id: string, extra: object) => ({
+    conversation_id: id,
+    title: null,
+    created_at: '2026-12-01T00:00:00Z',
+    updated_at: '2026-12-01T00:00:00Z',
+    ...extra,
+  });
+  globalThis.fetch = async () => Response.json({
+    items: [
+      row('scheduled', {schedule: {schedule_id: 'schedule-1', name: 'Weekly review'}}),
+      row('typed', {schedule: null}),
+      row('older-server', {}),
+    ],
+    next_cursor: null,
+  });
+
+  const {items} = await listConversations();
+
+  assert.deepEqual(items.map((item) => item.schedule), [{scheduleId: 'schedule-1', name: 'Weekly review'}, null, null]);
+});
+
 test('a new conversation posts an empty creation and reads the summary the server kept', async () => {
   let seen: {url: string; method: string | undefined; body: string | undefined} | null = null;
   globalThis.fetch = async (input, init) => {

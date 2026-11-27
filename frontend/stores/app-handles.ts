@@ -15,6 +15,7 @@ import {IngestStore} from './ingest-store.ts';
 import {KeptJudgements} from './kept-judgements.ts';
 import {MemoryNotices} from './memory-notices.ts';
 import {RunActivityStore} from './run-activity-store.ts';
+import {ScheduleStore} from './schedule-store.ts';
 import {WorkspaceStore} from './workspace-store.ts';
 
 export interface AppHandles {
@@ -34,6 +35,8 @@ export interface AppHandles {
   /** The reader's recent Run activity: which conversations are running, and which have an answer
    *  they have not opened. */
   readonly runActivity: RunActivityStore;
+  /** The reader's Schedules, which the sidebar's Scheduled section and its dialogs share. */
+  readonly schedules: ScheduleStore;
   /** Forget what the signed-in reader sent, rated, and read, as signing out must: whoever is shown this
    *  page next is shown none of it. Their unsent message is the composer's own to forget. */
   reset(): void;
@@ -58,6 +61,7 @@ export function createAppHandles(): AppHandles {
   const traces = new KeptTraces();
   const memoryNotices = new MemoryNotices();
   const runActivity = new RunActivityStore();
+  const schedules = new ScheduleStore();
   return {
     conversations: new ConversationStore(),
     workspaces,
@@ -69,12 +73,14 @@ export function createAppHandles(): AppHandles {
     traces,
     memoryNotices,
     runActivity,
+    schedules,
     reset: () => {
       submissions.dispose();
       judgements.forget();
       traces.forget();
       memoryNotices.forget();
       runActivity.forget();
+      schedules.forget();
     },
   };
 }

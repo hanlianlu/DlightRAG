@@ -261,6 +261,16 @@ being sent to the model as a turn. Creating one starts round 1 at once, so it wo
 conversation with no earlier Run.
 _Avoid_: slash command, admin action
 
+## Schedules
+
+**Schedule**:
+An owner's durable record of one turn to start on the clock: its prompt, mode and workspaces, where each fire's turn goes (a new conversation each time, or the one conversation the Schedule keeps), and a cadence, either a five-field recurrence read on the wall clock of an IANA zone the owner chose or one instant. A Schedule is `active` while it fires, `paused` when its owner or a stated reason stopped it (three consecutive Fires that failed or were refused, a refused Fire that only the owner can change, a daily token ceiling reached), and `completed` once a single time has started its Run (one whose Fire started nothing waits paused, with the reason, for its owner to name another time). It acts as whoever last created, edited or resumed it, and only while that identity is still its owner: a Run it starts takes the owner's authority at that moment, never at creation. With a round cap it is a goal Schedule: each fire starts a Goal whose objective is the prompt, and the fire's Run is the Goal's round 1. A Schedule belongs to one owner, is not shared, and is not a service identity; the Agent has no tool that creates or edits one ([ADR 0103](adr/0103-a-schedule-starts-a-run-on-the-clock-and-the-database-is-its-queue.md)).
+_Avoid_: cron job, task, automation, trigger, service account
+
+**Fire**:
+What one slot of a Schedule did, recorded under a key unique to that slot so the slot is taken once however many processes look: `pending` until its Run is started, `started` while the Run works, then `succeeded`, `failed`, `cancelled`, or one of the states that started nothing, each with its reason: `refused` (the owner lost access, the daily token ceiling was reached), `skipped_busy` (the previous Run, or the goal it left running, was still working), `skipped_limit` (a run limit was reached) and `missed` (slots that passed while nothing was looking, collapsed into one Fire, the latest of which runs late only within half its interval). A skipped or missed Fire is never queued: the next slot is the next chance. A Fire's Run starts under an idempotency key built from the slot, so a retry replays the Run it created.
+_Avoid_: job, execution, trigger event, queued run
+
 ## Long-Term Memory
 
 **Memory Record**:
@@ -629,5 +639,6 @@ _Avoid_: Migration, Workspace reset, compatibility cutover
 | Resource | Answer attachment or public link, read as bounded text or viewed as images on demand; later Runs in the same Session can adopt it | [Resource reading](resource-reading.md) |
 | Published Artifact | Owner-visible Research output authorized by a settled root attachment and validated at publication | this document |
 | Goal | One durable objective a Session carries; the platform continues it automatically and the Agent decides completion | [Goal mode](adr/0077-goal-mode-continues-automatically-and-pause-stops-the-running-round.md) |
+| Schedule | An owner's record of one turn to start on the clock; each slot is one Fire, taken once through the database | [Schedules](run-runtime.md#schedules) |
 | Source | Durable provenance and download contract for an ingested document | [Interfaces](interfaces.md#sources) |
 

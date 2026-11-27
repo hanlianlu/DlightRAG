@@ -1,0 +1,366 @@
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
+
+/* The Schedule dialogs: the form that makes or edits one, and the detail a row opens into. Both wear the
+ * confirm dialog's face (surface, border, scrim, title) at a wider measure, and split into a title, a body
+ * that scrolls, and a footer that stays, so a long history or a tall form never takes the buttons away. The
+ * fields are the primitives' own (`.dl-input`, `.dl-dialog-input`), all at the one control height. */
+
+@layer features {
+  .dialog {
+    max-height: min(46rem, calc(100dvh - 2 * var(--space-layout)));
+    max-width: none;
+    overflow: hidden;
+    padding: 0;
+    width: min(35rem, calc(100vw - 2 * var(--space-component)));
+  }
+
+  .dialog[open] {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .frame {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .title {
+    margin: 0;
+    overflow-wrap: anywhere;
+    padding: var(--space-section) var(--space-section) var(--space-tight);
+  }
+
+  .body {
+    align-content: start;
+    display: grid;
+    flex: 1;
+    gap: var(--space-related);
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: var(--space-tight) var(--space-section);
+  }
+
+  .actions {
+    margin: 0;
+    padding: var(--space-component) var(--space-section) var(--space-section);
+  }
+
+  /* ── Fields ── */
+
+  .field {
+    display: grid;
+    gap: var(--space-tight);
+    min-width: 0;
+  }
+
+  /* A field's name is quiet: the control and what is in it carry the form. */
+  .caption {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    font-weight: 500;
+    margin: 0;
+  }
+
+  .hint {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    margin: 0;
+  }
+
+  .wide,
+  .frequency,
+  .number,
+  .time,
+  .date,
+  .prompt {
+    box-sizing: border-box;
+    min-width: 0;
+  }
+
+  .wide,
+  .prompt {
+    width: 100%;
+  }
+
+  .frequency {
+    width: 9rem;
+  }
+
+  .number {
+    appearance: textfield;
+    width: 5.5rem;
+  }
+
+  /* The steppers are a mouse's way to type a number someone types faster. */
+  .number::-webkit-inner-spin-button,
+  .number::-webkit-outer-spin-button {
+    appearance: none;
+    margin: 0;
+  }
+
+  .time {
+    width: 8rem;
+  }
+
+  .date {
+    width: 10.5rem;
+  }
+
+  .prompt {
+    margin: 0;
+    min-height: 7rem;
+  }
+
+  .mono {
+    font-family: SFMono-Regular, Consolas, monospace;
+  }
+
+  /* ── When ── */
+
+  .when {
+    border: 0;
+    display: grid;
+    gap: var(--space-tight);
+    margin: 0;
+    min-inline-size: 0;
+    padding: 0;
+  }
+
+  .when > legend {
+    padding: 0;
+  }
+
+  /* The choice and the controls it needs share one line, and one height: they wrap together on a narrow one. */
+  .line {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-tight);
+  }
+
+  .word {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-detail);
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-inline);
+  }
+
+  .chip {
+    background: transparent;
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-pill);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    font: inherit;
+    font-size: var(--font-size-caption);
+    min-block-size: var(--size-target-min);
+    padding-inline: var(--space-component);
+    transition: background var(--duration-control), border-color var(--duration-control), color var(--duration-control);
+  }
+
+  .chip:hover {
+    background: var(--color-bg-hover);
+    color: var(--color-text-primary);
+  }
+
+  .chip[aria-pressed='true'] {
+    background: var(--color-action-bg-subtle);
+    border-color: var(--color-action-border);
+    color: var(--color-accent-text);
+  }
+
+  .chip:focus-visible {
+    outline: 2px solid var(--color-control-ring);
+    outline-offset: 2px;
+  }
+
+  /* One line that reads the choice back: its words, its zone, and what the server says of it. */
+  .summary {
+    align-items: center;
+    color: var(--color-text-muted);
+    display: flex;
+    flex-wrap: wrap;
+    font-size: var(--font-size-caption);
+    gap: 0 var(--space-tight);
+    line-height: var(--line-height-control);
+    margin: 0;
+  }
+
+  .refused {
+    color: var(--color-danger);
+  }
+
+  /* ── Advanced ── */
+
+  .advanced {
+    display: grid;
+    gap: var(--space-component);
+    justify-items: start;
+  }
+
+  .advancedBody {
+    display: grid;
+    gap: var(--space-component);
+    justify-self: stretch;
+  }
+
+  .advancedBody[hidden] {
+    display: none;
+  }
+
+  .pair {
+    display: grid;
+    gap: var(--space-component);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .group {
+    border: 0;
+    display: grid;
+    gap: var(--space-inline);
+    margin: 0;
+    min-inline-size: 0;
+    padding: 0;
+  }
+
+  /* A choice sits in the form's own rhythm: the primitive's face without its block margins. Its inline
+   * margins stay, since they are what puts the box on the fields' edge while its hover tint reaches past. */
+  .choice {
+    font-size: var(--font-size-detail);
+    margin-block: 0;
+  }
+
+  .problem {
+    color: var(--color-danger);
+    font-size: var(--font-size-detail);
+    margin: 0;
+  }
+
+  /* ── Detail ── */
+
+  .lead {
+    display: grid;
+    gap: var(--space-inline);
+  }
+
+  .cadence,
+  .status {
+    font-size: var(--font-size-detail);
+    margin: 0;
+  }
+
+  .cadence {
+    color: var(--color-text-secondary);
+  }
+
+  .status {
+    color: var(--color-text-primary);
+  }
+
+  .section {
+    display: grid;
+    gap: var(--space-tight);
+    justify-items: start;
+  }
+
+  .promptText {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-detail);
+    margin: 0;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+
+  /* Four lines of a long prompt; Show more opens the rest. */
+  .folded {
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 4;
+    display: -webkit-box;
+    overflow: hidden;
+  }
+
+  .buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-tight);
+  }
+
+  /* ── Recent runs ── */
+
+  .fires {
+    display: grid;
+    gap: var(--space-tight);
+    justify-self: stretch;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .fire {
+    align-items: baseline;
+    border-block-end: 1px solid var(--color-divider);
+    display: grid;
+    gap: 0 var(--space-component);
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    padding-block-end: var(--space-tight);
+  }
+
+  .fire:last-child {
+    border-block-end: 0;
+  }
+
+  .slot {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-detail);
+  }
+
+  .state {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-detail);
+  }
+
+  .state[data-tone='good'] {
+    color: var(--color-success);
+  }
+
+  .state[data-tone='bad'] {
+    color: var(--color-danger);
+  }
+
+  .state[data-tone='live'] {
+    color: var(--color-accent-text);
+  }
+
+  .reason {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    grid-column: 1 / -1;
+    overflow-wrap: anywhere;
+  }
+
+  .older {
+    justify-self: start;
+  }
+
+  @media (width <= 720px), (height <= 480px) {
+    .dialog {
+      max-height: calc(100dvh - 2 * var(--space-component));
+    }
+
+    .title {
+      padding-block-start: var(--space-component);
+    }
+
+    .pair {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+}

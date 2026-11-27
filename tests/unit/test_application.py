@@ -368,6 +368,7 @@ class _Parts:
         *,
         web_enabled: bool = True,
         recover_goal_rounds: Callable[[], Awaitable[None]] | None = None,
+        look_schedules: Callable[[], Awaitable[None]] | None = None,
     ) -> Application:
         def current_fingerprint(role: str) -> ModelInvocationFingerprint:
             return model_invocation_fingerprint(model_settings_for_role(config, cast(Any, role)))
@@ -428,6 +429,7 @@ class _Parts:
                     if recover_goal_rounds is not None
                     else {}
                 ),
+                **({"look_schedules": look_schedules} if look_schedules is not None else {}),
                 **(
                     {
                         "start_session_memory_passes": self.session_memory_passes.start,
@@ -682,6 +684,78 @@ async def test_the_periodic_recovery_never_starts_where_recovery_is_disabled(
 
     mutate_config(test_config, "deployment.goal_recovery", False)
     application = parts.application(test_config, recover_goal_rounds=recover_goal_rounds)
+    await application.astart()
+    try:
+        await asyncio.sleep(0.05)
+        assert calls == []
+    finally:
+        await application.aclose()
+
+
+async def _until(condition: Callable[[], bool], *, seconds: float = 2.0) -> None:
+    deadline = asyncio.get_running_loop().time() + seconds
+    while not condition() and asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(0.01)
+
+
+async def test_the_schedule_look_repeats_on_its_interval_until_shutdown(
+    test_config: DlightragConfig,
+) -> None:
+    """Every process that hosts Web conversations looks for due Schedules, until it is closed."""
+    calls: list[str] = []
+
+    async def look() -> None:
+        calls.append("look")
+
+    mutate_config(test_config, "schedules.look_interval_seconds", 0.01)
+    application = _Parts().application(test_config, look_schedules=look)
+    await application.astart()
+    try:
+        await _until(lambda: len(calls) >= 3)
+        assert len(calls) >= 3, "a look at startup and then one every interval"
+    finally:
+        await application.aclose()
+    settled = len(calls)
+    await asyncio.sleep(0.05)
+    assert len(calls) == settled, "shutdown stops the look"
+
+
+async def test_a_failing_schedule_look_costs_that_pass_and_not_the_loop(
+    test_config: DlightragConfig,
+) -> None:
+    calls: list[str] = []
+
+    async def look() -> None:
+        calls.append("look")
+        if len(calls) == 1:
+            raise RuntimeError("the schedule store is down")
+
+    mutate_config(test_config, "schedules.look_interval_seconds", 0.01)
+    application = _Parts().application(test_config, look_schedules=look)
+    await application.astart()
+    try:
+        await _until(lambda: len(calls) >= 3)
+        assert len(calls) >= 3
+        assert application.health.is_ready is True
+    finally:
+        await application.aclose()
+
+
+@pytest.mark.parametrize("reason", ["the deployment turns it off", "no Web conversations"])
+async def test_the_schedule_look_never_starts_where_a_fire_could_not_become_a_turn(
+    test_config: DlightragConfig, reason: str
+) -> None:
+    calls: list[str] = []
+
+    async def look() -> None:
+        calls.append("look")
+
+    mutate_config(test_config, "schedules.look_interval_seconds", 0.01)
+    if reason == "the deployment turns it off":
+        mutate_config(test_config, "deployment.schedules", False)
+    application = _Parts().application(
+        test_config, look_schedules=look, web_enabled=reason != "no Web conversations"
+    )
     await application.astart()
     try:
         await asyncio.sleep(0.05)
