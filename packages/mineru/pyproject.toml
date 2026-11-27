@@ -2,7 +2,7 @@
 
 [project]
 name = "dlightrag-mineru"
-version = "3.0.3"
+version = "3.0.7"
 description = "Host-side MinerU sidecar manager: install, launch, and background-service it"
 requires-python = ">=3.14"
 license = "Apache-2.0"
