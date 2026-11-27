@@ -102,6 +102,7 @@ if (host) {
             <p class="dl-note">Marked: <mark class="dl-mark">found words</mark></p>
             <button class="dl-text-action" type="button">2 reads skipped</button>
             <nav class="ds-nav" aria-label="Navigation item specimen">
+              <p class="dl-nav-group-label">Group label</p>
               <button class="dl-nav-item" type="button" aria-current="page">
                 <span class="dl-nav-item-icon">${icon('connections', {size: 'sm'})}</span>
                 <span class="dl-nav-item-text"><span class="dl-nav-item-label">Selected</span></span>
@@ -111,6 +112,10 @@ if (host) {
                 <span class="dl-nav-item-icon">${icon('agent-accounts', {size: 'sm'})}</span>
                 <span class="dl-nav-item-text"><span class="dl-nav-item-label">Idle</span></span>
                 <span class="dl-nav-item-status">3</span>
+              </button>
+              <button class="dl-nav-item" type="button" disabled>
+                <span class="dl-nav-item-icon">${icon('connections', {size: 'sm'})}</span>
+                <span class="dl-nav-item-text"><span class="dl-nav-item-label">Disabled</span></span>
               </button>
             </nav>
             <nav class="ds-list-card" aria-label="Navigation list form specimen">

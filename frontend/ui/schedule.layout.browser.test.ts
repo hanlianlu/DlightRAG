@@ -63,6 +63,57 @@ it('draws a Schedule as dense as a conversation row, with its words kept inside 
   expect(actions.right).to.be.at.most(rows[0]!.getBoundingClientRect().right + 1);
 });
 
+it('stands the nav rows and the rows on one column, pill and icon alike, and draws the row actions as icons', async () => {
+  await setViewport({width: 1400, height: 900});
+  serving({
+    'GET /web/api/conversations': () => Response.json({items: [{
+      conversation_id: 'c1', title: 'Research notes', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
+    }], next_cursor: null}),
+  }, [wireSchedule('Weekly review')]);
+  const column = document.createElement('div');
+  column.style.cssText = 'height: 640px; position: relative; width: 280px;';
+  document.body.append(column);
+  const {sidebar, handles} = await mountSidebar(column);
+  await handles.conversations.loadList();
+  const [schedule] = await rowsShown(sidebar, 1);
+  await waitFor(() => sidebar.querySelector('dl-conversation-list .conversation-select') !== null);
+
+  const textLeft = (element: Element): number => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    return range.getBoundingClientRect().left;
+  };
+  // The pills start on one edge, and a row's control starts on its tint's edge, not inside it.
+  const conversationRow = sidebar.querySelector('dl-conversation-list .conversation-row')!.getBoundingClientRect().left;
+  for (const [name, left] of [
+    ['New chat', sidebar.querySelector('#new-conversation-btn')!.getBoundingClientRect().left],
+    ['Scheduled', sidebar.querySelector('[data-toggle]')!.getBoundingClientRect().left],
+    ['Settings', sidebar.querySelector('#settings-btn')!.getBoundingClientRect().left],
+    ['a Schedule', schedule!.getBoundingClientRect().left],
+    ['a conversation\'s control', sidebar.querySelector('dl-conversation-list .conversation-select')!.getBoundingClientRect().left],
+    ['a Schedule\'s control', schedule!.querySelector('.conversation-select')!.getBoundingClientRect().left],
+  ] as const) {
+    expect(left, `${name} starts at a conversation row's edge`).to.be.closeTo(conversationRow, 0.5);
+  }
+
+  const title = textLeft(sidebar.querySelector('dl-conversation-list .conversation-select')!);
+  for (const [name, left] of [
+    ['New chat icon', sidebar.querySelector('#new-conversation-btn .dl-icon')!.getBoundingClientRect().left],
+    ['Scheduled icon', sidebar.querySelector('[data-toggle] .dl-icon')!.getBoundingClientRect().left],
+    ['Settings icon', sidebar.querySelector('#settings-btn .dl-icon')!.getBoundingClientRect().left],
+    ['Recents label', textLeft(sidebar.querySelector('.dl-nav-group-label')!)],
+    ['a Schedule\'s name', textLeft(schedule!.querySelector(`.${styles.name}`)!)],
+  ] as const) {
+    expect(left, `${name} starts where a conversation's title does`).to.be.closeTo(title, 0.5);
+  }
+
+  // The row actions are drawn marks, not the text glyph.
+  expect(sidebar.textContent).not.to.contain('•••');
+  for (const button of sidebar.querySelectorAll('.conversation-actions-button')) {
+    expect(button.querySelector('.dl-icon'), 'the actions button draws an icon').not.to.equal(null);
+  }
+});
+
 it('lays the frequency as a row of chips, and the controls it needs on a line under it at the one control height', async () => {
   await setViewport({width: 1400, height: 900});
   serving({'POST /web/api/schedules/preview': () => Response.json({zone: 'UTC', slots: []})}, []);

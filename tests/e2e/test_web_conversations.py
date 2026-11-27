@@ -438,11 +438,11 @@ def test_conversation_actions_menu_overlaps_its_row_from_the_end(page: Page) -> 
             return {
                 end: rowBox.right - menuBox.right,
                 overlap: rowBox.bottom - menuBox.top,
-                inset: parseFloat(getComputedStyle(row).paddingInlineEnd),
+                inset: parseFloat(getComputedStyle(menu).insetInlineEnd),
             };
         }"""
     )
-    # The row's own inset: the menu hangs over its bottom edge, in from its end.
+    # The menu's own inset: it hangs over the row's bottom edge, in from its end, by the same measure.
     assert geometry["inset"] > 0
     assert geometry["end"] == pytest.approx(geometry["inset"], abs=0.5)
     assert geometry["overlap"] == pytest.approx(geometry["inset"], abs=0.5)

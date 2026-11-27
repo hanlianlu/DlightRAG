@@ -497,18 +497,28 @@ verdict on an open error in both color modes.
 The owner's Schedules (ADR 0103) live in the conversation sidebar, not in Settings: a Scheduled section
 between "New chat" and the conversation list, so recurring work sits beside the conversations it writes.
 
+- **Sidebar column.** The sidebar is a `<nav>` built from primitives. New chat, Scheduled and Settings
+  are `.dl-nav-item` rows (an icon, a label, and Scheduled's count as the row's `.dl-nav-item-status`),
+  and the "Recents" label over the conversations is `.dl-nav-group-label`. The collapse and open
+  buttons, the row actions and the Scheduled "+" are `.dl-icon-button`s, sized to the sidebar's controls
+  (`--control-hit-target: var(--size-button)`) and sharing one resting colour and hover. They all stand on
+  one content column that starts `--space-component` in: a conversation or Schedule row has no inline
+  padding of its own, so its tint and its control share one edge with a nav row's pill, and the
+  `--space-tight` padding of a nav item and of a conversation's control puts an icon and a title on one x.
+  `ui/schedule.layout.browser.test.ts` measures both.
 - **Section.** A header row (a clock, "Scheduled", and the count) toggles the rows open and closed; with
-  no Schedule, clicking it opens New schedule instead. A "+" icon button ("New schedule") stands at its
-  end: on a pointer that hovers it shows while the header is hovered or holds focus, and on a touch screen
-  it always shows. The open choice is this browser's (`localStorage`); with none stored the section is
-  open once there is a Schedule, and with none the header stands alone. The rows scroll inside the
+  no Schedule, clicking it opens New schedule instead. A "+" `.dl-icon-button` ("New schedule") stands at
+  its end: on a pointer that hovers it shows while the header is hovered or holds focus, and on a touch
+  screen it always shows. The open choice is this browser's (`localStorage`); with none stored the section
+  is open once there is a Schedule, and with none the header stands alone. The rows scroll inside the
   section past a few, so they never push the conversations out of the column.
 - **Row.** A Schedule is a conversation row (the global `.conversation-row` family, so its density,
   tint and actions menu are theirs): its name, and a muted line with the cadence in words, followed by
   "· Paused" (with a small pause mark) or "· Done" when the Schedule is not active; when it runs next is
-  the detail's to say. Run now, Pause or Resume, and
-  an actions menu (Edit, Delete) stand over the row's end on hover and focus, and the row's text gives
-  them the room; on a touch screen a row opens its detail, which carries every action.
+  the detail's to say. Run now, Pause or Resume (`.dl-icon-button`s), and
+  an actions menu (Edit, Delete), opened from the `more` icon button every row carries, stand over the
+  row's end on hover and focus, and the row's text gives them the room; on a touch screen a row opens
+  its detail, which carries every action.
 - **Dialogs.** The form and the detail are the confirm dialog's face at 35rem: a title, a body that
   scrolls, and a footer that stays. They stand outside the sidebar's `<nav>`, as the conversation dialogs
   do, so the drawer's focus trap never sees them. The form asks a name, a prompt and when (a row of

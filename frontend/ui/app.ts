@@ -382,6 +382,7 @@ export class DlApp extends LightElement {
                 <header class="topbar" ?inert=${inspectorModal || this.canvasModal}>
                   <button
                     id="conversation-sidebar-open"
+                    class="dl-icon-button"
                     type="button"
                     aria-label=${msg('Open conversations', {id: 'conversationSidebar.openConversations'})}
                     aria-controls="chat-sidebar"

@@ -491,15 +491,19 @@ export class DlConversationSidebar extends LightElement {
         <div class="conversation-top-row">
           <button
             id="new-conversation-btn"
+            class="dl-nav-item"
             type="button"
             ?disabled=${this.#busy}
             @click=${() => { void this.#requestNewConversation(); }}
           >
-            ${icon('edit', {size: 'sm', className: 'new-chat-icon'})}
-            ${msg('New chat', {id: 'conversationSidebar.newChat'})}
+            <span class="dl-nav-item-icon">${icon('edit', {size: 'sm'})}</span>
+            <span class="dl-nav-item-text">
+              <span class="dl-nav-item-label">${msg('New chat', {id: 'conversationSidebar.newChat'})}</span>
+            </span>
           </button>
           <button
             id="conversation-sidebar-toggle"
+            class="dl-icon-button"
             type="button"
             aria-label=${this.#desktop.matches
               ? msg('Collapse conversations', {id: 'conversationSidebar.collapseConversations'})
@@ -515,7 +519,7 @@ export class DlConversationSidebar extends LightElement {
           .enabled=${this.enabled}
           @dl-schedule-intent=${this.#scheduleIntent}
         ></dl-schedule-section>
-        <p class="conversation-section-label">${msg('Recents', {id: 'conversationSidebar.recents'})}</p>
+        <p class="dl-nav-group-label">${msg('Recents', {id: 'conversationSidebar.recents'})}</p>
         <dl-conversation-list
           .handles=${this.handles}
           .busy=${this.#busy}
@@ -524,12 +528,14 @@ export class DlConversationSidebar extends LightElement {
           @dl-conversation-rename=${this.#renameConversation}
           @dl-conversation-retry=${this.#retryConversation}
         ></dl-conversation-list>
-        <button id="settings-btn" type="button"
+        <button id="settings-btn" class="dl-nav-item" type="button"
                 aria-label=${msg('Settings', {id: 'conversationSidebar.settings'})}
                 aria-controls="settings-dialog"
                 @click=${this.#requestSettings}>
-          ${icon('settings', {size: 'sm'})}
-          <span class="sidebar-action-label">${msg('Settings', {id: 'conversationSidebar.settingsLabel'})}</span>
+          <span class="dl-nav-item-icon">${icon('settings', {size: 'sm'})}</span>
+          <span class="dl-nav-item-text">
+            <span class="dl-nav-item-label">${msg('Settings', {id: 'conversationSidebar.settingsLabel'})}</span>
+          </span>
         </button>
       </nav>
       <div

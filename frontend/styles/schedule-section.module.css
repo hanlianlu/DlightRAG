@@ -18,6 +18,7 @@
 
   /* ── Header ── */
 
+  /* A nav row with the "+" icon button at its end. */
   .head {
     align-items: center;
     display: flex;
@@ -26,82 +27,8 @@
   }
 
   .toggle {
-    align-items: center;
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: var(--radius-control);
-    color: var(--color-text-secondary);
-    cursor: pointer;
-    display: inline-flex;
     flex: 1;
-    font: inherit;
-    font-size: var(--font-size-detail);
-    font-weight: 550;
-    gap: var(--space-tight);
-    height: var(--size-button);
     min-width: 0;
-
-    /* The same row as "New chat" above it: its icon on the titles' column. */
-    padding-inline: calc(var(--sidebar-content-inset) - 1px);
-    text-align: start;
-    transition: background var(--duration-control), color var(--duration-control);
-  }
-
-  .toggle:hover {
-    background: var(--color-bg-hover);
-    color: var(--color-text-primary);
-  }
-
-  .title {
-    flex: 0 1 auto;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .count {
-    color: var(--color-text-muted);
-    font-size: var(--font-size-caption);
-    font-variant-numeric: tabular-nums;
-    font-weight: 400;
-    margin-inline-start: auto;
-  }
-
-  /* The header's "+" and a row's quick actions are the same small icon button. */
-  .add,
-  .quick {
-    align-items: center;
-    background: transparent;
-    border: 0;
-    border-radius: var(--radius-control);
-    color: var(--color-text-subtle);
-    cursor: pointer;
-    display: inline-flex;
-    flex: 0 0 auto;
-    height: var(--size-button);
-    justify-content: center;
-    transition: background var(--duration-control), color var(--duration-control);
-    width: var(--size-button);
-  }
-
-  .add:disabled,
-  .quick:disabled {
-    cursor: not-allowed;
-    opacity: 0.46;
-  }
-
-  .toggle:focus-visible,
-  .add:focus-visible,
-  .quick:focus-visible {
-    outline: 2px solid var(--color-control-ring);
-    outline-offset: 2px;
-  }
-
-  .add:hover:not(:disabled),
-  .quick:hover:not(:disabled) {
-    background: var(--color-bg-hover);
-    color: var(--color-text-secondary);
   }
 
   /* ── Rows ── */
@@ -175,7 +102,7 @@
     align-items: center;
     display: inline-flex;
     inset-block: 0;
-    inset-inline-end: var(--space-inline);
+    inset-inline-end: 0;
     opacity: 0;
     pointer-events: none;
     position: absolute;
@@ -196,7 +123,6 @@
     /* "+" waits for the row, as a conversation row's actions do; a touch screen shows it always. */
     .add {
       opacity: 0;
-      transition: opacity var(--duration-control), background var(--duration-control), color var(--duration-control);
     }
 
     .head:hover .add,

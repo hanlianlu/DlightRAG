@@ -409,7 +409,18 @@ a.dl-btn {
     width: 100%;
 }
 
-.dl-nav-item:hover {
+/* The row ring sits inside the item: the nav column clips what a ring outside it would draw. */
+.dl-nav-item:focus-visible {
+    outline: 2px solid var(--focus-ring-color);
+    outline-offset: -2px;
+}
+
+.dl-nav-item:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+.dl-nav-item:hover:not(:disabled) {
     background: var(--color-bg-hover);
     color: var(--color-text-primary);
 }
@@ -418,12 +429,6 @@ a.dl-btn {
 .dl-nav-item[aria-current='page']:hover {
     background: var(--color-selected-row);
     color: var(--color-text-primary);
-}
-
-/* The row ring sits inside the item: the nav column clips what a ring outside it would draw. */
-.dl-nav-item:focus-visible {
-    outline: 2px solid var(--focus-ring-color);
-    outline-offset: -2px;
 }
 
 @media (forced-colors: active) {
@@ -493,6 +498,18 @@ a.dl-btn {
 
 .dl-nav-item--list .dl-nav-item-status {
     display: none;
+}
+
+/* The quiet label over a run of entries in a `nav` column, such as the sidebar's Recents. Its inline
+ * padding is a nav item's, so in the column it starts where a row's icon starts. Muted, not subtle:
+ * it is text, and it has to be read. */
+.dl-nav-group-label {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    font-weight: 500;
+    margin: 0;
+    padding-block: var(--space-related) 0;
+    padding-inline: var(--space-tight);
 }
 
 /* === Confirm Dialog === */

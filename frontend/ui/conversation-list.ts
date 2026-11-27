@@ -322,7 +322,7 @@ export class DlConversationList extends LightElement {
         ${this.#renderRunMarkers(conversationId)}
         <button
           type="button"
-          class="conversation-actions-button"
+          class="dl-icon-button conversation-actions-button"
           aria-label=${this.#actionsName(conversation)}
           aria-haspopup="menu"
           aria-controls=${expanded ? actionsMenuId(conversationId) : nothing}
@@ -338,7 +338,7 @@ export class DlConversationList extends LightElement {
             event.preventDefault();
             this.#openMenu(conversationId, focus);
           }}
-        >•••</button>
+        >${icon('more', {size: 'sm'})}</button>
         ${expanded ? this.#renderMenu(conversation) : nothing}
       </div>
     `;

@@ -32,8 +32,6 @@ body.conversation-drawer-open {
        (ADR 0068; lib/panel-share.ts holds the shares). */
     --layout-chat-sidebar-width: clamp(240px, 18vw, 360px);
     --conversation-top-row-height: calc(var(--size-button) + (2 * var(--space-tight)));
-    /* From a sidebar row's edge to its first mark: a conversation row's inset plus its control's. */
-    --sidebar-content-inset: calc(var(--space-inline) + var(--space-tight));
 }
 
 /* === Text Error === */

@@ -596,6 +596,43 @@ export const ICON_REGISTRY = {
       ]
     ]
   },
+  "more": {
+    source: "lucide",
+    sourceName: "ellipsis",
+    derivedFrom: null,
+    viewBox: "0 0 24 24",
+    opticalScale: 1,
+    opticalX: 0,
+    opticalY: 0,
+    fill: "none",
+    stroke: "currentColor",
+    nodes: [
+      [
+        "circle",
+        {
+          "cx": "12",
+          "cy": "12",
+          "r": "1"
+        }
+      ],
+      [
+        "circle",
+        {
+          "cx": "19",
+          "cy": "12",
+          "r": "1"
+        }
+      ],
+      [
+        "circle",
+        {
+          "cx": "5",
+          "cy": "12",
+          "r": "1"
+        }
+      ]
+    ]
+  },
   "next": {
     source: "lucide",
     sourceName: "chevron-right",

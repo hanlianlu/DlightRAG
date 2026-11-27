@@ -162,11 +162,11 @@ export class DlScheduleSection extends LightElement {
       ? msg(str`Resume ${schedule.name}`, {id: 'scheduleSection.resumeLabel'})
       : msg(str`Pause ${schedule.name}`, {id: 'scheduleSection.pauseLabel'});
     return html`
-      <button type="button" class=${styles.quick} data-action="run" ?disabled=${pending}
+      <button type="button" class="dl-icon-button" data-action="run" ?disabled=${pending}
         aria-label=${msg(str`Run ${schedule.name} now`, {id: 'scheduleSection.runLabel'})}
         title=${msg('Run now', {id: 'scheduleSection.run'})}
         @click=${(event: Event) => { this.#ask('run', id, event.currentTarget); }}>${icon('zap', {size: 'sm'})}</button>
-      <button type="button" class=${styles.quick} data-action=${toggle} ?disabled=${pending}
+      <button type="button" class="dl-icon-button" data-action=${toggle} ?disabled=${pending}
         aria-label=${toggleLabel}
         title=${paused ? msg('Resume', {id: 'scheduleSection.resume'}) : msg('Pause', {id: 'scheduleSection.pause'})}
         @click=${(event: Event) => { this.#ask(toggle, id, event.currentTarget); }}>${icon(paused ? 'play' : 'pause', {size: 'sm'})}</button>`;
@@ -188,7 +188,7 @@ export class DlScheduleSection extends LightElement {
         </button>
         <span class=${styles.actions}>
           ${this.#quick(schedule, pending)}
-          <button type="button" class="conversation-actions-button" data-menu-button ?disabled=${pending}
+          <button type="button" class="dl-icon-button conversation-actions-button" data-menu-button ?disabled=${pending}
             aria-label=${msg(str`Actions for ${schedule.name}`, {id: 'scheduleSection.actionsFor'})}
             aria-haspopup="menu"
             aria-controls=${expanded ? menuId(id) : nothing}
@@ -203,7 +203,7 @@ export class DlScheduleSection extends LightElement {
               if (!focus) return;
               event.preventDefault();
               this.#openMenu(id, focus);
-            }}>•••</button>
+            }}>${icon('more', {size: 'sm'})}</button>
         </span>
         ${expanded ? this.#menu(schedule) : nothing}
       </div>`;
@@ -231,17 +231,19 @@ export class DlScheduleSection extends LightElement {
     const open = this.#open;
     return html`
       <div class=${styles.head}>
-        <button type="button" class=${styles.toggle} data-toggle aria-expanded=${String(open)} aria-controls="scheduled-rows"
+        <button type="button" class="dl-nav-item ${styles.toggle}" data-toggle aria-expanded=${String(open)} aria-controls="scheduled-rows"
           @click=${(event: Event) => {
             // With nothing to show, the row's one use is to make the first Schedule.
             if (ready && store.schedules.length === 0) this.#ask('new', null, event.currentTarget);
             else this.#setOpen(!open);
           }}>
-          ${icon('clock', {size: 'sm'})}
-          <span class=${styles.title}>${msg('Scheduled', {id: 'scheduleSection.title'})}</span>
-          ${ready && store.schedules.length > 0 ? html`<span class=${styles.count} data-count>${store.schedules.length}</span>` : nothing}
+          <span class="dl-nav-item-icon">${icon('clock', {size: 'sm'})}</span>
+          <span class="dl-nav-item-text">
+            <span class="dl-nav-item-label">${msg('Scheduled', {id: 'scheduleSection.title'})}</span>
+          </span>
+          ${ready && store.schedules.length > 0 ? html`<span class="dl-nav-item-status" data-count>${store.schedules.length}</span>` : nothing}
         </button>
-        <button type="button" class=${styles.add} data-new ?disabled=${!ready}
+        <button type="button" class="dl-icon-button ${styles.add}" data-new ?disabled=${!ready}
           aria-label=${msg('New schedule', {id: 'scheduleSection.new'})}
           title=${msg('New schedule', {id: 'scheduleSection.new'})}
           @click=${(event: Event) => {

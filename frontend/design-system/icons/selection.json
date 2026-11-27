@@ -21,6 +21,7 @@
   "language": {"source": "lucide", "name": "languages"},
   "memory-notice": {"source": "lucide", "name": "bookmark"},
   "moon": {"source": "lucide", "name": "moon"},
+  "more": {"source": "lucide", "name": "ellipsis"},
   "next": {"source": "lucide", "name": "chevron-right"},
   "open-external": {"source": "lucide", "name": "external-link"},
   "panel-collapse": {"source": "lucide", "name": "panel-left-close"},
