@@ -3,9 +3,10 @@
 
 Every method is scoped to the caller's owner: a Schedule that is not theirs is the same miss as
 one that does not exist, as a conversation is. Creating, editing and resuming record the caller as
-the identity the Schedule acts as from then on; the Agent has no way into this service. The
-workspaces a caller names are the ones the transport already authorized for them. The firing rules
-read access again at every fire, so what was readable when the Schedule was written is not trusted.
+the identity the Schedule acts as from then on; the Agent reaches this service only through
+``AgentSchedules``, as the owner's latest human turn. The workspaces a caller names are the ones
+the transport already authorized for them. The firing rules read access again at every fire, so what
+was readable when the Schedule was written is not trusted.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from dlightrag.application.schedules.cadence import Cadence
 from dlightrag.application.schedules.errors import ScheduleStateError
 from dlightrag.application.schedules.firing import ScheduleFirer
 from dlightrag.application.schedules.model import (
+    ChangedBy,
     Clock,
     Fire,
     Schedule,
@@ -62,6 +64,7 @@ class ScheduleService:
         at: datetime | None = None,
         max_tokens_per_day: int | None = None,
         goal_max_rounds: int | None = None,
+        changed_by: ChangedBy = "owner",
     ) -> Schedule:
         """Save a new active Schedule: a recurrence (``cron``) or a single time (``at``).
 
@@ -91,6 +94,7 @@ class ScheduleService:
             ),
             now=now,
             goal_max_rounds=goal_max_rounds,
+            changed_by=changed_by,
         )
         return await self._store.create(schedule, max_active=self._settings.max_active_per_owner)
 
@@ -118,6 +122,7 @@ class ScheduleService:
         at: datetime | None = None,
         max_tokens_per_day: int | None = None,
         goal_max_rounds: int | None = None,
+        changed_by: ChangedBy = "owner",
     ) -> Schedule | None:
         """Change the parts that are named; ``None`` when the Schedule is not this owner's.
 
@@ -162,6 +167,7 @@ class ScheduleService:
             cadence=cadence,
             max_tokens_per_day=max_tokens_per_day,
             goal_max_rounds=goal_max_rounds,
+            changed_by=changed_by,
         )
         return await self._store.edit(
             edited, reschedule=not edited.cadence.same_slots(current.cadence)
@@ -178,7 +184,9 @@ class ScheduleService:
         paused = await self._store.pause(owner_id, schedule_id, reason=None)
         return paused or await self._store.get(owner_id, schedule_id)
 
-    async def resume(self, user: UserContext, schedule_id: str) -> Schedule | None:
+    async def resume(
+        self, user: UserContext, schedule_id: str, *, changed_by: ChangedBy = "owner"
+    ) -> Schedule | None:
         """Let a paused Schedule fire again, acting as the caller from now on.
 
         Slots it slept through are not replayed beyond the one late fire the grace window allows.
@@ -196,6 +204,7 @@ class ScheduleService:
             schedule_id,
             principal=user,
             max_active=self._settings.max_active_per_owner,
+            changed_by=changed_by,
         )
         return resumed or await self._store.get(owner_id, schedule_id)
 

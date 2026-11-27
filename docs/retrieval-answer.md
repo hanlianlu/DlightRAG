@@ -287,6 +287,12 @@ run-local registry may include:
   settlement starts the next round, and the process that serves the Web/API surface recovers active
   goals at startup and about once a minute while `deployment.goal_recovery` is on
   ([ADR 0077](adr/0077-goal-mode-continues-automatically-and-pause-stops-the-running-round.md));
+- the user's Schedules — `list_schedules`, `create_schedule`, `update_schedule` (which also pauses
+  and resumes) and `delete_schedule` — on a turn a person started, which acceptance pins with the
+  Run's plan: a scheduled fire, a goal round and any kind not named as a person's hold none, and
+  children never do. They go through the owner's own Schedule rules; a turn makes one Schedule, and
+  a Schedule the Agent makes has no goal and takes the deployment's default token ceiling
+  ([ADR 0103](adr/0103-a-schedule-starts-a-run-on-the-clock-and-the-database-is-its-queue.md));
 - the tools of every enabled
   [Personal MCP Connection](personal-mcp-connections.md) its owner holds, their
   published definitions declared whole and pinned in the Run plan;

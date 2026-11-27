@@ -1,11 +1,12 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-/** What a reader's ask of a Schedule opens or does: its detail, its form, a confirmation, a command.
+/** What a reader's ask of the Schedules opens or does: their list, a detail, a form, a confirmation, a command.
  *
- * The Scheduled section and the detail dialog only say what was asked (`dl-schedule-intent`); this carries
- * it out, so a row's quick action and the same button in the detail are one act with one set of words. The
- * store answers how a command ended without wording it, and the reader is told here: a started run, the
- * reason a Schedule would not start, a Schedule that is gone. The dialogs stand outside the sidebar's
- * navigation, as the conversation dialogs do, so the drawer's focus trap never sees them.
+ * The Scheduled row, the list and the detail dialog only say what was asked (`dl-schedule-intent`); this
+ * carries it out, so every ask has one act and one set of words. The store answers how a command ended without
+ * wording it, and the reader is told here: a started run, the reason a Schedule would not start, a Schedule
+ * that is gone. The dialogs stand outside the sidebar's navigation, as the conversation dialogs do, so the
+ * drawer's focus trap never sees them. The detail and the form open on top of the list, which stays open
+ * under them.
  */
 
 import {msg, str} from '@lit/localize';
@@ -17,31 +18,29 @@ import type {ScheduleOutcome} from '../stores/schedule-store.ts';
 import {modalResult} from './modal.ts';
 import './schedule-detail.ts';
 import './schedule-form.ts';
+import './schedule-list.ts';
 import type {DlScheduleDetail} from './schedule-detail.ts';
 import type {DlScheduleForm} from './schedule-form.ts';
+import type {DlScheduleList} from './schedule-list.ts';
 import type {ScheduleIntentDetail} from './schedule-section.ts';
 import {requestToast} from './toast-request.ts';
 
 export class DlScheduleDialogs extends LightElement {
   static properties = {
     handles: {attribute: false},
-    returnFocus: {attribute: false},
     deleting: {state: true},
   };
 
   declare handles: AppHandles;
-  /** Where focus goes when the control a dialog was opened from is gone. */
-  declare returnFocus: () => void;
   /** The name of the Schedule the delete dialog is asking about, so its copy can name it. */
   declare deleting: string | null;
 
-  /** The control the detail dialog was opened from, which what it opens in turn returns focus to. */
+  /** The control the detail dialog was opened from (a row of the list), which what it opens in turn returns focus to. */
   #origin: HTMLElement | null = null;
 
   constructor() {
     super();
     this.handles = productionHandles();
-    this.returnFocus = () => {};
     this.deleting = null;
   }
 
@@ -52,6 +51,13 @@ export class DlScheduleDialogs extends LightElement {
       event.stopPropagation();
       void this.handle(event.detail);
     }, {signal: this.lifetime});
+    // A run's conversation opened from the detail takes the reader away from the Schedules: the list does not stay
+    // modal over it. The event goes on to the sidebar, which carries out the navigation.
+    this.addEventListener('dl-conversation-select', () => { this.#list()?.close(); }, {signal: this.lifetime});
+  }
+
+  #list(): DlScheduleList | null {
+    return this.querySelector<DlScheduleList>('dl-schedule-list');
   }
 
   #detail(): DlScheduleDetail | null {
@@ -65,6 +71,10 @@ export class DlScheduleDialogs extends LightElement {
   /** Carry out what was asked of a Schedule. */
   async handle(ask: ScheduleIntentDetail): Promise<void> {
     const store = this.handles.schedules;
+    if (ask.intent === 'list') {
+      await this.#list()?.open(ask.trigger);
+      return;
+    }
     if (ask.intent === 'new') {
       await this.#form()?.open(null, ask.trigger);
       return;
@@ -77,17 +87,24 @@ export class DlScheduleDialogs extends LightElement {
         this.#origin = ask.trigger;
         await this.#detail()?.open(schedule.scheduleId, ask.trigger);
         this.#origin = null;
+        await this.#backToList(ask.trigger);
         return;
       case 'edit':
         // The form takes the detail's place, and focus returns to what opened the detail.
         this.#detail()?.close();
         await this.#form()?.open(schedule, trigger);
+        await this.#backToList(trigger);
         return;
       case 'run': return this.#run(schedule);
       case 'pause': return this.#setPaused(schedule, true);
       case 'resume': return this.#setPaused(schedule, false);
       case 'delete': return this.#delete(schedule, trigger);
     }
+  }
+
+  /** A dialog opened from a row has closed: when the row is gone (its Schedule was deleted), focus goes to the list's entry. */
+  async #backToList(trigger: HTMLElement | null): Promise<void> {
+    if (trigger?.isConnected === false) await this.#list()?.focusEntry();
   }
 
   /** Tell the reader how a command ended when it did not end well; whether it did. */
@@ -145,16 +162,13 @@ export class DlScheduleDialogs extends LightElement {
     if (this.#told(outcome, schedule, msg(str`Could not delete ${schedule.name}.`, {id: 'schedules.deleteFailed'}))) {
       requestToast(this, {message: msg(str`Deleted ${schedule.name}.`, {id: 'schedules.deleted'})});
     }
-    if (outcome.kind !== 'failed') {
-      if (this.#detail()?.shows === schedule.scheduleId) this.#detail()?.close();
-      // The row the reader asked from is gone, and focus with it.
-      await this.updateComplete;
-      if (!trigger?.isConnected) this.returnFocus();
-    }
+    // The Schedule is gone, and its row and focus with it: the detail's close, which resolves its `open`, brings focus back.
+    if (outcome.kind !== 'failed' && this.#detail()?.shows === schedule.scheduleId) this.#detail()?.close();
   }
 
   protected override render(): TemplateResult {
     return html`
+      <dl-schedule-list .handles=${this.handles}></dl-schedule-list>
       <dl-schedule-detail .handles=${this.handles}></dl-schedule-detail>
       <dl-schedule-form .handles=${this.handles}></dl-schedule-form>
       <dialog id="schedule-delete-dialog" class="confirm-dialog" aria-labelledby="schedule-delete-title">

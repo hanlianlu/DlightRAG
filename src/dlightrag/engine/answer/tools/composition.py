@@ -102,6 +102,12 @@ from dlightrag.engine.answer.tools.memory import (
     undo_declaration,
     undo_tool,
 )
+from dlightrag.engine.answer.tools.schedules import (
+    SCHEDULE_TOOL_NAMES,
+    ScheduleHost,
+    schedule_tool_declarations,
+    schedule_tools,
+)
 from dlightrag.engine.answer.tools.search import (
     KnowledgeRetrieval,
     RegisterWebSource,
@@ -190,6 +196,7 @@ class ResearchToolDeclarations(Protocol):
         model_guidance: str,
         injected: Sequence[ToolDeclaration],
         mcp_resources: bool = False,
+        schedules: bool = False,
     ) -> tuple[ToolDeclaration, ...]: ...
 
 
@@ -206,6 +213,7 @@ def research_tool_declarations(
     subagents: Sequence[ToolDeclaration] = (),
     memory: bool = False,
     goals: bool = False,
+    schedules: bool = False,
     skills: Sequence[ToolDeclaration] = (),
     injected: Sequence[ToolDeclaration] = (),
     mcp_resources: bool = False,
@@ -269,6 +277,8 @@ def research_tool_declarations(
         )
     if goals and not child:
         declarations.extend(goal_tool_declarations())
+    if schedules and not child:
+        declarations.extend(schedule_tool_declarations())
     declarations.extend(skills)
     try:
         registry = ToolRegistry(declarations)
@@ -314,6 +324,7 @@ def compose_research_tools(
     subagent_host: SubagentHost | None = None,
     memory_host: MemoryHost | None = None,
     goal_host: GoalHost | None = None,
+    schedule_host: ScheduleHost | None = None,
     mcp_resource_host: McpResourceHost | None = None,
     skill_tools: list[AgentTool] | None = None,
     delivery_ledger: DeliveryLedger | None = None,
@@ -348,6 +359,7 @@ def compose_research_tools(
         subagents=child_declarations,
         memory=memory_host is not None,
         goals=goal_host is not None,
+        schedules=schedule_host is not None,
         skills=skill_tools or (),
         injected=injected_tools,
         mcp_resources=mcp_resource_host is not None,
@@ -467,6 +479,7 @@ def compose_research_tools(
         *bound_children,
         *(skill_tools or ()),
         *(goal_tools(host=goal_host) if goal_host else ()),
+        *(schedule_tools(host=schedule_host) if schedule_host else ()),
     ):
         bindings[tool.name] = lambda tool=tool: tool
     if mcp_resource_host is not None:
@@ -605,6 +618,7 @@ CHILD_FORBIDDEN_TOOLS = frozenset(
         "reply_subagent",
         *MEMORY_MUTATION_TOOLS,
         *GOAL_TOOL_NAMES,
+        *SCHEDULE_TOOL_NAMES,
         "attach_artifact",
         "publish_skill",
         "delete_skill",

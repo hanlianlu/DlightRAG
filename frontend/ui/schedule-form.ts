@@ -342,7 +342,7 @@ export class DlScheduleForm extends LightElement {
       <label class=${styles.field}>
         <span class=${styles.caption}>${caption}</span>
         ${control}
-        ${hint ? html`<span class=${styles.hint}>${hint}</span>` : nothing}
+        ${hint ? html`<span class="dl-note">${hint}</span>` : nothing}
       </label>`;
   }
 
@@ -444,7 +444,7 @@ export class DlScheduleForm extends LightElement {
             <input class="dl-input ${styles.wide}" data-field="zone" list="schedule-zones" autocomplete="off" spellcheck="false"
               .value=${live(draft.zone)}
               @input=${(event: Event) => { this.#set({zone: (event.currentTarget as HTMLInputElement).value}, true); }}>
-            <span class=${styles.hint}>${msg('An IANA zone such as Europe/Stockholm. A recurrence follows its clock through daylight saving.', {id: 'schedules.zoneHint'})}</span>
+            <span class="dl-note">${msg('An IANA zone such as Europe/Stockholm. A recurrence follows its clock through daylight saving.', {id: 'schedules.zoneHint'})}</span>
           </label>
           <datalist id="schedule-zones">${Intl.supportedValuesOf('timeZone').map((zone) => html`<option value=${zone}></option>`)}</datalist>` : nothing}
       </div>`;
@@ -491,7 +491,7 @@ export class DlScheduleForm extends LightElement {
               @change=${() => { chosen(value); }}>
             <span>${label}</span>
           </label>`)}
-        ${hint ? html`<span id=${`schedule-${name}-hint`} class=${styles.hint}>${hint}</span>` : nothing}
+        ${hint ? html`<span id=${`schedule-${name}-hint`} class="dl-note">${hint}</span>` : nothing}
       </fieldset>`;
   }
 
@@ -571,7 +571,7 @@ export class DlScheduleForm extends LightElement {
                   placeholder="0 8 * * 1" .value=${live(draft.cadence.cron)}
                   aria-label=${msg('Cron expression', {id: 'scheduleForm.cronLabel'})}
                   @input=${(event: Event) => { this.#setCadence({cron: (event.currentTarget as HTMLInputElement).value}); }}>
-                <span class=${styles.hint}>${msg('Five fields: minute, hour, day of month, month, day of week.', {id: 'schedules.cronHint'})}</span>
+                <span class="dl-note">${msg('Five fields: minute, hour, day of month, month, day of week.', {id: 'schedules.cronHint'})}</span>
               </label>` : nothing}
             ${this.#summary(draft)}
           </fieldset>
@@ -580,7 +580,7 @@ export class DlScheduleForm extends LightElement {
         </div>
         <div class="dl-dialog-actions ${styles.actions}">
           <button type="button" ?disabled=${draft.saving} @click=${() => { this.#close('cancel'); }}>${msg('Cancel', {id: 'schedules.cancel'})}</button>
-          <button type="submit" class="primary-btn" ?disabled=${draft.saving}>${
+          <button type="submit" class="dl-dialog-primary" ?disabled=${draft.saving}>${
             creating ? msg('Create', {id: 'scheduleForm.create'}) : msg('Save', {id: 'scheduleForm.save'})}</button>
         </div>
       </form>`;

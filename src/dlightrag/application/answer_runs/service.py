@@ -2,6 +2,7 @@
 """Durable answer runs over already-authorized canonical workspaces."""
 
 import asyncio
+import logging
 import re
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import aclosing, asynccontextmanager
@@ -98,6 +99,7 @@ from dlightrag.engine.answer.tools.composition import (
     ResearchToolDeclarations,
     research_tool_declarations,
 )
+from dlightrag.engine.answer.tools.schedules import SCHEDULE_TOOLS_PIN, schedule_tools_offered
 from dlightrag.engine.network_admission import public_http_url_identity
 from dlightrag.engine.rag.corpus.sources.source_contract import safe_source_filename
 from dlightrag.engine.rag.retrieval.models import (
@@ -158,6 +160,8 @@ from .timeline_index import (
     TimelineIndex,
     TimelineIndexCache,
 )
+
+logger = logging.getLogger(__name__)
 
 #: Accepted input uploads, in the precedence one ordinal resolves against.
 _INPUT_REFERENCE_KINDS: tuple[ArtifactReferenceKind, ...] = (
@@ -579,6 +583,12 @@ class Caller(Protocol):
 
     @property
     def claims(self) -> Mapping[str, object]: ...
+
+
+class CallerRecorder(Protocol):
+    """Keeps the caller of a turn that is offered the Agent's Schedule tools, as its owner's identity."""
+
+    async def __call__(self, *, owner_id: str, caller: Caller) -> None: ...
 
 
 class RunPolicies(Protocol):
@@ -1219,6 +1229,7 @@ class AnswerService:
         research_tool_declarations: ResearchToolDeclarations | None = None,
         bind_research: Callable[..., Awaitable[BoundResearchConnections]] | None = None,
         memory_capability: Callable[..., Awaitable[tuple[bool, int]]] | None = None,
+        record_caller: CallerRecorder | None = None,
         protected_skill_documents: Callable[[], frozenset[tuple[str, str]]],
         protected_text: Callable[[str], str] | None = None,
         run_retention_seconds: int = 365 * 24 * 3600,
@@ -1235,6 +1246,8 @@ class AnswerService:
         self._research_tool_declarations = research_tool_declarations
         self._bind_research = bind_research
         self._memory_capability = memory_capability
+        #: ``None`` where this deployment runs no Schedules, and the Agent holds no Schedule tools.
+        self._record_caller = record_caller
         self._protected_skill_documents = protected_skill_documents
         # The content gate behind every reader-facing transcript surface. None in a
         # process composed without one (tests, a tool-only slice): the header fast path
@@ -1372,6 +1385,12 @@ class AnswerService:
         # without the limit or the ceiling the document sets for this caller.
         effort_ceiling = await self._policies.effort_ceiling(caller)
         active_run_limit = await self._policies.active_run_limit(caller)
+        # Offered the Schedule tools, pinned with the Run like its tools: whichever process executes
+        # it composes what it was accepted with.
+        schedule_tools = "research" in allowed_modes and schedule_tools_offered(
+            run_request.continuation_kind
+        )
+        await self._keep_caller(owner_id, caller, schedule_tools)
         async with self._prepare_input(
             run_request,
             resources=acceptance_resources or None,
@@ -1380,6 +1399,7 @@ class AnswerService:
             allowed_modes=allowed_modes,
             memory_enabled=memory_enabled,
             agent_may_register=agent_may_register,
+            schedule_tools=schedule_tools,
             effort_ceiling=effort_ceiling,
         ) as prepare:
             for attempt in range(2):
@@ -1398,6 +1418,7 @@ class AnswerService:
                 prepared_input["profile_memory_enabled"] = memory_enabled
                 prepared_input["profile_memory_epoch"] = memory_epoch
                 prepared_input[MAY_REGISTER_PIN] = agent_may_register
+                prepared_input[SCHEDULE_TOOLS_PIN] = schedule_tools
                 try:
                     return await self._admission.admit(
                         partial(
@@ -1442,6 +1463,23 @@ class AnswerService:
                     if attempt == 1:
                         raise AnswerConnectionsChangedError() from exc
         raise RuntimeError("Answer acceptance exhausted its bounded attempts")
+
+    async def _keep_caller(
+        self, owner_id: str, caller: Caller | None, schedule_tools: bool
+    ) -> None:
+        """Keep who sent a turn the Agent's Schedule tools are offered in, before the Run can start.
+
+        The Run's own input never holds it: the owner has one record of the identity of the latest
+        human turn (ADR 0103 Decision 12). A turn that is not offered the tools, and a turn with no
+        caller (a queued message delivered later), leaves the record as it was; one that cannot be
+        kept never fails the turn, and the tools then refuse as unavailable.
+        """
+        if not schedule_tools or self._record_caller is None or caller is None:
+            return
+        try:
+            await self._record_caller(owner_id=owner_id, caller=caller)
+        except Exception:
+            logger.warning("Could not keep the caller of a turn for Schedules", exc_info=True)
 
     def _reject_unsupported_mode(
         self, request: AnswerRunRequest
@@ -2781,6 +2819,7 @@ class AnswerService:
         requested_mode: AnswerMode,
         allowed_modes: frozenset[ResolvedMode],
         agent_may_register: bool,
+        schedule_tools: bool,
         effort_ceiling: AnswerEffort,
         memory_enabled: bool = True,
     ) -> AsyncIterator[
@@ -2800,6 +2839,7 @@ class AnswerService:
             allowed_modes=allowed_modes,
             memory_enabled=memory_enabled,
             agent_may_register=agent_may_register,
+            schedule_tools=schedule_tools,
             effort_ceiling=effort_ceiling,
             resource_identity=resource_identity,
         ) as project:
@@ -2872,6 +2912,7 @@ class AnswerService:
         requested_mode: AnswerMode,
         allowed_modes: frozenset[ResolvedMode],
         agent_may_register: bool,
+        schedule_tools: bool,
         effort_ceiling: AnswerEffort,
         memory_enabled: bool = True,
         resource_identity: str,
@@ -2937,12 +2978,14 @@ class AnswerService:
                             ),
                             injected=connection_tools,
                             mcp_resources=resource_tools_available and bool(connection_surface),
+                            schedules=schedule_tools,
                         )
                         if self._research_tool_declarations is not None
                         else research_tool_declarations(
                             web_search=web_search,
                             injected=connection_tools,
                             mcp_resources=resource_tools_available and bool(connection_surface),
+                            schedules=schedule_tools,
                         )
                     )
                     agent_run_plan = AgentRunPlan.from_tools(

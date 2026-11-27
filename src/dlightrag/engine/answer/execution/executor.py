@@ -261,6 +261,12 @@ from dlightrag.engine.answer.tools.resources import (
     make_resource_reader,
     make_resource_viewer,
 )
+from dlightrag.engine.answer.tools.schedules import (
+    AnswerScheduleService,
+    ScheduleHost,
+    UnavailableSchedules,
+    schedule_tools_pinned,
+)
 from dlightrag.engine.answer.tools.subagents import (
     DEFAULT_CHILD_CONCURRENCY,
     ChildContextSnapshot,
@@ -501,6 +507,7 @@ class AnswerExecutor:
         working_dir: str = "./dlightrag_storage",
         memory_store: MemoryStore | None = None,
         goal_service: AnswerGoalService | None = None,
+        schedule_service: AnswerScheduleService | None = None,
         memory_recall_enabled: Callable[..., Awaitable[bool]] | None = None,
         memory_capability_current: Callable[..., Awaitable[bool]] | None = None,
         connection_tool_resolver: ResearchConnectionToolResolver | None = None,
@@ -536,6 +543,9 @@ class AnswerExecutor:
         self._memory = Memory(memory_store) if memory_store is not None else None
         #: The durable goal capable of this deployment; ``None`` composes no goal tools.
         self._goal_service = goal_service
+        #: The owner's Schedules. A Run is composed with the Schedule tools it was accepted with,
+        #: whichever process executes it, so a process with none answers them as unavailable.
+        self._schedule_service = schedule_service
         self._memory_recall_enabled = memory_recall_enabled
         self._memory_capability_current = memory_capability_current
         self._connection_tool_resolver = connection_tool_resolver
@@ -561,6 +571,17 @@ class AnswerExecutor:
             if self._browser is not None:
                 await self._browser.provider.aclose()
 
+    def _schedule_host(self, session: RunSession, request: AnswerRunInput) -> ScheduleHost | None:
+        """The Schedule tools this Run was accepted with, or none: the pin decides, not this process."""
+        if not schedule_tools_pinned(session.prepared_input or {}):
+            return None
+        return ScheduleHost(
+            service=self._schedule_service or UnavailableSchedules(),
+            owner_id=session.owner_id,
+            run_id=session.run_id,
+            workspaces=request.workspaces,
+        )
+
     def validate_active_prepared_input(self, prepared: Mapping[str, Any]) -> None:
         """Validate active durable Answer input using the executor's model bindings."""
         validate_active_answer_input(
@@ -578,6 +599,7 @@ class AnswerExecutor:
         model_guidance: str,
         injected: Sequence[ToolDeclaration],
         mcp_resources: bool = False,
+        schedules: bool = False,
     ) -> tuple[ToolDeclaration, ...]:
         """Project configured capabilities without constructing execution dependencies.
 
@@ -600,6 +622,7 @@ class AnswerExecutor:
             subagents=subagent_declarations(model_guidance=model_guidance),
             memory=memory and self._memory_store is not None,
             goals=self._goal_service is not None,
+            schedules=schedules,
             skills=(
                 self._skills_bundle_factory.declarations(child=False)
                 if self._skills_bundle_factory is not None
@@ -1737,6 +1760,7 @@ class AnswerExecutor:
                             completion_refusal=run.orchestrator.goal_completion_refusal,
                         )
                     )
+                run.orchestrator.bind_schedules(self._schedule_host(session, request))
                 # Keep partial's fence keywords explicit: expanding a dict here
                 # makes Pyright erase the remaining callback parameters.
                 persist_child_runtime = _check_child_write(

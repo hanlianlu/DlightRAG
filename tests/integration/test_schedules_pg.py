@@ -14,6 +14,7 @@ import asyncio
 import json
 import uuid
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -103,6 +104,78 @@ async def _fires(pool: Any, schedule: Schedule) -> list[Any]:
             "SELECT * FROM dlightrag_schedule_fires WHERE schedule_id = $1::uuid ORDER BY slot",
             schedule.schedule_id,
         )
+
+
+async def test_an_owner_keeps_one_identity_that_the_next_human_turn_replaces(
+    store: PGScheduleStore, pool: Any
+) -> None:
+    assert await store.principal_of(OWNER) is None
+
+    await store.remember_principal(OWNER, USER)
+    await store.remember_principal("someone-else", OTHER)
+    assert await store.principal_of(OWNER) == USER
+
+    later = UserContext(user_id="dave", auth_mode="jwt", claims={"iss": "https://issuer", "x": 2})
+    await store.remember_principal(OWNER, later)
+
+    assert await store.principal_of(OWNER) == later
+    assert await store.principal_of("someone-else") == OTHER
+
+    # An identity no turn has refreshed for a day is no one's latest turn: the Agent acts under none.
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE dlightrag_owner_principals SET updated_at = NOW() - INTERVAL '2 days' "
+            "WHERE owner_id = $1",
+            OWNER,
+        )
+    assert await store.principal_of(OWNER) is None
+    async with pool.acquire() as conn:
+        rows = await conn.fetchval(
+            "SELECT count(*) FROM dlightrag_owner_principals WHERE owner_id = $1", OWNER
+        )
+    assert rows == 1
+
+
+async def test_keeping_an_identity_drops_the_records_nobody_can_use_any_more(
+    store: PGScheduleStore, pool: Any
+) -> None:
+    other = owner_id_from_user(OTHER)
+    await store.remember_principal(other, OTHER)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE dlightrag_owner_principals SET updated_at = NOW() - INTERVAL '2 days'"
+        )
+
+    await store.remember_principal(OWNER, USER)
+
+    async with pool.acquire() as conn:
+        kept = await conn.fetch("SELECT owner_id FROM dlightrag_owner_principals")
+    assert [row["owner_id"] for row in kept] == [OWNER]
+
+
+async def test_a_schedule_says_who_last_wrote_it_and_only_two_values_hold(
+    store: PGScheduleStore, pool: Any
+) -> None:
+    made = await store.create(replace(_schedule(), changed_by="agent"), max_active=20)
+    assert made.changed_by == "agent"
+
+    paused = await store.pause(OWNER, made.schedule_id, reason=None)
+    assert paused is not None and paused.changed_by == "agent"
+    edited = await store.edit(replace(paused, changed_by="owner"), reschedule=False)
+    assert edited is not None and edited.changed_by == "owner"
+    await store.pause(OWNER, made.schedule_id, reason=None)
+    resumed = await store.resume(
+        OWNER, made.schedule_id, principal=USER, max_active=20, changed_by="agent"
+    )
+    assert resumed is not None and resumed.changed_by == "agent"
+    assert (await store.get(OWNER, made.schedule_id)) == resumed
+
+    async with pool.acquire() as conn:
+        with pytest.raises(asyncpg.CheckViolationError, match="changed_by_check"):
+            await conn.execute(
+                "UPDATE dlightrag_schedules SET changed_by = 'script' WHERE schedule_id = $1::uuid",
+                made.schedule_id,
+            )
 
 
 async def test_a_schedule_round_trips_with_the_identity_it_acts_as(store: PGScheduleStore) -> None:

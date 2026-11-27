@@ -10,7 +10,7 @@ function schedule(id: string, extra: Partial<Schedule> = {}): Schedule {
   return {
     scheduleId: id, name: id, prompt: 'Ask.', mode: 'research', workspaces: ['default'], target: 'new_conversation',
     conversationId: null, zone: 'UTC', cron: '0 8 * * 1', at: null, maxTokensPerDay: 1000, goalMaxRounds: null,
-    state: 'active', pauseReason: null, nextFireAt: null, ...extra,
+    state: 'active', pauseReason: null, changedBy: 'owner', nextFireAt: null, ...extra,
   };
 }
 
@@ -78,6 +78,31 @@ test('a refresh that fails leaves the list as it was read', async () => {
   await store.refresh();
 
   assert.deepEqual([store.listState, store.schedules.length], ['ready', 1]);
+});
+
+test('a Run the page watched settling reads the list again once the list has been asked for', async () => {
+  let reads = 0;
+  const store = new ScheduleStore(api({list: async () => {
+    reads += 1;
+    return {schedules: reads === 1 ? [] : [schedule('made-by-the-agent')], defaultMaxTokensPerDay: 1};
+  }}));
+  let settle = () => {};
+  let released = 0;
+  const release = store.followRuns({subscribeSettled: (handler) => { settle = handler; return () => { released += 1; }; }});
+  const flush = () => new Promise((resolve) => { setImmediate(resolve); });
+
+  settle();
+  await flush();
+  assert.equal(reads, 0, 'a list nobody asked for is left to its first load');
+
+  await store.load();
+  settle();
+  await flush();
+
+  assert.equal(reads, 2);
+  assert.deepEqual(store.schedules.map((row) => row.scheduleId), ['made-by-the-agent']);
+  release();
+  assert.equal(released, 1);
 });
 
 test('a command\'s reply replaces its own row only, and says how it ended', async () => {

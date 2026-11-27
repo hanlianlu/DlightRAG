@@ -48,6 +48,7 @@ from dlightrag.engine.answer.research.persistence import (
 )
 from dlightrag.engine.answer.tools.child_activity import render_child_activity
 from dlightrag.engine.answer.tools.memory import MEMORY_MUTATION_TOOLS
+from dlightrag.engine.answer.tools.schedules import SCHEDULE_TOOL_NAMES
 from dlightrag.engine.runtime.coordinator import RunCancellationObserved
 
 type ChildStatus = Literal["running", "succeeded", "failed", "cancelled"]
@@ -564,7 +565,8 @@ _SPAWN_DESCRIPTION = (
     "each comes back at once and the children run beside you, in parallel as capacity "
     "allows. A child has your tools except those that spend the Run's authority: "
     f"controlling children, changing memory ({', '.join(MEMORY_MUTATION_TOOLS)}) "
-    "holding the Run's goal (create_goal, get_goal, update_goal), and publishing "
+    "holding the Run's goal (create_goal, get_goal, update_goal), keeping the user's Schedules "
+    f"({', '.join(SCHEDULE_TOOL_NAMES)}), and publishing "
     "(attach_artifact, publish_skill, delete_skill, set_skill_enabled). What a child finds "
     "becomes citable once you read its result with wait_subagent or subagent_status; if you "
     "end your turn first, the Run stays open and sends you the results when every child of "

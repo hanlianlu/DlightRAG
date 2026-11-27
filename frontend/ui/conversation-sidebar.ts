@@ -21,7 +21,7 @@ import type {
   DlConversationList,
 } from './conversation-list.ts';
 import type {DlScheduleDialogs} from './schedule-dialogs.ts';
-import type {DlScheduleSection, ScheduleIntentDetail} from './schedule-section.ts';
+import type {ScheduleIntentDetail} from './schedule-section.ts';
 import {requestToast} from './toast-request.ts';
 import './conversation-list.ts';
 import './schedule-dialogs.ts';
@@ -234,10 +234,6 @@ export class DlConversationSidebar extends LightElement {
     return this.querySelector<DlConversationList>('dl-conversation-list');
   }
 
-  #schedules(): DlScheduleSection | null {
-    return this.querySelector<DlScheduleSection>('dl-schedule-section');
-  }
-
   #newButton(): HTMLButtonElement | null {
     return this.querySelector<HTMLButtonElement>('#new-conversation-btn');
   }
@@ -410,7 +406,7 @@ export class DlConversationSidebar extends LightElement {
   #documentKeydown = (event: KeyboardEvent): void => {
     // An Escape that cancels an IME composition belongs to the composition, not to the drawer.
     if (isImeKey(event) || event.key !== 'Escape' || this.#desktop.matches || !this.drawerOpen) return;
-    if (document.querySelector('dialog[open]') || this.#list()?.menuOpen || this.#schedules()?.menuOpen) return;
+    if (document.querySelector('dialog[open]') || this.#list()?.menuOpen) return;
     event.preventDefault();
     void this.close(true);
   };
@@ -464,7 +460,7 @@ export class DlConversationSidebar extends LightElement {
     void (event.detail.kind === 'reload' ? this.routes?.reload() : this.#requestNewConversation());
   };
 
-  /** What the reader asked of a Schedule is carried out by the dialogs, which stand outside the navigation. */
+  /** What the reader asked of the Schedules (the Scheduled row asks for their list) is carried out by the dialogs, which stand outside the navigation. */
   #scheduleIntent = (event: CustomEvent<ScheduleIntentDetail>): void => {
     event.stopPropagation();
     void this.querySelector<DlScheduleDialogs>('dl-schedule-dialogs')?.handle(event.detail);
@@ -551,7 +547,6 @@ export class DlConversationSidebar extends LightElement {
     return html`
       <dl-schedule-dialogs
         .handles=${this.handles}
-        .returnFocus=${() => { this.#schedules()?.focusHeader(); }}
         @dl-conversation-select=${this.#selectConversation}
       ></dl-schedule-dialogs>
       <dialog id="delete-conversation-dialog" class="confirm-dialog"

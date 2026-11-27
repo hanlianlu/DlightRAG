@@ -59,6 +59,7 @@ from dlightrag.engine.answer.feedback import AnswerFeedback
 from dlightrag.engine.answer.image_capability import AnswerImageCapability
 from dlightrag.engine.answer.resources.models import ResourceInput
 from dlightrag.engine.answer.runs.routing import decide_resolved_mode
+from dlightrag.engine.answer.tools.schedules import SCHEDULE_TOOL_NAMES, SCHEDULE_TOOLS_PIN
 from dlightrag.engine.runtime.records import (
     CancellationOutcome,
     PendingArtifact,
@@ -74,6 +75,7 @@ from dlightrag.engine.runtime.records import (
 )
 from tests.support.agent_browser import never_registers
 from tests.support.callers import ANONYMOUS as _ANON
+from tests.support.callers import signed_in
 from tests.support.policy_store import InMemoryPolicyStore
 from tests.unit.conftest import answer_image_policy
 
@@ -807,6 +809,7 @@ def _service(
     memory_capability: Any = None,
     agent_may_register: Any = never_registers,
     research_tool_declarations: Any = None,
+    record_caller: Any = None,
     bind_research: Any = None,
     models: Any = None,
     policies: RuntimePolicies | None = None,
@@ -832,6 +835,7 @@ def _service(
         agent_may_register=agent_may_register,
         policies=policies or RuntimePolicies(store=InMemoryPolicyStore()),
         research_tool_declarations=research_tool_declarations,
+        record_caller=record_caller,
         bind_research=bind_research,
         child_roster_cursor_secret=b"answer-service-child-roster-test",
         protected_skill_documents=lambda: protected_skill_documents,
@@ -861,6 +865,91 @@ async def test_acceptance_pins_disabled_profile_memory_without_reserving_its_cap
     prepared = store.created[0]["prepared_input"]
     assert prepared["profile_memory_enabled"] is False
     assert prepared["profile_memory_epoch"] == 7
+
+
+def _plan_holds_schedule_tools(prepared: dict[str, Any]) -> bool:
+    from dlightrag.engine.answer.execution.input import AnswerRunInput
+
+    plan = AnswerRunInput.from_request(prepared).agent_run_plan
+    assert plan is not None
+    names = {tool.name for tool in plan.tools}
+    assert names >= set(SCHEDULE_TOOL_NAMES) or not names & set(SCHEDULE_TOOL_NAMES)
+    return bool(names & set(SCHEDULE_TOOL_NAMES))
+
+
+async def test_a_turn_a_person_started_keeps_its_caller_outside_the_runs_own_input() -> None:
+    store = _Store()
+    kept: list[tuple[str, Any]] = []
+
+    async def record(*, owner_id: str, caller: Any) -> None:
+        kept.append((owner_id, caller))
+
+    service = _service(store=store, record_caller=record)
+    dave = signed_in("dave@example.com")
+    for kind in (None, "follow_up", "fork"):
+        await service.create(
+            request=_request(mode="research", continuation_kind=kind),
+            owner_id=_OWNER,
+            caller=dave,
+        )
+
+    assert kept == [(_OWNER, dave)] * 3
+    assert all("dave@example.com" not in str(row["prepared_input"]) for row in store.created)
+    # The pin and the accepted plan say the same, so any process composes the Run as accepted.
+    for row in store.created:
+        assert row["prepared_input"][SCHEDULE_TOOLS_PIN] is True
+        assert _plan_holds_schedule_tools(row["prepared_input"])
+
+
+@pytest.mark.parametrize(
+    ("kind", "caller"),
+    [
+        ("scheduled", signed_in("dave@example.com")),
+        # A goal Schedule's fire carries its owner's real identity, and still starts no human turn.
+        ("goal_round", signed_in("dave@example.com")),
+        ("a_kind_nobody_named", signed_in("dave@example.com")),
+        ("goal_round", None),
+        (None, None),
+    ],
+)
+async def test_a_scheduled_fire_a_goal_round_or_a_turn_with_no_caller_keeps_nothing(
+    kind: str | None, caller: Any
+) -> None:
+    store = _Store()
+    kept: list[Any] = []
+
+    async def record(**kwargs: Any) -> None:
+        kept.append(kwargs)
+
+    service = _service(store=store, record_caller=record)
+    await service.create(
+        request=_request(mode="research", continuation_kind=kind), owner_id=_OWNER, caller=caller
+    )
+
+    assert kept == []
+    if kind is not None:
+        assert store.created[0]["prepared_input"][SCHEDULE_TOOLS_PIN] is False
+        assert not _plan_holds_schedule_tools(store.created[0]["prepared_input"])
+
+
+async def test_a_caller_that_cannot_be_kept_does_not_fail_the_turn(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    store = _Store()
+
+    async def broken(**_kwargs: Any) -> None:
+        raise RuntimeError("the database is away")
+
+    service = _service(store=store, record_caller=broken)
+    with caplog.at_level("WARNING"):
+        await service.create(
+            request=_request(mode="research"),
+            owner_id=_OWNER,
+            caller=signed_in("dave@example.com"),
+        )
+
+    assert len(store.created) == 1
+    assert "Could not keep the caller of a turn for Schedules" in caplog.text
 
 
 async def test_an_accepted_effort_is_recorded_and_distinguishes_replays() -> None:

@@ -45,6 +45,9 @@ PROMPT_MAX_CHARS = 20_000
 type ScheduleMode = Literal["research", "fast"]
 SCHEDULE_MODES: tuple[ScheduleMode, ...] = ("research", "fast")
 
+#: Who last made or edited a Schedule: its owner, or the Agent on the owner's behalf from a chat.
+type ChangedBy = Literal["owner", "agent"]
+
 #: What reads "now" for a Schedule. It is asynchronous because the one clock every process shares
 #: is the database's (``ScheduleStore.now``), so replicas whose own clocks differ agree on what is due.
 type Clock = Callable[[], Awaitable[datetime]]
@@ -102,7 +105,8 @@ class Schedule:
     prompt, with that round cap, and the fire's Run is the Goal's round 1 (Decision 10).
     ``principal_stamped_at`` is when the identity was last confirmed by its owner (creating,
     editing or resuming), and ``resumed_at`` when the Schedule last resumed: a failure streak
-    counts only the Fires made after it.
+    counts only the Fires made after it. ``changed_by`` is who last made, edited or resumed it, so
+    an owner can tell what the Agent wrote; pausing, deleting and running now leave it as it was.
     """
 
     schedule_id: str
@@ -124,6 +128,7 @@ class Schedule:
     resumed_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    changed_by: ChangedBy = "owner"
 
     @classmethod
     def create(
@@ -140,6 +145,7 @@ class Schedule:
         max_tokens_per_day: int,
         now: datetime,
         goal_max_rounds: int | None = None,
+        changed_by: ChangedBy = "owner",
     ) -> Self:
         """A new active Schedule, waiting for the cadence's first slot."""
         schedule = cls(
@@ -162,6 +168,7 @@ class Schedule:
             resumed_at=None,
             created_at=now,
             updated_at=now,
+            changed_by=changed_by,
         )
         _check_goal(schedule)
         return schedule
@@ -178,6 +185,7 @@ class Schedule:
         cadence: Cadence | None = None,
         max_tokens_per_day: int | None = None,
         goal_max_rounds: int | None = None,
+        changed_by: ChangedBy = "owner",
     ) -> Self:
         """The Schedule with the named parts changed and ``principal`` as the identity it acts as.
 
@@ -202,6 +210,7 @@ class Schedule:
             principal=principal,
             principal_stamped_at=now,
             updated_at=now,
+            changed_by=changed_by,
         )
         if self.goal_max_rounds is None and goal_max_rounds is not None:
             raise ScheduleInputError("this Schedule does not start a goal, so it has no round cap")
@@ -440,6 +449,7 @@ __all__ = [
     "RUN_OUTCOMES",
     "SCHEDULE_MODES",
     "STREAK_STATES",
+    "ChangedBy",
     "Clock",
     "DuePlan",
     "Fire",

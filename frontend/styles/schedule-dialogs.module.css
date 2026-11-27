@@ -1,9 +1,10 @@
 /* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
 
-/* The Schedule dialogs: the form that makes or edits one, and the detail a row opens into. Both wear the
- * confirm dialog's face (surface, border, scrim, title) at a wider measure, and split into a title, a body
- * that scrolls, and a footer that stays, so a long history or a tall form never takes the buttons away. The
- * fields are the primitives' own (`.dl-input`, `.dl-dialog-input`), all at the one control height. */
+/* The Schedule dialogs: the list the sidebar's Scheduled row opens, the detail one of its rows opens into, and
+ * the form that makes or edits one. All wear the confirm dialog's face (surface, border, scrim, title) at a
+ * wider measure, and split into a title, a body that scrolls, and a footer that stays, so a long list, a long
+ * history or a tall form never takes the buttons away. The fields are the primitives' own (`.dl-input`,
+ * `.dl-dialog-input`), all at the one control height. */
 
 @layer features {
   .dialog {
@@ -61,13 +62,6 @@
     color: var(--color-text-muted);
     font-size: var(--font-size-caption);
     font-weight: 500;
-    margin: 0;
-  }
-
-  .hint {
-    color: var(--color-text-muted);
-    font-size: var(--font-size-caption);
-    line-height: var(--line-height-control);
     margin: 0;
   }
 

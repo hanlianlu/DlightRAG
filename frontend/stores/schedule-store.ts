@@ -1,5 +1,5 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-/** The owner's Schedules, as the sidebar's Scheduled section and its dialogs share them.
+/** The owner's Schedules, as the sidebar's Scheduled row and the dialogs it opens share them.
  *
  * Each command answers the one Schedule it changed, so a reply replaces its row and nothing else, and a
  * row that is gone stays gone however late a reply for it arrives. A command says how it ended without
@@ -118,6 +118,15 @@ export class ScheduleStore extends Store {
     } finally {
       this.#reads.finish(signal);
     }
+  }
+
+  /** Read the list again whenever a Run the page watched settles: in it the Agent may have made, changed or deleted
+   *  a Schedule, and nothing else tells this list. A list nobody has asked for yet is left to its own first `load`.
+   *  Returns the unsubscribe. */
+  followRuns(runs: {subscribeSettled(handler: () => void): () => void}): () => void {
+    return runs.subscribeSettled(() => {
+      if (this.#listState !== 'idle') void this.refresh();
+    });
   }
 
   /** Forget what the signed-in owner had, as signing out must. */

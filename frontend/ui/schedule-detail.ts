@@ -160,14 +160,14 @@ export class DlScheduleDetail extends LightElement {
         return html`
           <p class=${styles.status} data-when>
             ${msg(str`Next run: ${nextRunText(schedule.nextFireAt, now, schedule.zone, locale)}`, {id: 'scheduleDetail.next'})}
-            ${schedule.zone === mine ? nothing : html`<span class=${styles.hint}>${
+            ${schedule.zone === mine ? nothing : html`<span class="dl-note">${
               msg(str`(your time ${slotText(schedule.nextFireAt, now, mine, locale)})`, {id: 'schedules.yourTime'})}</span>`}
           </p>`;
       }
       case 'paused':
         return html`
           <p class=${styles.status} data-when>${msg('Paused', {id: 'scheduleSection.paused'})}${
-            schedule.pauseReason === null ? nothing : html`<span class=${styles.hint} data-pause-reason> · ${schedule.pauseReason}</span>`}</p>`;
+            schedule.pauseReason === null ? nothing : html`<span class="dl-note" data-pause-reason> · ${schedule.pauseReason}</span>`}</p>`;
       case 'completed':
         return html`<p class=${styles.status} data-when>${msg('Done', {id: 'scheduleSection.done'})}</p>`;
     }
@@ -218,13 +218,13 @@ export class DlScheduleDetail extends LightElement {
     const history = this.history;
     if (history.kind === 'failed') {
       return html`
-        <p class=${styles.hint} role="alert">${msg('Could not load the history.', {id: 'schedules.historyFailed'})}
+        <p class="dl-note" role="alert">${msg('Could not load the history.', {id: 'schedules.historyFailed'})}
           <button type="button" class="dl-text-action" @click=${() => { void this.#read(null); }}>${msg('Retry', {id: 'scheduleSection.retry'})}</button></p>`;
     }
     if (history.kind === 'loading') {
-      return html`<p class=${styles.hint} role="status">${msg('Loading history…', {id: 'schedules.historyLoading'})}</p>`;
+      return html`<p class="dl-note" role="status">${msg('Loading history…', {id: 'schedules.historyLoading'})}</p>`;
     }
-    if (history.items.length === 0) return html`<p class=${styles.hint}>${msg('It has not run yet.', {id: 'scheduleDetail.noRuns'})}</p>`;
+    if (history.items.length === 0) return html`<p class="dl-note">${msg('It has not run yet.', {id: 'scheduleDetail.noRuns'})}</p>`;
     const locale = getLocale();
     return html`
       <ul class=${styles.fires} data-fires>
@@ -255,6 +255,7 @@ export class DlScheduleDetail extends LightElement {
               <div class=${styles.lead}>
                 <p class=${styles.cadence} data-cadence>${describeCadence(schedule, getLocale())} · ${schedule.zone}</p>
                 ${this.#when(schedule)}
+                ${schedule.changedBy === 'agent' ? html`<p class="dl-note" data-changed-by>${msg('Last changed by the Agent.', {id: 'scheduleDetail.changedByAgent'})}</p>` : nothing}
               </div>
               ${this.#prompt(schedule)}
               ${this.#actions(schedule)}

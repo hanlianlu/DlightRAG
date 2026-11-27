@@ -41,6 +41,7 @@ const wireSchedule = {
   goal_max_rounds: null,
   state: 'active',
   pause_reason: null,
+  changed_by: 'owner',
   next_fire_at: '2026-12-14T07:00:00.000000Z',
   created_at: '2026-12-07T10:00:20.000000Z',
   updated_at: '2026-12-07T10:00:20.000000Z',
@@ -62,7 +63,7 @@ function answering(reply: unknown, status = 200): Sent[] {
 
 test('the list keeps its times as dates, its recurrence or single time as stated, and carries the default ceiling', async () => {
   answering({
-    schedules: [wireSchedule, {...wireSchedule, schedule_id: 's2', cron: null, at: '2099-06-01T06:00:00.000000Z', state: 'paused', pause_reason: 'paused by its owner'}],
+    schedules: [wireSchedule, {...wireSchedule, schedule_id: 's2', cron: null, at: '2099-06-01T06:00:00.000000Z', state: 'paused', pause_reason: 'paused by its owner', changed_by: 'agent'}],
     default_max_tokens_per_day: 1_500_000,
   });
 
@@ -84,17 +85,21 @@ test('the list keeps its times as dates, its recurrence or single time as stated
     goalMaxRounds: null,
     state: 'active',
     pauseReason: null,
+    changedBy: 'owner',
     nextFireAt: new Date('2026-12-14T07:00:00Z'),
   });
   assert.equal(schedules[1].cron, null);
   assert.deepEqual(schedules[1].at, new Date('2099-06-01T06:00:00Z'));
   assert.equal(schedules[1].pauseReason, 'paused by its owner');
+  assert.equal(schedules[1].changedBy, 'agent');
 });
 
 test('a Schedule this client cannot interpret fails the read instead of being guessed', async () => {
   answering({schedules: [{...wireSchedule, state: 'sleeping'}], default_max_tokens_per_day: 1});
   await assert.rejects(listSchedules(), ApiError);
   answering({schedules: [{...wireSchedule, next_fire_at: 'Monday'}], default_max_tokens_per_day: 1});
+  await assert.rejects(listSchedules(), ApiError);
+  answering({schedules: [{...wireSchedule, changed_by: 'someone'}], default_max_tokens_per_day: 1});
   await assert.rejects(listSchedules(), ApiError);
 });
 

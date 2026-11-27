@@ -154,6 +154,26 @@ a.dl-btn {
     color: var(--color-on-danger);
 }
 
+/* The dialog's one affirmative action, beside its plain ones: the action fill on the same geometry as
+ * theirs, so it differs from them in colour and in nothing else. A disabled one dims and takes no hover
+ * with the rest of the row. */
+.dl-dialog-actions .dl-dialog-primary {
+    background: var(--color-action-bg);
+    border-color: var(--color-action-border);
+    color: var(--color-on-action);
+}
+
+.dl-dialog-actions .dl-dialog-primary:focus-visible {
+    outline: 2px solid var(--focus-ring-color);
+    outline-offset: 2px;
+}
+
+.dl-dialog-actions .dl-dialog-primary:hover:not(:disabled) {
+    background: var(--color-action-bg-hover);
+    border-color: var(--color-action-border-hover);
+    color: var(--color-on-action);
+}
+
 /* === Text action === */
 
 /* A control whose face is its own words: unlike `.dl-btn`, nothing is drawn around it, so it can
@@ -384,8 +404,9 @@ a.dl-btn {
 
 /* A native <button> inside a <nav>: an icon, a label, and a short trailing status. The item whose
  * page is showing carries aria-current="page" and the selected-row tint. The same row has a list
- * form (`dl-nav-item dl-nav-item--list`) for a screen that shows the navigation as a page of its
- * own: the full status line under the label and a disclosure, instead of the short status. The
+ * form (`dl-nav-item dl-nav-item--list`) for a bordered list of entries that each lead on to something (a
+ * phone's section list, the Schedules): the full status line under the label and a disclosure, instead of
+ * the short status. The
  * detail line stays in the tree in both forms, so the row's description never depends on its form. */
 
 .dl-nav-item {
@@ -474,8 +495,8 @@ a.dl-btn {
     flex: none;
 }
 
-/* The row as an entry of a bordered list: the list owns the outer border and clips its corners, so
- * the row is square, takes the list's text colour, and sits on a hairline under the row before it. */
+/* The row as an entry of a bordered list (a `.dl-list-card`): the list owns the outer border and clips its
+ * corners, so the row is square, takes the list's text colour, and sits on a hairline under the row before it. */
 .dl-nav-item--list {
     border-radius: 0;
     color: inherit;
@@ -498,6 +519,26 @@ a.dl-btn {
 
 .dl-nav-item--list .dl-nav-item-status {
     display: none;
+}
+
+/* === List card === */
+
+/* A bordered list of entries: the card owns the outer border and its rounded corners, clips its entries to
+ * them, and parts each entry from the one before with a hairline. Its bullets and indent go, so one class
+ * serves a `ul` of `li`s and a run of rows in a `nav` or `div`. It clips (`overflow: clip`) rather than
+ * hides: a hidden scroll container may shrink to nothing in a grid whose height is fixed, and the card was
+ * cut short where its dialog should have scrolled. */
+.dl-list-card {
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-card);
+    list-style: none;
+    margin: 0;
+    overflow: clip;
+    padding: 0;
+}
+
+.dl-list-card > * + * {
+    border-block-start: 1px solid var(--color-border-subtle);
 }
 
 /* The quiet label over a run of entries in a `nav` column, such as the sidebar's Recents. Its inline
@@ -543,7 +584,9 @@ a.dl-btn {
     margin-bottom: var(--space-component);
 }
 
-.confirm-dialog p {
+/* The dialog's paragraph face is for its own sentences: a `.dl-note` line keeps the note's face and the
+ * reset's margin, whatever element it is. */
+.confirm-dialog p:not(.dl-note) {
     color: var(--color-text-muted);
     font-size: var(--font-size-detail);
     line-height: var(--line-height-control);

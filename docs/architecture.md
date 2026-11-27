@@ -300,8 +300,8 @@ Vite supplies the static entry, pre-paint theme, locale, and built assets.
 FastAPI serves page and static assets plus same-origin `/web/api/*` commands,
 queries, and SSE; there is no server-side template UI. In the main document,
 the `dl-app` Shell composes light-DOM Lit Features: chat, conversations (with
-the Scheduled section above them, whose dialogs make, show and confirm a
-Schedule), workspaces and files, the Inspector (Files, Sources, or one Run's
+the Scheduled row above them, which opens the dialogs that list, make, show and
+confirm a Schedule), workspaces and files, the Inspector (Files, Sources, or one Run's
 Agent traces), the Artifact Canvas, and Settings (one dialog whose pages are
 elements of their own: Connections, Agent Accounts, Profile Memory, Skills,
 Conversation Sessions, and Language). Light DOM is composition; open Shadow DOM is reserved for

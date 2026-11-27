@@ -12,7 +12,9 @@ import {buttonNamed, waitFor} from '../testing/dom.ts';
 import {
   detailOpen,
   formOpen,
+  listOpen,
   mountSidebar,
+  rowButton,
   rowsShown,
   serving as servingSchedules,
   useWorkspaces,
@@ -529,7 +531,7 @@ it('conversation list has no serious axe violations with older conversations to 
   });
 });
 
-it('the Scheduled section, a Schedule\'s detail and the form that makes one have no serious axe violations', async () => {
+it('the Scheduled row, the Schedules dialog, a Schedule\'s detail and the form that makes one have no serious axe violations', async () => {
   servingSchedules({
     'GET /web/api/schedules/schedule-weekly-review/fires': () => Response.json({fires: [
       wireFire('f3', '2099-01-12T07:00:00.000000Z', 'succeeded', {conversation_id: 'conversation-3'}),
@@ -540,8 +542,9 @@ it('the Scheduled section, a Schedule\'s detail and the form that makes one have
       {at: '2099-01-05T07:00:00.000000Z', local: '2099-01-05T08:00:00+01:00'},
     ]}),
   }, [
-    wireSchedule('Weekly review', {prompt: Array.from({length: 7}, (_, index) => `Line ${index + 1} of the prompt.`).join('\n')}),
+    wireSchedule('Weekly review', {changed_by: 'agent', prompt: Array.from({length: 7}, (_, index) => `Line ${index + 1} of the prompt.`).join('\n')}),
     wireSchedule('Filing watch', {state: 'paused', pause_reason: 'paused by its owner', next_fire_at: null}),
+    wireSchedule('Launch', {state: 'completed', cron: null, at: '2026-12-01T07:00:00Z', next_fire_at: null}),
   ]);
   const app = document.createElement('div');
   app.className = 'app';
@@ -551,14 +554,14 @@ it('the Scheduled section, a Schedule\'s detail and the form that makes one have
   // The shell slides the compact drawer in by classing the body.
   document.body.classList.add('conversation-drawer-open');
   const section = sidebar.querySelector('dl-schedule-section')!;
-  await rowsShown(sidebar, 2);
-  // A row's menu is open beside the rows.
-  section.querySelector<HTMLButtonElement>('[data-menu-button]')!.click();
-  await waitFor(() => section.querySelector('dl-menu') !== null);
+  await waitFor(() => section.querySelector('[data-count]') !== null);
   expect(await seriousViolations(section)).to.deep.equal([]);
-  section.querySelector<HTMLButtonElement>('[data-menu-button]')!.click();
 
-  section.querySelector<HTMLButtonElement>('button.conversation-select')!.click();
+  const list = await listOpen(sidebar);
+  await rowsShown(sidebar, 3);
+  expect(await seriousViolations(list)).to.deep.equal([]);
+
+  rowButton(sidebar, 'schedule-weekly-review').click();
   const detail = await detailOpen(sidebar);
   await waitFor(() => detail.querySelectorAll('[data-fire]').length === 3);
   expect(await seriousViolations(detail)).to.deep.equal([]);
@@ -570,6 +573,44 @@ it('the Scheduled section, a Schedule\'s detail and the form that makes one have
   form.querySelector<HTMLInputElement>('[data-field="frequency"] input[value="weekly"]')!.click();
   await waitFor(() => form.querySelector('[data-day]') !== null);
   expect(await seriousViolations(form)).to.deep.equal([]);
+});
+
+it('the Schedules dialog has no serious axe violations while empty, loading, or when the list could not be read', async () => {
+  servingSchedules({}, []);
+  const app = document.createElement('div');
+  app.className = 'app';
+  document.body.append(app);
+  const {sidebar} = await mountSidebar(app);
+  document.body.classList.add('conversation-drawer-open');
+  const list = await listOpen(sidebar);
+  await waitFor(() => list.querySelector('[data-empty]') !== null);
+  expect(await seriousViolations(list)).to.deep.equal([]);
+  list.close();
+  await waitFor(() => !list.open);
+  document.body.replaceChildren();
+
+  // A list that is still being read: the dialog says so, with New schedule not yet offered.
+  servingSchedules({'GET /web/api/schedules': () => new Promise<Response>(() => {})});
+  const reading = document.createElement('div');
+  reading.className = 'app';
+  document.body.append(reading);
+  const pending = await mountSidebar(reading);
+  const loading = await listOpen(pending.sidebar);
+  expect(loading.textContent).to.contain('Loading schedules');
+  expect(await seriousViolations(loading)).to.deep.equal([]);
+  loading.close();
+  await waitFor(() => !loading.open);
+  document.body.replaceChildren();
+
+  servingSchedules({'GET /web/api/schedules': () => new Response('unavailable', {status: 503})});
+  const failing = document.createElement('div');
+  failing.className = 'app';
+  document.body.append(failing);
+  const broken = await mountSidebar(failing);
+  await waitFor(() => broken.handles.schedules.listState === 'error');
+  const failed = await listOpen(broken.sidebar);
+  await waitFor(() => failed.querySelector('[data-failed]') !== null);
+  expect(await seriousViolations(failed)).to.deep.equal([]);
 });
 
 it('workspace picker has no serious axe violations while open', async () => {

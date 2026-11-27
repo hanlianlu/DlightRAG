@@ -118,7 +118,7 @@ if (host) {
                 <span class="dl-nav-item-text"><span class="dl-nav-item-label">Disabled</span></span>
               </button>
             </nav>
-            <nav class="ds-list-card" aria-label="Navigation list form specimen">
+            <nav class="dl-list-card ds-list-width" aria-label="Navigation list form specimen">
               <button class="dl-nav-item dl-nav-item--list" type="button">
                 <span class="dl-nav-item-icon">${icon('connections', {size: 'sm'})}</span>
                 <span class="dl-nav-item-text">
@@ -138,7 +138,27 @@ if (host) {
                 <span class="dl-nav-item-disclosure" aria-hidden="true">${icon('disclosure', {size: 'sm'})}</span>
               </button>
             </nav>
-            <div class="ds-list-card" role="radiogroup" aria-label="Choice row specimen">
+            <ul class="dl-list-card ds-list-width" role="list" aria-label="List card specimen">
+              <li>
+                <button class="dl-nav-item dl-nav-item--list" type="button">
+                  <span class="dl-nav-item-text">
+                    <span class="dl-nav-item-label">Weekly review</span>
+                    <span class="dl-nav-item-detail">Mondays at 08:00 · Next: tomorrow 08:00</span>
+                  </span>
+                  <span class="dl-nav-item-disclosure" aria-hidden="true">${icon('disclosure', {size: 'sm'})}</span>
+                </button>
+              </li>
+              <li>
+                <button class="dl-nav-item dl-nav-item--list" type="button">
+                  <span class="dl-nav-item-text">
+                    <span class="dl-nav-item-label">Filing watch</span>
+                    <span class="dl-nav-item-detail">Weekdays at 07:30 · Paused</span>
+                  </span>
+                  <span class="dl-nav-item-disclosure" aria-hidden="true">${icon('disclosure', {size: 'sm'})}</span>
+                </button>
+              </li>
+            </ul>
+            <div class="dl-list-card ds-list-width" role="radiogroup" aria-label="Choice row specimen">
               <label class="dl-dialog-checkbox dl-dialog-checkbox--row">
                 <input type="radio" name="ds-choice" checked> Automatic
               </label>
@@ -173,12 +193,20 @@ if (host) {
               3 reads skipped ${icon('chevron-down', {size: 'xs'})}
             </button>
           </div>
+          <div class="ds-stage">
+            <div class="dl-dialog-actions" role="group" aria-label="Dialog actions specimen">
+              <button type="button">Close</button>
+              <button class="dl-dialog-primary" type="button">New schedule</button>
+              <button class="dl-dialog-primary" type="button" disabled>Disabled</button>
+            </div>
+          </div>
         </section>
       </div>
       <dialog class="confirm-dialog" id="ds-dialog" aria-labelledby="ds-dialog-title">
         <form method="dialog">
           <h2 id="ds-dialog-title">Native dialog primitive</h2>
           <p>Focus, Escape, and modality remain browser-owned.</p>
+          <p class="dl-note">A note inside the dialog keeps its own face.</p>
           <div class="dl-dialog-actions">
             <button type="submit">Cancel</button>
             <button class="dl-dialog-danger" type="submit">Confirm</button>

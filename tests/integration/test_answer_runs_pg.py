@@ -489,6 +489,7 @@ class TestSchema:
             "dlightrag_privacy_settings",
             "dlightrag_schedules",
             "dlightrag_schedule_fires",
+            "dlightrag_owner_principals",
         }
 
     async def test_artifact_reference_constraint_uses_one_output_kind(self, store, pool) -> None:

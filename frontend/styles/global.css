@@ -67,7 +67,12 @@ body.conversation-drawer-open {
     transition: background var(--duration-control), border-color var(--duration-control), color var(--duration-control);
 }
 
-.primary-btn:hover {
+.primary-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+.primary-btn:hover:not(:disabled) {
     background: var(--color-action-bg-hover);
     border-color: var(--color-action-border-hover);
     color: var(--color-on-action);

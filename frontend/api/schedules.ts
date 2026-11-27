@@ -26,6 +26,8 @@ const scheduleSchema = v.pipe(
     goal_max_rounds: v.nullable(v.number()),
     state: v.picklist(['active', 'paused', 'completed']),
     pause_reason: v.nullable(v.string()),
+    // Who last created, edited or resumed it.
+    changed_by: v.picklist(['owner', 'agent']),
     next_fire_at: v.nullable(timestamp),
   }),
   v.transform((w) => ({
@@ -43,6 +45,7 @@ const scheduleSchema = v.pipe(
     goalMaxRounds: w.goal_max_rounds,
     state: w.state,
     pauseReason: w.pause_reason,
+    changedBy: w.changed_by,
     nextFireAt: w.next_fire_at,
   })),
 );

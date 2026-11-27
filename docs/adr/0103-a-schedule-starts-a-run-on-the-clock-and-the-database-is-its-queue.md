@@ -14,7 +14,9 @@ processes, with no leader and no cron. Missed slots collapse into at most one la
 whose previous Run is still live is skipped, never queued; authority and policy are read at each
 fire, not frozen at creation; a spend ceiling, a failure streak or lost access pauses the Schedule
 with a stated reason. A fire can start a goal, and the goal's own rounds continue it (ADR 0077).
-Only the owner creates a Schedule in this version; the Agent has no tool for it.
+The owner manages Schedules in the Schedules dialog the sidebar's Scheduled row opens, and the Agent
+manages them from a chat on a turn a person started, under the same rules and never with a goal or a
+spend ceiling of its own.
 
 今天每个 Run 的起点要么是人发来的一轮，要么是刚结束的 Run 接着做（goal round、排队消息、Child 回报）。
 没有任何东西因为"到时间了"而启动 Run，所以周期性的工作——每周复盘、盯一份公告、汇总一个 corpus——
@@ -24,12 +26,13 @@ Schedule，按 slot 写入唯一的 **Fire**，并用由该 slot 构成的 idemp
 每个 slot 至多启动一个 Run，不需要 leader，也不需要 cron。错过的 slot 合并为至多一次补跑；上一次的 Run
 还在跑时本次直接跳过，不排队；权限和 policy 在每次触发时读取，不在创建时冻结；花费上限、连续失败或失去
 访问权会暂停 Schedule 并写明原因。一次触发可以启动一个 goal，由 goal 自己的轮次继续（ADR 0077）。
-本版本只有 owner 能创建 Schedule，Agent 没有相应工具。
+owner 在 Scheduled 区管理 Schedule；Agent 也能在人发起的 turn 里从对话中管理它们，规则与 owner 相同，
+但不能设置 goal，也没有自己的花费上限。
 
 ## Status
 
 Accepted and implemented 2026-11-27: the domain, store, look, settlement, REST and Web routes, and the
-Scheduled list. This is a harness decision: it names no vertical domain and ships to DlightRAG with the
+Scheduled list. Amended 2026-11-27: the Agent manages Schedules from a chat through four tools (Decision 12). This is a harness decision: it names no vertical domain and ships to DlightRAG with the
 rest of the runtime.
 
 ## Context
@@ -165,15 +168,54 @@ The spend rules are therefore part of the decision, not an afterthought.
     the Run panel and the trace can show which Schedule and which slot started a Run; a goal fire's
     first round keeps the goal-round continuation kind and is linked through its Fire the same way.
     The Session Memory Pass reads the turn like any other owner turn.
-12. **Owners manage Schedules; the Agent does not create them.** The Web sidebar and the REST API
-    create, edit, pause, resume, run now and delete a Schedule, and list its Fires. "Run now" is a
-    manual Fire with its own slot — the request time — under every rule above; it is refused while
-    the Schedule has a Fire pending or started, and it is allowed on a paused Schedule, because the
-    owner is present, without resuming it. Editing the cadence or zone
-    recomputes `next_fire_at` from now. Deleting a Schedule stops future fires and deletes its Fire
-    history; the conversations its Runs wrote stay, as any conversation does. In this version the
-    Agent has no tool that creates or edits a Schedule: an unattended, recurring spend is the
-    owner's decision, made where the owner can see its cadence and ceiling.
+12. **Owners and the Agent manage Schedules.** The Web sidebar and the REST API create, edit, pause,
+    resume, run now and delete a Schedule, and list its Fires. "Run now" is a manual Fire with its own
+    slot — the request time — under every rule above; it is refused while the Schedule has a Fire
+    pending or started, and it is allowed on a paused Schedule, because the owner is present, without
+    resuming it. Editing the cadence or zone recomputes `next_fire_at` from now. Deleting a Schedule
+    stops future fires and deletes its Fire history; the conversations its Runs wrote stay, as any
+    conversation does.
+
+    The Agent has four tools over the same service — `list_schedules`, `create_schedule`,
+    `update_schedule` and `delete_schedule`, where pausing and resuming are `update_schedule(paused)` —
+    and every rule above applies to them unchanged: the minimum interval, the cap on active Schedules,
+    cadence validation, and no edit of a completed Schedule. A refusal comes back as a tool error the
+    model can act on. The limits are these:
+
+    - **A turn a person started.** Only the continuation kinds a person starts — a new turn, the next
+      turn of a conversation and a fork — are offered the tools, an allowlist: a Schedule's fire
+      (`scheduled`), a goal round (`goal_round`) and any kind added later have none declared, so a
+      Schedule never creates a Schedule and an unattended goal loop never does either, whoever the
+      fire acts as. A REST or MCP answer submission by an authenticated client is a turn its own
+      client started and is offered them. A Child Session never holds them (ADR 0025). Acceptance
+      pins whether a Run is offered them in its input, as it pins its plan, so whichever process
+      claims the Run composes the tools it was accepted with: every process holds the Agent's way to
+      the Schedule service, and `deployment.schedules` only says which processes look for due
+      Schedules.
+    - **No goal and no ceiling.** The Agent's tools have no round cap and no `max_tokens_per_day`. A
+      Schedule the Agent creates starts with `schedules.default_max_tokens_per_day`, and an edit by the
+      Agent never touches the ceiling or the goal; only the owner changes either, or makes a goal
+      Schedule, in the Schedules dialog. A Schedule that starts a goal is the owner's to change and
+      resume: the Agent may rename, pause or delete it, nothing more.
+    - **The owner's latest human turn.** The Schedule acts under the identity of the owner's latest
+      human turn — the caller acceptance keeps, one record per owner, replaced by each such turn and
+      never written into a Run's input — which is what an owner's own request would store (Decision 6).
+      A record older than a day is no one's latest turn, so with none under a day old the tools answer
+      `schedule_unavailable`, and a turn that could not keep it still runs. Nothing the model passes
+      names an owner, and a workspace named for the Schedule is one of the workspaces the Run already
+      reads.
+    - **Bounded against text that asks for work.** What a Run read — a page, a file, a tool result —
+      can ask for a recurring instruction. A turn makes at most one Schedule, a second waiting for the
+      user to confirm; the minimum interval, the cap on active Schedules and the Schedule's ceiling
+      bind it; and every Schedule records whether its owner or the Agent last made, edited or resumed
+      it (`changed_by`; pausing, deleting and running now leave it).
+    - **Said back and visible.** The Agent creates one only when the user asks for recurring or deferred
+      work, takes the user's time zone from the user rather than assuming one, and tells the user the
+      name, the cadence in words with its zone, and the next run. When an edit is saved and the pause
+      or resume that followed is refused, the result says which was which. Every Schedule the Agent
+      made is in the owner's Schedules dialog, whose list (and the Scheduled row's count) is read
+      again when a Run settles, where the owner can pause or delete it.
+
 13. **Fire history is bounded.** A Schedule keeps its latest `schedules.fires_kept` (default 200)
     Fires; older ones are trimmed in the claim transaction that writes a new one. A Fire's state is one of `pending`, `started`,
     `succeeded`, `failed`, `cancelled`, `refused`, `skipped_busy`, `skipped_limit` or `missed`, with
@@ -194,9 +236,14 @@ The spend rules are therefore part of the decision, not an afterthought.
   fire and is compacted as any long Session is. `new_conversation` keeps each fire independent.
 - The spend ceiling is checked between Runs, not inside them, so one fire can overshoot it by up to
   that fire's own cost. The minimum interval and the round cap keep that overshoot bounded.
-- New durable state: the Schedule and Fire tables, owned by the Run store's Adapter family; a new
-  deployment switch, `deployment.schedules`; and the `schedules.*` settings named above.
+- New durable state: the Schedule and Fire tables and the one-row-per-owner identity record the
+  Agent's Schedules act under (`dlightrag_owner_principals`, kept a day), owned by the Run store's
+  Adapter family; a new deployment switch, `deployment.schedules`; and the `schedules.*` settings named above.
 - Known limits: a slot fires up to about 30 seconds late, plus admission time; there is no
   notification beyond the conversation appearing unread — email, push and webhooks are later
-  decisions; the Agent cannot propose or create a Schedule from a chat; and a Schedule cannot depend
-  on another Schedule or on an external event, only on the clock.
+  decisions; and a Schedule cannot depend on another Schedule or on an external event, only on the
+  clock.
+- A user can set up recurring work by asking for it in a chat, and it costs what the owner's own would:
+  the same minimum interval, cap and default ceiling bind it, and it is listed where the owner can
+  pause or delete it. What the Agent cannot do is spend unattended beyond that default or start a
+  goal; those stay the owner's decision.

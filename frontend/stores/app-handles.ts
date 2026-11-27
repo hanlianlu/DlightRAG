@@ -35,7 +35,7 @@ export interface AppHandles {
   /** The reader's recent Run activity: which conversations are running, and which have an answer
    *  they have not opened. */
   readonly runActivity: RunActivityStore;
-  /** The reader's Schedules, which the sidebar's Scheduled section and its dialogs share. */
+  /** The reader's Schedules, which the sidebar's Scheduled row and the dialogs it opens share. */
   readonly schedules: ScheduleStore;
   /** Forget what the signed-in reader sent, rated, and read, as signing out must: whoever is shown this
    *  page next is shown none of it. Their unsent message is the composer's own to forget. */
@@ -62,6 +62,8 @@ export function createAppHandles(): AppHandles {
   const memoryNotices = new MemoryNotices();
   const runActivity = new RunActivityStore();
   const schedules = new ScheduleStore();
+  // The Agent can make a Schedule in a turn: the list is read again when a Run settles.
+  schedules.followRuns(runActivity);
   return {
     conversations: new ConversationStore(),
     workspaces,

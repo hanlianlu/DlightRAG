@@ -164,6 +164,7 @@ async def test_an_owner_creates_lists_and_reads_a_schedule_with_the_deployments_
         "next_fire_at": "2026-12-14T07:00:00.000000Z",
         "created_at": "2026-12-07T10:00:20.000000Z",
         "updated_at": "2026-12-07T10:00:20.000000Z",
+        "changed_by": "owner",
     }
     listed = (await rest.get("/schedules", headers=_as("alice"))).json()
     assert listed == {

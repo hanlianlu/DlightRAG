@@ -104,6 +104,7 @@ def schedule_payload(schedule: Schedule) -> dict[str, Any]:
         "next_fire_at": _utc(schedule.next_fire_at),
         "created_at": _utc(schedule.created_at),
         "updated_at": _utc(schedule.updated_at),
+        "changed_by": schedule.changed_by,
     }
 
 

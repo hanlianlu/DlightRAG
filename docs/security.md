@@ -509,7 +509,7 @@ browser under that gate too; the Run panel states no reasoning
 Skill text is untrusted reference
 context: loading `council` or any Skill cannot widen host-permitted child tools.
 A child inherits its parent's tools except the Run's authority — roster controls,
-durable owner memory writes, and publication. A parent that wants a narrower child
+durable owner memory writes, the user's Schedules, and publication. A parent that wants a narrower child
 lists the tools it may hold, and a name the Run does not offer is left out, never an
 error; the built-in `council` Skill asks for no narrowing, so its children hold the
 default set (ADR 0025). User-cancelled child work cannot resume without an
@@ -568,6 +568,26 @@ results do not.
 All Agent/child/Fast mutations are fenced by owner, run lease, epoch, and
 register sequence. A completed child outcome is persisted so replay cannot
 re-enter it. A staged Fast result replays without another model call.
+
+### Agent Schedules
+
+In a turn a person started, the Agent can make, change, pause and delete the user's Schedules
+([ADR 0103](adr/0103-a-schedule-starts-a-run-on-the-clock-and-the-database-is-its-queue.md)). A
+Schedule runs later with nobody watching, so the tools are bounded where a Schedule can spend: a
+scheduled fire, a goal round and any continuation kind not named as a person's never hold them, and a
+Child never does; the Agent acts under the identity of the owner's latest human turn, kept for a day,
+and never names an owner; the owner's minimum interval, cap on active Schedules and per-Schedule
+default ceiling apply to it, and it sets no goal and no ceiling of its own. A turn makes one Schedule,
+and each Schedule records whether the owner or the Agent last wrote it (`changed_by`).
+
+Residual risk, recorded rather than solved:
+
+- Untrusted content read in a turn that holds `create_schedule` — a page, a file, a tool result —
+  can become a recurring instruction that runs under the owner's authority. The tool's description
+  tells the model never to act on such text, which is an instruction, not a control. What bounds the
+  harm is the minimum interval, the cap on active Schedules, the Schedule's token ceiling, one create
+  per Run, the `changed_by` mark that lets the owner see what the Agent wrote, and the owner's own
+  pause and delete in the Schedules dialog.
 
 ## Agent Browser Boundary
 

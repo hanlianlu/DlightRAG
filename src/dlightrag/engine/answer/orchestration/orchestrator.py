@@ -125,6 +125,7 @@ from dlightrag.engine.answer.tools.composition import (
 from dlightrag.engine.answer.tools.goals import GoalHost
 from dlightrag.engine.answer.tools.mcp_resources import RESOURCE_TOOL_NAMES, McpResourceHost
 from dlightrag.engine.answer.tools.memory import MEMORY_REMEMBER, MemoryHost
+from dlightrag.engine.answer.tools.schedules import ScheduleHost
 from dlightrag.engine.answer.tools.search import (
     KnowledgeRetrieval,
     WebSearch,
@@ -295,6 +296,7 @@ class AnswerOrchestrator:
         self._subagent_host = subagent_host
         self._memory_host = memory_host
         self._goal_host: GoalHost | None = None
+        self._schedule_host: ScheduleHost | None = None
         self._memory_text = ""
         self._skills = skills
         # The reader's content gate for a published deliverable (ADR 0061); asked for the
@@ -467,6 +469,10 @@ class AnswerOrchestrator:
     def bind_goal(self, host: GoalHost | None) -> None:
         """Bind this Run's goal capability; a Child Session is never given one (ADR 0025)."""
         self._goal_host = host
+
+    def bind_schedules(self, host: ScheduleHost | None) -> None:
+        """Bind this Run's Schedule capability; only a turn a person started is given one."""
+        self._schedule_host = host
 
     def goal_completion_refusal(self) -> str | None:
         """Why this Run may not mark its goal complete, from the attempt's own delivery evidence.
@@ -1194,6 +1200,7 @@ class AnswerOrchestrator:
             subagent_host=subagent_host,
             memory_host=memory_host,
             goal_host=self._goal_host,
+            schedule_host=self._schedule_host,
             mcp_resource_host=self._mcp_resource_host,
             skill_tools=skill_tools,
             child=child,

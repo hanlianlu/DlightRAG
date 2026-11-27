@@ -50,9 +50,9 @@
     opacity: 0.46;
 }
 
-/* The sidebar's icon buttons (collapse, the row actions, the Scheduled "+" and quick actions, and the
- * top bar's open button) are the shared `.dl-icon-button`, sized to the sidebar's controls and not to
- * the control ladder. The primitive has no resting colour or hover of its own, so they share these. */
+/* The sidebar's icon buttons (collapse, the row actions, and the top bar's open button) are the shared
+ * `.dl-icon-button`, sized to the sidebar's controls and not to the control ladder. The primitive has no
+ * resting colour or hover of its own, so they share these. */
 :global(dl-conversation-sidebar .dl-icon-button),
 :global(#conversation-sidebar-open) {
     --control-hit-target: var(--size-button);
@@ -73,7 +73,12 @@
 
 /* The content column starts `--space-component` in: the list's inset here, and the nav rows' and
  * Recents' beside it. Every pill then starts on it, and a control's `--space-tight` of padding (a nav
- * item's, a conversation's) puts an icon and a title on one x. */
+ * item's, a conversation's) puts an icon and a title on one x. The Scheduled row is one such nav row. */
+:global(dl-schedule-section) {
+    flex: 0 0 auto;
+    padding: 0 var(--space-component);
+}
+
 :global(dl-conversation-list) {
     display: flex;
     flex: 1;

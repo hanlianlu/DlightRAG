@@ -7,10 +7,12 @@ import {
   asked,
   choose,
   chosen,
+  editFormOpen,
   field,
-  formOpen,
   mountSidebar,
+  newFormOpen,
   noticeOf,
+  rowButton,
   rowsShown,
   serving,
   type,
@@ -25,7 +27,6 @@ afterEach(() => {
   window.fetch = originalFetch;
   document.body.replaceChildren();
   document.body.className = '';
-  window.localStorage.removeItem('dlightrag.schedule_section_open');
 });
 
 const SLOT = {at: '2099-01-05T07:00:00.000000Z', local: '2099-01-05T08:00:00+01:00'};
@@ -42,14 +43,12 @@ function forming(extra: Parameters<typeof serving>[0] = {}, schedules: Parameter
   }, schedules);
 }
 
-/** Open the form for a new Schedule on a page with one workspace. */
+/** Open the form for a new Schedule, through the list's New schedule, on a page with one workspace. */
 async function newForm() {
   const mounted = await mountSidebar();
   useWorkspaces(mounted.handles, ['alpha'], ['alpha']);
-  const add = mounted.sidebar.querySelector<HTMLButtonElement>('[data-new]')!;
-  await waitFor(() => !add.disabled);
-  add.click();
-  const dialog = await formOpen(mounted.sidebar);
+  const dialog = await newFormOpen(mounted.sidebar);
+  const add = mounted.sidebar.querySelector<HTMLButtonElement>('dl-schedule-list [data-new]')!;
   return {...mounted, dialog, add};
 }
 
@@ -62,10 +61,9 @@ async function previewed(api: Wire, body: unknown): Promise<void> {
   await waitFor(() => JSON.stringify(previewBody(api)) === JSON.stringify(body), 1000);
 }
 
-/** The form has closed and given focus back to the menu button of the row it was opened from. */
+/** The form has closed and given focus back to the row of the list it was opened from. */
 async function closedAround(sidebar: HTMLElement, schedule: string, dialog: HTMLDialogElement): Promise<void> {
-  const button = sidebar.querySelector(`[data-schedule-id="${schedule}"] [data-menu-button]`);
-  await waitFor(() => !dialog.open && document.activeElement === button);
+  await waitFor(() => !dialog.open && document.activeElement === rowButton(sidebar, schedule));
   await sidebar.querySelector('dl-schedule-form')!.updateComplete;
 }
 
@@ -308,14 +306,8 @@ it('reads a stored cadence back into the frequency it is, shows the Schedule bei
   }, [stored]);
   const {sidebar, handles} = await mountSidebar();
   useWorkspaces(handles, ['alpha'], ['alpha']);
-  await rowsShown(sidebar, 1);
 
-  const open = async () => {
-    sidebar.querySelector<HTMLButtonElement>('[data-schedule-id] [data-menu-button]')!.click();
-    await waitFor(() => sidebar.querySelector('[data-schedule-id] dl-menu') !== null);
-    sidebar.querySelector<HTMLButtonElement>('[data-menu="edit"]')!.click();
-    return await formOpen(sidebar);
-  };
+  const open = async () => await editFormOpen(sidebar, 'schedule-filing-watch');
   let dialog = await open();
   expect(dialog.querySelector('h2')!.textContent).to.equal('Edit schedule');
   expect(field(dialog, 'name').value).to.equal('Filing watch');
@@ -343,7 +335,7 @@ it('reads a stored cadence back into the frequency it is, shows the Schedule bei
   type(field(dialog, 'name'), 'Filing digest');
   dialog.querySelector<HTMLInputElement>('[data-day="3"]')!.click();
   submit(dialog);
-  await waitFor(() => sidebar.querySelector('[data-schedule-id]')!.textContent!.includes('Filing digest'));
+  await waitFor(() => sidebar.querySelector('dl-schedule-list [data-schedule-id]')!.textContent!.includes('Filing digest'));
 
   expect(asked(api, 'PATCH', '/web/api/schedules/schedule-filing-watch')[0]!.body).to.deep.equal({name: 'Filing digest', cron: '0 8 * * 1,3,4'});
 });
@@ -353,13 +345,7 @@ it('reads a cron that is no preset as Custom, and a one-time Schedule as the dat
   const once = wireSchedule('Launch', {cron: null, at: '2099-05-31T23:00:00Z', zone: 'Asia/Tokyo', next_fire_at: null});
   forming({}, [custom, once]);
   const {sidebar} = await mountSidebar();
-  await rowsShown(sidebar, 2);
-  const edit = async (id: string) => {
-    sidebar.querySelector<HTMLButtonElement>(`[data-schedule-id="${id}"] [data-menu-button]`)!.click();
-    await waitFor(() => sidebar.querySelector(`[data-schedule-id="${id}"] dl-menu`) !== null);
-    sidebar.querySelector<HTMLButtonElement>(`[data-schedule-id="${id}"] [data-menu="edit"]`)!.click();
-    return await formOpen(sidebar);
-  };
+  const edit = async (id: string) => await editFormOpen(sidebar, id);
 
   let dialog = await edit('schedule-often');
   expect(chosen(field<HTMLElement>(dialog, 'frequency'))).to.equal('custom');

@@ -290,6 +290,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.application.retrieval.execution import RetrievalExecutor
     from dlightrag.application.retrieval.service import RetrievalService
     from dlightrag.application.runs import RunService
+    from dlightrag.application.schedules.agent import AgentSchedules, OwnerCallers
     from dlightrag.application.schedules.firing import ScheduleFirer
     from dlightrag.application.schedules.service import ScheduleService
     from dlightrag.application.settings.projections import (
@@ -557,6 +558,13 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     )
     memory_settings = PGMemorySettingsStore()
     goal_service = AnswerGoalService(store=PGAnswerGoalStore())
+    # Every process holds the Agent's way to the owner's Schedules, because any process may claim a
+    # Run that was accepted with its tools; ``deployment.schedules`` only says which look for due ones.
+    # The Agent acts as the caller of the owner's latest human turn, which acceptance keeps; the
+    # Schedule service it wraps is bound below, once the conversations it starts turns in exist.
+    schedule_store = PGScheduleStore()
+    owner_callers = OwnerCallers(schedule_store)
+    agent_schedules = AgentSchedules(callers=owner_callers)
     memory = MemoryService(
         memory_store,
         settings_store=memory_settings,
@@ -685,6 +693,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         working_dir=config.deployment.working_dir,
         memory_store=memory_store,
         goal_service=goal_service,
+        schedule_service=agent_schedules,
         memory_recall_enabled=memory.recall_enabled,
         memory_capability_current=memory.capability_current,
         connection_tool_resolver=connections.restore_research,
@@ -817,6 +826,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         model_invocation_fingerprint_for_role=fingerprint_for_role,
         research_tool_declarations=answer_executor.research_tool_declarations,
         memory_capability=memory.execution_capability,
+        record_caller=owner_callers.remember,
         agent_may_register=agent_accounts.may_register,
         policies=policies,
         bind_research=connections.bind_research,
@@ -868,7 +878,6 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     cancelled_observers.append(queued_turns.run_cancelled)
     # A Schedule's Fires hear of every settled Run too. It only records how a Fire went, never
     # starts work, so it does not race the observer above; each process settles the Runs it ran.
-    schedule_store = PGScheduleStore()
     schedule_firer = ScheduleFirer(
         store=schedule_store,
         turns=web_conversations,
@@ -878,6 +887,10 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         settings=config.schedules,
     )
     coordinator.observe_settled(schedule_firer.run_settled)
+    schedules = ScheduleService(
+        store=schedule_store, firer=schedule_firer, settings=config.schedules
+    )
+    agent_schedules.bind(schedules)
     MODEL_CATALOGUE.replace_startup(startup_catalogue)
 
     return _ApplicationComponents(
@@ -917,9 +930,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         # Active goals are taken up automatically at startup; ``deployment.goal_recovery`` decides
         # whether this process is the one that scans (the MCP service sets it false).
         recover_goal_rounds=goal_rounds.resume_after_restart,
-        schedules=ScheduleService(
-            store=schedule_store, firer=schedule_firer, settings=config.schedules
-        ),
+        schedules=schedules,
         look_schedules=schedule_firer.look,
         initialize_process=_initialize_process,
         close_agent_execution=answer_executor.aclose,

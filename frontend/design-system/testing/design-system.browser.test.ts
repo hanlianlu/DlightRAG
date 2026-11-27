@@ -466,6 +466,74 @@ it('lights a dialog checkbox row under the pointer, with its tint inset past the
   }
 });
 
+/** A colour, length or size a token states, as the engine computes it. */
+function tokenOf(property: string, token: string): string {
+  const probe = document.createElement('div');
+  probe.style.setProperty(property, `var(${token})`);
+  document.body.append(probe);
+  const value = getComputedStyle(probe).getPropertyValue(property);
+  probe.remove();
+  return value;
+}
+
+it('keeps a note\'s face inside a confirm dialog, on a paragraph, and leaves the dialog its own sentences', () => {
+  const dialog = document.createElement('dialog');
+  dialog.className = 'confirm-dialog';
+  dialog.innerHTML = '<p>The dialog\'s own sentence.</p><p class="dl-note">A quiet line.</p>';
+  document.body.append(dialog);
+  const [sentence, note] = [...dialog.querySelectorAll('p')].map((paragraph) => getComputedStyle(paragraph));
+
+  expect(note!.fontSize, 'a note is caption size').to.equal(tokenOf('font-size', '--font-size-caption'));
+  expect(note!.marginBottom, 'and has no margin of the dialog\'s').to.equal('0px');
+  expect(sentence!.fontSize).to.equal(tokenOf('font-size', '--font-size-detail'));
+  expect(sentence!.marginBottom, 'the dialog\'s sentence keeps its margin').not.to.equal('0px');
+});
+
+it('draws a list card as one bordered, clipped list with a hairline before every entry but the first', () => {
+  const host = document.createElement('div');
+  host.innerHTML = '<ul class="dl-list-card"><li>One</li><li>Two</li><li>Three</li></ul>';
+  document.body.append(host);
+  const card = getComputedStyle(host.querySelector('ul')!);
+  const entries = [...host.querySelectorAll('li')].map((entry) => getComputedStyle(entry).borderTopWidth);
+
+  expect([card.borderTopWidth, card.borderTopStyle, card.borderTopColor]).to.deep.equal(['1px', 'solid', tokenOf('color', '--color-border-subtle')]);
+  expect(card.borderTopLeftRadius).to.equal(tokenOf('border-radius', '--radius-card'));
+  expect([card.overflow, card.listStyleType, card.paddingLeft, card.marginTop]).to.deep.equal(['clip', 'none', '0px', '0px']);
+  expect(entries).to.deep.equal(['0px', '1px', '1px']);
+});
+
+it('draws the dialog\'s primary action on its plain actions\' geometry, dims it when disabled, and tints only an enabled one under the pointer', async () => {
+  const host = document.createElement('div');
+  host.innerHTML = '<div class="dl-dialog-actions"><button type="button">Close</button>'
+    + '<button type="button" class="dl-dialog-primary">Save</button>'
+    + '<button type="button" class="dl-dialog-primary" disabled>Saving</button></div>';
+  document.body.append(host);
+  const [plain, primary, disabled] = [...host.querySelectorAll('button')];
+  const face = (button: Element): string[] => {
+    const style = getComputedStyle(button);
+    return ['height', 'padding-left', 'padding-right', 'font-size', 'font-weight', 'border-top-width', 'border-top-left-radius']
+      .map((property) => style.getPropertyValue(property));
+  };
+
+  expect(face(primary!), 'the same geometry and weight as the button beside it').to.deep.equal(face(plain!));
+  expect(getComputedStyle(primary!).backgroundColor).to.equal(tokenOf('background-color', '--color-action-bg'));
+  expect(getComputedStyle(primary!).color).to.equal(tokenOf('color', '--color-on-action'));
+  expect([getComputedStyle(disabled!).opacity, getComputedStyle(disabled!).cursor]).to.deep.equal(['0.5', 'not-allowed']);
+
+  const under = async (button: Element): Promise<string> => {
+    const box = button.getBoundingClientRect();
+    await sendMouse({type: 'move', position: [Math.round(box.left + box.width / 2), Math.round(box.top + box.height / 2)]});
+    await Promise.all(button.getAnimations().map((animation) => animation.finished));
+    return getComputedStyle(button).backgroundColor;
+  };
+  try {
+    expect(await under(primary!), 'tinted under the pointer').to.equal(tokenOf('background-color', '--color-action-bg-hover'));
+    expect(await under(disabled!), 'a disabled one is not').to.equal(tokenOf('background-color', '--color-action-bg'));
+  } finally {
+    await resetMouse();
+  }
+});
+
 it('opens menus from their button with one key map', () => {
   const focus = (key: string) => menuButtonFocus(new KeyboardEvent('keydown', {key}));
   expect(['ArrowDown', 'Enter', ' ', 'ArrowUp', 'Escape', 'a'].map(focus))

@@ -124,16 +124,9 @@
     gap: var(--space-tight);
   }
 
-  /* A bordered card that clips its rows: the choice rows and the navigation list form sit in one. */
-  .ds-list-card {
-    border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-card);
-    overflow: hidden;
+  /* A list card as wide as a phone's list, not as wide as the stage. */
+  .ds-list-width {
     width: 14rem;
-  }
-
-  .ds-list-card > * + * {
-    border-top: 1px solid var(--color-border-subtle);
   }
 
   .ds-token-group { margin-bottom: var(--space-component); }

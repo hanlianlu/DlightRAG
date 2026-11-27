@@ -12,6 +12,7 @@ from dlightrag.application.access.principal import UserContext
 from dlightrag.application.schedules.errors import ScheduleLimitError
 from dlightrag.application.schedules.model import (
     STREAK_STATES,
+    ChangedBy,
     DuePlan,
     Fire,
     FireState,
@@ -51,6 +52,8 @@ class FakeScheduleStore:
         self.held: dict[str, _Held] = {}
         #: What the Runs of any Schedule's Fires are said to have spent; the real store reads it.
         self.spent = 0
+        #: The identity of each owner's latest human turn, one per owner.
+        self.principals: dict[str, UserContext] = {}
 
     async def now(self) -> datetime:
         return self.clock.now
@@ -72,6 +75,12 @@ class FakeScheduleStore:
             raise ScheduleLimitError(max_active)
         self.schedules[schedule.schedule_id] = schedule
         return schedule
+
+    async def remember_principal(self, owner_id: str, principal: UserContext) -> None:
+        self.principals[owner_id] = principal
+
+    async def principal_of(self, owner_id: str) -> UserContext | None:
+        return self.principals.get(owner_id)
 
     async def get(self, owner_id: str, schedule_id: str) -> Schedule | None:
         found = self.schedules.get(schedule_id)
@@ -97,7 +106,13 @@ class FakeScheduleStore:
         return self._put(replace(current, state=ScheduleState.PAUSED, pause_reason=reason))
 
     async def resume(
-        self, owner_id: str, schedule_id: str, *, principal: UserContext, max_active: int
+        self,
+        owner_id: str,
+        schedule_id: str,
+        *,
+        principal: UserContext,
+        max_active: int,
+        changed_by: ChangedBy = "owner",
     ) -> Schedule | None:
         current = await self.get(owner_id, schedule_id)
         if current is None or current.state is not ScheduleState.PAUSED:
@@ -118,6 +133,7 @@ class FakeScheduleStore:
                 principal=principal,
                 principal_stamped_at=now,
                 resumed_at=now,
+                changed_by=changed_by,
             )
         )
 

@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-/** What the Schedule browser tests share: the wire's Schedules and Fires, and the sidebar mounted as the shell
- *  composes it, beside the shell's own toast regions. */
+/** What the Schedule browser tests share: the wire's Schedules and Fires, the sidebar mounted as the shell
+ *  composes it, beside the shell's own toast regions, and the way into the Schedules dialog from its Scheduled row. */
 
 import {defineDesignSystemElements} from '../design-system/index.ts';
 import {type AppHandles, createAppHandles} from '../stores/app-handles.ts';
@@ -29,6 +29,7 @@ export interface WireSchedule {
   goal_max_rounds: number | null;
   state: 'active' | 'paused' | 'completed';
   pause_reason: string | null;
+  changed_by: 'owner' | 'agent';
   next_fire_at: string | null;
 }
 
@@ -49,6 +50,7 @@ export function wireSchedule(name: string, extra: Partial<WireSchedule> = {}): W
     goal_max_rounds: null,
     state: 'active',
     pause_reason: null,
+    changed_by: 'owner',
     next_fire_at: '2099-01-05T07:00:00.000000Z',
     ...extra,
   };
@@ -106,10 +108,42 @@ export function serving(routes: Record<string, Handler> = {}, schedules: WireSch
   return api;
 }
 
-/** Wait until the section has read the list and drawn `count` rows. */
-export async function rowsShown(sidebar: HTMLElement, count: number): Promise<HTMLElement[]> {
-  await waitFor(() => sidebar.querySelectorAll('dl-schedule-section [data-schedule-id]').length === count);
-  return [...sidebar.querySelectorAll<HTMLElement>('dl-schedule-section [data-schedule-id]')];
+/** Open the Schedules dialog from the sidebar's Scheduled row, and return it. */
+export async function listOpen(root: ParentNode): Promise<HTMLDialogElement> {
+  const dialog = root.querySelector<HTMLDialogElement>('dl-schedule-list dialog')!;
+  if (!dialog.open) root.querySelector<HTMLButtonElement>('#scheduled-btn')!.click();
+  await waitFor(() => dialog.open);
+  return dialog;
+}
+
+/** Wait until the open Schedules dialog has drawn `count` rows. */
+export async function rowsShown(root: ParentNode, count: number): Promise<HTMLElement[]> {
+  await waitFor(() => root.querySelectorAll('dl-schedule-list [data-schedule-id]').length === count);
+  return [...root.querySelectorAll<HTMLElement>('dl-schedule-list [data-schedule-id]')];
+}
+
+/** The button of a Schedule's row in the open Schedules dialog; `id` is the Schedule's, as `schedule-weekly-review`. */
+export function rowButton(root: ParentNode, id: string): HTMLButtonElement {
+  return root.querySelector<HTMLButtonElement>(`dl-schedule-list [data-schedule-id="${id}"] button`)!;
+}
+
+/** Open the form for a new Schedule through the dialog's New schedule, once the list has been read. */
+export async function newFormOpen(root: ParentNode): Promise<HTMLDialogElement> {
+  await listOpen(root);
+  const add = root.querySelector<HTMLButtonElement>('dl-schedule-list [data-new]')!;
+  await waitFor(() => !add.disabled);
+  add.click();
+  return await formOpen(root);
+}
+
+/** Open the form for a Schedule through its row and its detail's Edit. */
+export async function editFormOpen(root: ParentNode, id: string): Promise<HTMLDialogElement> {
+  await listOpen(root);
+  await waitFor(() => root.querySelector(`dl-schedule-list [data-schedule-id="${id}"]`) !== null);
+  rowButton(root, id).click();
+  const detail = await detailOpen(root);
+  detail.querySelector<HTMLButtonElement>('[data-action="edit"]')!.click();
+  return await formOpen(root);
 }
 
 /** What a Schedule dialog or the section has said through the shell's toast region of a tone. */

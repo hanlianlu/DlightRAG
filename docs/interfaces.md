@@ -1395,8 +1395,9 @@ Retrieval or Corpus Mutations, and it is separate from the lane's
 
 A Schedule is an owner's durable record that starts an Answer Run on the clock
 ([ADR 0103](adr/0103-a-schedule-starts-a-run-on-the-clock-and-the-database-is-its-queue.md)). The
-owner creates, edits, pauses, resumes, runs and deletes it here; the Agent has no tool for any of
-these. Every route is owner-scoped: a Schedule that is not the caller's is as unknown as one that
+owner creates, edits, pauses, resumes, runs and deletes it here. The Agent makes, changes, pauses,
+resumes and deletes them through its own tools on a turn a person started, under the same rules and
+never with a goal or a token ceiling. Every route is owner-scoped: a Schedule that is not the caller's is as unknown as one that
 does not exist (404), and creating, editing or resuming one makes the caller the identity its
 fires act as from then on.
 
@@ -1415,15 +1416,17 @@ fires act as from then on.
 
 A Schedule reads `{schedule_id, name, prompt, mode, workspaces, target, conversation_id, zone,
 cron, at, max_tokens_per_day, goal_max_rounds, state, pause_reason, next_fire_at, created_at,
-updated_at}`. `mode` is `research` or `fast`; `target` is `new_conversation` or
+updated_at, changed_by}`. `mode` is `research` or `fast`; `target` is `new_conversation` or
 `same_conversation`, and `conversation_id` is the one conversation a `same_conversation`
 Schedule keeps once its first fire has opened it. The cadence is `cron`, five fields read on the
 wall clock of the IANA `zone`, or `at`, one UTC instant; the other is null. `state` is `active`,
 `paused` or `completed` (a single time that has fired); `pause_reason` says why the platform paused
 one, and is null when its owner did,
 and `next_fire_at` is null once nothing is left to fire. `goal_max_rounds` is null unless each
-fire starts a goal whose objective is the `prompt`. Every time is UTC ISO 8601 with a `Z`. A
-Schedule never shows the identity it acts as.
+fire starts a goal whose objective is the `prompt`. `changed_by` is `owner` or `agent`: who last
+made, edited or resumed it, so what the Agent wrote can be told from what its owner did (pausing,
+deleting and running now leave it). Every time is UTC ISO 8601 with a `Z`. A Schedule never shows
+the identity it acts as.
 
 `POST /schedules` takes `name`, `prompt`, `workspaces` (at least one), `zone`, and exactly one of
 `cron` or `at` (an instant that carries its offset); `mode` (default `research`), `target`
@@ -1455,7 +1458,7 @@ resumed) are a 409 with the reason. `POST /schedules/preview` holds a cadence to
 it would, so its 422 is the refusal the owner would meet there.
 
 The Web adapter serves the same operations, answering the same shapes, under
-`/web/api/schedules` for the sidebar's Scheduled section: `GET`/`POST /web/api/schedules`,
+`/web/api/schedules` for the sidebar's Scheduled row and its dialogs: `GET`/`POST /web/api/schedules`,
 `GET`/`PATCH`/`DELETE /web/api/schedules/{schedule_id}`, `POST` `.../pause`, `.../resume` and
 `.../run`, `GET .../fires`, and `POST /web/api/schedules/preview`. Its writes carry the Web's
 double-submit token like every other owner write.

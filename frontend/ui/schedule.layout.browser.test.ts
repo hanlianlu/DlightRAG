@@ -1,22 +1,23 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-/** What the shipped stylesheets do with the Scheduled section and its dialogs: the rows are as dense as a
- * conversation's and hold their words in a narrow sidebar, and the form's controls share one line and one height. */
+/** What the shipped stylesheets do with the Scheduled row and the Schedule dialogs: the row stands on the nav
+ * column with New chat and Settings, the Schedules dialog's rows are at least a control high and its body scrolls
+ * inside the dialog with the footer kept, and the form's controls share one line and one height. */
 
 import {expect} from '@esm-bundle/chai';
-import {setViewport} from '@web/test-runner-commands';
+import {sendMouse, setViewport} from '@web/test-runner-commands';
 import {waitFor} from '../testing/dom.ts';
 import {
   choose,
   field,
-  formOpen,
+  listOpen,
   mountSidebar,
+  newFormOpen,
   rowsShown,
   serving,
   useWorkspaces,
   wireSchedule,
 } from '../testing/schedules.ts';
 import dialogStyles from '../styles/schedule-dialogs.module.css';
-import styles from '../styles/schedule-section.module.css';
 
 const originalFetch = window.fetch;
 
@@ -24,59 +25,25 @@ afterEach(() => {
   window.fetch = originalFetch;
   document.body.replaceChildren();
   document.body.className = '';
-  window.localStorage.removeItem('dlightrag.schedule_section_open');
 });
 
 const LONG = 'Quarterly review of the supplier portal, its delivery commitments and the open contract disputes';
 
-it('draws a Schedule as dense as a conversation row, with its words kept inside a narrow column and the quick actions clear of them', async () => {
+it('stands the Scheduled row on the column of New chat and Settings, pill and icon alike, as tall as they are, with its count at the end', async () => {
   await setViewport({width: 1400, height: 900});
   serving({
     'GET /web/api/conversations': () => Response.json({items: [{
       conversation_id: 'c1', title: 'Research notes', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
     }], next_cursor: null}),
-  }, [wireSchedule(LONG), wireSchedule('Filing watch', {state: 'paused', next_fire_at: null})]);
-  const column = document.createElement('div');
-  column.style.cssText = 'height: 640px; position: relative; width: 240px;';
-  document.body.append(column);
-  const {sidebar, handles} = await mountSidebar(column);
-  await handles.conversations.loadList();
-  const rows = await rowsShown(sidebar, 2);
-  await waitFor(() => sidebar.querySelector('dl-conversation-list .conversation-row') !== null);
-  const conversation = sidebar.querySelector<HTMLElement>('dl-conversation-list .conversation-row')!;
-
-  for (const row of rows) {
-    expect(Math.abs(row.getBoundingClientRect().height - conversation.getBoundingClientRect().height), 'as tall as a conversation row').to.be.below(6);
-    expect(row.scrollWidth, 'nothing spills out of the row').to.be.at.most(row.clientWidth + 1);
-  }
-  const name = rows[0]!.querySelector<HTMLElement>(`.${styles.name}`)!;
-  expect(getComputedStyle(name).textOverflow).to.equal('ellipsis');
-  expect(name.scrollWidth, 'a long name ends in an ellipsis').to.be.greaterThan(name.clientWidth);
-  expect(rows[0]!.querySelector(`.${styles.meta}`)!.getBoundingClientRect().right).to.be.at.most(rows[0]!.getBoundingClientRect().right + 1);
-
-  // Focus brings the quick actions in over the row's end, and the words give them room.
-  const select = rows[0]!.querySelector<HTMLButtonElement>('button.conversation-select')!;
-  select.focus();
-  await waitFor(() => getComputedStyle(rows[0]!.querySelector(`.${styles.actions}`)!).opacity === '1');
-  const actions = rows[0]!.querySelector(`.${styles.actions}`)!.getBoundingClientRect();
-  expect(name.getBoundingClientRect().right).to.be.at.most(actions.left + 1);
-  expect(actions.right).to.be.at.most(rows[0]!.getBoundingClientRect().right + 1);
-});
-
-it('stands the nav rows and the rows on one column, pill and icon alike, and draws the row actions as icons', async () => {
-  await setViewport({width: 1400, height: 900});
-  serving({
-    'GET /web/api/conversations': () => Response.json({items: [{
-      conversation_id: 'c1', title: 'Research notes', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
-    }], next_cursor: null}),
-  }, [wireSchedule('Weekly review')]);
+  }, [wireSchedule('Weekly review'), wireSchedule('Filing watch')]);
   const column = document.createElement('div');
   column.style.cssText = 'height: 640px; position: relative; width: 280px;';
   document.body.append(column);
   const {sidebar, handles} = await mountSidebar(column);
   await handles.conversations.loadList();
-  const [schedule] = await rowsShown(sidebar, 1);
+  await waitFor(() => sidebar.querySelector('#scheduled-btn [data-count]') !== null);
   await waitFor(() => sidebar.querySelector('dl-conversation-list .conversation-select') !== null);
+  const scheduled = sidebar.querySelector<HTMLElement>('#scheduled-btn')!;
 
   const textLeft = (element: Element): number => {
     const range = document.createRange();
@@ -87,31 +54,108 @@ it('stands the nav rows and the rows on one column, pill and icon alike, and dra
   const conversationRow = sidebar.querySelector('dl-conversation-list .conversation-row')!.getBoundingClientRect().left;
   for (const [name, left] of [
     ['New chat', sidebar.querySelector('#new-conversation-btn')!.getBoundingClientRect().left],
-    ['Scheduled', sidebar.querySelector('[data-toggle]')!.getBoundingClientRect().left],
+    ['Scheduled', scheduled.getBoundingClientRect().left],
     ['Settings', sidebar.querySelector('#settings-btn')!.getBoundingClientRect().left],
-    ['a Schedule', schedule!.getBoundingClientRect().left],
     ['a conversation\'s control', sidebar.querySelector('dl-conversation-list .conversation-select')!.getBoundingClientRect().left],
-    ['a Schedule\'s control', schedule!.querySelector('.conversation-select')!.getBoundingClientRect().left],
   ] as const) {
     expect(left, `${name} starts at a conversation row's edge`).to.be.closeTo(conversationRow, 0.5);
   }
+  // It and Settings are the column's two nav rows, so they end on one edge too, and stand one control high.
+  expect(scheduled.getBoundingClientRect().right, 'Scheduled ends where Settings does')
+    .to.be.closeTo(sidebar.querySelector('#settings-btn')!.getBoundingClientRect().right, 0.5);
+  expect(scheduled.getBoundingClientRect().height, 'as tall as Settings')
+    .to.be.closeTo(sidebar.querySelector('#settings-btn')!.getBoundingClientRect().height, 0.5);
 
   const title = textLeft(sidebar.querySelector('dl-conversation-list .conversation-select')!);
   for (const [name, left] of [
     ['New chat icon', sidebar.querySelector('#new-conversation-btn .dl-icon')!.getBoundingClientRect().left],
-    ['Scheduled icon', sidebar.querySelector('[data-toggle] .dl-icon')!.getBoundingClientRect().left],
+    ['Scheduled icon', scheduled.querySelector('.dl-icon')!.getBoundingClientRect().left],
     ['Settings icon', sidebar.querySelector('#settings-btn .dl-icon')!.getBoundingClientRect().left],
     ['Recents label', textLeft(sidebar.querySelector('.dl-nav-group-label')!)],
-    ['a Schedule\'s name', textLeft(schedule!.querySelector(`.${styles.name}`)!)],
   ] as const) {
     expect(left, `${name} starts where a conversation's title does`).to.be.closeTo(title, 0.5);
   }
 
-  // The row actions are drawn marks, not the text glyph.
+  // The count stands inside the pill at its end, and the marks are drawn, not text glyphs.
+  const count = scheduled.querySelector('[data-count]')!.getBoundingClientRect();
+  expect(count.right).to.be.at.most(scheduled.getBoundingClientRect().right + 0.5);
+  expect(count.left).to.be.greaterThan(textLeft(scheduled.querySelector('.dl-nav-item-label')!));
   expect(sidebar.textContent).not.to.contain('•••');
-  for (const button of sidebar.querySelectorAll('.conversation-actions-button')) {
-    expect(button.querySelector('.dl-icon'), 'the actions button draws an icon').not.to.equal(null);
+});
+
+it('draws the Schedules dialog\'s rows at least a control high, one to a line, with a long name wrapping inside the row', async () => {
+  await setViewport({width: 1400, height: 900});
+  serving({}, [wireSchedule(LONG), wireSchedule('Filing watch', {state: 'paused', next_fire_at: null}), wireSchedule('Launch')]);
+  const {sidebar} = await mountSidebar();
+  const dialog = await listOpen(sidebar);
+  const rows = await rowsShown(sidebar, 3);
+  const control = dialog.querySelector('.dl-dialog-actions button')!.getBoundingClientRect().height;
+  const list = dialog.querySelector('.dl-list-card')!.getBoundingClientRect();
+
+  expect(dialog.getBoundingClientRect().width, 'a dialog of about 560px, as the detail is').to.be.closeTo(560, 1);
+  for (const row of rows) {
+    const box = row.getBoundingClientRect();
+    expect(box.height, 'at least the control height').to.be.at.least(control - 0.5);
+    expect(box.width, 'a row fills the list').to.be.closeTo(list.width - 2, 1.5);
+    expect(row.querySelector('button')!.scrollWidth, 'nothing spills out of the row').to.be.at.most(row.clientWidth + 1);
   }
+  // A hairline between rows, none above the first or under the last, and the list clips its rows' corners.
+  expect(rows.map((row) => getComputedStyle(row).borderTopWidth)).to.deep.equal(['0px', '1px', '1px']);
+  expect(getComputedStyle(dialog.querySelector('.dl-list-card')!).overflow).to.equal('clip');
+  // The name is the first line and the cadence the second, under it.
+  const name = rows[0]!.querySelector('[data-name]')!.getBoundingClientRect();
+  const meta = rows[0]!.querySelector('[data-meta]')!.getBoundingClientRect();
+  expect(meta.top).to.be.at.least(name.bottom - 0.5);
+  expect(rows[0]!.getBoundingClientRect().height, 'a long name makes its row taller, not wider').to.be.greaterThan(rows[2]!.getBoundingClientRect().height);
+  // Hover tints the whole row, and the keyboard's ring is drawn on it.
+  const button = rows[1]!.querySelector('button')!;
+  const box = button.getBoundingClientRect();
+  expect(getComputedStyle(button).backgroundColor).to.equal('rgba(0, 0, 0, 0)');
+  await sendMouse({type: 'move', position: [Math.round(box.left + box.width / 2), Math.round(box.top + box.height / 2)]});
+  await waitFor(() => getComputedStyle(button).backgroundColor !== 'rgba(0, 0, 0, 0)');
+  button.focus();
+  expect(getComputedStyle(button).outlineStyle).to.equal('solid');
+});
+
+it('scrolls a long list inside the dialog and keeps the footer in place, within the screen', async () => {
+  await setViewport({width: 1400, height: 520});
+  serving({}, Array.from({length: 30}, (_, index) => wireSchedule(`Schedule number ${index + 1}`)));
+  const {sidebar} = await mountSidebar();
+  const dialog = await listOpen(sidebar);
+  await rowsShown(sidebar, 30);
+  const body = dialog.querySelector<HTMLElement>('[data-body]')!;
+  const footer = dialog.querySelector<HTMLElement>('.dl-dialog-actions')!;
+  const box = dialog.getBoundingClientRect();
+
+  expect(box.top).to.be.at.least(0);
+  expect(box.bottom).to.be.at.most(window.innerHeight);
+  expect(getComputedStyle(body).overflowY).to.equal('auto');
+  expect(body.scrollHeight, 'the list is taller than its window').to.be.greaterThan(body.clientHeight);
+  expect(body.scrollWidth).to.be.at.most(body.clientWidth + 1);
+  const before = footer.getBoundingClientRect();
+  expect(before.bottom).to.be.at.most(box.bottom + 0.5);
+  body.scrollTop = body.scrollHeight;
+  expect(body.scrollTop, 'the body is what scrolled').to.be.greaterThan(0);
+  expect(footer.getBoundingClientRect().top, 'the footer did not move').to.be.closeTo(before.top, 0.5);
+  expect(dialog.scrollTop).to.equal(0);
+});
+
+it('fits a phone: the dialog stays inside the screen, its two footer buttons within reach and apart, and nothing scrolls sideways', async () => {
+  await setViewport({width: 360, height: 640});
+  serving({}, [wireSchedule(LONG), wireSchedule('Filing watch', {state: 'paused', next_fire_at: null})]);
+  const {sidebar} = await mountSidebar();
+  const dialog = await listOpen(sidebar);
+  await rowsShown(sidebar, 2);
+
+  const box = dialog.getBoundingClientRect();
+  expect(box.left).to.be.at.least(0);
+  expect(box.right).to.be.at.most(window.innerWidth);
+  expect(box.bottom).to.be.at.most(window.innerHeight);
+  const body = dialog.querySelector<HTMLElement>('[data-body]')!;
+  expect(body.scrollWidth).to.be.at.most(body.clientWidth + 1);
+  const [close, add] = [...dialog.querySelectorAll<HTMLElement>('.dl-dialog-actions button')].map((button) => button.getBoundingClientRect());
+  expect(add!.right).to.be.at.most(window.innerWidth);
+  expect(close!.right, 'the two do not overlap').to.be.at.most(add!.left);
 });
 
 it('lays the frequency as a row of chips, and the controls it needs on a line under it at the one control height', async () => {
@@ -119,10 +163,7 @@ it('lays the frequency as a row of chips, and the controls it needs on a line un
   serving({'POST /web/api/schedules/preview': () => Response.json({zone: 'UTC', slots: []})}, []);
   const {sidebar, handles} = await mountSidebar();
   useWorkspaces(handles, ['alpha'], ['alpha']);
-  const add = sidebar.querySelector<HTMLButtonElement>('[data-new]')!;
-  await waitFor(() => !add.disabled);
-  add.click();
-  const dialog = await formOpen(sidebar);
+  const dialog = await newFormOpen(sidebar);
   const plain = field(dialog, 'name').getBoundingClientRect().height;
   const chips = field<HTMLElement>(dialog, 'frequency');
 
@@ -154,10 +195,7 @@ it('fits a phone: the dialog stays inside the screen, its footer within reach, a
   serving({'POST /web/api/schedules/preview': () => Response.json({zone: 'UTC', slots: []})}, []);
   const {sidebar, handles} = await mountSidebar();
   useWorkspaces(handles, ['alpha', 'beta'], ['alpha']);
-  const add = sidebar.querySelector<HTMLButtonElement>('[data-new]')!;
-  await waitFor(() => !add.disabled);
-  add.click();
-  const dialog = await formOpen(sidebar);
+  const dialog = await newFormOpen(sidebar);
   choose(field<HTMLElement>(dialog, 'frequency'), 'monthly');
   dialog.querySelector<HTMLButtonElement>('[data-advanced]')!.click();
   await waitFor(() => field(dialog, 'ceiling') !== null);

@@ -9,8 +9,10 @@ import {
   asked,
   detailOpen,
   formOpen,
+  listOpen,
   mountSidebar,
   noticeOf,
+  rowButton,
   rowsShown,
   serving,
   wireFire,
@@ -24,7 +26,6 @@ afterEach(async () => {
   window.fetch = originalFetch;
   document.body.replaceChildren();
   document.body.className = '';
-  window.localStorage.removeItem('dlightrag.schedule_section_open');
   await webRouter.navigate(newChatRoute(), {replace: true, notify: false, bypassGuard: true});
 });
 
@@ -48,10 +49,12 @@ function firesWire(): Record<string, (request: {search: string}) => Response> {
   };
 }
 
+/** Open a Schedule's detail the way a reader does: the Scheduled row, then the Schedule's row in the dialog. */
 async function openDetail(name = 'weekly-review') {
   const mounted = await mountSidebar();
+  await listOpen(mounted.sidebar);
   await rowsShown(mounted.sidebar, 1);
-  mounted.sidebar.querySelector<HTMLButtonElement>(`[data-schedule-id="schedule-${name}"] button.conversation-select`)!.click();
+  rowButton(mounted.sidebar, `schedule-${name}`).click();
   const dialog = await detailOpen(mounted.sidebar);
   return {...mounted, dialog};
 }
@@ -70,6 +73,22 @@ it('says what the Schedule is, when it runs next, what it asks, and what it can 
   expect(dialog.querySelector('[data-prompt]')!.textContent).to.equal('Summarize the week.');
   expect(dialog.querySelector('[data-expand]')).to.equal(null);
   expect(['run', 'pause', 'edit', 'delete'].map((name) => action(dialog, name)?.textContent?.trim())).to.deep.equal(['Run now', 'Pause', 'Edit', 'Delete']);
+});
+
+it('says under the cadence when the Agent last changed the Schedule, in one quiet line, and says nothing when its owner did', async () => {
+  serving(firesWire(), [wireSchedule('Weekly review', {changed_by: 'agent'})]);
+  const byAgent = await openDetail();
+  const note = byAgent.dialog.querySelector<HTMLElement>('[data-changed-by]')!;
+
+  expect(note.textContent).to.equal('Last changed by the Agent.');
+  expect([note.tagName, note.className], 'a note and no new class').to.deep.equal(['P', 'dl-note']);
+  expect(byAgent.dialog.querySelector('[data-cadence] ~ [data-changed-by]'), 'it follows the cadence and when it runs next').not.to.equal(null);
+  document.body.replaceChildren();
+
+  serving(firesWire(), [wireSchedule('Weekly review', {changed_by: 'owner'})]);
+  const byOwner = await openDetail();
+  expect(byOwner.dialog.querySelector('[data-changed-by]')).to.equal(null);
+  expect(byOwner.dialog.textContent).not.to.contain('Last changed by');
 });
 
 it('folds a long prompt to a few lines until it is asked for in full', async () => {
@@ -124,16 +143,19 @@ it('says so when a Schedule has not run yet, and offers a retry when its history
   await waitFor(() => dialog.textContent!.includes('It has not run yet.'));
 });
 
-it('opens the conversation a run wrote through the sidebar\'s own path, and closes', async () => {
+it('opens the conversation a run wrote through the sidebar\'s own path, and closes, with the list too: it does not stay modal over the conversation', async () => {
   serving(firesWire(), [WEEKLY]);
-  const {dialog} = await openDetail();
+  const {sidebar, dialog} = await openDetail();
   await waitFor(() => dialog.querySelector('[data-open]') !== null);
+  const list = sidebar.querySelector<HTMLDialogElement>('dl-schedule-list dialog')!;
+  expect(list.open).to.equal(true);
 
   dialog.querySelector<HTMLButtonElement>('[data-open="conversation-3"]')!.click();
 
   await waitFor(() => !dialog.open);
   await waitFor(() => webRouter.current.kind === 'conversation');
   expect(webRouter.current).to.deep.equal(conversationRoute('conversation-3'));
+  expect(list.open, 'the Schedules dialog went with it').to.equal(false);
 });
 
 it('runs the Schedule now from its detail, says how it went, and reads the history again', async () => {
@@ -179,7 +201,7 @@ it('offers a finished Schedule only its deletion', async () => {
   expect([...dialog.querySelectorAll('[data-action]')].map((button) => button.getAttribute('data-action'))).to.deep.equal(['delete']);
 });
 
-it('hands over to the edit form, and focus comes back to the row it was opened from', async () => {
+it('hands over to the edit form, and focus comes back to the row of the list it was opened from', async () => {
   serving(firesWire(), [WEEKLY]);
   const {sidebar, dialog} = await openDetail();
 
@@ -189,7 +211,18 @@ it('hands over to the edit form, and focus comes back to the row it was opened f
   expect(form.querySelector<HTMLInputElement>('[data-field="name"]')!.value).to.equal('Weekly review');
   form.querySelector<HTMLButtonElement>('button[type=button]:not([data-advanced]):not([data-zone-toggle])')!.click();
 
-  await waitFor(() => !form.open && document.activeElement === sidebar.querySelector('[data-schedule-id] button.conversation-select'));
+  await waitFor(() => !form.open && document.activeElement === rowButton(sidebar, 'schedule-weekly-review'));
+  expect(sidebar.querySelector<HTMLDialogElement>('dl-schedule-list dialog')!.open, 'the list is still open under it').to.equal(true);
+});
+
+it('closes back to its row, which is where focus returns, with the list still open under it', async () => {
+  serving(firesWire(), [WEEKLY]);
+  const {sidebar, dialog} = await openDetail();
+
+  dialog.querySelector<HTMLButtonElement>('.dl-dialog-actions button')!.click();
+
+  await waitFor(() => !dialog.open && document.activeElement === rowButton(sidebar, 'schedule-weekly-review'));
+  expect(sidebar.querySelector<HTMLDialogElement>('dl-schedule-list dialog')!.open).to.equal(true);
 });
 
 it('deletes from its detail after a confirmation, and the detail goes with the Schedule', async () => {
@@ -207,7 +240,10 @@ it('deletes from its detail after a confirmation, and the detail goes with the S
   await waitFor(() => !dialog.open && !confirm.open);
   expect(asked(api, 'DELETE', '/web/api/schedules/schedule-weekly-review')).to.have.length(1);
   expect(noticeOf(shell)).to.contain('Deleted Weekly review.');
-  expect(sidebar.querySelector('[data-schedule-id]')).to.equal(null);
+  // The list is still open, now saying there is nothing, and focus is on its New schedule: the row it came from is gone.
+  expect(sidebar.querySelector('dl-schedule-list [data-schedule-id]')).to.equal(null);
+  expect(sidebar.querySelector('dl-schedule-list [data-empty]')).not.to.equal(null);
+  await waitFor(() => document.activeElement === sidebar.querySelector('dl-schedule-list [data-new]'));
 });
 
 it('closes when its Schedule is deleted somewhere else', async () => {
@@ -217,4 +253,5 @@ it('closes when its Schedule is deleted somewhere else', async () => {
   handles.schedules.drop('schedule-weekly-review');
 
   await waitFor(() => !dialog.open);
+  await waitFor(() => document.activeElement === document.querySelector('dl-schedule-list [data-new]'));
 });

@@ -21,8 +21,8 @@
  * A run is only "settled" to this store when the page watched it settle after its first successful
  * read: the first read is what the page opened with, and the reader has not missed it. A settled run
  * already marked seen is never announced, and a run the page started watching after it had already
- * settled has nothing to announce either. That is what the completion notifier uses; it is the only
- * reader of settlement.
+ * settled has nothing to announce either. That is what the completion notifier uses, and what tells the
+ * Scheduled list that the Agent may have changed it.
  *
  * The visibility of the page chooses the polling interval (closer while the reader is here, calmer
  * while they are away), one request is in flight at a time, and stopping ends the timers and the

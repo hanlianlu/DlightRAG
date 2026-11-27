@@ -32,6 +32,7 @@ from dlightrag.application.schedules.cadence import Cadence, CadenceError
 from dlightrag.application.schedules.errors import ScheduleLimitError
 from dlightrag.application.schedules.model import (
     STREAK_STATES,
+    ChangedBy,
     DuePlan,
     Fire,
     FireState,
@@ -77,6 +78,7 @@ CREATE TABLE IF NOT EXISTS dlightrag_schedules (
     resumed_at          TIMESTAMPTZ,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    changed_by          TEXT        NOT NULL DEFAULT 'owner',
     PRIMARY KEY (owner_id, schedule_id),
     CONSTRAINT dlightrag_schedules_mode_check CHECK (mode IN ('research', 'fast')),
     CONSTRAINT dlightrag_schedules_target_check
@@ -95,7 +97,8 @@ CREATE TABLE IF NOT EXISTS dlightrag_schedules (
         CHECK ((state <> 'active' OR next_fire_at IS NOT NULL OR run_at IS NOT NULL)
                AND (state <> 'completed' OR next_fire_at IS NULL)),
     CONSTRAINT dlightrag_schedules_pause_check
-        CHECK ((state = 'paused') OR pause_reason IS NULL)
+        CHECK ((state = 'paused') OR pause_reason IS NULL),
+    CONSTRAINT dlightrag_schedules_changed_by_check CHECK (changed_by IN ('owner', 'agent'))
 )
 """
 
@@ -130,6 +133,19 @@ CREATE TABLE IF NOT EXISTS dlightrag_schedule_fires (
 )
 """
 
+# The identity the Agent's Schedules act under: the caller of the owner's latest human turn, one row
+# per owner, kept for a day. It is never written into a Run's own input.
+_CREATE_OWNER_PRINCIPALS = """
+CREATE TABLE IF NOT EXISTS dlightrag_owner_principals (
+    owner_id   TEXT        NOT NULL,
+    user_id    TEXT        NOT NULL,
+    auth_mode  TEXT        NOT NULL,
+    claims     JSONB       NOT NULL DEFAULT '{}'::jsonb,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (owner_id)
+)
+"""
+
 _SCHEDULES_ACTIVE_INDEX = IndexRequirement(
     # The look's claim: the active Schedules whose time has come, earliest first.
     "idx_dlightrag_schedules_due",
@@ -151,7 +167,7 @@ _FIRES_OPEN_INDEX = IndexRequirement(
 #: Declared here, created and verified with the Run scope's other indexes.
 SCHEDULE_INDEXES = (_SCHEDULES_ACTIVE_INDEX, _FIRES_RUN_INDEX, _FIRES_OPEN_INDEX)
 
-SCHEDULES_DDL = (_CREATE_SCHEDULES, _CREATE_FIRES)
+SCHEDULES_DDL = (_CREATE_SCHEDULES, _CREATE_FIRES, _CREATE_OWNER_PRINCIPALS)
 
 SCHEDULES_SCHEMA_TABLES = (
     TableRequirement(
@@ -180,6 +196,7 @@ SCHEDULES_SCHEMA_TABLES = (
             "resumed_at",
             "created_at",
             "updated_at",
+            "changed_by",
         ),
         primary_key=("owner_id", "schedule_id"),
         checks=(
@@ -194,6 +211,7 @@ SCHEDULES_SCHEMA_TABLES = (
             "dlightrag_schedules_goal_check",
             "dlightrag_schedules_waiting_check",
             "dlightrag_schedules_pause_check",
+            "dlightrag_schedules_changed_by_check",
         ),
     ),
     TableRequirement(
@@ -228,6 +246,11 @@ SCHEDULES_SCHEMA_TABLES = (
             "dlightrag_schedule_fires_missed_check",
         ),
     ),
+    TableRequirement(
+        name="dlightrag_owner_principals",
+        columns=("owner_id", "user_id", "auth_mode", "claims", "updated_at"),
+        primary_key=("owner_id",),
+    ),
 )
 
 #: One owner's active Schedules are counted and added to under this lock, so two requests cannot
@@ -243,16 +266,37 @@ INSERT INTO dlightrag_schedules (
     owner_id, schedule_id, name, prompt, mode, workspaces, target, conversation_id,
     zone, cron, run_at, daily_ceiling, goal_max_rounds, state, pause_reason, next_fire_at,
     principal_user_id, principal_auth_mode, principal_claims, principal_stamped_at,
-    created_at, updated_at
+    created_at, updated_at, changed_by
 ) VALUES (
     $1, $2::uuid, $3, $4, $5, $6, $7, $8::uuid,
     $9, $10, $11, $12, $13, $14, $15, $16,
-    $17, $18, $19::jsonb, $20, $21, $21
+    $17, $18, $19::jsonb, $20, $21, $21, $22
 )
 RETURNING *
 """
 
 _SELECT_ONE = "SELECT * FROM dlightrag_schedules WHERE owner_id = $1 AND schedule_id = $2::uuid"
+
+#: Keeping an identity also drops every other owner's record older than a day, which nothing reads
+#: any more (``_SELECT_PRINCIPAL``): the table holds the day's latest turns and no more.
+_UPSERT_PRINCIPAL = """
+WITH expired AS (
+    DELETE FROM dlightrag_owner_principals
+    WHERE owner_id <> $1 AND updated_at <= NOW() - INTERVAL '1 day'
+)
+INSERT INTO dlightrag_owner_principals (owner_id, user_id, auth_mode, claims)
+VALUES ($1, $2, $3, $4::jsonb)
+ON CONFLICT (owner_id) DO UPDATE
+SET user_id = EXCLUDED.user_id, auth_mode = EXCLUDED.auth_mode, claims = EXCLUDED.claims,
+    updated_at = NOW()
+"""
+
+#: A record older than a day is not the identity of a turn someone just sent, so the Agent acts
+#: under none: a person's latest turn is what the Agent's Schedules are made on behalf of.
+_SELECT_PRINCIPAL = """
+SELECT user_id, auth_mode, claims FROM dlightrag_owner_principals
+WHERE owner_id = $1 AND updated_at > NOW() - INTERVAL '1 day'
+"""
 
 _LIST = """
 SELECT * FROM dlightrag_schedules WHERE owner_id = $1 ORDER BY created_at, schedule_id
@@ -264,7 +308,7 @@ SET name = $3, prompt = $4, mode = $5, workspaces = $6, daily_ceiling = $7,
     principal_user_id = $8, principal_auth_mode = $9, principal_claims = $10::jsonb,
     zone = $11, cron = $12, run_at = $13, goal_max_rounds = $14,
     next_fire_at = CASE WHEN $15 THEN $16 ELSE next_fire_at END,
-    updated_at = $17, principal_stamped_at = $18
+    updated_at = $17, principal_stamped_at = $18, changed_by = $19
 WHERE owner_id = $1 AND schedule_id = $2::uuid AND state <> 'completed'
 RETURNING *
 """
@@ -280,7 +324,7 @@ _RESUME = """
 UPDATE dlightrag_schedules
 SET state = 'active', pause_reason = NULL,
     principal_user_id = $3, principal_auth_mode = $4, principal_claims = $5::jsonb,
-    principal_stamped_at = NOW(), resumed_at = NOW(), updated_at = NOW()
+    principal_stamped_at = NOW(), resumed_at = NOW(), updated_at = NOW(), changed_by = $6
 WHERE owner_id = $1 AND schedule_id = $2::uuid AND state = 'paused'
 RETURNING *
 """
@@ -507,8 +551,16 @@ def _usage_tokens(usage: Any) -> int | None:
     return total
 
 
+def _principal_from_row(row: Any, claims_column: str, prefix: str = "") -> UserContext:
+    claims = row[claims_column]
+    return UserContext(
+        user_id=str(row[f"{prefix}user_id"]),
+        auth_mode=str(row[f"{prefix}auth_mode"]),
+        claims=json.loads(claims) if isinstance(claims, str) else dict(claims),
+    )
+
+
 def _schedule_from_row(row: Any) -> Schedule:
-    claims = row["principal_claims"]
     return Schedule(
         schedule_id=str(row["schedule_id"]),
         owner_id=str(row["owner_id"]),
@@ -524,15 +576,12 @@ def _schedule_from_row(row: Any) -> Schedule:
         state=ScheduleState(str(row["state"])),
         pause_reason=None if row["pause_reason"] is None else str(row["pause_reason"]),
         next_fire_at=row["next_fire_at"],
-        principal=UserContext(
-            user_id=str(row["principal_user_id"]),
-            auth_mode=str(row["principal_auth_mode"]),
-            claims=json.loads(claims) if isinstance(claims, str) else dict(claims),
-        ),
+        principal=_principal_from_row(row, "principal_claims", "principal_"),
         principal_stamped_at=row["principal_stamped_at"],
         resumed_at=row["resumed_at"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        changed_by="agent" if row["changed_by"] == "agent" else "owner",
     )
 
 
@@ -604,10 +653,30 @@ class PGScheduleStore(PostgresOperationRunner):
                     _claims_json(schedule.principal),
                     schedule.principal_stamped_at,
                     schedule.created_at,
+                    schedule.changed_by,
                 )
                 return _schedule_from_row(row)
 
         return await self._run_once(operation)
+
+    async def remember_principal(self, owner_id: str, principal: UserContext) -> None:
+        async def operation(conn: Any) -> None:
+            await conn.execute(
+                _UPSERT_PRINCIPAL,
+                owner_id,
+                principal.user_id,
+                principal.auth_mode,
+                _claims_json(principal),
+            )
+
+        await self._run(operation)
+
+    async def principal_of(self, owner_id: str) -> UserContext | None:
+        async def operation(conn: Any) -> UserContext | None:
+            row = await conn.fetchrow(_SELECT_PRINCIPAL, owner_id)
+            return None if row is None else _principal_from_row(row, "claims")
+
+        return await self._run(operation)
 
     async def get(self, owner_id: str, schedule_id: str) -> Schedule | None:
         async def operation(conn: Any) -> Schedule | None:
@@ -644,6 +713,7 @@ class PGScheduleStore(PostgresOperationRunner):
                 schedule.next_fire_at,
                 schedule.updated_at,
                 schedule.principal_stamped_at,
+                schedule.changed_by,
             )
             return None if row is None else _schedule_from_row(row)
 
@@ -659,7 +729,13 @@ class PGScheduleStore(PostgresOperationRunner):
         return await self._run_once(operation)
 
     async def resume(
-        self, owner_id: str, schedule_id: str, *, principal: UserContext, max_active: int
+        self,
+        owner_id: str,
+        schedule_id: str,
+        *,
+        principal: UserContext,
+        max_active: int,
+        changed_by: ChangedBy = "owner",
     ) -> Schedule | None:
         async def operation(conn: Any) -> Schedule | None:
             async with conn.transaction():
@@ -673,6 +749,7 @@ class PGScheduleStore(PostgresOperationRunner):
                     principal.user_id,
                     principal.auth_mode,
                     _claims_json(principal),
+                    changed_by,
                 )
                 return None if row is None else _schedule_from_row(row)
 

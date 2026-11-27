@@ -15,7 +15,13 @@ from datetime import datetime, timedelta
 from typing import Protocol
 
 from dlightrag.application.access.principal import UserContext
-from dlightrag.application.schedules.model import DuePlan, Fire, FireState, Schedule
+from dlightrag.application.schedules.model import (
+    ChangedBy,
+    DuePlan,
+    Fire,
+    FireState,
+    Schedule,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +55,14 @@ class ScheduleStore(Protocol):
         """Store a new active Schedule; raises ``ScheduleLimitError`` at ``max_active``."""
         ...
 
+    async def remember_principal(self, owner_id: str, principal: UserContext) -> None:
+        """Keep ``principal`` as the identity of the owner's latest human turn: one record per owner."""
+        ...
+
+    async def principal_of(self, owner_id: str) -> UserContext | None:
+        """The identity the owner's latest human turn kept, or ``None`` when none was or it is over a day old."""
+        ...
+
     async def get(self, owner_id: str, schedule_id: str) -> Schedule | None: ...
 
     async def list(self, owner_id: str) -> tuple[Schedule, ...]: ...
@@ -67,7 +81,13 @@ class ScheduleStore(Protocol):
         ...
 
     async def resume(
-        self, owner_id: str, schedule_id: str, *, principal: UserContext, max_active: int
+        self,
+        owner_id: str,
+        schedule_id: str,
+        *,
+        principal: UserContext,
+        max_active: int,
+        changed_by: ChangedBy = "owner",
     ) -> Schedule | None:
         """Resume a paused Schedule as ``principal``; ``None`` when missing or not paused."""
         ...

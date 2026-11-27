@@ -494,40 +494,54 @@ verdict on an open error in both color modes.
 
 ## Scheduled
 
-The owner's Schedules (ADR 0103) live in the conversation sidebar, not in Settings: a Scheduled section
-between "New chat" and the conversation list, so recurring work sits beside the conversations it writes.
+The owner's Schedules (ADR 0103) are not in Settings and not in the conversation list: the sidebar has one
+Scheduled row, and the Schedules open in a dialog. The Agent makes and changes Schedules too, so the list
+grows and changes under its reader, which a window holds better than a nav column.
 
 - **Sidebar column.** The sidebar is a `<nav>` built from primitives. New chat, Scheduled and Settings
   are `.dl-nav-item` rows (an icon, a label, and Scheduled's count as the row's `.dl-nav-item-status`),
   and the "Recents" label over the conversations is `.dl-nav-group-label`. The collapse and open
-  buttons, the row actions and the Scheduled "+" are `.dl-icon-button`s, sized to the sidebar's controls
+  buttons and the conversation row actions are `.dl-icon-button`s, sized to the sidebar's controls
   (`--control-hit-target: var(--size-button)`) and sharing one resting colour and hover. They all stand on
-  one content column that starts `--space-component` in: a conversation or Schedule row has no inline
-  padding of its own, so its tint and its control share one edge with a nav row's pill, and the
-  `--space-tight` padding of a nav item and of a conversation's control puts an icon and a title on one x.
+  one content column that starts `--space-component` in: a conversation row has no inline padding of its
+  own, so its tint and its control share one edge with a nav row's pill, and the `--space-tight` padding
+  of a nav item and of a conversation's control puts an icon and a title on one x.
   `ui/schedule.layout.browser.test.ts` measures both.
-- **Section.** A header row (a clock, "Scheduled", and the count) toggles the rows open and closed; with
-  no Schedule, clicking it opens New schedule instead. A "+" `.dl-icon-button` ("New schedule") stands at
-  its end: on a pointer that hovers it shows while the header is hovered or holds focus, and on a touch
-  screen it always shows. The open choice is this browser's (`localStorage`); with none stored the section
-  is open once there is a Schedule, and with none the header stands alone. The rows scroll inside the
-  section past a few, so they never push the conversations out of the column.
-- **Row.** A Schedule is a conversation row (the global `.conversation-row` family, so its density,
-  tint and actions menu are theirs): its name, and a muted line with the cadence in words, followed by
-  "· Paused" (with a small pause mark) or "· Done" when the Schedule is not active; when it runs next is
-  the detail's to say. Run now, Pause or Resume (`.dl-icon-button`s), and
-  an actions menu (Edit, Delete), opened from the `more` icon button every row carries, stand over the
-  row's end on hover and focus, and the row's text gives them the room; on a touch screen a row opens
-  its detail, which carries every action.
-- **Dialogs.** The form and the detail are the confirm dialog's face at 35rem: a title, a body that
-  scrolls, and a footer that stays. They stand outside the sidebar's `<nav>`, as the conversation dialogs
-  do, so the drawer's focus trap never sees them. The form asks a name, a prompt and when (a row of
-  frequency chips, with the few controls the chosen one needs on the line below, all at the one control
-  height, and day chips under Weekly), reads the choice back in one line with its zone and the server's
-  next slot or refusal, and holds Mode, Workspaces, where each run goes, goal and ceiling under
-  Advanced; Mode and where each run goes are radio choices. The detail shows the cadence and zone, the next
-  run or why it is paused, the prompt folded to four lines, the actions, and the recent runs with their
-  state in a quiet tone and an Open that goes to that run's conversation.
+- **Scheduled row.** One `.dl-nav-item` between New chat and Recents: a clock, "Scheduled", and the number
+  of Schedules, which is absent while there are none or the list has not been read. It has no open state,
+  no "+", no rows and no actions; pressing it opens the Schedules dialog, and closing the dialog returns
+  focus to it.
+- **Schedules dialog.** The confirm dialog's face at 35rem, as the detail and the form wear it: a title
+  ("Scheduled"), a body that scrolls inside the dialog's height, and a footer that stays, with Close and
+  New schedule (`.dl-dialog-primary`, offered once the list has been read). It reads the list each time it
+  opens, so a tab left open shows what is true now. While it reads, and when the read failed (with a Retry,
+  `.dl-text-action`), and when there is no Schedule (one sentence: nothing is scheduled yet, ask the Agent in
+  a chat or add one here), it says so in one `.dl-note` paragraph. It follows the store, so a Schedule the
+  Agent makes while it is open appears at once and a deleted one goes; the count is also said, in a visually
+  hidden `role="status"` line that changes with it, to a reader who cannot see the list change. If the row
+  that holds focus goes, focus moves to the first row left, or to New schedule.
+- **Rows.** The Schedules are one `.dl-list-card` (a `ul` with `role="list"`), and each is one
+  `.dl-nav-item.dl-nav-item--list` button, the primitive's list form: a hairline between rows, the hover
+  tint, the focus ring inside the row, one control height at least, and a disclosure mark at the end. A row
+  has its name, which wraps when it is long, and a muted `.dl-nav-item-detail` line with the cadence in
+  words followed by "· Next: …" for an active Schedule or "· Paused" or "· Done". The button is named by
+  both lines, since a name that left the second out would not hold the words the row shows. A row carries no
+  action: pressing it opens that Schedule's detail.
+- **Detail and form.** The detail and the form are the same dialog face: a title, a body that scrolls, and
+  a footer that stays. They stand outside the sidebar's `<nav>`, as the conversation dialogs do, so the
+  drawer's focus trap never sees them, and they open on top of the list as native stacked modals: Escape
+  closes the one on top, and what closes returns focus to the row or the New schedule it was opened from (when
+  the row is gone because its Schedule was deleted, to the first row, or to New schedule when none is left).
+  A run's conversation opened from the detail closes the list too, so it is not modal over the conversation.
+  The form asks a name, a prompt and when (a row of frequency chips, with the few controls the chosen one
+  needs on the line below, all at the one control height, and day chips under Weekly), reads the choice
+  back in one line with its zone and the server's next slot or refusal, and holds Mode, Workspaces, where
+  each run goes, goal and ceiling under Advanced; Mode and where each run goes are radio choices. The
+  detail shows the cadence and zone, the next run or why it is paused, one quiet `.dl-note` line when the
+  Agent last created, edited or resumed the Schedule ("Last changed by the Agent."; nothing when its owner
+  did), the prompt folded to four lines,
+  the actions (Run now, Pause or Resume, Edit, Delete), and the recent runs with their state in a quiet
+  tone and an Open that goes to that run's conversation.
 - **Conversations.** A conversation a Schedule wrote carries a small clock before its title, and the
   Schedule's name as its tooltip and its accessible name.
 
